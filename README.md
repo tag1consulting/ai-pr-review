@@ -143,8 +143,10 @@ Then in your workflow, use `submodules: true` on checkout and reference the loca
         with:
           fetch-depth: 0
           submodules: true
-          # PAT required if ai-pr-review is private:
-          # token: ${{ secrets.GH_PAT }}
+          # GITHUB_TOKEN cannot check out a submodule in a different private repo.
+          # A PAT with repo scope (or fine-grained token with read access to
+          # tag1consulting/ai-pr-review) is required:
+          token: ${{ secrets.AI_PR_REVIEW_TOKEN }}
 
       - uses: ./ai-pr-review
         with:
