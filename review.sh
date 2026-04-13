@@ -164,6 +164,7 @@ if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
   # Post a comment on the PR explaining the skip so the author is not left wondering
   : "${GH_TOKEN:?GH_TOKEN is required}"
   : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+  : "${PR_NUMBER:?PR_NUMBER is required}"
   OWNER="${GITHUB_REPOSITORY%%/*}"
   REPO="${GITHUB_REPOSITORY##*/}"
   gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
