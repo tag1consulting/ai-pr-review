@@ -161,21 +161,31 @@ fi
 if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
   echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
   echo "To review large diffs, increase MAX_DIFF_LINES or split the PR into smaller changes." >&2
-  # Post a comment on the PR explaining the skip so the author is not left wondering
+  # Post (or update) a comment explaining the skip — idempotent via marker to avoid
+  # accumulating duplicate comments across repeated oversized pushes.
   : "${GH_TOKEN:?GH_TOKEN is required}"
   : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
   : "${PR_NUMBER:?PR_NUMBER is required}"
   OWNER="${GITHUB_REPOSITORY%%/*}"
   REPO="${GITHUB_REPOSITORY##*/}"
-  gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
-    --method POST \
-    --field body="<!-- ai-pr-review-skipped -->
+  SKIP_MARKER="<!-- ai-pr-review-skipped -->"
+  SKIP_BODY="${SKIP_MARKER}
 ## AI Review Skipped
 
 This PR's diff is too large for automated review (${DIFF_LINES} lines; limit: ${MAX_DIFF_LINES}).
 
-To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR into smaller changes." \
-    > /dev/null 2>&1 || true
+To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR into smaller changes."
+  existing_skip_id=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --paginate \
+    --jq ".[] | select(.body | contains(\"${SKIP_MARKER}\")) | .id" \
+    2>/dev/null | tail -1) || true
+  if [[ -n "$existing_skip_id" ]]; then
+    gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_skip_id}" \
+      --method PATCH --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+  else
+    gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+      --method POST --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+  fi
   exit 0
 fi
 
