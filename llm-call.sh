@@ -90,13 +90,13 @@ call_anthropic() {
   }
 
   local http_code
-  http_code=$(curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "https://api.anthropic.com/v1/messages" \
     -H "x-api-key: ${ANTHROPIC_API_KEY}" \
     -H "anthropic-version: 2023-06-01" \
     -H "Content-Type: application/json" \
-    -d "$request_body") || {
+    --data-binary @-) || {
     echo "ERROR: Anthropic API request failed" >&2
     exit 1
   }
@@ -129,12 +129,12 @@ call_openai() {
   }
 
   local http_code
-  http_code=$(curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "${base_url}/chat/completions" \
     -H "Authorization: Bearer ${OPENAI_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$request_body") || {
+    --data-binary @-) || {
     echo "ERROR: OpenAI API request failed" >&2
     exit 1
   }
@@ -172,12 +172,12 @@ call_google() {
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)
 
   local http_code
-  http_code=$(curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "https://generativelanguage.googleapis.com/v1beta/models/${encoded_model_id}:generateContent" \
     -H "x-goog-api-key: ${GOOGLE_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$request_body") || {
+    --data-binary @-) || {
     echo "ERROR: Google Gemini API request failed" >&2
     exit 1
   }
@@ -219,12 +219,12 @@ call_bedrock_proxy() {
   local url="${BEDROCK_API_URL}/model/${encoded_model_id}/invoke"
 
   local http_code
-  http_code=$(curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "$url" \
     -H "Authorization: Bearer ${BEDROCK_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$request_body") || {
+    --data-binary @-) || {
     echo "ERROR: Bedrock proxy API request failed" >&2
     cat "$RESPONSE_FILE" >&2
     exit 1
