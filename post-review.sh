@@ -499,7 +499,7 @@ post_findings() {
 
   # Determine overall risk and review event from highest severity found
   #   No findings          → APPROVE
-  #   Medium/Low findings  → COMMENT  (informational, non-blocking)
+  #   Medium/Low findings  → APPROVE  (informational findings noted in review body)
   #   High/Critical        → REQUEST_CHANGES (blocking)
   local overall_risk finding_total review_event
   finding_total=$(echo "$findings_json" | jq 'length')
@@ -524,10 +524,10 @@ post_findings() {
     review_event="REQUEST_CHANGES"
   elif echo "$findings_json" | jq -e '.[] | select(.severity == "Medium")' > /dev/null 2>&1; then
     overall_risk="Medium"
-    review_event="COMMENT"
+    review_event="APPROVE"
   else
     overall_risk="Low"
-    review_event="COMMENT"
+    review_event="APPROVE"
   fi
 
   # Build review body
@@ -537,9 +537,17 @@ post_findings() {
     if [[ -n "$TOKEN_TABLE_FILE" && -s "$TOKEN_TABLE_FILE" ]]; then
       approve_token_table=$(cat "$TOKEN_TABLE_FILE")
     fi
-    review_body="## AI Review: Approved
+    if [[ "$finding_total" -eq 0 ]]; then
+      review_body="## AI Review: Approved
 
 No findings above the confidence threshold. The changes look good."
+    else
+      review_body="## AI Review: Approved
+
+$(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:** ${finding_total} (${inline_count} inline)
+
+No Critical or High findings. The changes look good — Medium/Low findings are informational only."
+    fi
     if [[ -n "$approve_token_table" ]]; then
       review_body="${review_body}
 
