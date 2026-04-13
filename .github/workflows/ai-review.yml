@@ -30,8 +30,10 @@ jobs:
       cancel-in-progress: true
     if: >-
       (github.event_name == 'workflow_dispatch') ||
-      (github.event.pull_request.draft == false &&
-       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review'))
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.draft == false &&
+       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ai-review-full'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,11 +48,13 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_REF: ${{ inputs.ref }}
         run: |
-          if [[ -n "${{ inputs.pr_number }}" ]]; then
-            echo "pr_number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
-            base_ref=$(gh pr view "${{ inputs.pr_number }}" --json baseRefName --jq '.baseRefName')
-            head_sha=$(gh pr view "${{ inputs.pr_number }}" --json headRefOid --jq '.headRefOid')
+          if [[ -n "$INPUT_PR_NUMBER" ]]; then
+            echo "pr_number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
+            base_ref=$(gh pr view "$INPUT_PR_NUMBER" --json baseRefName --jq '.baseRefName')
+            head_sha=$(gh pr view "$INPUT_PR_NUMBER" --json headRefOid --jq '.headRefOid')
             echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
             echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           else
@@ -61,11 +65,11 @@ jobs:
               --jq ".[] | select(.headRefOid | startswith(\"${head_sha:0:7}\"))" | head -1)
             if [[ -z "$pr_json" ]]; then
               # Fall back: find any open PR whose head branch matches the ref input
-              pr_json=$(gh pr list --state open --head "${{ inputs.ref }}" \
+              pr_json=$(gh pr list --state open --head "$INPUT_REF" \
                 --json number,baseRefName,headRefOid | jq '.[0]')
             fi
             if [[ -z "$pr_json" || "$pr_json" == "null" ]]; then
-              echo "ERROR: No open PR found for ref '${{ inputs.ref }}' (${head_sha:0:7}). Create a PR first or pass pr_number directly." >&2
+              echo "ERROR: No open PR found for ref '${INPUT_REF}' (${head_sha:0:7}). Create a PR first or pass pr_number directly." >&2
               exit 1
             fi
             echo "pr_number=$(echo "$pr_json" | jq -r '.number')" >> "$GITHUB_OUTPUT"
