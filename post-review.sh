@@ -610,8 +610,27 @@ ${token_table}"
   # Truncate review body to stay within GitHub's 65,536 char API limit
   review_body=$(truncate_body "$review_body")
 
-  # APPROVE does not support inline comments — clear them if present
-  if [[ "$review_event" == "APPROVE" ]]; then
+  # GitHub does not allow inline comments on an APPROVE review.
+  # When approving with findings present, post them as a COMMENT review first,
+  # then post the APPROVE review separately (body only, no inline comments).
+  if [[ "$review_event" == "APPROVE" && "$inline_count" -gt 0 ]]; then
+    local findings_json_for_comment
+    findings_json_for_comment=$(jq -n \
+      --arg body "$(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:** ${finding_total} (${inline_count} inline)" \
+      --arg commit_id "$HEAD_SHA" \
+      --argjson comments "$inline_comments" \
+      '{body: $body, event: "COMMENT", commit_id: $commit_id, comments: $comments}')
+    local findings_post_result
+    findings_post_result=$(echo "$findings_json_for_comment" | gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
+      --method POST \
+      --input - 2>&1) || {
+      echo "WARNING: Failed to post inline findings as COMMENT review before APPROVE: ${findings_post_result}" >&2
+    }
+    echo "Posted inline findings as COMMENT review before APPROVE." >&2
+    # Clear inline comments from the APPROVE review — they were posted above
+    inline_comments="[]"
+    inline_count=0
+  elif [[ "$review_event" == "APPROVE" ]]; then
     inline_comments="[]"
     inline_count=0
   fi
