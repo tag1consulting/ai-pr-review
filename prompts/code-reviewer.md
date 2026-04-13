@@ -58,6 +58,7 @@ This code runs inside a GitHub Actions CI pipeline. Understand what data is trus
 - Pre-existing issues in unchanged code
 - Test code style (unless tests are actually broken)
 - Security issues on trusted internal data flows (see Threat Model above)
+- Dependency or action version bumps where the only concern is that you don't recognize the version number — your training data has a cutoff and newer releases exist. Only flag a version if the diff context provides concrete evidence of a problem (e.g., a downgrade, a known-vulnerable version string, or a syntactically malformed version).
 
 ## Issue Confidence Scoring
 
