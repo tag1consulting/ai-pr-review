@@ -5,9 +5,13 @@ on:
     types: [opened, synchronize, ready_for_review, labeled]
   workflow_dispatch:
     inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to review (default: main)"
+        required: false
+        default: main
       pr_number:
-        description: PR number to review
-        required: true
+        description: "PR number (optional — looked up automatically from ref if omitted)"
+        required: false
       review_mode:
         description: Review mode
         required: false
@@ -22,7 +26,7 @@ permissions:
 jobs:
   review:
     concurrency:
-      group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}
+      group: ai-review-${{ github.event.pull_request.number || inputs.pr_number || inputs.ref }}
       cancel-in-progress: true
     if: >-
       (github.event_name == 'workflow_dispatch') ||
@@ -33,6 +37,40 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      # For workflow_dispatch: resolve PR number from ref when not supplied directly.
+      # Resolves a branch name or SHA to the open PR targeting the default branch.
+      - name: Resolve PR number
+        id: resolve-pr
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n "${{ inputs.pr_number }}" ]]; then
+            echo "pr_number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+            base_ref=$(gh pr view "${{ inputs.pr_number }}" --json baseRefName --jq '.baseRefName')
+            head_sha=$(gh pr view "${{ inputs.pr_number }}" --json headRefOid --jq '.headRefOid')
+            echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
+            echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          else
+            # Resolve the ref to a commit SHA, then find the open PR for it
+            head_sha=$(git rev-parse HEAD)
+            echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+            pr_json=$(gh pr list --state open --json number,baseRefName,headRefOid \
+              --jq ".[] | select(.headRefOid | startswith(\"${head_sha:0:7}\"))" | head -1)
+            if [[ -z "$pr_json" ]]; then
+              # Fall back: find any open PR whose head branch matches the ref input
+              pr_json=$(gh pr list --state open --head "${{ inputs.ref }}" \
+                --json number,baseRefName,headRefOid | jq '.[0]')
+            fi
+            if [[ -z "$pr_json" || "$pr_json" == "null" ]]; then
+              echo "ERROR: No open PR found for ref '${{ inputs.ref }}' (${head_sha:0:7}). Create a PR first or pass pr_number directly." >&2
+              exit 1
+            fi
+            echo "pr_number=$(echo "$pr_json" | jq -r '.number')" >> "$GITHUB_OUTPUT"
+            echo "base_ref=$(echo "$pr_json" | jq -r '.baseRefName')" >> "$GITHUB_OUTPUT"
+          fi
 
       # Self-referential: use the checked-out action at the repo root.
       - uses: ./
@@ -46,7 +84,7 @@ jobs:
               (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
               'quick'
             }}
-          pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
-          base-ref: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
-          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          pr-number: ${{ steps.resolve-pr.outputs.pr_number || github.event.pull_request.number }}
+          base-ref: ${{ steps.resolve-pr.outputs.base_ref || github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          head-sha: ${{ steps.resolve-pr.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
