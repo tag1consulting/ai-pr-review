@@ -56,13 +56,13 @@ Findings use shape-distinct icons for accessibility:
 
 ## Supported LLM providers
 
-| Provider | `provider` value | Required secret | Notes |
-|----------|-----------------|-----------------|-------|
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | Claude Sonnet/Opus |
-| OpenAI | `openai` | `OPENAI_API_KEY` | GPT-4o |
-| OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Any OpenAI-compatible endpoint |
-| Google | `google` | `GOOGLE_API_KEY` | Gemini 2.5 Flash/Pro |
-| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | Tag1 OpenWebUI Bedrock proxy (default) |
+| Provider | `provider` value | Required secret | Default models (standard / premium) |
+|----------|-----------------|-----------------|--------------------------------------|
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6-20250514` / `claude-opus-4-6-20250514` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4o` |
+| OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
+| Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
+| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-6-v1` (default provider) |
 
 ## Installation
 
