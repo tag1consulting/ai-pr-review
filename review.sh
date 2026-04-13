@@ -248,11 +248,15 @@ if [[ "$REVIEW_MODE" != "quick" && "$REVIEW_MODE" != "full" ]]; then
   REVIEW_MODE="quick"
 fi
 
-# Compute diff size for informational logging (and large-diff warning)
-# Note: || echo "0" here is intentional — parse failures default to 0 lines,
-# which is the safe direction (does not suppress any review output).
-TOTAL_CHANGED=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ insertions?' | grep -o '[0-9]*' || echo "0")
-TOTAL_REMOVED=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ deletions?' | grep -o '[0-9]*' || echo "0")
+# Compute diff size for informational logging (and large-diff warning).
+# grep fails when the pattern is absent (pure adds have no deletions, etc.),
+# so || echo "0" is intentional — parse failures default to 0 lines, which is
+# the safe direction (does not suppress any review output).
+TOTAL_CHANGED=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ insertions?' | grep -o '[0-9]*' 2>/dev/null || echo "0")
+TOTAL_REMOVED=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ deletions?' | grep -o '[0-9]*' 2>/dev/null || echo "0")
+if [[ "${TOTAL_CHANGED:-0}" == "0" && "${TOTAL_REMOVED:-0}" == "0" && -n "$DIFF_STAT" ]]; then
+  echo "NOTE: Could not parse insertion/deletion counts from diff stat; defaulting to 0. Stat: ${DIFF_STAT}" >&2
+fi
 TOTAL_LINES=$(( ${TOTAL_CHANGED:-0} + ${TOTAL_REMOVED:-0} ))
 
 if [[ "$TOTAL_LINES" -gt 2000 ]]; then

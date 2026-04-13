@@ -46,7 +46,7 @@ for file in "${SHELL_FILES[@]}"; do
   fi
 
   # Parse shellcheck JSON and convert to our findings format
-  FILE_FINDINGS=$(echo "$SC_OUTPUT" | jq -r --arg file "$file" '
+  if ! FILE_FINDINGS=$(echo "$SC_OUTPUT" | jq -r --arg file "$file" '
     [.comments[]? | select(.level == "warning" or .level == "error") | {
       severity: (if .level == "error" then "High" else "Medium" end),
       confidence: 95,
@@ -55,7 +55,10 @@ for file in "${SHELL_FILES[@]}"; do
       finding: ("SC\(.code): \(.message)"),
       remediation: ("See https://www.shellcheck.net/wiki/SC\(.code)")
     }]
-  ' 2>/dev/null || echo "[]")
+  ' 2>/dev/null); then
+    echo "WARNING: jq failed to parse shellcheck output for ${file}; skipping." >&2
+    FILE_FINDINGS="[]"
+  fi
 
   FINDINGS=$(echo "$FINDINGS" "$FILE_FINDINGS" | jq -s '.[0] + .[1]')
 done

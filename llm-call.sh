@@ -31,6 +31,10 @@ MODEL_ID="${1:?Usage: llm-call.sh <model_id> <system_prompt_file> <user_message_
 SYSTEM_PROMPT_FILE="${2:?Missing system prompt file}"
 USER_MESSAGE_FILE="${3:?Missing user message file}"
 MAX_TOKENS="${4:-4096}"
+if ! [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: max_tokens must be a positive integer; got '${MAX_TOKENS}'" >&2
+  exit 1
+fi
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
 TEMPERATURE="${AI_TEMPERATURE:-0.3}"
@@ -104,8 +108,8 @@ call_anthropic() {
 
   local response_text input_tokens output_tokens
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
-  input_tokens=$(jq -r '.usage.input_tokens // "?"' "$RESPONSE_FILE" 2>/dev/null)
-  output_tokens=$(jq -r '.usage.output_tokens // "?"' "$RESPONSE_FILE" 2>/dev/null)
+  input_tokens=$(jq -r '.usage.input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  output_tokens=$(jq -r '.usage.output_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   emit_response "$response_text" "$input_tokens" "$output_tokens"
 }
 
@@ -142,8 +146,8 @@ call_openai() {
 
   local response_text input_tokens output_tokens
   response_text=$(jq -r '.choices[0].message.content // empty' "$RESPONSE_FILE" 2>/dev/null)
-  input_tokens=$(jq -r '.usage.prompt_tokens // "?"' "$RESPONSE_FILE" 2>/dev/null)
-  output_tokens=$(jq -r '.usage.completion_tokens // "?"' "$RESPONSE_FILE" 2>/dev/null)
+  input_tokens=$(jq -r '.usage.prompt_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  output_tokens=$(jq -r '.usage.completion_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   emit_response "$response_text" "$input_tokens" "$output_tokens"
 }
 
@@ -185,8 +189,8 @@ call_google() {
 
   local response_text input_tokens output_tokens
   response_text=$(jq -r '.candidates[0].content.parts[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
-  input_tokens=$(jq -r '.usageMetadata.promptTokenCount // "?"' "$RESPONSE_FILE" 2>/dev/null)
-  output_tokens=$(jq -r '.usageMetadata.candidatesTokenCount // "?"' "$RESPONSE_FILE" 2>/dev/null)
+  input_tokens=$(jq -r '.usageMetadata.promptTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  output_tokens=$(jq -r '.usageMetadata.candidatesTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
   emit_response "$response_text" "$input_tokens" "$output_tokens"
 }
 
@@ -233,8 +237,8 @@ call_bedrock_proxy() {
 
   local response_text input_tokens output_tokens
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
-  input_tokens=$(jq -r '.usage.input_tokens // "?"' "$RESPONSE_FILE" 2>/dev/null)
-  output_tokens=$(jq -r '.usage.output_tokens // "?"' "$RESPONSE_FILE" 2>/dev/null)
+  input_tokens=$(jq -r '.usage.input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  output_tokens=$(jq -r '.usage.output_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   emit_response "$response_text" "$input_tokens" "$output_tokens"
 }
 
