@@ -42,6 +42,9 @@ TEMPERATURE="${AI_TEMPERATURE:-0.3}"
 if ! echo "$TEMPERATURE" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
   echo "WARNING: AI_TEMPERATURE '${TEMPERATURE}' is not a valid number; defaulting to 0.3." >&2
   TEMPERATURE="0.3"
+elif awk "BEGIN { exit !($TEMPERATURE > 2) }"; then
+  echo "WARNING: AI_TEMPERATURE '${TEMPERATURE}' exceeds maximum (2); clamping to 2." >&2
+  TEMPERATURE="2"
 fi
 
 SYSTEM_PROMPT=$(cat "$SYSTEM_PROMPT_FILE")

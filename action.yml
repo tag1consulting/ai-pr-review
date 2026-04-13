@@ -49,6 +49,13 @@ inputs:
     required: false
     default: 'quick'
 
+  max-diff-lines:
+    description: >
+      Maximum diff size in lines before the review is skipped to prevent runaway
+      token consumption. A comment is posted on the PR explaining the skip.
+    required: false
+    default: '5000'
+
   # --- PR metadata (normally auto-detected from github context) ---
   pr-number:
     description: Pull request number
@@ -83,6 +90,7 @@ runs:
       env:
         AI_PROVIDER: ${{ inputs.provider }}
         AI_REVIEW_MODE: ${{ inputs.review-mode }}
+        MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         AI_MODEL_STANDARD: ${{ inputs.model-standard }}
         AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
         # Map the single api-key input to all provider-specific env vars.

@@ -37,6 +37,15 @@ REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
 
+# Validate provider early — fail fast before expensive diff computation.
+case "$AI_PROVIDER" in
+  anthropic|openai|openai-compatible|google|bedrock-proxy) ;;
+  *)
+    echo "::error::Invalid AI_PROVIDER '${AI_PROVIDER}'. Valid values: anthropic, openai, openai-compatible, google, bedrock-proxy" >&2
+    exit 1
+    ;;
+esac
+
 # Set per-provider model defaults; user env vars take precedence.
 case "$AI_PROVIDER" in
   anthropic)
@@ -54,11 +63,6 @@ case "$AI_PROVIDER" in
   bedrock-proxy)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-us.anthropic.claude-sonnet-4-6}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-6-v1}"
-    ;;
-  *)
-    # openai-compatible without standard: user must set AI_MODEL_STANDARD
-    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:?AI_MODEL_STANDARD is required for AI_PROVIDER=${AI_PROVIDER}}"
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-${AI_MODEL_STANDARD}}"
     ;;
 esac
 
@@ -139,6 +143,29 @@ fi
 DIFF_LINES=$(wc -l < "$DIFF_FILE" | tr -d ' ')
 if [[ "$DIFF_LINES" -eq 0 ]]; then
   echo "No new changes since last review. Skipping." >&2
+  exit 0
+fi
+
+# Enforce diff size hard cap to prevent runaway token consumption.
+# Configurable via MAX_DIFF_LINES env var (default: 5000).
+MAX_DIFF_LINES="${MAX_DIFF_LINES:-5000}"
+if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
+  echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
+  echo "To review large diffs, increase MAX_DIFF_LINES or split the PR into smaller changes." >&2
+  # Post a comment on the PR explaining the skip so the author is not left wondering
+  : "${GH_TOKEN:?GH_TOKEN is required}"
+  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+  OWNER="${GITHUB_REPOSITORY%%/*}"
+  REPO="${GITHUB_REPOSITORY##*/}"
+  gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --method POST \
+    --field body="<!-- ai-pr-review-skipped -->
+## AI Review Skipped
+
+This PR's diff is too large for automated review (${DIFF_LINES} lines; limit: ${MAX_DIFF_LINES}).
+
+To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR into smaller changes." \
+    > /dev/null 2>&1 || true
   exit 0
 fi
 
