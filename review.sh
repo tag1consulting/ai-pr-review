@@ -355,6 +355,10 @@ FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
     echo -e "$LANGUAGE_CONTEXT"
     echo ""
   fi
+  echo "## Review Metadata"
+  echo "Current date: $(date -u +%Y-%m-%d)"
+  echo "Note: Your training data has a knowledge cutoff. Software versions, GitHub Actions, APIs, and packages released after that cutoff exist but may be unfamiliar to you. Do not flag dependency versions as nonexistent or unreleased solely because you have not encountered them before."
+  echo ""
   echo "## Diff"
   cat "$DIFF_FILE"
 } > "$FULL_CONTEXT_MSG"
@@ -369,6 +373,10 @@ CODE_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-code-ctx-XXXXXXXX.md)
     echo -e "$LANGUAGE_CONTEXT"
     echo ""
   fi
+  echo "## Review Metadata"
+  echo "Current date: $(date -u +%Y-%m-%d)"
+  echo "Note: Your training data has a knowledge cutoff. Software versions, GitHub Actions, APIs, and packages released after that cutoff exist but may be unfamiliar to you. Do not flag dependency versions as nonexistent or unreleased solely because you have not encountered them before."
+  echo ""
   echo "## Diff"
   cat "$DIFF_FILE"
 } > "$CODE_CONTEXT_MSG"
