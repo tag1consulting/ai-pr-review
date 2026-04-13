@@ -1,0 +1,52 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+      review_mode:
+        description: Review mode
+        required: false
+        default: full
+        type: choice
+        options: [quick, full]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: true
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.pull_request.draft == false &&
+       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Self-referential: use the checked-out action at the repo root.
+      - uses: ./
+        with:
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'bedrock-proxy' }}
+          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
+          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          review-mode: >-
+            ${{
+              inputs.review_mode ||
+              (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
+              'quick'
+            }}
+          pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          base-ref: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
