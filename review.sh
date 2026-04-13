@@ -37,14 +37,28 @@ REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
 
+# Validate provider early — fail fast before expensive diff computation.
+case "$AI_PROVIDER" in
+  anthropic|openai|openai-compatible|google|bedrock-proxy) ;;
+  *)
+    echo "::error::Invalid AI_PROVIDER '${AI_PROVIDER}'. Valid values: anthropic, openai, openai-compatible, google, bedrock-proxy" >&2
+    exit 1
+    ;;
+esac
+
 # Set per-provider model defaults; user env vars take precedence.
 case "$AI_PROVIDER" in
   anthropic)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-claude-sonnet-4-6-20250514}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-claude-opus-4-6-20250514}"
     ;;
-  openai|openai-compatible)
+  openai)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-gpt-4o}"
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-${AI_MODEL_STANDARD}}"
+    ;;
+  openai-compatible)
+    # No universal default — user must specify a model for custom endpoints.
+    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:?AI_MODEL_STANDARD is required for AI_PROVIDER=openai-compatible}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-${AI_MODEL_STANDARD}}"
     ;;
   google)
@@ -54,11 +68,6 @@ case "$AI_PROVIDER" in
   bedrock-proxy)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-us.anthropic.claude-sonnet-4-6}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-6-v1}"
-    ;;
-  *)
-    # openai-compatible without standard: user must set AI_MODEL_STANDARD
-    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:?AI_MODEL_STANDARD is required for AI_PROVIDER=${AI_PROVIDER}}"
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-${AI_MODEL_STANDARD}}"
     ;;
 esac
 
@@ -139,6 +148,44 @@ fi
 DIFF_LINES=$(wc -l < "$DIFF_FILE" | tr -d ' ')
 if [[ "$DIFF_LINES" -eq 0 ]]; then
   echo "No new changes since last review. Skipping." >&2
+  exit 0
+fi
+
+# Enforce diff size hard cap to prevent runaway token consumption.
+# Configurable via MAX_DIFF_LINES env var (default: 5000).
+MAX_DIFF_LINES="${MAX_DIFF_LINES:-5000}"
+if ! [[ "$MAX_DIFF_LINES" =~ ^[0-9]+$ ]]; then
+  echo "WARNING: MAX_DIFF_LINES '${MAX_DIFF_LINES}' is not a valid integer; using default 5000." >&2
+  MAX_DIFF_LINES=5000
+fi
+if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
+  echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
+  echo "To review large diffs, increase MAX_DIFF_LINES or split the PR into smaller changes." >&2
+  # Post (or update) a comment explaining the skip — idempotent via marker to avoid
+  # accumulating duplicate comments across repeated oversized pushes.
+  : "${GH_TOKEN:?GH_TOKEN is required}"
+  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+  : "${PR_NUMBER:?PR_NUMBER is required}"
+  OWNER="${GITHUB_REPOSITORY%%/*}"
+  REPO="${GITHUB_REPOSITORY##*/}"
+  SKIP_MARKER="<!-- ai-pr-review-skipped -->"
+  SKIP_BODY="${SKIP_MARKER}
+## AI Review Skipped
+
+This PR's diff is too large for automated review (${DIFF_LINES} lines; limit: ${MAX_DIFF_LINES}).
+
+To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR into smaller changes."
+  existing_skip_id=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --paginate \
+    --jq ".[] | select(.body | contains(\"${SKIP_MARKER}\")) | .id" \
+    2>/dev/null | tail -1) || true
+  if [[ -n "$existing_skip_id" ]]; then
+    gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_skip_id}" \
+      --method PATCH --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+  else
+    gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+      --method POST --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+  fi
   exit 0
 fi
 
