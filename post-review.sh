@@ -86,12 +86,10 @@ MAX_BODY_SIZE=64000
 truncate_body() {
   local body="$1"
   if [[ ${#body} -gt $MAX_BODY_SIZE ]]; then
-    echo "${body:0:$MAX_BODY_SIZE}
-
----
-*Review output truncated — body exceeded GitHub API limit (65,536 chars). Run a full review locally to see complete output.*"
+    printf '%s\n\n---\n*Review output truncated — body exceeded GitHub API limit (65,536 chars). Run a full review locally to see complete output.*\n' \
+      "${body:0:$MAX_BODY_SIZE}"
   else
-    echo "$body"
+    printf '%s' "$body"
   fi
 }
 

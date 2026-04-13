@@ -52,8 +52,13 @@ case "$AI_PROVIDER" in
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-claude-sonnet-4-6-20250514}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-claude-opus-4-6-20250514}"
     ;;
-  openai|openai-compatible)
+  openai)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-gpt-4o}"
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-${AI_MODEL_STANDARD}}"
+    ;;
+  openai-compatible)
+    # No universal default — user must specify a model for custom endpoints.
+    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:?AI_MODEL_STANDARD is required for AI_PROVIDER=openai-compatible}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-${AI_MODEL_STANDARD}}"
     ;;
   google)
@@ -149,6 +154,10 @@ fi
 # Enforce diff size hard cap to prevent runaway token consumption.
 # Configurable via MAX_DIFF_LINES env var (default: 5000).
 MAX_DIFF_LINES="${MAX_DIFF_LINES:-5000}"
+if ! [[ "$MAX_DIFF_LINES" =~ ^[0-9]+$ ]]; then
+  echo "WARNING: MAX_DIFF_LINES '${MAX_DIFF_LINES}' is not a valid integer; using default 5000." >&2
+  MAX_DIFF_LINES=5000
+fi
 if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
   echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
   echo "To review large diffs, increase MAX_DIFF_LINES or split the PR into smaller changes." >&2
