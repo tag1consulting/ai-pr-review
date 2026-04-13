@@ -88,7 +88,7 @@ ONLY findings with confidence >= 75:
 ```json-findings
 [{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
 ```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
+`severity` must be exactly one of: `Critical`, `High`, `Medium`.
 If no findings meet the threshold, emit an empty array: `[]`
 
 ---
