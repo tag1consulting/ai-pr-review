@@ -2,6 +2,17 @@
 
 AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline review findings directly on the PR.
 
+## Requirements
+
+The action runs on `ubuntu-latest` GitHub Actions runners and requires:
+
+- **Bash 4+**, **curl**, **jq**, **git**, **gh** — all pre-installed on standard GitHub-hosted runners
+- **shellcheck** — installed automatically by the action if not already present
+- A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
+- An API key for one of the [supported LLM providers](#supported-llm-providers)
+
+No additional runner setup or Docker image is required.
+
 ## What it does
 
 On every PR push, this action:
@@ -53,20 +64,17 @@ Findings use shape-distinct icons for accessibility:
 | Google | `google` | `GOOGLE_API_KEY` | Gemini 2.5 Flash/Pro |
 | Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | Tag1 OpenWebUI Bedrock proxy (default) |
 
-## Usage
+## Installation
 
-### As a GitHub Actions composite action (submodule)
+### Direct action reference (recommended)
 
-#### 1. Add this repo as a git submodule
+This is the simplest approach. No submodule or extra checkout configuration needed.
 
-```bash
-git submodule add git@github.com:tag1consulting/ai-pr-review.git ai-pr-review
-git commit -m "Add ai-pr-review submodule"
-```
+**Prerequisites:** In this repo's settings, go to **Settings → Actions → General → Access** and set it to **"Accessible from repositories in the 'tag1consulting' organization"**. This allows other repos in the org to use it as an action.
 
-#### 2. Create the workflow
+#### 1. Create the workflow
 
-Create `.github/workflows/ai-review.yml`:
+Create `.github/workflows/ai-review.yml` in your repository:
 
 ```yaml
 name: AI PR Review
@@ -92,11 +100,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: true
-          # Use a PAT if the submodule is in a private repo:
-          # token: ${{ secrets.GH_PAT }}
 
-      - uses: ./ai-pr-review
+      - uses: tag1consulting/ai-pr-review@main
         with:
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'bedrock-proxy' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
@@ -107,9 +112,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-#### 3. Configure secrets and variables
+Pin to a specific version by using a tag or commit SHA instead of `@main` (e.g., `@v1.0` or `@d613707`).
 
-In your repository settings:
+#### 2. Configure secrets and variables
+
+In the **consuming** repository's settings:
 
 **Secrets:**
 - `AI_REVIEW_API_KEY` — API key for your chosen LLM provider
@@ -120,14 +127,36 @@ In your repository settings:
 - `AI_REVIEW_MODEL_STANDARD` — Override the standard model ID
 - `AI_REVIEW_MODEL_PREMIUM` — Override the premium model ID (full mode only)
 
-### Updating the submodule
+### Alternative: git submodule
 
-To pin the submodule to a new version:
+If you prefer explicit version pinning via a submodule (useful for auditing exactly which version of the action is used):
+
+```bash
+git submodule add git@github.com:tag1consulting/ai-pr-review.git ai-pr-review
+git commit -m "Add ai-pr-review submodule"
+```
+
+Then in your workflow, use `submodules: true` on checkout and reference the local path:
+
+```yaml
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+          # PAT required if ai-pr-review is private:
+          # token: ${{ secrets.GH_PAT }}
+
+      - uses: ./ai-pr-review
+        with:
+          # ... same inputs as above
+```
+
+To update the submodule pin:
 
 ```bash
 cd ai-pr-review
 git fetch --all
-git checkout v1.0  # or a specific commit
+git checkout v1.0
 cd ..
 git add ai-pr-review
 git commit -m "Bump ai-pr-review submodule to v1.0"
