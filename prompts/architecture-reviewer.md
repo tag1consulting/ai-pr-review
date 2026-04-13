@@ -59,6 +59,7 @@ relationships, or restructure modules.
 
 Do NOT assess: security implications (security-reviewer), code-level style/formatting
 (code-reviewer), error handling quality (silent-failure-hunter), test coverage.
+Do NOT flag dependency version bumps as problematic solely because the version is unfamiliar — your training data has a cutoff and newer releases exist.
 
 ## Empty State
 
