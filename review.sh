@@ -223,16 +223,16 @@ done <<< "$CHANGED_FILES"
 # Build manifest text
 MANIFEST="BASE: ${BASE_REF} | DIFF: ${DIFF_LABEL} | LANGUAGES: ${LANGUAGES:-unknown} | FILES: ${FILE_COUNT} | ${DIFF_STAT}"
 if [[ -n "$SOURCE_FILES" ]]; then
-  MANIFEST="${MANIFEST}\n\nSource: $(printf '%b' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST="${MANIFEST}\n\nSource: $(printf '%b' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//' || true)"
 fi
 if [[ -n "$TEST_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nTests: $(printf '%b' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST="${MANIFEST}\nTests: $(printf '%b' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//' || true)"
 fi
 if [[ -n "$CONFIG_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nConfig: $(printf '%b' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST="${MANIFEST}\nConfig: $(printf '%b' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//' || true)"
 fi
 if [[ -n "$DOC_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nDocs: $(printf '%b' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST="${MANIFEST}\nDocs: $(printf '%b' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//' || true)"
 fi
 
 # Commit log — scoped to the same range as the diff
@@ -441,6 +441,10 @@ AGENT_COUNT=${#AGENT_OUTPUTS[@]}
 FAILED_COUNT=${#FAILED_AGENTS[@]}
 if [[ "$FAILED_COUNT" -gt 0 ]]; then
   echo "Agents complete. (${AGENT_COUNT} finding agents ran, ${FAILED_COUNT} failed: ${FAILED_AGENTS[*]})" >&2
+  if [[ "$FAILED_COUNT" -eq "$AGENT_COUNT" && "$AGENT_COUNT" -gt 0 ]]; then
+    echo "ERROR: All ${AGENT_COUNT} agents failed. Aborting review." >&2
+    exit 1
+  fi
 else
   echo "Agents complete. (${AGENT_COUNT} finding agents ran)" >&2
 fi
