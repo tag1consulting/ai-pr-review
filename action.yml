@@ -1,0 +1,102 @@
+name: AI PR Review
+description: >
+  AI-powered pull request review using multiple LLM agents.
+  Posts a summary comment and inline review findings on the PR.
+
+inputs:
+  # --- Provider ---
+  provider:
+    description: >
+      LLM provider: anthropic | openai | openai-compatible | google | bedrock-proxy
+    required: false
+    default: 'bedrock-proxy'
+
+  # --- Credentials ---
+  api-key:
+    description: >
+      API key for the chosen provider.
+      Maps to ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, or BEDROCK_API_KEY
+      depending on the provider.
+    required: true
+
+  base-url:
+    description: >
+      Base URL for OpenAI-compatible or bedrock-proxy endpoints.
+      Not needed for anthropic or google providers.
+    required: false
+    default: ''
+
+  # --- Model overrides ---
+  model-standard:
+    description: >
+      Model ID for standard agents (pr-summarizer, code-reviewer, etc.).
+      Defaults to the provider's standard model.
+    required: false
+    default: ''
+
+  model-premium:
+    description: >
+      Model ID for premium/deep-analysis agents (architecture, security).
+      Only used in full review mode. Defaults to the provider's premium model.
+    required: false
+    default: ''
+
+  # --- Review mode ---
+  review-mode:
+    description: >
+      Review mode: quick (3 agents) or full (all agents including architecture,
+      security, blind-hunter, edge-case-hunter, adversarial-general).
+    required: false
+    default: 'quick'
+
+  # --- PR metadata (normally auto-detected from github context) ---
+  pr-number:
+    description: Pull request number
+    required: true
+
+  base-ref:
+    description: Base branch name (e.g., main)
+    required: true
+
+  head-sha:
+    description: Head commit SHA
+    required: true
+
+  github-token:
+    description: >
+      GitHub token for posting reviews and comments.
+      Needs pull-requests: write permission.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install shellcheck
+      shell: bash
+      run: |
+        if ! command -v shellcheck &>/dev/null; then
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+        fi
+
+    - name: Run AI review
+      shell: bash
+      env:
+        AI_PROVIDER: ${{ inputs.provider }}
+        AI_REVIEW_MODE: ${{ inputs.review-mode }}
+        AI_MODEL_STANDARD: ${{ inputs.model-standard }}
+        AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
+        # Map the single api-key input to all provider-specific env vars.
+        # Only the one matching AI_PROVIDER will actually be read.
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        OPENAI_API_KEY: ${{ inputs.api-key }}
+        GOOGLE_API_KEY: ${{ inputs.api-key }}
+        BEDROCK_API_KEY: ${{ inputs.api-key }}
+        OPENAI_BASE_URL: ${{ inputs.base-url }}
+        BEDROCK_API_URL: ${{ inputs.base-url || 'https://openwebui-proxy.tag1.io/bedrock' }}
+        # GitHub context
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        BASE_REF: ${{ inputs.base-ref }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+      run: bash "${{ github.action_path }}/review.sh"

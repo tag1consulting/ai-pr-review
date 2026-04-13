@@ -1,0 +1,51 @@
+[
+  {
+    "id": "shellcheck-heredoc-false-positive-run-shellcheck",
+    "reason": "Shellcheck misparses the heredoc inside the if condition in run-shellcheck.sh and emits SC1072+SC1073 as a pair; bash -n passes cleanly. Suppressing all shellcheck findings on this file.",
+    "match": {
+      "file": "run-shellcheck.sh"
+    }
+  },
+  {
+    "id": "echo-zero-safe-default",
+    "reason": "Intentional: || echo '0' in arithmetic contexts provides a safe default when grep finds no match. Defaulting to 0 lines does not suppress any review output — it is the conservative path.",
+    "match": {
+      "pattern": "silently default.*0|default.*0.*echo|echo.*0.*safe|safe.*default.*0"
+    }
+  },
+  {
+    "id": "merge-findings-skip-intentional",
+    "reason": "Intentional: merge_findings skipping a corrupt batch with WARNING is by design. Aborting the entire review on one bad batch is worse than losing one agent's findings.",
+    "match": {
+      "pattern": "merge_findings.*skip|silently skip.*batch|skip.*batch.*warning"
+    }
+  },
+  {
+    "id": "shellcheck-empty-array-fallback",
+    "reason": "Intentional: || echo '[]' on shellcheck failure is graceful degradation. Shellcheck is a nice-to-have lint pass; its failure should not block the AI review.",
+    "match": {
+      "pattern": "\\[\\].*shellcheck|shellcheck.*\\[\\]|shellcheck.*fallback|fallback.*shellcheck"
+    }
+  },
+  {
+    "id": "marker-prefix-jq-interpolation",
+    "reason": "MARKER_PREFIX is a hardcoded constant (<!-- ai-pr-review-summary) containing no jq metacharacters. gh api does not support --arg, so shell interpolation into --jq is the only option. The interpolation is safe for this controlled value.",
+    "match": {
+      "pattern": "MARKER_PREFIX.*jq|jq.*MARKER_PREFIX|marker.*interpolat|interpolat.*marker|fragile.*marker|marker.*fragile"
+    }
+  },
+  {
+    "id": "review-id-jq-interpolation-integer-safe",
+    "reason": "review_id always originates from gh api JSON output as an integer. Shell-interpolating an integer into a jq filter is safe; no string quoting or metacharacter risk applies to integer values.",
+    "match": {
+      "pattern": "review_id.*interpolat|interpolat.*review_id|review_id.*jq.*express|jq.*review_id.*shell"
+    }
+  },
+  {
+    "id": "get-last-sha-api-failure-fallback-intentional",
+    "reason": "Intentional: get_last_reviewed_sha emits a WARNING on API failure and returns empty, triggering a full PR diff. This is the safe fallback — a full re-review is correct behavior when the last SHA is unknown, and the WARNING distinguishes it from a genuine first run.",
+    "match": {
+      "pattern": "get_last_reviewed_sha.*indistinguishable|indistinguishable.*first.run|api.failure.*full.re-review|transient.*api.*full"
+    }
+  }
+]
