@@ -56,13 +56,13 @@ Findings use shape-distinct icons for accessibility:
 
 ## Supported LLM providers
 
-| Provider | `provider` value | Required secret | Notes |
-|----------|-----------------|-----------------|-------|
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | Claude Sonnet/Opus |
-| OpenAI | `openai` | `OPENAI_API_KEY` | GPT-4o |
-| OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Any OpenAI-compatible endpoint |
-| Google | `google` | `GOOGLE_API_KEY` | Gemini 2.5 Flash/Pro |
-| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | Tag1 OpenWebUI Bedrock proxy |
+| Provider | `provider` value | Required secret | Default models (standard / premium) |
+|----------|-----------------|-----------------|--------------------------------------|
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6-20250514` / `claude-opus-4-6-20250514` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4o` |
+| OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
+| Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
+| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-6-v1` |
 
 ## Installation
 
@@ -225,6 +225,21 @@ The action auto-detects languages from file extensions and injects per-language 
 - `shell.md` — Shell/Bash-specific review context
 
 To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) should match the language key detected from file extensions.
+
+## Token usage
+
+After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
+
+| Column | Description |
+|--------|-------------|
+| Agent | Agent name |
+| Model | Human-readable model name (e.g. "Sonnet 4.6") |
+| Input | Input tokens consumed |
+| Output | Output tokens generated |
+| Total | Combined token count |
+| Est. Cost | Estimated cost at public list prices |
+
+Costs are calculated using public list prices as of April 2026 and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
 
 ## Architecture
 
