@@ -223,23 +223,23 @@ done <<< "$CHANGED_FILES"
 # Build manifest text
 MANIFEST="BASE: ${BASE_REF} | DIFF: ${DIFF_LABEL} | LANGUAGES: ${LANGUAGES:-unknown} | FILES: ${FILE_COUNT} | ${DIFF_STAT}"
 if [[ -n "$SOURCE_FILES" ]]; then
-  MANIFEST="${MANIFEST}\n\nSource: $(printf '%b' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//' || true)"
+  MANIFEST="${MANIFEST}\n\nSource: $(set +o pipefail; printf '%b' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$TEST_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nTests: $(printf '%b' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//' || true)"
+  MANIFEST="${MANIFEST}\nTests: $(set +o pipefail; printf '%b' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$CONFIG_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nConfig: $(printf '%b' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//' || true)"
+  MANIFEST="${MANIFEST}\nConfig: $(set +o pipefail; printf '%b' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$DOC_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nDocs: $(printf '%b' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//' || true)"
+  MANIFEST="${MANIFEST}\nDocs: $(set +o pipefail; printf '%b' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 
 # Commit log — scoped to the same range as the diff
 if [[ -n "$DIFF_BASE" ]]; then
-  COMMIT_LOG=$(git log --oneline "${DIFF_BASE}..${HEAD_SHA}" 2>/dev/null | head -20)
+  COMMIT_LOG=$(set +o pipefail; git log --oneline "${DIFF_BASE}..${HEAD_SHA}" 2>/dev/null | head -20)
 else
-  COMMIT_LOG=$(git log --oneline "origin/${BASE_REF}..${HEAD_SHA}" 2>/dev/null | head -20)
+  COMMIT_LOG=$(set +o pipefail; git log --oneline "origin/${BASE_REF}..${HEAD_SHA}" 2>/dev/null | head -20)
 fi
 
 # Validate and log review mode
@@ -500,7 +500,7 @@ extract_findings() {
       return
     else
       local preview
-      preview=$(printf '%s' "$extracted" | head -c 200)
+      preview=$(set +o pipefail; printf '%s' "$extracted" | head -c 200)
       echo "WARNING: $(basename "$agent_file") produced invalid or malformed json-findings; skipping. Preview: ${preview}" >&2
     fi
   fi
