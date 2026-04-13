@@ -226,6 +226,21 @@ The action auto-detects languages from file extensions and injects per-language 
 
 To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) should match the language key detected from file extensions.
 
+## Token usage
+
+After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
+
+| Column | Description |
+|--------|-------------|
+| Agent | Agent name |
+| Model | Human-readable model name (e.g. "Sonnet 4.6") |
+| Input | Input tokens consumed |
+| Output | Output tokens generated |
+| Total | Combined token count |
+| Est. Cost | Estimated cost at public list prices |
+
+Costs are calculated using public list prices as of April 2026 and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
+
 ## Architecture
 
 ```
