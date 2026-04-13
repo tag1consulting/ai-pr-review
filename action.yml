@@ -9,7 +9,7 @@ inputs:
     description: >
       LLM provider: anthropic | openai | openai-compatible | google | bedrock-proxy
     required: false
-    default: 'bedrock-proxy'
+    default: 'anthropic'
 
   # --- Credentials ---
   api-key:
@@ -92,7 +92,7 @@ runs:
         GOOGLE_API_KEY: ${{ inputs.api-key }}
         BEDROCK_API_KEY: ${{ inputs.api-key }}
         OPENAI_BASE_URL: ${{ inputs.base-url }}
-        BEDROCK_API_URL: ${{ inputs.base-url || 'https://openwebui-proxy.tag1.io/bedrock' }}
+        BEDROCK_API_URL: ${{ inputs.base-url }}
         # GitHub context
         GH_TOKEN: ${{ inputs.github-token }}
         GITHUB_REPOSITORY: ${{ github.repository }}

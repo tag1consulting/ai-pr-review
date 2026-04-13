@@ -75,7 +75,7 @@ jobs:
       # Self-referential: use the checked-out action at the repo root.
       - uses: ./
         with:
-          provider: ${{ vars.AI_REVIEW_PROVIDER || 'bedrock-proxy' }}
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
           review-mode: >-

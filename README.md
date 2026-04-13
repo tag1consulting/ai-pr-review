@@ -62,7 +62,7 @@ Findings use shape-distinct icons for accessibility:
 | OpenAI | `openai` | `OPENAI_API_KEY` | GPT-4o |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Any OpenAI-compatible endpoint |
 | Google | `google` | `GOOGLE_API_KEY` | Gemini 2.5 Flash/Pro |
-| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | Tag1 OpenWebUI Bedrock proxy (default) |
+| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | Tag1 OpenWebUI Bedrock proxy |
 
 ## Installation
 
@@ -103,7 +103,7 @@ jobs:
 
       - uses: tag1consulting/ai-pr-review@main
         with:
-          provider: ${{ vars.AI_REVIEW_PROVIDER || 'bedrock-proxy' }}
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
           pr-number: ${{ github.event.pull_request.number }}
@@ -122,7 +122,7 @@ In the **consuming** repository's settings:
 - `AI_REVIEW_API_KEY` — API key for your chosen LLM provider
 
 **Variables** (optional):
-- `AI_REVIEW_PROVIDER` — Provider name (default: `bedrock-proxy`)
+- `AI_REVIEW_PROVIDER` — Provider name (default: `anthropic`)
 - `AI_REVIEW_BASE_URL` — Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`)
 - `AI_REVIEW_MODEL_STANDARD` — Override the standard model ID
 - `AI_REVIEW_MODEL_PREMIUM` — Override the premium model ID (full mode only)
@@ -168,7 +168,7 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `provider` | No | `bedrock-proxy` | LLM provider |
+| `provider` | No | `anthropic` | LLM provider |
 | `api-key` | **Yes** | — | API key for the provider |
 | `base-url` | No | `''` | Base URL for OpenAI-compatible or bedrock-proxy |
 | `model-standard` | No | Per-provider default | Model for standard agents |
