@@ -27,19 +27,17 @@ if [[ "${1:-}" == "--get-last-sha" ]]; then
   MARKER_PREFIX="<!-- ai-pr-review-summary"
 
   get_last_reviewed_sha() {
-    local all_comments gh_err
+    local comment_body gh_err
     gh_err=$(mktemp)
-    all_comments=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    comment_body=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --paginate \
-      --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .body" \
+      --jq "[.[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .body] | last // empty" \
       2>"$gh_err") || {
       echo "WARNING: get_last_reviewed_sha: GitHub API error (treating as first run): $(cat "$gh_err")" >&2
       rm -f "$gh_err"
       return 0
     }
     rm -f "$gh_err"
-    local comment_body
-    comment_body=$(echo "$all_comments" | tail -1)
     if [[ -n "$comment_body" ]]; then
       echo "$comment_body" | grep -oE 'sha=[0-9a-f]+' | sed 's/sha=//' | head -1 || true
     fi
@@ -98,10 +96,10 @@ truncate_body() {
 # Returns the SHA via stdout, or empty string if no prior review.
 # ---------------------------------------------------------------------------
 get_last_reviewed_sha() {
-  local all_comments gh_err
+  local comment_body gh_err
   gh_err=$(mktemp)
-  all_comments=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
-    --paginate --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .body" \
+  comment_body=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --paginate --jq "[.[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .body] | last // empty" \
     2>"$gh_err") || {
     echo "WARNING: get_last_reviewed_sha: GitHub API error (treating as first run): $(cat "$gh_err")" >&2
     rm -f "$gh_err"
@@ -109,11 +107,8 @@ get_last_reviewed_sha() {
   }
   rm -f "$gh_err"
 
-  local comment_body
-  comment_body=$(echo "$all_comments" | tail -1)
   if [[ -n "$comment_body" ]]; then
     # Extract sha= value from marker: <!-- ai-pr-review-summary sha=abc1234 -->
-    # Use a fixed-string grep first, then extract the sha= portion with a safe pattern.
     echo "$comment_body" | grep -oE 'sha=[0-9a-f]+' | sed 's/sha=//' | head -1 || true
   fi
 }
@@ -621,12 +616,13 @@ ${token_table}"
       --argjson comments "$inline_comments" \
       '{body: $body, event: "COMMENT", commit_id: $commit_id, comments: $comments}')
     local findings_post_result
-    findings_post_result=$(echo "$findings_json_for_comment" | gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
+    if findings_post_result=$(echo "$findings_json_for_comment" | gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
       --method POST \
-      --input - 2>&1) || {
+      --input - 2>&1); then
+      echo "Posted inline findings as COMMENT review before APPROVE." >&2
+    else
       echo "WARNING: Failed to post inline findings as COMMENT review before APPROVE: ${findings_post_result}" >&2
-    }
-    echo "Posted inline findings as COMMENT review before APPROVE." >&2
+    fi
     # Clear inline comments from the APPROVE review — they were posted above
     inline_comments="[]"
     inline_count=0
