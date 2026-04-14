@@ -173,23 +173,28 @@ $(cat "$_TOKEN_TABLE_FILE")"
       label_args+=(--field "labels[]=ai-review-action-needed")
     fi
 
-    local issue_url
+    local issue_url issue_err
+    issue_err=$(mktemp)
     if ! issue_url=$(gh api "repos/${_OWNER}/${_REPO}/issues" \
       --method POST \
       --field title="$issue_title" \
       --field body="$issue_body" \
       "${label_args[@]}" \
-      --jq '.html_url' 2>&1); then
-      echo "WARNING: Issue creation with labels failed; retrying without labels..." >&2
-      issue_url=$(gh api "repos/${_OWNER}/${_REPO}/issues" \
+      --jq '.html_url' 2>"$issue_err"); then
+      local first_err
+      first_err=$(cat "$issue_err")
+      echo "WARNING: Issue creation with labels failed (${first_err}); retrying without labels..." >&2
+      if ! issue_url=$(gh api "repos/${_OWNER}/${_REPO}/issues" \
         --method POST \
         --field title="$issue_title" \
         --field body="$issue_body" \
-        --jq '.html_url' 2>&1) || {
-        echo "ERROR: Failed to create standalone review issue: ${issue_url}" >&2
+        --jq '.html_url' 2>"$issue_err"); then
+        echo "ERROR: Failed to create standalone review issue: $(cat "$issue_err")" >&2
+        rm -f "$issue_err"
         exit 1
-      }
+      fi
     fi
+    rm -f "$issue_err"
 
     echo "Standalone review issue created: ${issue_url}" >&2
   }
