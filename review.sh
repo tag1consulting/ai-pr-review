@@ -120,6 +120,7 @@ git fetch origin "${BASE_REF}" --depth=50 2>/dev/null || {
 LAST_REVIEWED_SHA=""
 DIFF_BASE=""
 DIFF_LABEL=""
+DIFF_TWO_DOT=false
 
 if [[ "$REVIEW_TARGET" != "standalone" ]]; then
   LAST_REVIEWED_SHA=$("${SCRIPT_DIR}/post-review.sh" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
@@ -161,8 +162,9 @@ if [[ -z "$DIFF_BASE" ]]; then
         echo "Standalone review: diffing last ${STANDALONE_DEPTH} commits (HEAD~${STANDALONE_DEPTH}...HEAD)" >&2
       else
         DIFF_BASE="$(git hash-object -t tree /dev/null)"
+        DIFF_TWO_DOT=true   # empty tree is not a commit; three-dot syntax won't work
         DIFF_LABEL="standalone (full tree)"
-        echo "Standalone review: diffing entire tree against empty tree (${DIFF_BASE:0:7}...${HEAD_SHA:0:7})" >&2
+        echo "Standalone review: diffing entire tree against empty tree (${DIFF_BASE:0:7}..${HEAD_SHA:0:7})" >&2
       fi
     fi
   fi
@@ -176,7 +178,9 @@ fi
 DIFF_FILE=$(mktemp_tracked /tmp/ai-review-diff-XXXXXXXX.txt)
 EXCL=(':!*lock.json' ':!*lock.yaml' ':!vendor/*' ':!*.sum' ':!node_modules/*')
 if [[ -n "$DIFF_BASE" ]]; then
-  if ! git diff "${DIFF_BASE}...${HEAD_SHA}" -- "${EXCL[@]}" > "$DIFF_FILE" 2>/dev/null; then
+  local_diff_sep="..."
+  [[ "$DIFF_TWO_DOT" == "true" ]] && local_diff_sep=".."
+  if ! git diff "${DIFF_BASE}${local_diff_sep}${HEAD_SHA}" -- "${EXCL[@]}" > "$DIFF_FILE" 2>/dev/null; then
     : > "$DIFF_FILE"
     echo "WARNING: git diff failed; diff output may be empty or incomplete." >&2
   fi
@@ -238,8 +242,8 @@ echo "Diff: ${DIFF_LINES} lines (${DIFF_LABEL})" >&2
 
 # Build file manifest (same range as diff)
 if [[ -n "$DIFF_BASE" ]]; then
-  CHANGED_FILES=$(git diff --name-only -z "${DIFF_BASE}...${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tr '\0' '\n' || true)
-  DIFF_STAT=$(git diff --stat "${DIFF_BASE}...${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tail -1)
+  CHANGED_FILES=$(git diff --name-only -z "${DIFF_BASE}${local_diff_sep}${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tr '\0' '\n' || true)
+  DIFF_STAT=$(git diff --stat "${DIFF_BASE}${local_diff_sep}${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tail -1)
 else
   CHANGED_FILES=$(git diff --name-only -z "origin/${BASE_REF}...${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tr '\0' '\n' || true)
   DIFF_STAT=$(git diff --stat "origin/${BASE_REF}...${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tail -1)
