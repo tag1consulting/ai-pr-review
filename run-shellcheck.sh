@@ -38,7 +38,7 @@ FINDINGS="[]"
 for file in "${SHELL_FILES[@]}"; do
   [[ ! -f "$file" ]] && continue
 
-  # shellcheck outputs JSON with -f json1
+  # Run shellcheck with JSON output (-f json1) at warning severity
   SC_OUTPUT=$(shellcheck -f json1 -S warning -- "$file" 2>/dev/null || true)
 
   if [[ -z "$SC_OUTPUT" ]]; then

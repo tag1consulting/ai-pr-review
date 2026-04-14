@@ -727,12 +727,32 @@ if [[ "$PRE_FILTER_COUNT" -ne "$POST_FILTER_COUNT" ]]; then
   echo "Filtered findings: ${PRE_FILTER_COUNT} → ${POST_FILTER_COUNT} (confidence >= 75)" >&2
 fi
 
-# Deduplicate findings on same file:line (keep highest severity)
+# Deduplicate findings: merge same file:line exact duplicates, then merge findings
+# within 3 lines of each other in the same file (adjacent-line dedup). The highest
+# severity finding in each proximity cluster is kept.
 if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
-  group_by((.file // "unknown") + ":" + ((.line // 0) | tostring))
-  | map(sort_by(.severity | sev_rank) | reverse | .[0])
+  # Sort within each file by line number, then reduce adjacent findings within 3 lines
+  group_by(.file // "unknown")
+  | map(
+      sort_by(.line // 0) |
+      reduce .[] as $f (
+        [];
+        if length == 0 then [$f]
+        elif ((.[-1].file // "unknown") == ($f.file // "unknown")) and
+             (($f.line // 0) - (.[-1].line // 0)) <= 3
+        then
+          # Same proximity cluster: keep the higher-severity finding
+          if ((.[-1].severity | sev_rank) >= ($f.severity | sev_rank))
+          then .
+          else .[:-1] + [$f]
+          end
+        else . + [$f]
+        end
+      )
+    )
+  | flatten
 ' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
   mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
 else
