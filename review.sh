@@ -473,9 +473,10 @@ call_agent() {
       echo "$line" >&2
     fi
   done < "$agent_stderr"
-  # Append a marker so extract_findings() knows to attempt JSON repair
+  # Write a sidecar file so extract_findings() knows to attempt JSON repair.
+  # Using a separate file avoids any risk of the LLM emitting the sentinel in its prose.
   if [[ "$was_truncated" == "true" ]]; then
-    echo "<!-- RESPONSE_TRUNCATED -->" >> "$output"
+    touch "${output}.truncated"
   fi
 
   if [[ -n "$token_line" ]]; then
@@ -602,7 +603,7 @@ echo "[]" > "$FINDINGS_JSON_FILE"
 extract_findings() {
   local agent_file="$1"
   local was_truncated=false
-  grep -q '<!-- RESPONSE_TRUNCATED -->' "$agent_file" 2>/dev/null && was_truncated=true
+  [[ -f "${agent_file}.truncated" ]] && was_truncated=true
 
   if ! grep -q '```json-findings' "$agent_file" 2>/dev/null; then
     if [[ "$was_truncated" == "true" ]]; then
@@ -632,11 +633,8 @@ extract_findings() {
   # Strategy: find the last complete top-level object close in the extracted text,
   # truncate there, then close the array. This handles mid-object truncation.
   if [[ "$was_truncated" == "true" ]]; then
-    local last_obj_line repaired close_char
-    # Use printf to build the closing-brace char so no literal brace appears in this
-    # function body (the brace-depth tracker used by the test suite counts all braces).
-    printf -v close_char '%s' '}'
-    last_obj_line=$(printf '%s' "$extracted" | grep -n "^  ${close_char}" | tail -1 | cut -d: -f1)
+    local last_obj_line repaired
+    last_obj_line=$(printf '%s' "$extracted" | grep -n '^[[:space:]]*}' | tail -1 | cut -d: -f1)
     if [[ -n "$last_obj_line" ]]; then
       repaired=$(printf '%s' "$extracted" | head -n "$last_obj_line" | sed '$ s/,$//')
       repaired=$(printf '%s\n]' "$repaired")

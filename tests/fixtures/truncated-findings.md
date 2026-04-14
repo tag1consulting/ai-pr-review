@@ -30,4 +30,3 @@ Some discussion here.
     "file": "src/utils.go",
     "line": 88,
     "finding": "Partial find
-<!-- RESPONSE_TRUNCATED -->

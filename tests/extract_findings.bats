@@ -13,6 +13,11 @@ setup() {
   load_function "${PROJECT_ROOT}/review.sh" extract_findings
 }
 
+teardown() {
+  # Remove any sidecar files left by truncation tests
+  rm -f "${PROJECT_ROOT}/tests/fixtures/"*.truncated
+}
+
 # ---------------------------------------------------------------------------
 # extract_findings
 # ---------------------------------------------------------------------------
@@ -73,6 +78,7 @@ setup() {
 
 @test "extract_findings: truncated response with no fence returns empty array with truncation warning" {
   local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-no-fence.md"
+  touch "${fixture}.truncated"
   run --separate-stderr extract_findings "$fixture"
   [ "$status" -eq 0 ]
   [ "$output" = "[]" ]
@@ -81,6 +87,7 @@ setup() {
 
 @test "extract_findings: truncated JSON block is salvaged and returns partial findings" {
   local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-findings.md"
+  touch "${fixture}.truncated"
   run --separate-stderr extract_findings "$fixture"
   [ "$status" -eq 0 ]
   local count
@@ -91,6 +98,7 @@ setup() {
 
 @test "extract_findings: salvaged findings pass schema validation" {
   local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-findings.md"
+  touch "${fixture}.truncated"
   run --separate-stderr extract_findings "$fixture"
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '
