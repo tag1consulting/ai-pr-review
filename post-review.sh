@@ -840,6 +840,7 @@ ${body_findings}"
           echo "Review posted as PR comment (${review_event} → COMMENT both unavailable) to PR #${PR_NUMBER}." >&2
           return 0
         fi
+        # Reaches here only if the PR comment fallback above also failed.
         echo "ERROR: All three posting attempts failed (${review_event} → COMMENT → PR comment)." >&2
         return 1
       }
@@ -847,7 +848,7 @@ ${body_findings}"
       return 0
     fi
 
-    # COMMENT also failed — fall back to regular PR comment
+    # Initial COMMENT review failed — fall back to regular PR comment
     echo "Falling back to posting as a PR comment..." >&2
     if gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
@@ -855,6 +856,7 @@ ${body_findings}"
       echo "Review posted as PR comment (${review_event} unavailable) to PR #${PR_NUMBER}." >&2
       return 0
     fi
+    # Reaches here only if the PR comment fallback above also failed.
     echo "ERROR: All three posting attempts failed (${review_event} → COMMENT → PR comment)." >&2
     return 1
   }
@@ -865,7 +867,8 @@ ${body_findings}"
 # ---------------------------------------------------------------------------
 # Advance the SHA watermark in the existing summary comment so that the next
 # incremental review diffs from this HEAD, not the original first-review SHA.
-# Called unconditionally — even when post_summary is skipped (incremental runs).
+# Only called when post_summary succeeded — if the summary comment was not posted,
+# there is no existing comment to patch, so the update is skipped.
 # ---------------------------------------------------------------------------
 update_sha_marker() {
   local existing_comment_id existing_body
