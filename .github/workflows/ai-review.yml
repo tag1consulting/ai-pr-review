@@ -71,7 +71,7 @@ jobs:
             head_sha=$(git rev-parse HEAD)
             echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
             pr_json=$(gh pr list --state open --json number,baseRefName,headRefOid \
-              --jq ".[] | select(.headRefOid | startswith(\"${head_sha:0:7}\"))" | head -1)
+              --jq ".[] | select(.headRefOid == \"${head_sha}\")" | head -1)
             if [[ -z "$pr_json" ]]; then
               # Fall back: find any open PR whose head branch matches the ref input
               pr_json=$(gh pr list --state open --head "$INPUT_REF" \
