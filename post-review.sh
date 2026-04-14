@@ -71,8 +71,8 @@ if [[ "${1:-}" == "--standalone" ]]; then
 
   _severity_icon() {
     case "$1" in
-      Critical) echo "🚨" ;; High) echo "🚨" ;;
-      Medium)   echo "🔶" ;; Low)  echo "🔵" ;;
+      Critical) echo "❌" ;; High) echo "🚨" ;;
+      Medium)   echo "🔶" ;; Low)  echo "💬" ;;
       *)        echo "⚪" ;;
     esac
   }
@@ -834,11 +834,13 @@ ${body_findings}"
         --input - 2>&1) || {
         echo "ERROR: COMMENT review also failed: ${review_result}" >&2
         echo "Falling back to posting as a PR comment..." >&2
-        if ! gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+        if gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
           --method POST \
           --field body="${review_body}" > /dev/null 2>&1; then
-          echo "ERROR: All three posting attempts failed (${review_event} → COMMENT → PR comment)." >&2
+          echo "Review posted as PR comment (${review_event} → COMMENT both unavailable) to PR #${PR_NUMBER}." >&2
+          return 0
         fi
+        echo "ERROR: All three posting attempts failed (${review_event} → COMMENT → PR comment)." >&2
         return 1
       }
       echo "Review posted as COMMENT (${review_event} unavailable) to PR #${PR_NUMBER}." >&2
@@ -847,11 +849,13 @@ ${body_findings}"
 
     # COMMENT also failed — fall back to regular PR comment
     echo "Falling back to posting as a PR comment..." >&2
-    if ! gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    if gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
       --field body="${review_body}" > /dev/null 2>&1; then
-      echo "ERROR: All three posting attempts failed (${review_event} → COMMENT → PR comment)." >&2
+      echo "Review posted as PR comment (${review_event} unavailable) to PR #${PR_NUMBER}." >&2
+      return 0
     fi
+    echo "ERROR: All three posting attempts failed (${review_event} → COMMENT → PR comment)." >&2
     return 1
   }
 
@@ -906,6 +910,14 @@ update_sha_marker() {
 
 resolve_stale_threads
 dismiss_stale_reviews
-post_summary || echo "WARNING: Summary posting failed; continuing to post findings. The SHA marker will not be updated, so the next run will fall back to a full PR diff." >&2
+summary_ok=true
+post_summary || {
+  echo "WARNING: Summary posting failed; continuing to post findings. The next run will fall back to a full PR diff." >&2
+  summary_ok=false
+}
 post_findings || exit 1
-update_sha_marker
+if [[ "$summary_ok" == "true" ]]; then
+  update_sha_marker
+else
+  echo "Skipping SHA marker update — summary comment was not posted." >&2
+fi
