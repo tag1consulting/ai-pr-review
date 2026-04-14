@@ -84,6 +84,25 @@ When adding a suppression, include an `id` and a `reason` explaining why it is a
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 | `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-6-v1` |
 
+## Retry and resilience
+
+`llm-call.sh` retries transient API failures (HTTP 429, 500, 502, 503) and transient curl failures (exit codes 7, 28, 56) with exponential backoff and jitter. Configuration via env vars:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_RETRY_COUNT` | `3` | Number of retry attempts (set to 0 to disable) |
+| `LLM_RETRY_BASE_DELAY` | `2` | Base delay in seconds (doubles each retry) |
+
+The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`.
+
+Exit codes from `llm-call.sh`:
+- **0** — success
+- **1** — permanent error (bad API key, invalid request, unknown provider)
+- **2** — transient error (all retries exhausted)
+- **3** — content issue (provider safety/recitation filter blocked response)
+
+`post-review.sh` wraps critical GitHub API calls with `gh_api_retry()` (3 retries, 2s/4s/8s backoff) for transient errors (502, 503, 429, ETIMEDOUT).
+
 ## Testing locally
 
 ```bash
