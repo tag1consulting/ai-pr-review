@@ -49,6 +49,14 @@ inputs:
     required: false
     default: 'quick'
 
+  review-target:
+    description: >
+      Review target: pr (post review on a pull request) or standalone
+      (post findings as a GitHub issue without requiring a PR).
+      Default: pr.
+    required: false
+    default: 'pr'
+
   max-diff-lines:
     description: >
       Maximum diff size in lines before the review is skipped to prevent runaway
@@ -58,8 +66,10 @@ inputs:
 
   # --- PR metadata (normally auto-detected from github context) ---
   pr-number:
-    description: Pull request number
-    required: true
+    description: >
+      Pull request number. Required for pr review-target; not used in standalone mode.
+    required: false
+    default: ''
 
   base-ref:
     description: Base branch name (e.g., main)
@@ -90,6 +100,7 @@ runs:
       env:
         AI_PROVIDER: ${{ inputs.provider }}
         AI_REVIEW_MODE: ${{ inputs.review-mode }}
+        REVIEW_TARGET: ${{ inputs.review-target }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         AI_MODEL_STANDARD: ${{ inputs.model-standard }}
         AI_MODEL_PREMIUM: ${{ inputs.model-premium }}

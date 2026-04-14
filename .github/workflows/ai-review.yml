@@ -9,8 +9,17 @@ on:
         description: "Branch, tag, or commit SHA to review (default: main)"
         required: false
         default: main
+      standalone:
+        description: "Standalone review: post findings as a GitHub issue instead of a PR comment"
+        required: false
+        type: boolean
+        default: false
+      base_ref:
+        description: "Base ref to diff against (standalone mode only; defaults to default branch)"
+        required: false
+        default: ''
       pr_number:
-        description: "PR number (optional — looked up automatically from ref if omitted)"
+        description: "PR number (optional — looked up automatically from ref if not standalone)"
         required: false
       review_mode:
         description: Review mode
@@ -22,6 +31,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   review:
@@ -41,11 +51,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
-      # For workflow_dispatch: resolve PR number from ref when not supplied directly.
-      # Resolves a branch name or SHA to the open PR targeting the default branch.
+      # For workflow_dispatch (PR mode): resolve PR number from ref when not supplied directly.
       - name: Resolve PR number
         id: resolve-pr
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.standalone != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
@@ -69,12 +78,33 @@ jobs:
                 --json number,baseRefName,headRefOid | jq '.[0]')
             fi
             if [[ -z "$pr_json" || "$pr_json" == "null" ]]; then
-              echo "ERROR: No open PR found for ref '${INPUT_REF}' (${head_sha:0:7}). Create a PR first or pass pr_number directly." >&2
-              exit 1
+              # No PR found — fall back to standalone mode automatically
+              echo "No open PR found for ref '${INPUT_REF}' (${head_sha:0:7}); switching to standalone mode." >&2
+              echo "standalone=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "pr_number=$(echo "$pr_json" | jq -r '.number')" >> "$GITHUB_OUTPUT"
+              echo "base_ref=$(echo "$pr_json" | jq -r '.baseRefName')" >> "$GITHUB_OUTPUT"
             fi
-            echo "pr_number=$(echo "$pr_json" | jq -r '.number')" >> "$GITHUB_OUTPUT"
-            echo "base_ref=$(echo "$pr_json" | jq -r '.baseRefName')" >> "$GITHUB_OUTPUT"
           fi
+
+      # For workflow_dispatch (standalone mode): resolve HEAD SHA and base ref without a PR.
+      # Runs when standalone input is true OR when resolve-pr fell back to standalone.
+      - name: Resolve standalone refs
+        id: resolve-standalone
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.standalone == true || steps.resolve-pr.outputs.standalone == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          head_sha=$(git rev-parse HEAD)
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          base_ref="${{ inputs.base_ref }}"
+          if [[ -z "$base_ref" ]]; then
+            base_ref="${{ github.event.repository.default_branch }}"
+            echo "No base_ref provided; using default branch: ${base_ref}" >&2
+          fi
+          echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
 
       # Self-referential: use the checked-out action at the repo root.
       - uses: ./
@@ -88,7 +118,8 @@ jobs:
               (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
               'quick'
             }}
-          pr-number: ${{ steps.resolve-pr.outputs.pr_number || github.event.pull_request.number }}
-          base-ref: ${{ steps.resolve-pr.outputs.base_ref || github.event.pull_request.base.ref || github.event.repository.default_branch }}
-          head-sha: ${{ steps.resolve-pr.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
+          review-target: ${{ (inputs.standalone == true || steps.resolve-pr.outputs.standalone == 'true') && 'standalone' || 'pr' }}
+          pr-number: ${{ steps.resolve-pr.outputs.pr_number || github.event.pull_request.number || '' }}
+          base-ref: ${{ steps.resolve-standalone.outputs.base_ref || steps.resolve-pr.outputs.base_ref || github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          head-sha: ${{ steps.resolve-standalone.outputs.head_sha || steps.resolve-pr.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

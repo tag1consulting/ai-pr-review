@@ -24,6 +24,8 @@
 # Environment (optional):
 #   AI_REVIEW_MODE    — "quick" (default) or "full"
 #                       Add the "ai-review-full" label to a PR for full mode.
+#   REVIEW_TARGET     — "pr" (default) or "standalone"
+#                       "standalone" skips SHA watermark, posts findings as a GitHub issue.
 #   AI_MODEL_STANDARD — Model for standard agents (pr-summarizer, code-reviewer, etc.)
 #                       Defaults are chosen per provider if not set.
 #   AI_MODEL_PREMIUM  — Model for deep agents (architecture-reviewer, security-reviewer)
@@ -34,6 +36,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+REVIEW_TARGET="${REVIEW_TARGET:-pr}"
+PR_NUMBER="${PR_NUMBER:-}"
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
 
@@ -88,8 +92,16 @@ mktemp_tracked() {
 # ---------------------------------------------------------------------------
 # Phase 0: Pre-flight — compute diff, build manifest
 # ---------------------------------------------------------------------------
+if [[ "$REVIEW_TARGET" != "standalone" ]]; then
+  : "${PR_NUMBER:?PR_NUMBER is required for pr review-target}"
+fi
+
 echo "=== AI PR Review ===" >&2
-echo "PR: #${PR_NUMBER} | Base: ${BASE_REF} | Head: ${HEAD_SHA}" >&2
+if [[ "$REVIEW_TARGET" == "standalone" ]]; then
+  echo "Standalone review | Base: ${BASE_REF} | Head: ${HEAD_SHA}" >&2
+else
+  echo "PR: #${PR_NUMBER} | Base: ${BASE_REF} | Head: ${HEAD_SHA}" >&2
+fi
 echo "Mode: ${REVIEW_MODE}" >&2
 
 # Ensure we have the base branch for diffing
@@ -105,12 +117,16 @@ git fetch origin "${BASE_REF}" --depth=50 2>/dev/null || {
 # Incremental diff: only review commits since the last review run.
 # Fall back to the full PR diff on first run or if the last SHA is unreachable.
 # ---------------------------------------------------------------------------
-LAST_REVIEWED_SHA=$("${SCRIPT_DIR}/post-review.sh" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
-  echo "WARNING: Could not retrieve last-reviewed SHA; falling back to full PR diff." >&2
-  LAST_REVIEWED_SHA=""
-}
+LAST_REVIEWED_SHA=""
 DIFF_BASE=""
 DIFF_LABEL=""
+
+if [[ "$REVIEW_TARGET" != "standalone" ]]; then
+  LAST_REVIEWED_SHA=$("${SCRIPT_DIR}/post-review.sh" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
+    echo "WARNING: Could not retrieve last-reviewed SHA; falling back to full PR diff." >&2
+    LAST_REVIEWED_SHA=""
+  }
+fi
 
 if [[ -n "$LAST_REVIEWED_SHA" && "$LAST_REVIEWED_SHA" != "$HEAD_SHA" ]]; then
   # Verify the SHA is reachable AND is an ancestor of HEAD (guards against force-push/rebase)
@@ -160,7 +176,8 @@ if ! [[ "$MAX_DIFF_LINES" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
   echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
-  echo "To review large diffs, increase MAX_DIFF_LINES or split the PR into smaller changes." >&2
+  echo "To review large diffs, increase MAX_DIFF_LINES or split into smaller changes." >&2
+  if [[ "$REVIEW_TARGET" != "standalone" ]]; then
   # Post (or update) a comment explaining the skip — idempotent via marker to avoid
   # accumulating duplicate comments across repeated oversized pushes.
   : "${GH_TOKEN:?GH_TOKEN is required}"
@@ -186,6 +203,7 @@ To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR i
     gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST --field body="$SKIP_BODY" > /dev/null 2>&1 || true
   fi
+  fi  # end REVIEW_TARGET != standalone
   exit 0
 fi
 
@@ -849,14 +867,25 @@ if [[ "${#FAILED_AGENTS[@]}" -gt 0 ]]; then
   AI_REVIEW_FAILED_AGENTS=$(IFS=:; echo "${FAILED_AGENTS[*]}")
 fi
 
-"${SCRIPT_DIR}/post-review.sh" \
-  "$PR_NUMBER" \
-  "$SUMMARY_FILE" \
-  "$FINDINGS_CLEAN_FILE" \
-  "$FINDINGS_JSON_FILE" \
-  "$DIFF_FILE" \
-  "$HEAD_SHA" \
-  "$TOKEN_TABLE_FILE"
+if [[ "$REVIEW_TARGET" == "standalone" ]]; then
+  "${SCRIPT_DIR}/post-review.sh" \
+    --standalone \
+    "$SUMMARY_FILE" \
+    "$FINDINGS_CLEAN_FILE" \
+    "$FINDINGS_JSON_FILE" \
+    "$DIFF_FILE" \
+    "$HEAD_SHA" \
+    "$TOKEN_TABLE_FILE"
+else
+  "${SCRIPT_DIR}/post-review.sh" \
+    "$PR_NUMBER" \
+    "$SUMMARY_FILE" \
+    "$FINDINGS_CLEAN_FILE" \
+    "$FINDINGS_JSON_FILE" \
+    "$DIFF_FILE" \
+    "$HEAD_SHA" \
+    "$TOKEN_TABLE_FILE"
+fi
 
 # ---------------------------------------------------------------------------
 # Phase 4: Summary to step summary
