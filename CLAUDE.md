@@ -112,9 +112,9 @@ In addition to reviewing open PRs, the action supports a **standalone** mode tha
 ### Triggering standalone mode
 
 Via `workflow_dispatch` in the GitHub UI or CLI:
-- Set `standalone: true` (or omit `pr_number` — if no open PR is found for the ref, standalone is assumed automatically)
-- Optionally set `base_ref` to diff against (defaults to the repo's default branch)
-- Optionally set `ref` to the branch/tag/SHA to review
+- Leave `pr_number` empty (standalone is assumed when no PR number is provided)
+- Optionally set `branch` to the branch to review (defaults to the repo's default branch)
+- Diffs against the repo's default branch automatically
 
 Programmatically:
 ```bash
