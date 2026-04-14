@@ -316,19 +316,20 @@ while IFS= read -r file; do
   fi
 done <<< "$CHANGED_FILES"
 
-# Build manifest text
+# Build manifest text. Use $'\n' for literal newlines (not \n strings + echo -e) so
+# that git-derived filenames with backslash sequences are never interpreted.
 MANIFEST="BASE: ${BASE_REF} | DIFF: ${DIFF_LABEL} | LANGUAGES: ${LANGUAGES:-unknown} | FILES: ${FILE_COUNT} | ${DIFF_STAT}"
 if [[ -n "$SOURCE_FILES" ]]; then
-  MANIFEST="${MANIFEST}\n\nSource: $(set +o pipefail; printf '%b' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n\n'"Source: $(set +o pipefail; printf '%s' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$TEST_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nTests: $(set +o pipefail; printf '%b' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n'"Tests: $(set +o pipefail; printf '%s' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$CONFIG_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nConfig: $(set +o pipefail; printf '%b' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n'"Config: $(set +o pipefail; printf '%s' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$DOC_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nDocs: $(set +o pipefail; printf '%b' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n'"Docs: $(set +o pipefail; printf '%s' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 
 # Commit log — scoped to the same range as the diff
@@ -365,7 +366,7 @@ for lang in "${DETECTED_LANGS[@]+"${DETECTED_LANGS[@]}"}"; do
   lang_lower=$(echo "$lang" | tr '[:upper:]' '[:lower:]')
   profile="${SCRIPT_DIR}/language-profiles/${lang_lower}.md"
   if [[ -f "$profile" ]]; then
-    LANGUAGE_CONTEXT="${LANGUAGE_CONTEXT}\n$(cat "$profile")\n"
+    LANGUAGE_CONTEXT+=$'\n'"$(cat "$profile")"$'\n'
   fi
 done
 
@@ -390,7 +391,7 @@ echo "--- Calling agents ---" >&2
 FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
 {
   echo "## File Manifest"
-  echo -e "$MANIFEST"
+  printf '%s\n' "$MANIFEST"
   echo ""
   echo "## Commit Log"
   echo "$COMMIT_LOG"
@@ -401,7 +402,7 @@ FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
     echo ""
   fi
   if [[ -n "$LANGUAGE_CONTEXT" ]]; then
-    echo -e "$LANGUAGE_CONTEXT"
+    printf '%s\n' "$LANGUAGE_CONTEXT"
     echo ""
   fi
   echo "## Review Metadata"
@@ -416,10 +417,10 @@ FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
 CODE_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-code-ctx-XXXXXXXX.md)
 {
   echo "## File Manifest"
-  echo -e "$MANIFEST"
+  printf '%s\n' "$MANIFEST"
   echo ""
   if [[ -n "$LANGUAGE_CONTEXT" ]]; then
-    echo -e "$LANGUAGE_CONTEXT"
+    printf '%s\n' "$LANGUAGE_CONTEXT"
     echo ""
   fi
   echo "## Review Metadata"
