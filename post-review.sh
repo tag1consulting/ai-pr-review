@@ -705,6 +705,12 @@ No findings above the confidence threshold. The changes look good."
 $(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:** ${finding_total} (${inline_count} inline)
 
 No Critical or High findings. The changes look good — Medium/Low findings are informational only."
+      if [[ -n "$body_findings" ]]; then
+        review_body="${review_body}
+
+### Findings (informational)
+${body_findings}"
+      fi
     fi
     if [[ -n "$approve_token_table" ]]; then
       review_body="${review_body}
@@ -772,9 +778,16 @@ ${token_table}"
   # When approving with findings present, post them as a COMMENT review first,
   # then post the APPROVE review separately (body only, no inline comments).
   if [[ "$review_event" == "APPROVE" && "$inline_count" -gt 0 ]]; then
-    local findings_json_for_comment
+    local comment_body findings_json_for_comment
+    comment_body="$(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:** ${finding_total} (${inline_count} inline)"
+    if [[ -n "$body_findings" ]]; then
+      comment_body="${comment_body}
+
+### Findings (informational)
+${body_findings}"
+    fi
     findings_json_for_comment=$(jq -n \
-      --arg body "$(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:** ${finding_total} (${inline_count} inline)" \
+      --arg body "$comment_body" \
       --arg commit_id "$HEAD_SHA" \
       --argjson comments "$inline_comments" \
       '{body: $body, event: "COMMENT", commit_id: $commit_id, comments: $comments}')
