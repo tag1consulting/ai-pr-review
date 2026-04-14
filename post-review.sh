@@ -643,8 +643,15 @@ post_findings() {
         '. + [{"path": $path, "line": $line, "body": $body}]')
       inline_count=$((inline_count + 1))
     else
+      # Append to review body. If the line isn't in the diff (as opposed to the
+      # inline cap being hit), add a note so reviewers know the location may be
+      # approximate (LLMs sometimes report lines from the full file context).
+      local loc_note=""
+      if ! grep -qxF "${file}:${line}" "$valid_lines_file"; then
+        loc_note=" *(line not in diff)*"
+      fi
       body_findings="${body_findings}
-- $(severity_icon "$severity") **[${severity}]** ${finding} — \`${file}:${line}\`"
+- $(severity_icon "$severity") **[${severity}]** ${finding} — \`${file}:${line}\`${loc_note}"
     fi
   done <<< "$findings_ndjson"
 
