@@ -316,19 +316,20 @@ while IFS= read -r file; do
   fi
 done <<< "$CHANGED_FILES"
 
-# Build manifest text
+# Build manifest text. Use $'\n' for literal newlines (not \n strings + echo -e) so
+# that git-derived filenames with backslash sequences are never interpreted.
 MANIFEST="BASE: ${BASE_REF} | DIFF: ${DIFF_LABEL} | LANGUAGES: ${LANGUAGES:-unknown} | FILES: ${FILE_COUNT} | ${DIFF_STAT}"
 if [[ -n "$SOURCE_FILES" ]]; then
-  MANIFEST="${MANIFEST}\n\nSource: $(set +o pipefail; printf '%b' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n\n'"Source: $(set +o pipefail; printf '%s' "$SOURCE_FILES" | head -20 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$TEST_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nTests: $(set +o pipefail; printf '%b' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n'"Tests: $(set +o pipefail; printf '%s' "$TEST_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$CONFIG_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nConfig: $(set +o pipefail; printf '%b' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n'"Config: $(set +o pipefail; printf '%s' "$CONFIG_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 if [[ -n "$DOC_FILES" ]]; then
-  MANIFEST="${MANIFEST}\nDocs: $(set +o pipefail; printf '%b' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
+  MANIFEST+=$'\n'"Docs: $(set +o pipefail; printf '%s' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
 fi
 
 # Commit log — scoped to the same range as the diff
@@ -365,7 +366,7 @@ for lang in "${DETECTED_LANGS[@]+"${DETECTED_LANGS[@]}"}"; do
   lang_lower=$(echo "$lang" | tr '[:upper:]' '[:lower:]')
   profile="${SCRIPT_DIR}/language-profiles/${lang_lower}.md"
   if [[ -f "$profile" ]]; then
-    LANGUAGE_CONTEXT="${LANGUAGE_CONTEXT}\n$(cat "$profile")\n"
+    LANGUAGE_CONTEXT+=$'\n'"$(cat "$profile")"$'\n'
   fi
 done
 
@@ -390,7 +391,7 @@ echo "--- Calling agents ---" >&2
 FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
 {
   echo "## File Manifest"
-  echo -e "$MANIFEST"
+  printf '%s\n' "$MANIFEST"
   echo ""
   echo "## Commit Log"
   echo "$COMMIT_LOG"
@@ -401,7 +402,7 @@ FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
     echo ""
   fi
   if [[ -n "$LANGUAGE_CONTEXT" ]]; then
-    echo -e "$LANGUAGE_CONTEXT"
+    printf '%s\n' "$LANGUAGE_CONTEXT"
     echo ""
   fi
   echo "## Review Metadata"
@@ -416,10 +417,10 @@ FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
 CODE_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-code-ctx-XXXXXXXX.md)
 {
   echo "## File Manifest"
-  echo -e "$MANIFEST"
+  printf '%s\n' "$MANIFEST"
   echo ""
   if [[ -n "$LANGUAGE_CONTEXT" ]]; then
-    echo -e "$LANGUAGE_CONTEXT"
+    printf '%s\n' "$LANGUAGE_CONTEXT"
     echo ""
   fi
   echo "## Review Metadata"
@@ -726,12 +727,31 @@ if [[ "$PRE_FILTER_COUNT" -ne "$POST_FILTER_COUNT" ]]; then
   echo "Filtered findings: ${PRE_FILTER_COUNT} → ${POST_FILTER_COUNT} (confidence >= 75)" >&2
 fi
 
-# Deduplicate findings on same file:line (keep highest severity)
+# Deduplicate findings: merge same file:line exact duplicates, then merge findings
+# within 3 lines of each other in the same file (adjacent-line dedup). The highest
+# severity finding in each proximity cluster is kept.
 if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
-  group_by((.file // "unknown") + ":" + ((.line // 0) | tostring))
-  | map(sort_by(.severity | sev_rank) | reverse | .[0])
+  # Sort within each file by line number, then reduce adjacent findings within 3 lines
+  group_by(.file // "unknown")
+  | map(
+      sort_by(.line // 0) |
+      reduce .[] as $f (
+        [];
+        if length == 0 then [$f]
+        elif (($f.line // 0) - (.[-1].line // 0)) <= 3
+        then
+          # Same proximity cluster: keep the higher-severity finding
+          if ((.[-1].severity | sev_rank) >= ($f.severity | sev_rank))
+          then .
+          else .[:-1] + [$f]
+          end
+        else . + [$f]
+        end
+      )
+    )
+  | flatten
 ' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
   mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
 else
@@ -758,62 +778,38 @@ if [[ "${#FAILED_AGENTS[@]}" -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Pricing lookup: returns "input_millicents_per_token output_millicents_per_token"
-# Rates are in USD per million tokens × 1000 (millicents/token × 1000 = nanodollars/token)
-# to avoid floating point in bash. We store as microdollars per million tokens, i.e.
-# integer cents-per-million × 100.
-# All rates are public list prices as of 2026-04; bedrock/proxy marked as estimate (~).
+# Pricing and display name lookups — backed by model-pricing.json.
+# Rates are in microdollars per million tokens (integer, no floating point).
+# All rates are public list prices; update model-pricing.json when prices change.
 # ---------------------------------------------------------------------------
-# Returns two integers: IN_RATE OUT_RATE (in units of $0.001 per million tokens = $0.000000001/tok)
+# Returns two integers: IN_RATE OUT_RATE (microdollars per million tokens).
 # Callers compute: cost_microdollars = tokens * rate / 1_000_000
-# Then format as: $X.XXXXXX
+MODEL_PRICING_FILE="${SCRIPT_DIR}/model-pricing.json"
 model_pricing() {
   local model="$1"
-  local m
+  local m result
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
-  case "$m" in
-    # Claude Sonnet 4.6 / 4.5 — $3/M in, $15/M out (public API list price)
-    *claude-sonnet-4-6*|*claude-sonnet-4.6*|*claude-sonnet-4-5*|*claude-sonnet-4.5*)
-      echo "3000000 15000000" ;;
-    # Claude Opus 4.6 / 4.5 — $15/M in, $75/M out
-    *claude-opus-4-6*|*claude-opus-4.6*|*claude-opus-4-5*|*claude-opus-4.5*)
-      echo "15000000 75000000" ;;
-    # Claude Haiku 4.5 — $0.80/M in, $4/M out
-    *claude-haiku-4-5*|*claude-haiku-4.5*)
-      echo "800000 4000000" ;;
-    # GPT-4o-mini — $0.15/M in, $0.60/M out (listed before gpt-4o to avoid shadowing)
-    *gpt-4o-mini*) echo "150000 600000" ;;
-    # GPT-4o — $2.50/M in, $10/M out
-    *gpt-4o*)      echo "2500000 10000000" ;;
-    # Gemini 2.5 Pro — $1.25/M in, $10/M out
-    *gemini-2.5-pro*)
-      echo "1250000 10000000" ;;
-    # Gemini 2.5 Flash — $0.15/M in, $3.50/M out
-    *gemini-2.5-flash*)
-      echo "150000 3500000" ;;
-    # Unknown — return zeros (no estimate)
-    *)
-      echo "0 0" ;;
-  esac
+  result=$(jq -r --arg m "$m" '
+    first(
+      .[] | select(.patterns[] as $p | ($m | test($p)))
+      | "\(.input_rate) \(.output_rate)"
+    ) // "0 0"
+  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result="0 0"
+  echo "${result:-0 0}"
 }
 
-# Human-readable model display name: "Sonnet 4.6", "Opus 4.6", etc.
+# Human-readable model display name: "Sonnet 4.6", "GPT-4o mini", etc.
 model_display_name() {
   local model="$1"
-  local m
+  local m result
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
-  case "$m" in
-    *claude-sonnet-4-6*|*claude-sonnet-4.6*) echo "Sonnet 4.6" ;;
-    *claude-sonnet-4-5*|*claude-sonnet-4.5*) echo "Sonnet 4.5" ;;
-    *claude-opus-4-6*|*claude-opus-4.6*)     echo "Opus 4.6" ;;
-    *claude-opus-4-5*|*claude-opus-4.5*)     echo "Opus 4.5" ;;
-    *claude-haiku-4-5*|*claude-haiku-4.5*)   echo "Haiku 4.5" ;;
-    *gpt-4o-mini*)                           echo "GPT-4o mini" ;;
-    *gpt-4o*)                                echo "GPT-4o" ;;
-    *gemini-2.5-pro*)                        echo "Gemini 2.5 Pro" ;;
-    *gemini-2.5-flash*)                      echo "Gemini 2.5 Flash" ;;
-    *)                                       echo "$model" ;;
-  esac
+  result=$(jq -r --arg m "$m" '
+    first(
+      .[] | select(.patterns[] as $p | ($m | test($p)))
+      | .display_name
+    ) // ""
+  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result=""
+  echo "${result:-$model}"
 }
 
 # Format microdollars (millionths of a dollar) as $X.XXXXXX
