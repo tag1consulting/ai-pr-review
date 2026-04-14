@@ -47,8 +47,9 @@ elif awk "BEGIN { exit !($TEMPERATURE > 2) }"; then
   TEMPERATURE="2"
 fi
 
-SYSTEM_PROMPT=$(cat "$SYSTEM_PROMPT_FILE")
-USER_MESSAGE=$(cat "$USER_MESSAGE_FILE")
+# Do NOT pre-expand SYSTEM_PROMPT / USER_MESSAGE into shell variables.
+# Passing large strings via --arg hits ARG_MAX on big diffs.
+# All provider functions use --rawfile to let jq read the files directly.
 
 RESPONSE_FILE=$(mktemp /tmp/llm-response-XXXXXXXX.json)
 trap 'rm -f "$RESPONSE_FILE"' EXIT
@@ -87,8 +88,8 @@ call_anthropic() {
   local request_body
   request_body=$(jq -n \
     --arg model "$MODEL_ID" \
-    --arg system "$SYSTEM_PROMPT" \
-    --arg user "$USER_MESSAGE" \
+    --rawfile system "$SYSTEM_PROMPT_FILE" \
+    --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson temperature "$TEMPERATURE" \
     '{model: $model, system: $system, messages: [{role: "user", content: $user}], max_tokens: $max_tokens, temperature: $temperature}') || {
@@ -126,8 +127,8 @@ call_openai() {
   local request_body
   request_body=$(jq -n \
     --arg model "$MODEL_ID" \
-    --arg system "$SYSTEM_PROMPT" \
-    --arg user "$USER_MESSAGE" \
+    --rawfile system "$SYSTEM_PROMPT_FILE" \
+    --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson temperature "$TEMPERATURE" \
     '{model: $model, messages: [{role: "system", content: $system}, {role: "user", content: $user}], max_tokens: $max_tokens, temperature: $temperature}') || {
@@ -162,8 +163,8 @@ call_google() {
 
   local request_body
   request_body=$(jq -n \
-    --arg system "$SYSTEM_PROMPT" \
-    --arg user "$USER_MESSAGE" \
+    --rawfile system "$SYSTEM_PROMPT_FILE" \
+    --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson temperature "$TEMPERATURE" \
     '{
@@ -206,8 +207,8 @@ call_bedrock_proxy() {
 
   local request_body
   request_body=$(jq -n \
-    --arg system "$SYSTEM_PROMPT" \
-    --arg user "$USER_MESSAGE" \
+    --rawfile system "$SYSTEM_PROMPT_FILE" \
+    --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson temperature "$TEMPERATURE" \
     '{
