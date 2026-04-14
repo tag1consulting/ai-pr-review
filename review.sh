@@ -759,62 +759,38 @@ if [[ "${#FAILED_AGENTS[@]}" -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Pricing lookup: returns "input_millicents_per_token output_millicents_per_token"
-# Rates are in USD per million tokens × 1000 (millicents/token × 1000 = nanodollars/token)
-# to avoid floating point in bash. We store as microdollars per million tokens, i.e.
-# integer cents-per-million × 100.
-# All rates are public list prices as of 2026-04; bedrock/proxy marked as estimate (~).
+# Pricing and display name lookups — backed by model-pricing.json.
+# Rates are in microdollars per million tokens (integer, no floating point).
+# All rates are public list prices; update model-pricing.json when prices change.
 # ---------------------------------------------------------------------------
-# Returns two integers: IN_RATE OUT_RATE (in units of $0.001 per million tokens = $0.000000001/tok)
+# Returns two integers: IN_RATE OUT_RATE (microdollars per million tokens).
 # Callers compute: cost_microdollars = tokens * rate / 1_000_000
-# Then format as: $X.XXXXXX
+MODEL_PRICING_FILE="${SCRIPT_DIR}/model-pricing.json"
 model_pricing() {
   local model="$1"
-  local m
+  local m result
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
-  case "$m" in
-    # Claude Sonnet 4.6 / 4.5 — $3/M in, $15/M out (public API list price)
-    *claude-sonnet-4-6*|*claude-sonnet-4.6*|*claude-sonnet-4-5*|*claude-sonnet-4.5*)
-      echo "3000000 15000000" ;;
-    # Claude Opus 4.6 / 4.5 — $15/M in, $75/M out
-    *claude-opus-4-6*|*claude-opus-4.6*|*claude-opus-4-5*|*claude-opus-4.5*)
-      echo "15000000 75000000" ;;
-    # Claude Haiku 4.5 — $0.80/M in, $4/M out
-    *claude-haiku-4-5*|*claude-haiku-4.5*)
-      echo "800000 4000000" ;;
-    # GPT-4o-mini — $0.15/M in, $0.60/M out (listed before gpt-4o to avoid shadowing)
-    *gpt-4o-mini*) echo "150000 600000" ;;
-    # GPT-4o — $2.50/M in, $10/M out
-    *gpt-4o*)      echo "2500000 10000000" ;;
-    # Gemini 2.5 Pro — $1.25/M in, $10/M out
-    *gemini-2.5-pro*)
-      echo "1250000 10000000" ;;
-    # Gemini 2.5 Flash — $0.15/M in, $3.50/M out
-    *gemini-2.5-flash*)
-      echo "150000 3500000" ;;
-    # Unknown — return zeros (no estimate)
-    *)
-      echo "0 0" ;;
-  esac
+  result=$(jq -r --arg m "$m" '
+    first(
+      .[] | select(.patterns[] as $p | ($m | contains($p)))
+      | "\(.input_rate) \(.output_rate)"
+    ) // "0 0"
+  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result="0 0"
+  echo "${result:-0 0}"
 }
 
-# Human-readable model display name: "Sonnet 4.6", "Opus 4.6", etc.
+# Human-readable model display name: "Sonnet 4.6", "GPT-4o mini", etc.
 model_display_name() {
   local model="$1"
-  local m
+  local m result
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
-  case "$m" in
-    *claude-sonnet-4-6*|*claude-sonnet-4.6*) echo "Sonnet 4.6" ;;
-    *claude-sonnet-4-5*|*claude-sonnet-4.5*) echo "Sonnet 4.5" ;;
-    *claude-opus-4-6*|*claude-opus-4.6*)     echo "Opus 4.6" ;;
-    *claude-opus-4-5*|*claude-opus-4.5*)     echo "Opus 4.5" ;;
-    *claude-haiku-4-5*|*claude-haiku-4.5*)   echo "Haiku 4.5" ;;
-    *gpt-4o-mini*)                           echo "GPT-4o mini" ;;
-    *gpt-4o*)                                echo "GPT-4o" ;;
-    *gemini-2.5-pro*)                        echo "Gemini 2.5 Pro" ;;
-    *gemini-2.5-flash*)                      echo "Gemini 2.5 Flash" ;;
-    *)                                       echo "$model" ;;
-  esac
+  result=$(jq -r --arg m "$m" '
+    first(
+      .[] | select(.patterns[] as $p | ($m | contains($p)))
+      | .display_name
+    ) // ""
+  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result=""
+  echo "${result:-$model}"
 }
 
 # Format microdollars (millionths of a dollar) as $X.XXXXXX

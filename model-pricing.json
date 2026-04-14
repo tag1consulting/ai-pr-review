@@ -1,0 +1,44 @@
+[
+  {
+    "patterns": ["claude-sonnet-4-6", "claude-sonnet-4.6", "claude-sonnet-4-5", "claude-sonnet-4.5"],
+    "display_name": "Sonnet 4.6",
+    "input_rate": 3000000,
+    "output_rate": 15000000
+  },
+  {
+    "patterns": ["claude-opus-4-6", "claude-opus-4.6", "claude-opus-4-5", "claude-opus-4.5"],
+    "display_name": "Opus 4.6",
+    "input_rate": 15000000,
+    "output_rate": 75000000
+  },
+  {
+    "patterns": ["claude-haiku-4-5", "claude-haiku-4.5"],
+    "display_name": "Haiku 4.5",
+    "input_rate": 800000,
+    "output_rate": 4000000
+  },
+  {
+    "patterns": ["gpt-4o-mini"],
+    "display_name": "GPT-4o mini",
+    "input_rate": 150000,
+    "output_rate": 600000
+  },
+  {
+    "patterns": ["gpt-4o"],
+    "display_name": "GPT-4o",
+    "input_rate": 2500000,
+    "output_rate": 10000000
+  },
+  {
+    "patterns": ["gemini-2.5-pro"],
+    "display_name": "Gemini 2.5 Pro",
+    "input_rate": 1250000,
+    "output_rate": 10000000
+  },
+  {
+    "patterns": ["gemini-2.5-flash"],
+    "display_name": "Gemini 2.5 Flash",
+    "input_rate": 150000,
+    "output_rate": 3500000
+  }
+]
