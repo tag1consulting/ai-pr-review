@@ -57,6 +57,15 @@ inputs:
     required: false
     default: 'pr'
 
+  standalone-depth:
+    description: >
+      In standalone mode, when base-ref resolves to the same commit as head-sha
+      (e.g. reviewing the tip of main against itself), diff the last N commits
+      instead. If not set, diffs the entire tree against the empty tree
+      (reviews all file content).
+    required: false
+    default: ''
+
   max-diff-lines:
     description: >
       Maximum diff size in lines before the review is skipped to prevent runaway
@@ -101,6 +110,7 @@ runs:
         AI_PROVIDER: ${{ inputs.provider }}
         AI_REVIEW_MODE: ${{ inputs.review-mode }}
         REVIEW_TARGET: ${{ inputs.review-target }}
+        STANDALONE_DEPTH: ${{ inputs.standalone-depth }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         AI_MODEL_STANDARD: ${{ inputs.model-standard }}
         AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
