@@ -86,9 +86,10 @@ When adding a suppression, include an `id` and a `reason` explaining why it is a
 
 ## Testing locally
 
-There is no automated test suite. To test changes manually:
-
 ```bash
+# Run the unit test suite (requires bats and jq)
+bats tests/*.bats
+
 # Lint all shell scripts
 shellcheck review.sh llm-call.sh post-review.sh run-shellcheck.sh
 
@@ -136,6 +137,16 @@ bash review.sh
 - Title: `🚨 AI Review: High risk — abc1234 on main`
 - Body: overall risk summary, pr-summarizer output, findings sorted by severity, token usage table
 - Labels: `ai-review` (always), `ai-review-action-needed` (Critical/High) — falls back gracefully if labels don't exist
+
+## Test architecture
+
+Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
+
+- No production script changes are needed to make functions testable
+- Tests cover pure functions: `detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `severity_icon`, and `extract_findings`
+- Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
+
+To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
 
 ## Release process
 
