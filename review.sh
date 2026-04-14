@@ -740,8 +740,7 @@ if jq '
       reduce .[] as $f (
         [];
         if length == 0 then [$f]
-        elif ((.[-1].file // "unknown") == ($f.file // "unknown")) and
-             (($f.line // 0) - (.[-1].line // 0)) <= 3
+        elif (($f.line // 0) - (.[-1].line // 0)) <= 3
         then
           # Same proximity cluster: keep the higher-severity finding
           if ((.[-1].severity | sev_rank) >= ($f.severity | sev_rank))
@@ -792,7 +791,7 @@ model_pricing() {
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
   result=$(jq -r --arg m "$m" '
     first(
-      .[] | select(.patterns[] as $p | ($m | contains($p)))
+      .[] | select(.patterns[] as $p | ($m | test($p)))
       | "\(.input_rate) \(.output_rate)"
     ) // "0 0"
   ' "$MODEL_PRICING_FILE" 2>/dev/null) || result="0 0"
@@ -806,7 +805,7 @@ model_display_name() {
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
   result=$(jq -r --arg m "$m" '
     first(
-      .[] | select(.patterns[] as $p | ($m | contains($p)))
+      .[] | select(.patterns[] as $p | ($m | test($p)))
       | .display_name
     ) // ""
   ' "$MODEL_PRICING_FILE" 2>/dev/null) || result=""
