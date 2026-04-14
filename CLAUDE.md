@@ -104,6 +104,39 @@ export GITHUB_REPOSITORY=owner/repo PR_NUMBER=123 BASE_REF=main HEAD_SHA=<sha>
 bash review.sh
 ```
 
+## Standalone review mode
+
+In addition to reviewing open PRs, the action supports a **standalone** mode that reviews any branch or commit SHA and posts findings as a GitHub issue rather than a PR review.
+
+### Triggering standalone mode
+
+Via `workflow_dispatch` in the GitHub UI or CLI:
+- Set `standalone: true` (or omit `pr_number` — if no open PR is found for the ref, standalone is assumed automatically)
+- Optionally set `base_ref` to diff against (defaults to the repo's default branch)
+- Optionally set `ref` to the branch/tag/SHA to review
+
+Programmatically:
+```bash
+export REVIEW_TARGET=standalone
+export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> GH_TOKEN=<token>
+export GITHUB_REPOSITORY=owner/repo BASE_REF=main HEAD_SHA=<sha>
+bash review.sh
+```
+
+### What changes in standalone mode
+
+- No PR comment or PR review is posted
+- All findings are posted as a single GitHub issue with severity, file:line references, and remediation notes
+- The SHA watermark / incremental diff is skipped (always a full diff)
+- Oversized diffs exit cleanly without posting a skip comment
+- `post-review.sh` is invoked with `--standalone` instead of a PR number
+
+### Issue output format
+
+- Title: `🚨 AI Review: High risk — abc1234 on main`
+- Body: overall risk summary, pr-summarizer output, findings sorted by severity, token usage table
+- Labels: `ai-review` (always), `ai-review-action-needed` (Critical/High) — falls back gracefully if labels don't exist
+
 ## Release process
 
 Run `/comprehensive-review` before tagging or releasing. This action is consumed as a submodule, so downstream repos pin to a specific commit or tag — breaking changes require a version bump and coordinated submodule updates in consuming repos.
