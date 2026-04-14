@@ -141,8 +141,35 @@ if [[ -n "$LAST_REVIEWED_SHA" && "$LAST_REVIEWED_SHA" != "$HEAD_SHA" ]]; then
 fi
 
 if [[ -z "$DIFF_BASE" ]]; then
-  DIFF_LABEL="full PR diff"
-  echo "Full PR review: diffing origin/${BASE_REF}...${HEAD_SHA}" >&2
+  # In standalone mode, if the base ref resolves to the same commit as HEAD
+  # (e.g. reviewing the tip of main against itself):
+  #   - If STANDALONE_DEPTH is set, diff the last N commits.
+  #   - Otherwise, diff against the empty tree to review all file content.
+  if [[ "$REVIEW_TARGET" == "standalone" ]]; then
+    STANDALONE_DEPTH="${STANDALONE_DEPTH:-}"
+    BASE_RESOLVED=$(git rev-parse "origin/${BASE_REF}" 2>/dev/null || true)
+    if [[ "$BASE_RESOLVED" == "$HEAD_SHA" ]]; then
+      if [[ -n "$STANDALONE_DEPTH" ]]; then
+        if ! [[ "$STANDALONE_DEPTH" =~ ^[0-9]+$ ]] || [[ "$STANDALONE_DEPTH" -eq 0 ]]; then
+          echo "WARNING: STANDALONE_DEPTH '${STANDALONE_DEPTH}' is not a valid positive integer; ignoring." >&2
+          STANDALONE_DEPTH=""
+        fi
+      fi
+      if [[ -n "$STANDALONE_DEPTH" ]]; then
+        DIFF_BASE="HEAD~${STANDALONE_DEPTH}"
+        DIFF_LABEL="standalone (last ${STANDALONE_DEPTH} commits)"
+        echo "Standalone review: diffing last ${STANDALONE_DEPTH} commits (HEAD~${STANDALONE_DEPTH}...HEAD)" >&2
+      else
+        DIFF_BASE="$(git hash-object -t tree /dev/null)"
+        DIFF_LABEL="standalone (full tree)"
+        echo "Standalone review: diffing entire tree against empty tree (${DIFF_BASE:0:7}...${HEAD_SHA:0:7})" >&2
+      fi
+    fi
+  fi
+  if [[ -z "$DIFF_BASE" ]]; then
+    DIFF_LABEL="full diff (${BASE_REF}...${HEAD_SHA:0:7})"
+    echo "Full review: diffing origin/${BASE_REF}...${HEAD_SHA}" >&2
+  fi
 fi
 
 # Compute the diff
