@@ -55,20 +55,120 @@ RESPONSE_FILE=$(mktemp /tmp/llm-response-XXXXXXXX.json)
 trap 'rm -f "$RESPONSE_FILE"' EXIT
 
 # ---------------------------------------------------------------------------
+# Exit codes:
+#   0 — success
+#   1 — permanent / configuration error (bad API key, invalid request, unknown provider)
+#   2 — transient error (all retries exhausted on 429/5xx/timeout)
+#   3 — content issue (response blocked by provider safety/recitation filter)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+# Retry configuration (overridable via env vars)
+LLM_RETRY_COUNT="${LLM_RETRY_COUNT:-3}"
+LLM_RETRY_BASE_DELAY="${LLM_RETRY_BASE_DELAY:-2}"
+
+# HTTP status codes considered transient (worth retrying)
+is_transient_http() {
+  local code="$1"
+  case "$code" in
+    429|500|502|503) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# curl exit codes considered transient (worth retrying)
+is_transient_curl() {
+  local code="$1"
+  case "$code" in
+    7|28|56) return 0 ;;  # 7=connection refused, 28=timeout, 56=network failure
+    *) return 1 ;;
+  esac
+}
 
 check_http_status() {
   local code="$1"
   if [[ "$code" -lt 200 || "$code" -ge 300 ]]; then
     echo "ERROR: LLM API returned HTTP ${code}" >&2
     cat "$RESPONSE_FILE" >&2
+    if is_transient_http "$code"; then
+      exit 2
+    fi
     exit 1
   fi
 }
 
+# retry_curl — wrapper around curl that retries on transient failures.
+# Usage: retry_curl <provider_label> [curl_args...]
+# Retries on transient HTTP codes (429, 500, 502, 503) and transient curl
+# exit codes (7=connection refused, 28=timeout, 56=network failure).
+# Uses exponential backoff with jitter.
+retry_curl() {
+  local provider_label="$1"; shift
+  local attempt=0 http_code curl_exit backoff jitter
+
+  while true; do
+    curl_exit=0
+    http_code=$(curl "$@" 2>/dev/null) || curl_exit=$?
+
+    if [[ "$curl_exit" -ne 0 ]]; then
+      # curl itself failed (not an HTTP error)
+      if [[ "$attempt" -lt "$LLM_RETRY_COUNT" ]] && is_transient_curl "$curl_exit"; then
+        attempt=$((attempt + 1))
+        backoff=$(( LLM_RETRY_BASE_DELAY * (1 << (attempt - 1)) ))
+        jitter=$(( RANDOM % 1000 ))
+        echo "WARNING: ${provider_label} curl failed (exit ${curl_exit}), retrying in ${backoff}.${jitter}s (attempt ${attempt}/${LLM_RETRY_COUNT})..." >&2
+        sleep "${backoff}.${jitter}"
+        continue
+      fi
+      echo "ERROR: ${provider_label} API request failed (curl exit ${curl_exit})" >&2
+      if is_transient_curl "$curl_exit"; then
+        exit 2
+      fi
+      exit 1
+    fi
+
+    # curl succeeded — check HTTP status
+    if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+      # Success
+      return 0
+    fi
+
+    # Non-2xx HTTP response
+    if [[ "$attempt" -lt "$LLM_RETRY_COUNT" ]] && is_transient_http "$http_code"; then
+      attempt=$((attempt + 1))
+      backoff=$(( LLM_RETRY_BASE_DELAY * (1 << (attempt - 1)) ))
+      jitter=$(( RANDOM % 1000 ))
+      echo "WARNING: ${provider_label} returned HTTP ${http_code}, retrying in ${backoff}.${jitter}s (attempt ${attempt}/${LLM_RETRY_COUNT})..." >&2
+      sleep "${backoff}.${jitter}"
+      continue
+    fi
+
+    # Not retryable or retries exhausted — let check_http_status handle the exit
+    check_http_status "$http_code"
+  done
+}
+
 emit_response() {
   local response_text="$1" input_tokens="$2" output_tokens="$3" stop_reason="${4:-}"
+
+  # Check provider-specific content filter reasons before the empty-response check
+  # so error messages are specific rather than generic "Could not extract response text"
+  if [[ "$stop_reason" == "SAFETY" ]]; then
+    echo "ERROR: Response blocked by provider safety filter (finishReason=SAFETY)" >&2
+    echo "Raw response:" >&2
+    cat "$RESPONSE_FILE" >&2
+    exit 3
+  fi
+  if [[ "$stop_reason" == "RECITATION" ]]; then
+    echo "ERROR: Response blocked by provider recitation filter (finishReason=RECITATION)" >&2
+    echo "Raw response:" >&2
+    cat "$RESPONSE_FILE" >&2
+    exit 3
+  fi
+
   if [[ -z "$response_text" ]]; then
     echo "ERROR: Could not extract response text from API response" >&2
     echo "Raw response:" >&2
@@ -102,18 +202,14 @@ call_anthropic() {
     exit 1
   }
 
-  local http_code
-  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  echo "$request_body" | retry_curl "Anthropic" \
+    -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "https://api.anthropic.com/v1/messages" \
     -H "x-api-key: ${ANTHROPIC_API_KEY}" \
     -H "anthropic-version: 2023-06-01" \
     -H "Content-Type: application/json" \
-    --data-binary @-) || {
-    echo "ERROR: Anthropic API request failed" >&2
-    exit 1
-  }
-  check_http_status "$http_code"
+    --data-binary @-
 
   local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
@@ -142,17 +238,13 @@ call_openai() {
     exit 1
   }
 
-  local http_code
-  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  echo "$request_body" | retry_curl "OpenAI" \
+    -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "${base_url}/chat/completions" \
     -H "Authorization: Bearer ${OPENAI_API_KEY}" \
     -H "Content-Type: application/json" \
-    --data-binary @-) || {
-    echo "ERROR: OpenAI API request failed" >&2
-    exit 1
-  }
-  check_http_status "$http_code"
+    --data-binary @-
 
   local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.choices[0].message.content // empty' "$RESPONSE_FILE" 2>/dev/null)
@@ -186,17 +278,13 @@ call_google() {
   local encoded_model_id
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)
 
-  local http_code
-  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  echo "$request_body" | retry_curl "Google Gemini" \
+    -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "https://generativelanguage.googleapis.com/v1beta/models/${encoded_model_id}:generateContent" \
     -H "x-goog-api-key: ${GOOGLE_API_KEY}" \
     -H "Content-Type: application/json" \
-    --data-binary @-) || {
-    echo "ERROR: Google Gemini API request failed" >&2
-    exit 1
-  }
-  check_http_status "$http_code"
+    --data-binary @-
 
   local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.candidates[0].content.parts[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
@@ -234,18 +322,13 @@ call_bedrock_proxy() {
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)
   local url="${BEDROCK_API_URL}/model/${encoded_model_id}/invoke"
 
-  local http_code
-  http_code=$(echo "$request_body" | curl -s -w "%{http_code}" -o "$RESPONSE_FILE" \
+  echo "$request_body" | retry_curl "Bedrock proxy" \
+    -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
     -X POST "$url" \
     -H "Authorization: Bearer ${BEDROCK_API_KEY}" \
     -H "Content-Type: application/json" \
-    --data-binary @-) || {
-    echo "ERROR: Bedrock proxy API request failed" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 1
-  }
-  check_http_status "$http_code"
+    --data-binary @-
 
   local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
