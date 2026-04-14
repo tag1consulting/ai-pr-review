@@ -453,9 +453,14 @@ call_agent() {
   "${SCRIPT_DIR}/llm-call.sh" "$model" "$prompt" "$msg" "$max_tokens" \
     > "$output" 2> "$agent_stderr" || exit_code=$?
   if [[ "$exit_code" -ne 0 ]]; then
-    local last_err
+    local last_err failure_type
     last_err=$(grep -m1 'ERROR:' "$agent_stderr" 2>/dev/null || tail -1 "$agent_stderr" 2>/dev/null)
-    echo "WARNING: ${name} failed (exit ${exit_code}): ${last_err:-no stderr output}. Continuing without its output." >&2
+    case "$exit_code" in
+      2) failure_type="transient API error, retries exhausted" ;;
+      3) failure_type="response blocked by provider content filter" ;;
+      *) failure_type="configuration or request error" ;;
+    esac
+    echo "WARNING: ${name} failed (${failure_type}): ${last_err:-no stderr output}. Continuing without its output." >&2
     cat "$agent_stderr" >&2
     FAILED_AGENTS+=("$name")
     echo "" > "$output"
