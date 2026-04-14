@@ -630,19 +630,18 @@ extract_findings() {
   fi
 
   # Validation failed — if the response was truncated, attempt to repair the JSON.
-  # Strategy: find the last complete top-level object close in the extracted text,
-  # truncate there, then close the array. This handles mid-object truncation.
+  # Strategy: iterate over closing-brace lines from last to first, close the array
+  # at each candidate, and accept the first result that passes schema validation.
+  # Iterating (rather than taking the last '}') handles nested objects whose inner
+  # '}' lines would otherwise produce invalid JSON.
   if [[ "$was_truncated" == "true" ]]; then
-    local last_obj_line repaired
-    last_obj_line=$(printf '%s' "$extracted" | grep -n '^[[:space:]]*}' | tail -1 | cut -d: -f1)
-    if [[ -n "$last_obj_line" ]]; then
-      repaired=$(printf '%s' "$extracted" | head -n "$last_obj_line" | sed '$ s/,$//')
+    local candidate_line repaired
+    while IFS=: read -r candidate_line _; do
+      repaired=$(printf '%s' "$extracted" | head -n "$candidate_line" | sed '$ s/,$//')
       repaired=$(printf '%s\n]' "$repaired")
       if echo "$repaired" | jq -e '
-        type == "array" and
-        (if length > 0 then
-          all(.[]; has("severity") and has("finding") and has("confidence"))
-        else true end)
+        type == "array" and length > 0 and
+        all(.[]; has("severity") and has("finding") and has("confidence"))
       ' > /dev/null 2>&1; then
         local count
         count=$(echo "$repaired" | jq 'length')
@@ -650,7 +649,7 @@ extract_findings() {
         printf '%s' "$repaired"
         return
       fi
-    fi
+    done < <(printf '%s' "$extracted" | grep -n '^[[:space:]]*}' | tac)
   fi
 
   local preview
