@@ -23,9 +23,14 @@ load_function() {
     $1 == fname"()" { found=1; depth=0; started=0 }
     found {
       n = split($0, chars, "")
+      in_sq = 0   # inside single-quoted string
       for (i = 1; i <= n; i++) {
-        if (chars[i] == "{") { depth++; started=1 }
-        if (chars[i] == "}") depth--
+        c = chars[i]
+        # Toggle single-quote state (bash single quotes cannot be escaped inside them)
+        if (c == "'"'"'") { in_sq = !in_sq; continue }
+        if (in_sq) continue
+        if (c == "{") { depth++; started=1 }
+        if (c == "}") depth--
       }
       body = body $0 "\n"
       if (started && depth == 0 && body != "") { print body; exit }
