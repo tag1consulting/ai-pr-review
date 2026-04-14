@@ -5,6 +5,7 @@
 
 setup() {
   load test_helper
+  MODEL_PRICING_FILE="${PROJECT_ROOT}/model-pricing.json"
   load_function "${PROJECT_ROOT}/review.sh" detect_language
   load_function "${PROJECT_ROOT}/review.sh" model_pricing
   load_function "${PROJECT_ROOT}/review.sh" model_display_name
