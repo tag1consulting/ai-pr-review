@@ -640,8 +640,10 @@ extract_findings() {
       repaired=$(printf '%s' "$extracted" | head -n "$candidate_line" | sed '$ s/,$//')
       repaired=$(printf '%s\n]' "$repaired")
       if echo "$repaired" | jq -e '
-        type == "array" and length > 0 and
-        all(.[]; has("severity") and has("finding") and has("confidence"))
+        type == "array" and
+        (if length > 0 then
+          all(.[]; has("severity") and has("finding") and has("confidence"))
+        else true end)
       ' > /dev/null 2>&1; then
         local count
         count=$(echo "$repaired" | jq 'length')
