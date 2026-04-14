@@ -68,7 +68,7 @@ check_http_status() {
 }
 
 emit_response() {
-  local response_text="$1" input_tokens="$2" output_tokens="$3"
+  local response_text="$1" input_tokens="$2" output_tokens="$3" stop_reason="${4:-}"
   if [[ -z "$response_text" ]]; then
     echo "ERROR: Could not extract response text from API response" >&2
     echo "Raw response:" >&2
@@ -76,6 +76,11 @@ emit_response() {
     exit 1
   fi
   echo "TOKENS: input=${input_tokens} output=${output_tokens} model=${MODEL_ID}" >&2
+  # Warn and signal callers when the model hit the token limit
+  if [[ "$stop_reason" == "max_tokens" || "$stop_reason" == "length" || "$stop_reason" == "MAX_TOKENS" ]]; then
+    echo "WARNING: response truncated (stop_reason=${stop_reason}); output may be incomplete" >&2
+    echo "TRUNCATED:true" >&2
+  fi
   printf '%s\n' "$response_text"
 }
 
@@ -110,11 +115,12 @@ call_anthropic() {
   }
   check_http_status "$http_code"
 
-  local response_text input_tokens output_tokens
+  local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usage.input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usage.output_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens"
+  stop_reason=$(jq -r '.stop_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
+  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
 }
 
 # ---------------------------------------------------------------------------
@@ -148,11 +154,12 @@ call_openai() {
   }
   check_http_status "$http_code"
 
-  local response_text input_tokens output_tokens
+  local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.choices[0].message.content // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usage.prompt_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usage.completion_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens"
+  stop_reason=$(jq -r '.choices[0].finish_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
+  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
 }
 
 # ---------------------------------------------------------------------------
@@ -191,11 +198,12 @@ call_google() {
   }
   check_http_status "$http_code"
 
-  local response_text input_tokens output_tokens
+  local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.candidates[0].content.parts[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usageMetadata.promptTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usageMetadata.candidatesTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens"
+  stop_reason=$(jq -r '.candidates[0].finishReason // empty' "$RESPONSE_FILE" 2>/dev/null)
+  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
 }
 
 # ---------------------------------------------------------------------------
@@ -239,11 +247,12 @@ call_bedrock_proxy() {
   }
   check_http_status "$http_code"
 
-  local response_text input_tokens output_tokens
+  local response_text input_tokens output_tokens stop_reason
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usage.input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usage.output_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens"
+  stop_reason=$(jq -r '.stop_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
+  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
 }
 
 # ---------------------------------------------------------------------------

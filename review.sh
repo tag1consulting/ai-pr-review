@@ -443,7 +443,7 @@ TOKEN_LOG=()  # entries: "agent_name input=N output=N"
 # Intercepts TOKENS: lines from llm-call.sh stderr for usage tracking;
 # forwards all other stderr to the workflow log.
 call_agent() {
-  local name="$1" model="$2" prompt="$3" msg="$4" output="$5" max_tokens="${6:-4096}"
+  local name="$1" model="$2" prompt="$3" msg="$4" output="$5" max_tokens="${6:-16384}"
   echo "Calling ${name} (${model##*.})..." >&2
 
   local agent_stderr
@@ -462,15 +462,22 @@ call_agent() {
     return
   fi
 
-  # Parse token usage line; forward remaining stderr to workflow log
-  local token_line=""
+  # Parse token usage and truncation lines; forward remaining stderr to workflow log
+  local token_line="" was_truncated=false
   while IFS= read -r line; do
     if [[ "$line" == TOKENS:* ]]; then
       token_line="$line"
+    elif [[ "$line" == "TRUNCATED:true" ]]; then
+      was_truncated=true
     else
       echo "$line" >&2
     fi
   done < "$agent_stderr"
+  # Write a sidecar file so extract_findings() knows to attempt JSON repair.
+  # Using a separate file avoids any risk of the LLM emitting the sentinel in its prose.
+  if [[ "$was_truncated" == "true" ]]; then
+    touch "${output}.truncated"
+  fi
 
   if [[ -n "$token_line" ]]; then
     local input_tokens output_tokens model_id
@@ -595,24 +602,61 @@ echo "[]" > "$FINDINGS_JSON_FILE"
 # Extract json-findings from each agent output, validate shape, and return clean array.
 extract_findings() {
   local agent_file="$1"
-  if grep -q '```json-findings' "$agent_file" 2>/dev/null; then
-    local extracted
-    extracted=$(sed -n '/```json-findings/,/```/p' "$agent_file" | sed '1d;$d')
-    # Validate it is an array and each item has required fields
-    if echo "$extracted" | jq -e '
-      type == "array" and
-      (if length > 0 then
-        all(.[]; has("severity") and has("finding") and has("confidence"))
-      else true end)
-    ' > /dev/null 2>&1; then
-      printf '%s' "$extracted"
-      return
+  local was_truncated=false
+  [[ -f "${agent_file}.truncated" ]] && was_truncated=true
+
+  if ! grep -q '```json-findings' "$agent_file" 2>/dev/null; then
+    if [[ "$was_truncated" == "true" ]]; then
+      echo "WARNING: $(basename "$agent_file") was truncated before json-findings block; findings lost." >&2
     else
-      local preview
-      preview=$(set +o pipefail; printf '%s' "$extracted" | head -c 200)
-      echo "WARNING: $(basename "$agent_file") produced invalid or malformed json-findings; skipping. Preview: ${preview}" >&2
+      echo "WARNING: $(basename "$agent_file") has no json-findings block; skipping." >&2
     fi
+    echo "[]"
+    return
   fi
+
+  local extracted
+  extracted=$(sed -n '/```json-findings/,/```/p' "$agent_file" | sed '1d;$d')
+
+  # Validate it is an array and each item has required fields
+  if echo "$extracted" | jq -e '
+    type == "array" and
+    (if length > 0 then
+      all(.[]; has("severity") and has("finding") and has("confidence"))
+    else true end)
+  ' > /dev/null 2>&1; then
+    printf '%s' "$extracted"
+    return
+  fi
+
+  # Validation failed — if the response was truncated, attempt to repair the JSON.
+  # Strategy: iterate over closing-brace lines from last to first, close the array
+  # at each candidate, and accept the first result that passes schema validation.
+  # Iterating (rather than taking the last '}') handles nested objects whose inner
+  # '}' lines would otherwise produce invalid JSON.
+  if [[ "$was_truncated" == "true" ]]; then
+    local candidate_line repaired
+    while IFS=: read -r candidate_line _; do
+      repaired=$(printf '%s' "$extracted" | head -n "$candidate_line" | sed '$ s/,$//')
+      repaired=$(printf '%s\n]' "$repaired")
+      if echo "$repaired" | jq -e '
+        type == "array" and
+        (if length > 0 then
+          all(.[]; has("severity") and has("finding") and has("confidence"))
+        else true end)
+      ' > /dev/null 2>&1; then
+        local count
+        count=$(echo "$repaired" | jq 'length')
+        echo "NOTE: $(basename "$agent_file") was truncated; salvaged ${count} finding(s) from partial JSON." >&2
+        printf '%s' "$repaired"
+        return
+      fi
+    done < <(printf '%s' "$extracted" | grep -n '^[[:space:]]*}' | tac)
+  fi
+
+  local preview
+  preview=$(set +o pipefail; printf '%s' "$extracted" | head -c 200)
+  echo "WARNING: $(basename "$agent_file") produced invalid or malformed json-findings; skipping. Preview: ${preview}" >&2
   echo "[]"
 }
 

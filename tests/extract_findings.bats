@@ -13,6 +13,11 @@ setup() {
   load_function "${PROJECT_ROOT}/review.sh" extract_findings
 }
 
+teardown() {
+  # Remove any sidecar files left by truncation tests
+  rm -f "${PROJECT_ROOT}/tests/fixtures/"*.truncated
+}
+
 # ---------------------------------------------------------------------------
 # extract_findings
 # ---------------------------------------------------------------------------
@@ -44,7 +49,7 @@ setup() {
 
 @test "extract_findings: no findings block returns empty array" {
   local fixture="${PROJECT_ROOT}/tests/fixtures/no-findings.md"
-  run extract_findings "$fixture"
+  run --separate-stderr extract_findings "$fixture"
   [ "$status" -eq 0 ]
   [ "$output" = "[]" ]
 }
@@ -61,4 +66,43 @@ setup() {
   run --separate-stderr extract_findings "$fixture"
   [ "$status" -eq 0 ]
   [ "$output" = "[]" ]
+}
+
+@test "extract_findings: no block emits WARNING" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/no-findings.md"
+  run --separate-stderr extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+  [[ "$stderr" == *"WARNING"* ]]
+}
+
+@test "extract_findings: truncated response with no fence returns empty array with truncation warning" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-no-fence.md"
+  touch "${fixture}.truncated"
+  run --separate-stderr extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+  [[ "$stderr" == *"truncated"* ]]
+}
+
+@test "extract_findings: truncated JSON block is salvaged and returns partial findings" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-findings.md"
+  touch "${fixture}.truncated"
+  run --separate-stderr extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  local count
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -ge 2 ]
+  [[ "$stderr" == *"salvaged"* ]]
+}
+
+@test "extract_findings: salvaged findings pass schema validation" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-findings.md"
+  touch "${fixture}.truncated"
+  run --separate-stderr extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '
+    type == "array" and
+    all(.[]; has("severity") and has("finding") and has("confidence"))
+  ' > /dev/null
 }
