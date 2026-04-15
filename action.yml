@@ -104,6 +104,13 @@ runs:
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
         fi
 
+    - name: Mask API credentials
+      shell: bash
+      run: |
+        if [[ -n "${{ inputs.api-key }}" ]]; then
+          echo "::add-mask::${{ inputs.api-key }}"
+        fi
+
     - name: Run AI review
       shell: bash
       env:

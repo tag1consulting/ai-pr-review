@@ -34,6 +34,13 @@
 
 set -euo pipefail
 
+# Mask all provider API keys in GitHub Actions logs (defense-in-depth)
+for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY; do
+  if [[ -n "${!key_var:-}" ]]; then
+    echo "::add-mask::${!key_var}"
+  fi
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
 REVIEW_TARGET="${REVIEW_TARGET:-pr}"
