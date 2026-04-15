@@ -34,8 +34,10 @@
 
 set -euo pipefail
 
-# Mask all provider API keys in GitHub Actions logs (defense-in-depth)
-for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY; do
+# Mask provider API keys in GitHub Actions logs (defense-in-depth; also covers
+# direct invocations outside action.yml). Keep in sync with the env: mapping in
+# action.yml (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY / BEDROCK_API_KEY).
+for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY GH_TOKEN; do
   if [[ -n "${!key_var:-}" ]]; then
     echo "::add-mask::${!key_var}"
   fi
