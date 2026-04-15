@@ -115,6 +115,15 @@ runs:
           }
         fi
 
+    - name: Mask API credentials
+      shell: bash
+      env:
+        _API_KEY: ${{ inputs.api-key }}
+        _GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        [[ -n "$_API_KEY" ]] && echo "::add-mask::$_API_KEY"
+        [[ -n "$_GH_TOKEN" ]] && echo "::add-mask::$_GH_TOKEN"
+
     - name: Run AI review
       shell: bash
       env:
