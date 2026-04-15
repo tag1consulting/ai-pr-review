@@ -59,3 +59,25 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = "⚪" ]
 }
+
+@test "severity_icon: CRITICAL (all caps) -> cross mark" {
+  run severity_icon "CRITICAL"
+  [ "$status" -eq 0 ]
+  [ "$output" = "❌" ]
+}
+
+@test "severity_icon: HIGH (all caps) -> siren" {
+  run severity_icon "HIGH"
+  [ "$status" -eq 0 ]
+  [ "$output" = "🚨" ]
+}
+
+# ---------------------------------------------------------------------------
+# gh_api_retry — structural tests (no real API calls)
+# ---------------------------------------------------------------------------
+
+@test "gh_api_retry: function is defined and callable" {
+  load_function "${PROJECT_ROOT}/post-review.sh" gh_api_retry
+  # Just verify the function exists (no actual API call)
+  declare -f gh_api_retry > /dev/null
+}

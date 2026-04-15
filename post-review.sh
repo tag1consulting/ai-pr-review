@@ -48,6 +48,57 @@ if [[ "${1:-}" == "--get-last-sha" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# gh_api_retry — retry gh api calls on transient failures (502, 503, 429).
+# Usage: gh_api_retry [gh api args...]
+# Retries up to 3 times with exponential backoff (2s, 4s, 8s) + jitter.
+# ---------------------------------------------------------------------------
+gh_api_retry() {
+  local attempt=0 max_retries=3 result exit_code
+
+  # Capture stdin so retries can re-read piped request bodies (e.g.,
+  # echo "$json" | gh_api_retry api ... --input -). Without this, stdin
+  # is consumed on the first gh invocation and retries get empty input.
+  local stdin_file
+  stdin_file=$(mktemp /tmp/gh-retry-stdin-XXXXXXXX)
+  cat > "$stdin_file"
+
+  # Rewrite --input - to --input <file> so each retry re-reads the body
+  local -a gh_args=()
+  local prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--input" && "$arg" == "-" ]]; then
+      gh_args+=("$stdin_file")
+    else
+      gh_args+=("$arg")
+    fi
+    prev="$arg"
+  done
+
+  while true; do
+    exit_code=0
+    result=$(gh "${gh_args[@]}" 2>&1) || exit_code=$?
+    if [[ "$exit_code" -eq 0 ]]; then
+      rm -f "$stdin_file"
+      printf '%s' "$result"
+      return 0
+    fi
+    # Check if the error looks transient
+    if [[ "$attempt" -lt "$max_retries" ]] && echo "$result" | grep -qE '(502|503|429|ETIMEDOUT|Server Error|rate limit)'; then
+      attempt=$((attempt + 1))
+      local backoff=$(( 2 * (1 << (attempt - 1)) ))
+      local jitter=$(( RANDOM % 1000 ))  # milliseconds, formatted as fractional seconds for sleep
+      echo "WARNING: gh api call failed (attempt ${attempt}/${max_retries}), retrying in ${backoff}.${jitter}s..." >&2
+      sleep "${backoff}.${jitter}"
+      continue
+    fi
+    # Not transient or retries exhausted
+    rm -f "$stdin_file"
+    printf '%s' "$result"
+    return "$exit_code"
+  done
+}
+
+# ---------------------------------------------------------------------------
 # --standalone mode: post findings as a GitHub issue instead of a PR review.
 # Usage: post-review.sh --standalone <summary_file> <findings_file>
 #        <findings_json_file> <diff_file> <head_sha> [token_table_file]
@@ -70,9 +121,9 @@ if [[ "${1:-}" == "--standalone" ]]; then
   _REPO="${GITHUB_REPOSITORY##*/}"
 
   _severity_icon() {
-    case "$1" in
-      Critical) echo "❌" ;; High) echo "🚨" ;;
-      Medium)   echo "🔶" ;; Low)  echo "💬" ;;
+    case "${1,,}" in
+      critical) echo "❌" ;; high) echo "🚨" ;;
+      medium)   echo "🔶" ;; low)  echo "💬" ;;
       *)        echo "⚪" ;;
     esac
   }
@@ -100,11 +151,11 @@ if [[ "${1:-}" == "--standalone" ]]; then
 
     if [[ "$finding_total" -eq 0 ]]; then
       overall_risk="None"
-    elif echo "$findings_json" | jq -e '.[] | select(.severity == "Critical")' > /dev/null 2>&1; then
+    elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "critical")' > /dev/null 2>&1; then
       overall_risk="Critical"
-    elif echo "$findings_json" | jq -e '.[] | select(.severity == "High")' > /dev/null 2>&1; then
+    elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "high")' > /dev/null 2>&1; then
       overall_risk="High"
-    elif echo "$findings_json" | jq -e '.[] | select(.severity == "Medium")' > /dev/null 2>&1; then
+    elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "medium")' > /dev/null 2>&1; then
       overall_risk="Medium"
     else
       overall_risk="Low"
@@ -131,9 +182,9 @@ ${summary}
 
 $(echo "$findings_json" | jq -r '
   sort_by(
-    if .severity == "Critical" then 0
-    elif .severity == "High" then 1
-    elif .severity == "Medium" then 2
+    if (.severity | ascii_downcase) == "critical" then 0
+    elif (.severity | ascii_downcase) == "high" then 1
+    elif (.severity | ascii_downcase) == "medium" then 2
     else 3 end
   ) | .[] |
   "- **[\(.severity)]** `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n"
@@ -175,7 +226,7 @@ $(cat "$_TOKEN_TABLE_FILE")"
 
     local issue_url issue_err
     issue_err=$(mktemp)
-    if ! issue_url=$(gh api "repos/${_OWNER}/${_REPO}/issues" \
+    if ! issue_url=$(gh_api_retry api "repos/${_OWNER}/${_REPO}/issues" \
       --method POST \
       --field title="$issue_title" \
       --field body="$issue_body" \
@@ -184,7 +235,7 @@ $(cat "$_TOKEN_TABLE_FILE")"
       local first_err
       first_err=$(cat "$issue_err")
       echo "WARNING: Issue creation with labels failed (${first_err}); retrying without labels..." >&2
-      if ! issue_url=$(gh api "repos/${_OWNER}/${_REPO}/issues" \
+      if ! issue_url=$(gh_api_retry api "repos/${_OWNER}/${_REPO}/issues" \
         --method POST \
         --field title="$issue_title" \
         --field body="$issue_body" \
@@ -499,7 +550,7 @@ ${truncated_summary}
 
   if [[ -n "$existing_comment_id" ]]; then
     echo "Updating existing summary comment #${existing_comment_id}..." >&2
-    gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+    gh_api_retry api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
       --method PATCH \
       --field body="$body" > /dev/null || {
       echo "ERROR: Failed to update summary comment #${existing_comment_id}." >&2
@@ -507,7 +558,7 @@ ${truncated_summary}
     }
   else
     echo "Posting new summary comment..." >&2
-    gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
       --field body="$body" > /dev/null || {
       echo "ERROR: Failed to post summary comment." >&2
@@ -674,13 +725,13 @@ post_findings() {
       overall_risk="None"
       review_event="APPROVE"
     fi
-  elif echo "$findings_json" | jq -e '.[] | select(.severity == "Critical")' > /dev/null 2>&1; then
+  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "critical")' > /dev/null 2>&1; then
     overall_risk="Critical"
     review_event="REQUEST_CHANGES"
-  elif echo "$findings_json" | jq -e '.[] | select(.severity == "High")' > /dev/null 2>&1; then
+  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "high")' > /dev/null 2>&1; then
     overall_risk="High"
     review_event="REQUEST_CHANGES"
-  elif echo "$findings_json" | jq -e '.[] | select(.severity == "Medium")' > /dev/null 2>&1; then
+  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "medium")' > /dev/null 2>&1; then
     overall_risk="Medium"
     review_event="APPROVE"
   else
@@ -792,7 +843,7 @@ ${body_findings}"
       --argjson comments "$inline_comments" \
       '{body: $body, event: "COMMENT", commit_id: $commit_id, comments: $comments}')
     local findings_post_result
-    if findings_post_result=$(echo "$findings_json_for_comment" | gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
+    if findings_post_result=$(echo "$findings_json_for_comment" | gh_api_retry api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
       --method POST \
       --input - 2>&1); then
       echo "Posted inline findings as COMMENT review before APPROVE." >&2
@@ -819,7 +870,7 @@ ${body_findings}"
   echo "Posting review (${review_event}) with ${inline_count} inline comments..." >&2
 
   local review_result
-  review_result=$(echo "$review_json" | gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
+  review_result=$(echo "$review_json" | gh_api_retry api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
     --method POST \
     --input - 2>&1) || {
     echo "WARNING: Failed to post ${review_event} review: ${review_result}" >&2
@@ -829,12 +880,12 @@ ${body_findings}"
     if [[ "$review_event" == "REQUEST_CHANGES" || "$review_event" == "APPROVE" ]]; then
       echo "Retrying as COMMENT review..." >&2
       review_json=$(echo "$review_json" | jq '.event = "COMMENT"')
-      review_result=$(echo "$review_json" | gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
+      review_result=$(echo "$review_json" | gh_api_retry api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
         --method POST \
         --input - 2>&1) || {
         echo "ERROR: COMMENT review also failed: ${review_result}" >&2
         echo "Falling back to posting as a PR comment..." >&2
-        if gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+        if gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
           --method POST \
           --field body="${review_body}" > /dev/null 2>&1; then
           echo "Review posted as PR comment (${review_event} → COMMENT both unavailable) to PR #${PR_NUMBER}." >&2
@@ -850,7 +901,7 @@ ${body_findings}"
 
     # Initial COMMENT review failed — fall back to regular PR comment
     echo "Falling back to posting as a PR comment..." >&2
-    if gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    if gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
       --field body="${review_body}" > /dev/null 2>&1; then
       echo "Review posted as PR comment (${review_event} unavailable) to PR #${PR_NUMBER}." >&2
@@ -897,7 +948,7 @@ update_sha_marker() {
     return 0
   fi
 
-  gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+  gh_api_retry api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
     --method PATCH \
     --field body="$updated_body" > /dev/null || {
     echo "WARNING: Failed to update SHA marker in summary comment." >&2

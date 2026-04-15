@@ -94,6 +94,14 @@ inputs:
       Needs pull-requests: write permission.
     required: true
 
+  # --- Resilience ---
+  retry-count:
+    description: >
+      Number of retry attempts for transient LLM API failures (429, 5xx, timeouts).
+      Set to 0 to disable retries. Uses exponential backoff with jitter.
+    required: false
+    default: '3'
+
 runs:
   using: composite
   steps:
@@ -101,7 +109,10 @@ runs:
       shell: bash
       run: |
         if ! command -v shellcheck &>/dev/null; then
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck || {
+            echo "ERROR: Failed to install shellcheck" >&2
+            exit 1
+          }
         fi
 
     - name: Run AI review
@@ -128,4 +139,5 @@ runs:
         PR_NUMBER: ${{ inputs.pr-number }}
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_SHA: ${{ inputs.head-sha }}
+        LLM_RETRY_COUNT: ${{ inputs.retry-count }}
       run: bash "${{ github.action_path }}/review.sh"

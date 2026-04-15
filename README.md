@@ -97,7 +97,7 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -139,7 +139,7 @@ git commit -m "Add ai-pr-review submodule"
 Then in your workflow, use `submodules: true` on checkout and reference the local path:
 
 ```yaml
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: true
