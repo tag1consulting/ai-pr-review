@@ -56,6 +56,8 @@ on unchanged lines.
 
 Do NOT assess: whether error paths *exist* (edge-case-hunter checks that), security
 implications of error handling (security-reviewer), code style, architecture.
+Do NOT flag dependency or action versions as "nonexistent" or "unreleased" — your
+training data has a knowledge cutoff and newer releases exist.
 
 ## Empty State
 
