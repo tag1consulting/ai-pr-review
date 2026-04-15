@@ -54,10 +54,31 @@ fi
 # ---------------------------------------------------------------------------
 gh_api_retry() {
   local attempt=0 max_retries=3 result exit_code
+
+  # Capture stdin so retries can re-read piped request bodies (e.g.,
+  # echo "$json" | gh_api_retry api ... --input -). Without this, stdin
+  # is consumed on the first gh invocation and retries get empty input.
+  local stdin_file
+  stdin_file=$(mktemp /tmp/gh-retry-stdin-XXXXXXXX)
+  cat > "$stdin_file"
+
+  # Rewrite --input - to --input <file> so each retry re-reads the body
+  local -a gh_args=()
+  local prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--input" && "$arg" == "-" ]]; then
+      gh_args+=("$stdin_file")
+    else
+      gh_args+=("$arg")
+    fi
+    prev="$arg"
+  done
+
   while true; do
     exit_code=0
-    result=$(gh "$@" 2>&1) || exit_code=$?
+    result=$(gh "${gh_args[@]}" 2>&1) || exit_code=$?
     if [[ "$exit_code" -eq 0 ]]; then
+      rm -f "$stdin_file"
       printf '%s' "$result"
       return 0
     fi
@@ -65,12 +86,13 @@ gh_api_retry() {
     if [[ "$attempt" -lt "$max_retries" ]] && echo "$result" | grep -qE '(502|503|429|ETIMEDOUT|Server Error|rate limit)'; then
       attempt=$((attempt + 1))
       local backoff=$(( 2 * (1 << (attempt - 1)) ))
-      local jitter=$(( RANDOM % 1000 ))
+      local jitter=$(( RANDOM % 1000 ))  # milliseconds, formatted as fractional seconds for sleep
       echo "WARNING: gh api call failed (attempt ${attempt}/${max_retries}), retrying in ${backoff}.${jitter}s..." >&2
       sleep "${backoff}.${jitter}"
       continue
     fi
     # Not transient or retries exhausted
+    rm -f "$stdin_file"
     printf '%s' "$result"
     return "$exit_code"
   done

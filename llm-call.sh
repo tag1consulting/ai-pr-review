@@ -66,9 +66,23 @@ trap 'rm -f "$RESPONSE_FILE"' EXIT
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-# Retry configuration (overridable via env vars)
+# Retry configuration (overridable via env vars, clamped to sane ranges)
 LLM_RETRY_COUNT="${LLM_RETRY_COUNT:-3}"
 LLM_RETRY_BASE_DELAY="${LLM_RETRY_BASE_DELAY:-2}"
+if ! [[ "$LLM_RETRY_COUNT" =~ ^[0-9]+$ ]]; then
+  echo "WARNING: LLM_RETRY_COUNT '${LLM_RETRY_COUNT}' is not a valid number; defaulting to 3." >&2
+  LLM_RETRY_COUNT=3
+elif [[ "$LLM_RETRY_COUNT" -gt 10 ]]; then
+  echo "WARNING: LLM_RETRY_COUNT '${LLM_RETRY_COUNT}' exceeds maximum (10); clamping." >&2
+  LLM_RETRY_COUNT=10
+fi
+if ! [[ "$LLM_RETRY_BASE_DELAY" =~ ^[0-9]+$ ]]; then
+  echo "WARNING: LLM_RETRY_BASE_DELAY '${LLM_RETRY_BASE_DELAY}' is not a valid number; defaulting to 2." >&2
+  LLM_RETRY_BASE_DELAY=2
+elif [[ "$LLM_RETRY_BASE_DELAY" -gt 30 ]]; then
+  echo "WARNING: LLM_RETRY_BASE_DELAY '${LLM_RETRY_BASE_DELAY}' exceeds maximum (30); clamping." >&2
+  LLM_RETRY_BASE_DELAY=30
+fi
 
 # HTTP status codes considered transient (worth retrying)
 is_transient_http() {
@@ -109,21 +123,42 @@ retry_curl() {
   local provider_label="$1"; shift
   local attempt=0 http_code curl_exit backoff jitter
 
+  # Capture stdin to a temp file so retries can re-read the request body.
+  # Without this, piped input (echo "$body" | retry_curl ... --data-binary @-)
+  # would be consumed on the first curl attempt, leaving retries with empty bodies.
+  local stdin_file
+  stdin_file=$(mktemp /tmp/llm-retry-stdin-XXXXXXXX)
+  cat > "$stdin_file"
+
+  # Rewrite --data-binary @- to --data-binary @<file> so each retry
+  # re-reads the captured body instead of exhausted stdin.
+  local -a curl_args=()
+  local prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--data-binary" && "$arg" == "@-" ]]; then
+      curl_args+=("@${stdin_file}")
+    else
+      curl_args+=("$arg")
+    fi
+    prev="$arg"
+  done
+
   while true; do
     curl_exit=0
-    http_code=$(curl "$@" 2>/dev/null) || curl_exit=$?
+    http_code=$(curl "${curl_args[@]}" 2>/dev/null) || curl_exit=$?
 
     if [[ "$curl_exit" -ne 0 ]]; then
       # curl itself failed (not an HTTP error)
       if [[ "$attempt" -lt "$LLM_RETRY_COUNT" ]] && is_transient_curl "$curl_exit"; then
         attempt=$((attempt + 1))
         backoff=$(( LLM_RETRY_BASE_DELAY * (1 << (attempt - 1)) ))
-        jitter=$(( RANDOM % 1000 ))
+        jitter=$(( RANDOM % 1000 ))  # milliseconds, formatted as fractional seconds for sleep
         echo "WARNING: ${provider_label} curl failed (exit ${curl_exit}), retrying in ${backoff}.${jitter}s (attempt ${attempt}/${LLM_RETRY_COUNT})..." >&2
         sleep "${backoff}.${jitter}"
         continue
       fi
       echo "ERROR: ${provider_label} API request failed (curl exit ${curl_exit})" >&2
+      rm -f "$stdin_file"
       if is_transient_curl "$curl_exit"; then
         exit 2
       fi
@@ -132,7 +167,7 @@ retry_curl() {
 
     # curl succeeded — check HTTP status
     if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
-      # Success
+      rm -f "$stdin_file"
       return 0
     fi
 
@@ -140,13 +175,14 @@ retry_curl() {
     if [[ "$attempt" -lt "$LLM_RETRY_COUNT" ]] && is_transient_http "$http_code"; then
       attempt=$((attempt + 1))
       backoff=$(( LLM_RETRY_BASE_DELAY * (1 << (attempt - 1)) ))
-      jitter=$(( RANDOM % 1000 ))
+      jitter=$(( RANDOM % 1000 ))  # milliseconds, formatted as fractional seconds for sleep
       echo "WARNING: ${provider_label} returned HTTP ${http_code}, retrying in ${backoff}.${jitter}s (attempt ${attempt}/${LLM_RETRY_COUNT})..." >&2
       sleep "${backoff}.${jitter}"
       continue
     fi
 
     # Not retryable or retries exhausted — let check_http_status handle the exit
+    rm -f "$stdin_file"
     check_http_status "$http_code"
   done
 }
