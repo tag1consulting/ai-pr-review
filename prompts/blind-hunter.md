@@ -67,7 +67,7 @@ Do NOT flag dependency versions, GitHub Action versions, or package versions as
 "nonexistent," "unreleased," or "unknown" — your training data has a knowledge cutoff
 and newer releases exist beyond it. Only raise a version-related finding if the diff
 itself provides concrete evidence of a problem (e.g., a syntactically malformed version
-string or a clearly contradictory reference).
+string, a downgrade, or a clearly contradictory reference).
 
 ## Empty State
 

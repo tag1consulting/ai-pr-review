@@ -57,7 +57,9 @@ on unchanged lines.
 Do NOT assess: whether error paths *exist* (edge-case-hunter checks that), security
 implications of error handling (security-reviewer), code style, architecture.
 Do NOT flag dependency or action versions as "nonexistent" or "unreleased" — your
-training data has a knowledge cutoff and newer releases exist.
+training data has a knowledge cutoff and newer releases exist. Only flag a version if
+the diff itself provides concrete evidence of a problem (e.g., a syntactically malformed
+version string).
 
 ## Empty State
 
