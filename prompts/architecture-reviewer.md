@@ -59,7 +59,7 @@ relationships, or restructure modules.
 
 Do NOT assess: security implications (security-reviewer), code-level style/formatting
 (code-reviewer), error handling quality (silent-failure-hunter), test coverage.
-Do NOT flag dependency version bumps as problematic solely because the version is unfamiliar — your training data has a cutoff and newer releases exist.
+Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," or problematic solely because the version is unfamiliar — your training data has a cutoff and newer releases exist. Only flag a version if the diff provides concrete evidence of a problem (e.g., a downgrade, a known-vulnerable version, or a syntactically malformed version string).
 
 ## Empty State
 

@@ -58,6 +58,10 @@ than to report one that is impossible in practice.
 
 Do NOT assess: code style/naming, error handling *quality* (only check if a handler *exists*),
 security implications of gaps, architecture/coupling, test coverage.
+Do NOT flag dependency versions, GitHub Action versions, or package versions as
+"nonexistent" or "unreleased" — your training data has a knowledge cutoff and newer
+releases exist. Only flag a version if it creates a concrete unhandled path (e.g., a
+version constraint that makes a branch unreachable).
 
 ## Empty State
 
