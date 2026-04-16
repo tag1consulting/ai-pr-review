@@ -141,7 +141,7 @@ shellcheck review.sh llm-call.sh post-review.sh run-shellcheck.sh
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key>
 echo "hello" > /tmp/msg.txt
 echo "Say hi" > /tmp/sys.txt
-./llm-call.sh claude-haiku-4-5-20251001 /tmp/sys.txt /tmp/msg.txt
+./llm-call.sh claude-haiku-4-5 /tmp/sys.txt /tmp/msg.txt
 
 # Dry-run review.sh (requires a real repo with a PR)
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> GH_TOKEN=<token>
