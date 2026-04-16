@@ -6,10 +6,10 @@
     "output_rate": 15000000
   },
   {
-    "patterns": ["claude-opus-4-6", "claude-opus-4\\.6", "claude-opus-4-5", "claude-opus-4\\.5"],
-    "display_name": "Opus 4.6",
-    "input_rate": 15000000,
-    "output_rate": 75000000
+    "patterns": ["claude-opus-4-7", "claude-opus-4\\.7", "claude-opus-4-6", "claude-opus-4\\.6", "claude-opus-4-5", "claude-opus-4\\.5"],
+    "display_name": "Opus 4.7",
+    "input_rate": 5000000,
+    "output_rate": 25000000
   },
   {
     "patterns": ["claude-haiku-4-5", "claude-haiku-4\\.5"],

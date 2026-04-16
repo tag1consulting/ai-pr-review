@@ -81,10 +81,10 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-6` |
+| `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-7` |
 | `openai` / `openai-compatible` | `gpt-4o` | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
-| `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-6-v1` |
+| `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-7-v1` |
 
 ## Retry and resilience
 
