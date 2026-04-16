@@ -104,10 +104,16 @@ setup() {
   [ "$output" = "3000000 15000000" ]
 }
 
-@test "model_pricing: claude-opus-4-6 returns correct rates" {
+@test "model_pricing: claude-opus-4-7 returns correct rates" {
+  run model_pricing "claude-opus-4-7"
+  [ "$status" -eq 0 ]
+  [ "$output" = "5000000 25000000" ]
+}
+
+@test "model_pricing: claude-opus-4-6 still matched by Opus pattern" {
   run model_pricing "claude-opus-4-6-20250514"
   [ "$status" -eq 0 ]
-  [ "$output" = "15000000 75000000" ]
+  [ "$output" = "5000000 25000000" ]
 }
 
 @test "model_pricing: claude-haiku-4-5 returns correct rates" {
@@ -168,10 +174,16 @@ setup() {
   [ "$output" = "Sonnet 4.6" ]
 }
 
-@test "model_display_name: claude-opus-4-6 -> Opus 4.6" {
+@test "model_display_name: claude-opus-4-7 -> Opus 4.7" {
+  run model_display_name "claude-opus-4-7"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Opus 4.7" ]
+}
+
+@test "model_display_name: claude-opus-4-6 -> Opus 4.7 (shared display name)" {
   run model_display_name "claude-opus-4-6-20250514"
   [ "$status" -eq 0 ]
-  [ "$output" = "Opus 4.6" ]
+  [ "$output" = "Opus 4.7" ]
 }
 
 @test "model_display_name: claude-haiku-4-5 -> Haiku 4.5" {
