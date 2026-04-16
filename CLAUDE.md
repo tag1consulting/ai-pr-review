@@ -79,7 +79,7 @@ When adding a suppression, include an `id` and a `reason` explaining why it is a
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-4-6-20250514` | `claude-opus-4-6-20250514` |
+| `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-6` |
 | `openai` / `openai-compatible` | `gpt-4o` | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 | `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-6-v1` |
