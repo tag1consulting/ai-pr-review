@@ -62,8 +62,8 @@ esac
 # Set per-provider model defaults; user env vars take precedence.
 case "$AI_PROVIDER" in
   anthropic)
-    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-claude-sonnet-4-6-20250514}"
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-claude-opus-4-6-20250514}"
+    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-claude-sonnet-4-6}"
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-claude-opus-4-6}"
     ;;
   openai)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-gpt-4o}"

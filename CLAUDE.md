@@ -79,7 +79,7 @@ When adding a suppression, include an `id` and a `reason` explaining why it is a
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-4-6-20250514` | `claude-opus-4-6-20250514` |
+| `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-6` |
 | `openai` / `openai-compatible` | `gpt-4o` | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 | `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-6-v1` |
@@ -141,7 +141,7 @@ shellcheck review.sh llm-call.sh post-review.sh run-shellcheck.sh
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key>
 echo "hello" > /tmp/msg.txt
 echo "Say hi" > /tmp/sys.txt
-./llm-call.sh claude-haiku-4-5-20251001 /tmp/sys.txt /tmp/msg.txt
+./llm-call.sh claude-haiku-4-5 /tmp/sys.txt /tmp/msg.txt
 
 # Dry-run review.sh (requires a real repo with a PR)
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> GH_TOKEN=<token>
