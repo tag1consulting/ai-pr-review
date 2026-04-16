@@ -1,5 +1,12 @@
 [
   {
+    "id": "self-action-pin-not-supply-chain-risk",
+    "reason": "tag1consulting/ai-pr-review referencing itself (@main, a tag, or a SHA) is not a supply-chain risk — it IS the action being run. Flagging the tool's own canonical invocation as an unpinned third-party dependency is a false positive.",
+    "match": {
+      "pattern": "tag1consulting/ai-pr-review"
+    }
+  },
+  {
     "id": "shellcheck-heredoc-false-positive-run-shellcheck",
     "reason": "Shellcheck misparses the heredoc inside the if condition in run-shellcheck.sh and emits SC1072+SC1073 as a pair; bash -n passes cleanly. Suppressing all shellcheck findings on this file.",
     "match": {
