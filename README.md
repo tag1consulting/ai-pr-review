@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 0    # required: shallow clones break git diff against base
 
       - uses: tag1consulting/ai-pr-review@main
         with:
@@ -165,7 +165,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0    # required: shallow clones break git diff against base
           submodules: true
           # GITHUB_TOKEN cannot check out a submodule in a different private repo.
           # A PAT with repo scope (or fine-grained token with read access to
