@@ -75,6 +75,8 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 When adding a suppression, include an `id` and a `reason` explaining why it is a false positive.
 
+Consuming repos can add **local suppressions** by placing a `suppressions.json` file at `.github/ai-pr-review/suppressions.json` in their repository. Local rules are merged with the global rules at runtime — no action input required. Use the same schema as the global file.
+
 ## Provider model defaults (review.sh)
 
 | Provider | Standard model | Premium model |
