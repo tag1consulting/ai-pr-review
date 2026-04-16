@@ -62,7 +62,7 @@ esac
 # Set per-provider model defaults; user env vars take precedence.
 case "$AI_PROVIDER" in
   anthropic)
-    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-claude-sonnet-4-6-20250514}"
+    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-claude-sonnet-4-6}"
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-claude-opus-4-7}"
     ;;
   openai)
@@ -689,8 +689,14 @@ merge_findings() {
 # Apply declarative suppressions from suppressions.json.
 # Runs after all findings are merged, before confidence filter and dedup.
 # Suppressed findings are removed from FINDINGS_JSON_FILE and logged to stderr.
+# Local suppressions in ${GITHUB_WORKSPACE}/.github/ai-pr-review/suppressions.json
+# are merged with the global rules (local rules take precedence in log output).
 apply_suppressions() {
   local suppressions_file="${SCRIPT_DIR}/suppressions.json"
+  local local_suppressions_file="${GITHUB_WORKSPACE:-}/.github/ai-pr-review/suppressions.json"
+  local combined_rules_file
+  combined_rules_file=$(mktemp /tmp/ai-review-suppressions-XXXXXXXX.json)
+  TMPFILES+=("$combined_rules_file")
 
   if [[ ! -f "$suppressions_file" ]]; then
     return 0
@@ -701,8 +707,20 @@ apply_suppressions() {
     return 0
   fi
 
+  if [[ -n "${GITHUB_WORKSPACE:-}" && -f "$local_suppressions_file" ]]; then
+    if ! jq -e 'type == "array"' "$local_suppressions_file" > /dev/null 2>&1; then
+      echo "WARNING: local suppressions.json is not a valid JSON array; ignoring local suppressions." >&2
+      cp "$suppressions_file" "$combined_rules_file"
+    else
+      jq -s 'add' "$suppressions_file" "$local_suppressions_file" > "$combined_rules_file"
+      echo "Loaded local suppressions from .github/ai-pr-review/suppressions.json" >&2
+    fi
+  else
+    cp "$suppressions_file" "$combined_rules_file"
+  fi
+
   local result
-  result=$(jq --slurpfile rules "$suppressions_file" '
+  result=$(jq --slurpfile rules "$combined_rules_file" '
     ($rules[0]) as $active_rules |
 
     def rule_matches(rule):

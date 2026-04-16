@@ -25,7 +25,7 @@ On every PR push, this action:
 
 ### Review agents
 
-**Quick mode** (default) runs 2-3 agents:
+**Quick mode** (default) runs 1-2 finding agents plus a summary agent on first run:
 
 | Agent | Purpose |
 |-------|---------|
@@ -51,14 +51,14 @@ Findings use shape-distinct icons for accessibility:
 |------|----------|---------------|
 | ❌ | Critical | REQUEST_CHANGES |
 | 🚨 | High | REQUEST_CHANGES |
-| 🔶 | Medium | COMMENT |
-| 💬 | Low | COMMENT |
+| 🔶 | Medium | APPROVE (informational) |
+| 💬 | Low | APPROVE (informational) |
 
 ## Supported LLM providers
 
 | Provider | `provider` value | Required secret | Default models (standard / premium) |
 |----------|-----------------|-----------------|--------------------------------------|
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6-20250514` / `claude-opus-4-7` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` / `claude-opus-4-7` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4o` |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
@@ -81,11 +81,12 @@ name: AI PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, ready_for_review, labeled]
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write           # needed for standalone review mode
 
 jobs:
   review:
@@ -174,16 +175,20 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
-| `pr-number` | **Yes** | — | PR number |
+| `review-target` | No | `pr` | `pr` (PR review) or `standalone` (GitHub issue) |
+| `standalone-depth` | No | `''` | Commits to diff when base and head resolve to the same SHA |
+| `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
+| `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
+| `retry-count` | No | `3` | Retry attempts for transient LLM failures |
 
 ## Review modes
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs all 8 agents including architecture, security, and adversarial review. Trigger full mode by:
+**Full mode**: Runs up to 8 agents — 6 always-on finding agents (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`
@@ -193,6 +198,16 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 After the first full-PR review, subsequent pushes trigger an incremental review that only analyzes the new commits. The SHA watermark is stored in the summary comment and advanced after each review run.
 
 If the watermark cannot be found (e.g., the summary comment was deleted), the action falls back to a full PR diff.
+
+## Resilience
+
+**Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
+
+**LLM retries**: Transient API failures (HTTP 429, 500, 502, 503) and transient curl errors (connection refused, timeout) are retried with exponential backoff and jitter. Controlled by the `retry-count` input (default: 3).
+
+**GitHub API retries**: Critical GitHub API calls (posting reviews, comments) retry on 502, 503, 429, and ETIMEDOUT with fixed backoff.
+
+**Truncation recovery**: When an LLM response is truncated (hit max tokens), the action attempts to salvage valid findings from the partial JSON rather than discarding the entire agent output.
 
 ## Suppression system
 
@@ -212,10 +227,28 @@ Known false positives can be suppressed via `suppressions.json`. Each entry matc
 ```
 
 Match fields (all optional, combined with AND logic):
-- `file` — Exact filename match
+- `file` — Substring match on the finding's file path
 - `line` — Exact line number match
 - `code` — Finding text starts with this prefix
 - `pattern` — Regex matched against the finding text
+
+### Local suppressions
+
+Consuming repos can add their own suppression rules without modifying the action. Create `.github/ai-pr-review/suppressions.json` in your repository using the same schema:
+
+```json
+[
+  {
+    "id": "my-repo-specific-rule",
+    "reason": "Why this finding is not relevant to this repo",
+    "match": {
+      "pattern": "regex.*to.*match.*finding.*text"
+    }
+  }
+]
+```
+
+Local rules are merged with the global suppression rules at runtime — no action input or configuration is required.
 
 ## Language profiles
 
@@ -250,6 +283,7 @@ ai-pr-review/
 ├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
 ├── post-review.sh          # GitHub API posting: summary, review, thread management
 ├── run-shellcheck.sh       # Shellcheck wrapper for shell script findings
+├── model-pricing.json      # Per-model token pricing for cost estimation
 ├── suppressions.json       # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
 │   ├── pr-summarizer.md
@@ -260,9 +294,19 @@ ai-pr-review/
 │   ├── blind-hunter.md
 │   ├── edge-case-hunter.md
 │   └── adversarial-general.md
-└── language-profiles/      # Per-language review context
-    ├── go.md
-    └── shell.md
+├── language-profiles/      # Per-language review context
+│   ├── go.md
+│   └── shell.md
+├── tests/                  # bats-core unit tests
+│   ├── review_functions.bats
+│   ├── extract_findings.bats
+│   ├── llm_call_functions.bats
+│   ├── post_review_functions.bats
+│   ├── test_helper.bash
+│   └── fixtures/
+└── .github/workflows/
+    ├── ai-review.yml       # Self-test: runs the action on its own PRs
+    └── lint.yml            # Shellcheck + bats test suite
 ```
 
 ### Data flow
