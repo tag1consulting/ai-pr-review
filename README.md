@@ -232,6 +232,24 @@ Match fields (all optional, combined with AND logic):
 - `code` — Finding text starts with this prefix
 - `pattern` — Regex matched against the finding text
 
+### Local suppressions
+
+Consuming repos can add their own suppression rules without modifying the action. Create `.github/ai-pr-review/suppressions.json` in your repository using the same schema:
+
+```json
+[
+  {
+    "id": "my-repo-specific-rule",
+    "reason": "Why this finding is not relevant to this repo",
+    "match": {
+      "pattern": "regex.*to.*match.*finding.*text"
+    }
+  }
+]
+```
+
+Local rules are merged with the global suppression rules at runtime — no action input or configuration is required.
+
 ## Language profiles
 
 The action auto-detects languages from file extensions and injects per-language context into agent prompts. Language profiles are markdown files in `language-profiles/`:
