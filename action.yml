@@ -44,7 +44,7 @@ inputs:
   # --- Review mode ---
   review-mode:
     description: >
-      Review mode: quick (3 agents) or full (all agents including architecture,
+      Review mode: quick (code-reviewer + conditional agents) or full (all agents including architecture,
       security, blind-hunter, edge-case-hunter, adversarial-general).
     required: false
     default: 'quick'

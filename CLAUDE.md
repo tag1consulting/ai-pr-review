@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A GitHub Actions composite action that runs multiple LLM agents against a PR diff and posts a structured review (summary comment + inline findings) back to the PR. It is consumed as a git submodule by downstream repos.
+A GitHub Actions composite action that runs multiple LLM agents against a PR diff and posts a structured review (summary comment + inline findings) back to the PR. It is consumed by downstream repos either as a direct action reference (`uses: tag1consulting/ai-pr-review@main`) or as a git submodule.
 
 ## Key scripts and their roles
 
@@ -33,13 +33,13 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 ]
 ```
 
-`review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates on the same `file:line` are deduped (highest severity wins).
+`review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding.
 
 ## Findings pipeline (review.sh phases)
 
 1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
 2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()`.
-3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Apply `suppressions.json`. Filter by confidence ≥ 75. Deduplicate by `file:line`.
+3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Apply `suppressions.json`. Filter by confidence ≥ 75. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
 4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub.
 
 ## Incremental review / SHA watermark
@@ -57,7 +57,7 @@ Three message files are built and passed selectively to agents:
 ## Adding a new agent
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
-2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>"` and push `<output_var>` onto `AGENT_OUTPUTS`.
+2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384.
 3. If the agent should only run conditionally (like `silent-failure-hunter`), gate it with a grep check on `$DIFF_FILE`.
 
 ## Adding a language profile
@@ -95,6 +95,13 @@ When adding a suppression, include an `id` and a `reason` explaining why it is a
 
 The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`.
 
+Additional env vars consumed by the scripts (not exposed as action inputs):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
+| `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
+
 Exit codes from `llm-call.sh`:
 - **0** — success
 - **1** — permanent error (bad API key, invalid request, unknown provider)
@@ -102,6 +109,24 @@ Exit codes from `llm-call.sh`:
 - **3** — content issue (provider safety/recitation filter blocked response)
 
 `post-review.sh` wraps critical GitHub API calls with `gh_api_retry()` (3 retries, 2s/4s/8s backoff) for transient errors (502, 503, 429, ETIMEDOUT).
+
+## Graceful failure handling
+
+When an agent call fails (transient API error, content filter block, configuration issue), `call_agent()` in `review.sh`:
+1. Logs a WARNING with the failure type and last error message
+2. Appends the agent name to the `FAILED_AGENTS` array
+3. Writes empty output and continues to the next agent
+
+After all agents complete:
+- If **all** finding agents failed, the review aborts with exit 1
+- Otherwise, `FAILED_AGENTS` is exported as `AI_REVIEW_FAILED_AGENTS` (colon-separated) to `post-review.sh`
+- `post-review.sh` downgrades an empty-findings review from APPROVE to COMMENT to indicate an incomplete review
+
+## Token usage and cost estimation
+
+`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr.
+
+`model-pricing.json` maps model ID patterns to display names and per-token rates (cost per 1M tokens). The `model_pricing()`, `model_display_name()`, and `format_cost()` functions in `review.sh` use this data; `emit_token_table_rows()` generates the markdown table rows for the review comment and the Actions step summary.
 
 ## Testing locally
 
@@ -162,11 +187,11 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions: `detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `severity_icon`, and `extract_findings`
+- Tests cover pure functions from `review.sh` (`detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `severity_icon`, `extract_findings`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`), and from `post-review.sh` (`gh_api_retry`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
 
 ## Release process
 
-Run `/comprehensive-review` before tagging or releasing. This action is consumed as a submodule, so downstream repos pin to a specific commit or tag — breaking changes require a version bump and coordinated submodule updates in consuming repos.
+Run `/comprehensive-review` before tagging or releasing. This action is consumed via direct action reference (`@main`, `@v1.0`) or as a git submodule. Direct references pin to a branch or tag; submodule consumers pin to a specific commit. Breaking changes require a version bump and coordinated updates in consuming repos.
