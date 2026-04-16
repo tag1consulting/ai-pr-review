@@ -46,6 +46,8 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 
 The SHA of the last-reviewed commit is stored in an HTML comment embedded in the PR summary comment (`<!-- ai-pr-review-summary sha=<sha> -->`). `post-review.sh --get-last-sha` extracts it. Subsequent pushes diff from that SHA to HEAD. `post-review.sh` calls `update_sha_marker()` at the end to advance it.
 
+To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. This sets the `force-full-diff` action input to `true`, which causes `review.sh` to skip the `--get-last-sha` call (leaving `LAST_REVIEWED_SHA=""`) and fall through to the full `origin/BASE_REF...HEAD_SHA` diff. The watermark still advances normally at the end of the run.
+
 ## Context message variants
 
 Three message files are built and passed selectively to agents:

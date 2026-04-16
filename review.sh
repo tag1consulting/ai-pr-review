@@ -24,6 +24,8 @@
 # Environment (optional):
 #   AI_REVIEW_MODE    — "quick" (default) or "full"
 #                       Add the "ai-review-full" label to a PR for full mode.
+#   FORCE_FULL_DIFF   — "true" to bypass SHA watermark and force full-PR diff.
+#                       Add the "ai-review-rescan" label to a PR to set this.
 #   REVIEW_TARGET     — "pr" (default) or "standalone"
 #                       "standalone" skips SHA watermark, posts findings as a GitHub issue.
 #   AI_MODEL_STANDARD — Model for standard agents (pr-summarizer, code-reviewer, etc.)
@@ -131,11 +133,13 @@ DIFF_BASE=""
 DIFF_LABEL=""
 DIFF_TWO_DOT=false
 
-if [[ "$REVIEW_TARGET" != "standalone" ]]; then
+if [[ "$REVIEW_TARGET" != "standalone" && "${FORCE_FULL_DIFF:-false}" != "true" ]]; then
   LAST_REVIEWED_SHA=$("${SCRIPT_DIR}/post-review.sh" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
     echo "WARNING: Could not retrieve last-reviewed SHA; falling back to full PR diff." >&2
     LAST_REVIEWED_SHA=""
   }
+elif [[ "${FORCE_FULL_DIFF:-false}" == "true" ]]; then
+  echo "FORCE_FULL_DIFF=true — bypassing SHA watermark; reviewing full PR diff." >&2
 fi
 
 if [[ -n "$LAST_REVIEWED_SHA" && "$LAST_REVIEWED_SHA" != "$HEAD_SHA" ]]; then

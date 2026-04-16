@@ -35,7 +35,9 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.draft == false &&
        !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
-       (github.event.action != 'labeled' || github.event.label.name == 'ai-review-full'))
+       (github.event.action != 'labeled' ||
+        github.event.label.name == 'ai-review-full' ||
+        github.event.label.name == 'ai-review-rescan'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -75,6 +77,10 @@ jobs:
               inputs.review_mode ||
               (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
               'quick'
+            }}
+          force-full-diff: >-
+            ${{
+              contains(github.event.pull_request.labels.*.name, 'ai-review-rescan')
             }}
           review-target: ${{ (github.event_name == 'workflow_dispatch' && inputs.pr_number == '') && 'standalone' || 'pr' }}
           pr-number: ${{ inputs.pr_number || github.event.pull_request.number || '' }}

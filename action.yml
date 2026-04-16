@@ -49,6 +49,16 @@ inputs:
     required: false
     default: 'quick'
 
+  force-full-diff:
+    description: >-
+      Force a full-PR diff, bypassing the SHA watermark that normally enables
+      incremental reviews. Set to 'true' to re-review the full diff
+      (origin/BASE_REF...HEAD_SHA). The watermark advances normally after the
+      run (one-shot per invocation). Typically set via the ai-review-rescan PR
+      label in the workflow.
+    required: false
+    default: 'false'
+
   review-target:
     description: >
       Review target: pr (post review on a pull request) or standalone
@@ -129,6 +139,7 @@ runs:
       env:
         AI_PROVIDER: ${{ inputs.provider }}
         AI_REVIEW_MODE: ${{ inputs.review-mode }}
+        FORCE_FULL_DIFF: ${{ inputs.force-full-diff }}
         REVIEW_TARGET: ${{ inputs.review-target }}
         STANDALONE_DEPTH: ${{ inputs.standalone-depth }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}

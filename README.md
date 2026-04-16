@@ -137,10 +137,33 @@ git submodule add git@github.com:tag1consulting/ai-pr-review.git ai-pr-review
 git commit -m "Add ai-pr-review submodule"
 ```
 
-Then in your workflow, use `submodules: true` on checkout and reference the local path:
+Then create `.github/workflows/ai-review.yml` in your repository. This example mirrors the full feature set of the direct-reference workflow (label triggers, full-diff rescan, concurrency):
 
 ```yaml
-      - uses: actions/checkout@v6
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    if: >-
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
+      (github.event.action != 'labeled' ||
+       github.event.label.name == 'ai-review-full' ||
+       github.event.label.name == 'ai-review-rescan')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: true
@@ -149,10 +172,27 @@ Then in your workflow, use `submodules: true` on checkout and reference the loca
           # tag1consulting/ai-pr-review) is required:
           token: ${{ secrets.AI_PR_REVIEW_TOKEN }}
 
-      - uses: ./ai-pr-review
+      - uses: ./.github/actions/ai-pr-review
         with:
-          # ... same inputs as above
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
+          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
+          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          review-mode: >-
+            ${{
+              (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
+              'quick'
+            }}
+          force-full-diff: >-
+            ${{
+              contains(github.event.pull_request.labels.*.name, 'ai-review-rescan')
+            }}
+          pr-number: ${{ github.event.pull_request.number }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+> **Note:** The submodule is typically placed at `.github/actions/ai-pr-review` so the `uses:` path matches the above. Adjust if you chose a different path.
 
 To update the submodule pin:
 
@@ -175,6 +215,7 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
+| `force-full-diff` | No | `false` | Bypass the SHA watermark; review the full PR diff for this run |
 | `review-target` | No | `pr` | `pr` (PR review) or `standalone` (GitHub issue) |
 | `standalone-depth` | No | `''` | Commits to diff when base and head resolve to the same SHA |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
@@ -198,6 +239,8 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 After the first full-PR review, subsequent pushes trigger an incremental review that only analyzes the new commits. The SHA watermark is stored in the summary comment and advanced after each review run.
 
 If the watermark cannot be found (e.g., the summary comment was deleted), the action falls back to a full PR diff.
+
+To force a full-PR diff for a single run, add the **`ai-review-rescan`** label to the PR. The watermark still advances normally afterward, so subsequent pushes resume incremental review — re-add the label if you want another full rescan.
 
 ## Resilience
 
