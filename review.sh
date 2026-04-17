@@ -611,6 +611,19 @@ if [[ -n "$CHANGED_FILES" ]]; then
   fi
 fi
 
+# --- Run CVE check if dependency manifests changed ---
+CVE_JSON="[]"
+if [[ -n "$CHANGED_FILES" ]]; then
+  CVE_JSON=$("${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES") || {
+    echo "WARNING: run-cve-check.sh failed; CVE findings will be skipped." >&2
+    CVE_JSON="[]"
+  }
+  CVE_COUNT=$(echo "$CVE_JSON" | jq 'length' 2>/dev/null || echo "0")
+  if [[ "$CVE_COUNT" -gt 0 ]]; then
+    echo "CVE check: ${CVE_COUNT} findings" >&2
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Phase 2: Parse and merge findings JSON from all agents
 # ---------------------------------------------------------------------------
@@ -788,6 +801,11 @@ done
 # Merge shellcheck findings
 if [[ "$SHELLCHECK_JSON" != "[]" ]]; then
   merge_findings "$SHELLCHECK_JSON"
+fi
+
+# Merge CVE findings
+if [[ "$CVE_JSON" != "[]" ]]; then
+  merge_findings "$CVE_JSON"
 fi
 
 # Apply declarative suppressions (won't-fix / false positives)

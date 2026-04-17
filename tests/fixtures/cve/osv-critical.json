@@ -1,0 +1,20 @@
+{
+  "vulns": [
+    {
+      "id": "GHSA-xxxx-yyyy-zzzz",
+      "aliases": ["CVE-2025-99999"],
+      "summary": "Remote code execution via unsanitized input in example library",
+      "severity": [
+        {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H (9.8)"}
+      ],
+      "affected": [
+        {
+          "package": {"name": "github.com/gin-gonic/gin", "ecosystem": "Go"},
+          "ranges": [
+            {"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.7.7"}]}
+          ]
+        }
+      ]
+    }
+  ]
+}
