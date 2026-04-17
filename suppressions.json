@@ -7,6 +7,14 @@
     }
   },
   {
+    "id": "ai-review-yml-action-pin-false-positive",
+    "reason": "uses: tag1consulting/ai-pr-review@main in ai-review.yml is intentional. Consumers deliberately pin to @main (or a tag/SHA) for this specific action. Flagging it as a supply-chain risk is a false positive — the action is the reviewed tool itself or is a known trusted dependency.",
+    "match": {
+      "file": "ai-review.yml",
+      "pattern": "floating branch|unpinned|supply.chain|pin.*@main|@main.*pin|commit sha|immutable"
+    }
+  },
+  {
     "id": "shellcheck-heredoc-false-positive-run-shellcheck",
     "reason": "Shellcheck misparses the heredoc inside the if condition in run-shellcheck.sh and emits SC1072+SC1073 as a pair; bash -n passes cleanly. Suppressing all shellcheck findings on this file.",
     "match": {
