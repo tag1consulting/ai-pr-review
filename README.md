@@ -285,9 +285,13 @@ jobs:
   # returns 404 when the label is absent; || true swallows it.
   cleanup-rescan-label:
     needs: [prepare, review]
-    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     steps:
       - name: Remove ai-review-rescan label
