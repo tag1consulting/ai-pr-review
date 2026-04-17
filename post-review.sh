@@ -129,10 +129,13 @@ if [[ "${1:-}" == "--standalone" ]]; then
   }
 
   _truncate_body() {
-    local body="$1" limit=64000
-    if [[ ${#body} -gt $limit ]]; then
+    local body="$1" limit=64000 byte_len
+    byte_len=$(printf '%s' "$body" | wc -c)
+    if [[ "$byte_len" -gt "$limit" ]]; then
+      local truncated
+      truncated=$(printf '%s' "$body" | head -c "$limit" | iconv -f UTF-8 -t UTF-8//IGNORE 2>/dev/null)
       printf '%s\n\n---\n*Review output truncated — body exceeded GitHub API limit.*\n' \
-        "${body:0:$limit}"
+        "$truncated"
     else
       printf '%s' "$body"
     fi
@@ -285,14 +288,21 @@ mktemp_tracked() {
   echo "$f"
 }
 
-# GitHub API rejects comment/review bodies exceeding 65,536 characters.
-# Truncate to 64,000 chars (leaving room for the truncation notice itself).
+# GitHub API rejects comment/review bodies exceeding 65,536 bytes (the limit
+# applies to the JSON-encoded UTF-8 request body, not character count).
+# Truncate at 64,000 bytes to leave room for the truncation notice itself.
 MAX_BODY_SIZE=64000
 truncate_body() {
-  local body="$1"
-  if [[ ${#body} -gt $MAX_BODY_SIZE ]]; then
-    printf '%s\n\n---\n*Review output truncated — body exceeded GitHub API limit (65,536 chars). Run a full review locally to see complete output.*\n' \
-      "${body:0:$MAX_BODY_SIZE}"
+  local body="$1" byte_len
+  byte_len=$(printf '%s' "$body" | wc -c)
+  if [[ "$byte_len" -gt "$MAX_BODY_SIZE" ]]; then
+    local truncated
+    # head -c cuts at a byte boundary which may land mid-UTF-8-sequence;
+    # iconv -t UTF-8//IGNORE drops any trailing partial codepoint so the
+    # output is always valid UTF-8.
+    truncated=$(printf '%s' "$body" | head -c "$MAX_BODY_SIZE" | iconv -f UTF-8 -t UTF-8//IGNORE 2>/dev/null)
+    printf '%s\n\n---\n*Review output truncated — body exceeded GitHub API limit (65,536 bytes). Run a full review locally to see complete output.*\n' \
+      "$truncated"
   else
     printf '%s' "$body"
   fi
