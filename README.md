@@ -124,6 +124,7 @@ jobs:
     if: always() && !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     steps:
       - name: Remove ai-review-rescan label
