@@ -95,6 +95,8 @@ jobs:
   review:
     if: >-
       github.event.pull_request.draft == false &&
+      github.actor != 'dependabot[bot]' &&
+      github.actor != 'renovate[bot]' &&
       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
       (github.event.action != 'labeled' ||
        github.event.label.name == 'ai-review-full' ||
@@ -181,6 +183,8 @@ jobs:
       cancel-in-progress: true
     if: >-
       github.event.pull_request.draft == false &&
+      github.actor != 'dependabot[bot]' &&
+      github.actor != 'renovate[bot]' &&
       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
       (github.event.action != 'labeled' ||
        github.event.label.name == 'ai-review-full' ||
