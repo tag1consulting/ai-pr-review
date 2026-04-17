@@ -86,19 +86,22 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write           # needed for standalone review mode
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
-    concurrency:
-      group: ai-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     if: >-
       github.event.pull_request.draft == false &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
+      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
+      (github.event.action != 'labeled' ||
+       github.event.label.name == 'ai-review-full' ||
+       github.event.label.name == 'ai-review-rescan')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -107,10 +110,30 @@ jobs:
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
+          force-full-diff: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') && 'true' || 'false' }}
           pr-number: ${{ github.event.pull_request.number }}
           base-ref: ${{ github.event.pull_request.base.ref }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Always attempt to remove the ai-review-rescan label after the review,
+  # even if the review job was cancelled by the concurrency rule on a new push.
+  cleanup-rescan-label:
+    needs: review
+    if: always() && !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Remove ai-review-rescan label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            --method DELETE \
+            repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/ai-review-rescan \
+            || true
 ```
 
 Pin to a specific version by using a tag or commit SHA instead of `@main` (e.g., `@v1.0` or `@d613707`).
