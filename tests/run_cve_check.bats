@@ -123,10 +123,15 @@ teardown() {
   OSV_MOCK_FILE="$FIXTURES/osv-critical.json" run --separate-stderr "$SCRIPT" "${WORK}/go.mod"$'\n'"${WORK}/package.json"
   [ "$status" -eq 0 ]
   echo "$output" | jq -e 'type == "array"' > /dev/null
-  # At least one finding per manifest since both get the same (critical) mock
-  local count
-  count=$(echo "$output" | jq 'length')
-  [ "$count" -ge 1 ]
+
+  # OSV_MOCK_FILE returns the same response for every queried package, so one
+  # finding is emitted per (manifest, package) pair. Assert that findings are
+  # present for both manifests rather than just count >= 1.
+  local go_count pkg_count
+  go_count=$(echo "$output" | jq '[.[] | select(.file | endswith("go.mod"))] | length')
+  pkg_count=$(echo "$output" | jq '[.[] | select(.file | endswith("package.json"))] | length')
+  [ "$go_count" -ge 1 ]
+  [ "$pkg_count" -ge 1 ]
 }
 
 # ---------------------------------------------------------------------------
