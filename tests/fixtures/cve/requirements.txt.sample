@@ -1,0 +1,7 @@
+# Production dependencies
+Django==3.2.0
+requests==2.25.1
+urllib3 ==1.26.5  ; python_version >= "3.6"
+
+# blank line above
+pyyaml==5.3.1

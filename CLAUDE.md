@@ -14,6 +14,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
+| `run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
 | `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
 
 ## Agent output schema
@@ -65,6 +66,22 @@ Three message files are built and passed selectively to agents:
 ## Adding a language profile
 
 Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `review.sh`). The file content is injected verbatim into `FULL_CONTEXT_MSG` and `CODE_CONTEXT_MSG` when that language is detected.
+
+## CVE check
+
+`run-cve-check.sh` inspects changed dependency manifests and queries OSV.dev for known vulnerabilities affecting the declared versions. Currently supports `go.mod`, `package.json`, `requirements.txt`, and `composer.json`.
+
+The script follows the same external-tool pattern as `run-shellcheck.sh`: `review.sh` invokes it in Phase 1, captures a JSON findings array on stdout, and merges it through the standard pipeline (suppressions, confidence filter, dedup). Critical/High findings route to REQUEST_CHANGES through the existing severity ladder.
+
+CVSS severity mapping:
+- CVSS ≥ 9.0 → `Critical`, confidence 95
+- CVSS 7.0–8.9 → `High`, confidence 95
+- CVSS 4.0–6.9 → `Medium`, confidence 90
+- CVSS < 4.0 or missing → `Low`, confidence 85
+
+If OSV.dev is unreachable the script emits WARNING on stderr and returns `[]` — the review never blocks on CVE-check outage. Tests bypass the network via the `OSV_MOCK_FILE` env var which reads a canned response from a file; do not set this in production.
+
+Suppressions work the same as for LLM findings — match on `pattern` against the finding text (e.g. `"CVE-2025-12345"` or `"GHSA-xxxx-yyyy-zzzz"`).
 
 ## Suppressions
 
@@ -139,7 +156,7 @@ After all agents complete:
 bats tests/*.bats
 
 # Lint all shell scripts
-shellcheck review.sh llm-call.sh post-review.sh run-shellcheck.sh
+shellcheck review.sh llm-call.sh post-review.sh run-shellcheck.sh run-cve-check.sh
 
 # Smoke-test llm-call.sh against a provider
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key>

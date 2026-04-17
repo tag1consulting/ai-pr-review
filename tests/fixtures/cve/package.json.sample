@@ -1,0 +1,11 @@
+{
+  "name": "example",
+  "version": "1.0.0",
+  "dependencies": {
+    "lodash": "^4.17.20",
+    "express": "4.17.1"
+  },
+  "devDependencies": {
+    "jest": "~29.0.0"
+  }
+}

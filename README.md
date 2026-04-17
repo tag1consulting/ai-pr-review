@@ -20,8 +20,9 @@ On every PR push, this action:
 1. Computes the diff (full on first run, incremental on subsequent pushes)
 2. Detects languages from changed file extensions
 3. Runs a roster of AI review agents against the diff
-4. Posts a summary comment (first run only) and a review with inline findings
-5. Auto-resolves stale bot threads and dismisses superseded reviews
+4. Runs deterministic checks on changed files: shellcheck on shell scripts, CVE lookups against [OSV.dev](https://osv.dev/) for dependency manifest changes
+5. Posts a summary comment (first run only) and a review with inline findings
+6. Auto-resolves stale bot threads and dismisses superseded reviews
 
 ### Review agents
 
@@ -330,6 +331,33 @@ The action auto-detects languages from file extensions and injects per-language 
 
 To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) should match the language key detected from file extensions.
 
+## Dependency vulnerability check
+
+When a PR modifies a supported dependency manifest, the action queries [OSV.dev](https://osv.dev/) for known vulnerabilities affecting the declared versions and surfaces them as findings alongside the LLM review.
+
+| Manifest | Ecosystem |
+|----------|-----------|
+| `go.mod` | Go |
+| `package.json` | npm |
+| `requirements.txt` | PyPI |
+| `composer.json` | Packagist |
+
+Findings are mapped from CVSS score: ≥ 9.0 → Critical, 7.0–8.9 → High, 4.0–6.9 → Medium, below 4.0 or unscored → Low. Critical and High findings trigger `REQUEST_CHANGES` on the PR review just like any other high-severity finding.
+
+No configuration is required — the check runs automatically when a manifest file is in the diff. The OSV.dev API is unauthenticated and free. If the API is unreachable, the check emits a warning and continues — the review is never blocked by CVE-lookup failures.
+
+To accept a specific CVE (e.g. library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID:
+
+```json
+{
+  "id": "accept-risk-CVE-2025-12345",
+  "reason": "Library used only in test fixtures, not production",
+  "match": {
+    "pattern": "CVE-2025-12345|GHSA-xxxx-yyyy-zzzz"
+  }
+}
+```
+
 ## Token usage
 
 After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
@@ -354,6 +382,7 @@ ai-pr-review/
 ├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
 ├── post-review.sh          # GitHub API posting: summary, review, thread management
 ├── run-shellcheck.sh       # Shellcheck wrapper for shell script findings
+├── run-cve-check.sh        # OSV.dev vulnerability lookup for dependency manifests
 ├── model-pricing.json      # Per-model token pricing for cost estimation
 ├── suppressions.json       # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
