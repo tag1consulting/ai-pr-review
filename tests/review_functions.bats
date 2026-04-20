@@ -243,3 +243,176 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = '$5.0000' ]
 }
+
+# ---------------------------------------------------------------------------
+# call_agent_bg and collect_parallel_results
+# ---------------------------------------------------------------------------
+# Tests use a mock llm-call.sh in a temp SCRIPT_DIR. The mock writes a
+# TOKENS: line to stderr on success, or exits non-zero on failure.
+# These functions are called directly (no `run`) so sidecar files
+# written inside subshells are visible after wait.
+
+_parallel_setup() {
+  load_function "${PROJECT_ROOT}/review.sh" call_agent_bg
+  load_function "${PROJECT_ROOT}/review.sh" collect_parallel_results
+
+  # Temp dir acts as SCRIPT_DIR with a stub llm-call.sh
+  MOCK_DIR=$(mktemp -d)
+  SCRIPT_DIR="$MOCK_DIR"
+  TMPFILES=()
+  FAILED_AGENTS=()
+  TOKEN_LOG=()
+}
+
+_parallel_teardown() {
+  rm -rf "$MOCK_DIR"
+  for f in "${TMPFILES[@]}"; do rm -f "$f" 2>/dev/null || true; done
+}
+
+@test "call_agent_bg: success writes .name and .tokens sidecars" {
+  _parallel_setup
+
+  # Mock llm-call.sh: writes output and emits TOKENS: line to stderr
+  cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "agent output"
+echo "TOKENS: input=100 output=200 model=test-model" >&2
+EOF
+  chmod +x "${MOCK_DIR}/llm-call.sh"
+
+  local out
+  out=$(mktemp)
+  TMPFILES+=("$out")
+
+  call_agent_bg "my-agent" "test-model" "/dev/null" "/dev/null" "$out"
+
+  [ -f "${out}.name" ]
+  [ "$(cat "${out}.name")" = "my-agent" ]
+  [ -f "${out}.tokens" ]
+  [ "$(cat "${out}.tokens")" = "my-agent: input=100 output=200 model=test-model" ]
+  [ ! -f "${out}.failed" ]
+  [ "$(cat "$out")" = "agent output" ]
+
+  _parallel_teardown
+}
+
+@test "call_agent_bg: failure writes .name and .failed, clears output" {
+  _parallel_setup
+
+  cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "ERROR: bad key" >&2
+exit 1
+EOF
+  chmod +x "${MOCK_DIR}/llm-call.sh"
+
+  local out
+  out=$(mktemp)
+  TMPFILES+=("$out")
+
+  call_agent_bg "fail-agent" "test-model" "/dev/null" "/dev/null" "$out"
+
+  [ -f "${out}.name" ]
+  [ "$(cat "${out}.name")" = "fail-agent" ]
+  [ -f "${out}.failed" ]
+  [ ! -f "${out}.tokens" ]
+  [ -z "$(cat "$out")" ]
+
+  _parallel_teardown
+}
+
+@test "call_agent_bg: truncated response writes .truncated sidecar" {
+  _parallel_setup
+
+  cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "partial output"
+echo "TRUNCATED:true" >&2
+echo "TOKENS: input=50 output=30 model=test-model" >&2
+EOF
+  chmod +x "${MOCK_DIR}/llm-call.sh"
+
+  local out
+  out=$(mktemp)
+  TMPFILES+=("$out")
+
+  call_agent_bg "trunc-agent" "test-model" "/dev/null" "/dev/null" "$out"
+
+  [ -f "${out}.truncated" ]
+  [ -f "${out}.tokens" ]
+
+  _parallel_teardown
+}
+
+@test "collect_parallel_results: success agents populate TOKEN_LOG in roster order" {
+  _parallel_setup
+
+  # Pre-create output files with sidecars as call_agent_bg would
+  local out1 out2
+  out1=$(mktemp); out2=$(mktemp)
+  TMPFILES+=("$out1" "$out2")
+
+  echo "agent-one" > "${out1}.name"
+  echo "agent-one: input=100 output=200 model=m1" > "${out1}.tokens"
+
+  echo "agent-two" > "${out2}.name"
+  echo "agent-two: input=300 output=400 model=m2" > "${out2}.tokens"
+
+  collect_parallel_results "$out1" "$out2"
+
+  [ "${#TOKEN_LOG[@]}" -eq 2 ]
+  [ "${TOKEN_LOG[0]}" = "agent-one: input=100 output=200 model=m1" ]
+  [ "${TOKEN_LOG[1]}" = "agent-two: input=300 output=400 model=m2" ]
+  [ "${#FAILED_AGENTS[@]}" -eq 0 ]
+
+  _parallel_teardown
+}
+
+@test "collect_parallel_results: failed agents populate FAILED_AGENTS in roster order" {
+  _parallel_setup
+
+  local out1 out2 out3
+  out1=$(mktemp); out2=$(mktemp); out3=$(mktemp)
+  TMPFILES+=("$out1" "$out2" "$out3")
+
+  # out1: success
+  echo "agent-ok" > "${out1}.name"
+  echo "agent-ok: input=10 output=20 model=m" > "${out1}.tokens"
+
+  # out2: failure
+  echo "agent-fail" > "${out2}.name"
+  touch "${out2}.failed"
+
+  # out3: success
+  echo "agent-ok2" > "${out3}.name"
+  echo "agent-ok2: input=5 output=10 model=m" > "${out3}.tokens"
+
+  collect_parallel_results "$out1" "$out2" "$out3"
+
+  [ "${#FAILED_AGENTS[@]}" -eq 1 ]
+  [ "${FAILED_AGENTS[0]}" = "agent-fail" ]
+  [ "${#TOKEN_LOG[@]}" -eq 2 ]
+  [ "${TOKEN_LOG[0]}" = "agent-ok: input=10 output=20 model=m" ]
+  [ "${TOKEN_LOG[1]}" = "agent-ok2: input=5 output=10 model=m" ]
+
+  _parallel_teardown
+}
+
+@test "collect_parallel_results: registers sidecars with TMPFILES for cleanup" {
+  _parallel_setup
+
+  local out
+  out=$(mktemp)
+  TMPFILES+=("$out")
+
+  echo "my-agent" > "${out}.name"
+  echo "my-agent: input=1 output=2 model=m" > "${out}.tokens"
+
+  collect_parallel_results "$out"
+
+  # TMPFILES should now include the .name and .tokens sidecars
+  [[ " ${TMPFILES[*]} " == *"${out}.name"* ]]
+  [[ " ${TMPFILES[*]} " == *"${out}.tokens"* ]]
+
+  _parallel_teardown
+}
