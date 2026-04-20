@@ -271,6 +271,10 @@ _parallel_teardown() {
 
 @test "call_agent_bg: success writes .name and .tokens sidecars" {
   _parallel_setup
+  # Note: call_agent_bg is called synchronously here (no &) to keep sidecar assertions
+  # in the same shell. The backgrounded code path differs only in subshell scoping of
+  # TMPFILES; wait_tier_pids and collect_parallel_results are tested via their own
+  # tests and by the documented end-to-end verification in the PR description.
 
   # Mock llm-call.sh: writes output and emits TOKENS: line to stderr
   cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'

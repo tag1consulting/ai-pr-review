@@ -634,16 +634,17 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
 
   echo "Running Phase 1 in parallel mode (tiered fan-out)." >&2
 
-  # Pre-allocate Tier 1 output files before backgrounding
+  # Tier 1: build TIER1_WAIT_ARGS inline at each call site so PID/output pairs
+  # are always in sync — no post-hoc array-zip that could misalign on conditional agents.
   TIER1_OUTPUTS=()
-  TIER1_PIDS=()
+  TIER1_WAIT_ARGS=()
 
   # pr-summarizer: only on first review (gate evaluated in parent)
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     TIER1_OUTPUTS+=("$SUMMARY_FILE")
     call_agent_bg "pr-summarizer" "$AI_MODEL_STANDARD" \
       "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" &
-    TIER1_PIDS+=($!)
+    TIER1_WAIT_ARGS+=($! "$SUMMARY_FILE")
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
   fi
@@ -651,20 +652,19 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
   TIER1_OUTPUTS+=("$FINDINGS_FILE")
   call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
     "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" &
-  TIER1_PIDS+=($!)
+  TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
     TIER1_OUTPUTS+=("$SFH_FILE")
     call_agent_bg "silent-failure-hunter" "$AI_MODEL_STANDARD" \
       "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" &
-    TIER1_PIDS+=($!)
+    TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
 
   # Static analyzers run concurrently with Tier 1 agents
-  SHELLCHECK_TMPFILE=$(mktemp /tmp/ai-review-sc-XXXXXXXX.json)
-  CVE_TMPFILE=$(mktemp /tmp/ai-review-cve-XXXXXXXX.json)
-  TMPFILES+=("$SHELLCHECK_TMPFILE" "$CVE_TMPFILE")
+  SHELLCHECK_TMPFILE=$(mktemp_tracked /tmp/ai-review-sc-XXXXXXXX.json)
+  CVE_TMPFILE=$(mktemp_tracked /tmp/ai-review-cve-XXXXXXXX.json)
   SC_PID="" CVE_PID=""
 
   if [[ -n "$CHANGED_FILES" ]]; then
@@ -674,11 +674,7 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
     CVE_PID=$!
   fi
 
-  # Wait for Tier 1 agents (interleave PIDs and output paths for signal-safe failure detection)
-  TIER1_WAIT_ARGS=()
-  for (( i=0; i<${#TIER1_PIDS[@]}; i++ )); do
-    TIER1_WAIT_ARGS+=("${TIER1_PIDS[$i]}" "${TIER1_OUTPUTS[$i]}")
-  done
+  # Wait for Tier 1 agents
   wait_tier_pids "${TIER1_WAIT_ARGS[@]}"
   collect_parallel_results "${TIER1_OUTPUTS[@]}"
   # code-reviewer and SFH outputs go into AGENT_OUTPUTS; summary is separate
@@ -689,42 +685,38 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
   # Tier 2: Full mode only
   if [[ "$REVIEW_MODE" == "full" ]]; then
     TIER2_OUTPUTS=()
-    TIER2_PIDS=()
+    TIER2_WAIT_ARGS=()
 
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ARCH_FILE")
     call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
       "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" &
-    TIER2_PIDS+=($!)
+    TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$SEC_FILE")
     call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
       "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" &
-    TIER2_PIDS+=($!)
+    TIER2_WAIT_ARGS+=($! "$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
     call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
       "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" &
-    TIER2_PIDS+=($!)
+    TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$EDGE_FILE")
     call_agent_bg "edge-case-hunter" "$AI_MODEL_STANDARD" \
       "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" &
-    TIER2_PIDS+=($!)
+    TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ADV_FILE")
     call_agent_bg "adversarial-general" "$AI_MODEL_STANDARD" \
       "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" &
-    TIER2_PIDS+=($!)
+    TIER2_WAIT_ARGS+=($! "$ADV_FILE")
 
-    TIER2_WAIT_ARGS=()
-    for (( i=0; i<${#TIER2_PIDS[@]}; i++ )); do
-      TIER2_WAIT_ARGS+=("${TIER2_PIDS[$i]}" "${TIER2_OUTPUTS[$i]}")
-    done
     wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
     collect_parallel_results "${TIER2_OUTPUTS[@]}"
     AGENT_OUTPUTS+=("${TIER2_OUTPUTS[@]}")
