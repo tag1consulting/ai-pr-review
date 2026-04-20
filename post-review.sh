@@ -579,11 +579,10 @@ ${truncated_summary}
       return 1
     }
     if [[ -z "$new_comment_id" ]]; then
-      echo "ERROR: Posted summary comment but could not capture its ID; skipping cleanup." >&2
-      kept_comment_id=""
-    else
-      kept_comment_id="$new_comment_id"
+      echo "ERROR: Posted summary comment but could not capture its ID." >&2
+      return 1
     fi
+    kept_comment_id="$new_comment_id"
   fi
 
   _cleanup_duplicate_summary_comments "$kept_comment_id"
@@ -597,11 +596,15 @@ _cleanup_duplicate_summary_comments() {
   local kept_id="$1"
   # Safety: if kept_id is empty, grep -v "^$" would pass all IDs for deletion.
   [[ -z "$kept_id" ]] && return 0
-  local duplicate_ids
-  duplicate_ids=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+  local duplicate_ids listing
+  listing=$(gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
     --paginate \
     --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .id" \
-    2>/dev/null | grep -v "^${kept_id}$") || true
+    < /dev/null 2>&1) || {
+    echo "WARNING: Could not list summary comments for cleanup: ${listing}" >&2
+    return 0
+  }
+  duplicate_ids=$(printf '%s\n' "$listing" | grep -v "^${kept_id}$") || true
   [[ -z "$duplicate_ids" ]] && return 0
   while IFS= read -r dup_id; do
     [[ -z "$dup_id" ]] && continue
