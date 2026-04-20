@@ -574,11 +574,16 @@ ${truncated_summary}
     new_comment_id=$(gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
       --field body="$body" \
-      --jq ".id") || {
+      --jq ".id" < /dev/null) || {
       echo "ERROR: Failed to post summary comment." >&2
       return 1
     }
-    kept_comment_id="$new_comment_id"
+    if [[ -z "$new_comment_id" ]]; then
+      echo "ERROR: Posted summary comment but could not capture its ID; skipping cleanup." >&2
+      kept_comment_id=""
+    else
+      kept_comment_id="$new_comment_id"
+    fi
   fi
 
   _cleanup_duplicate_summary_comments "$kept_comment_id"
@@ -590,6 +595,8 @@ ${truncated_summary}
 # Cosmetic failures are non-fatal — the next run will clean up any leftovers.
 _cleanup_duplicate_summary_comments() {
   local kept_id="$1"
+  # Safety: if kept_id is empty, grep -v "^$" would pass all IDs for deletion.
+  [[ -z "$kept_id" ]] && return 0
   local duplicate_ids
   duplicate_ids=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
     --paginate \
