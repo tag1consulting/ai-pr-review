@@ -73,6 +73,120 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
+# _cleanup_duplicate_summary_comments — duplicate comment deletion
+# ---------------------------------------------------------------------------
+# Tests stub `gh` and `gh_api_retry` as shell functions (eval'd into the test
+# shell via load_function), so no PATH shims are needed. Because `run` creates
+# a subshell, assertions use temp files written by the stubs.
+
+@test "_cleanup_duplicate_summary_comments: deletes IDs not matching kept_id" {
+  load_function "${PROJECT_ROOT}/post-review.sh" _cleanup_duplicate_summary_comments
+
+  OWNER="owner"; REPO="repo"; PR_NUMBER="1"
+  MARKER_PREFIX="<!-- ai-pr-review-summary"
+  DELETED_LOG=$(mktemp)
+
+  # Stub: listing returns 3 IDs; DELETE records which id was targeted.
+  # Called directly (no `run`) so function stubs are visible in the same shell.
+  gh() {
+    if printf '%s\n' "$@" | grep -q -- '--paginate'; then
+      printf '100\n200\n300\n'
+    elif [[ " $* " == *" --method DELETE "* ]] || [[ " $* " == *"--method DELETE"* ]]; then
+      local id
+      id=$(printf '%s\n' "$@" | grep -oE '/comments/[0-9]+' | grep -oE '[0-9]+$' | head -1)
+      echo "$id" >> "$DELETED_LOG"
+    fi
+  }
+  gh_api_retry() { gh "$@"; }
+
+  _cleanup_duplicate_summary_comments "100"
+
+  deleted=$(sort "$DELETED_LOG")
+  [ "$deleted" = $'200\n300' ]
+  rm -f "$DELETED_LOG"
+}
+
+@test "_cleanup_duplicate_summary_comments: does not delete the kept_id" {
+  load_function "${PROJECT_ROOT}/post-review.sh" _cleanup_duplicate_summary_comments
+
+  OWNER="owner"; REPO="repo"; PR_NUMBER="2"
+  MARKER_PREFIX="<!-- ai-pr-review-summary"
+  DELETED_LOG=$(mktemp)
+
+  gh() {
+    if printf '%s\n' "$@" | grep -q -- '--paginate'; then
+      printf '42\n99\n'
+    elif [[ " $* " == *" --method DELETE "* ]] || [[ " $* " == *"--method DELETE"* ]]; then
+      local id
+      id=$(printf '%s\n' "$@" | grep -oE '/comments/[0-9]+' | grep -oE '[0-9]+$' | head -1)
+      echo "$id" >> "$DELETED_LOG"
+    fi
+  }
+  gh_api_retry() { gh "$@"; }
+
+  _cleanup_duplicate_summary_comments "99"
+
+  deleted=$(cat "$DELETED_LOG")
+  [ "$deleted" = "42" ]
+  rm -f "$DELETED_LOG"
+}
+
+@test "_cleanup_duplicate_summary_comments: no-op when only kept_id exists" {
+  load_function "${PROJECT_ROOT}/post-review.sh" _cleanup_duplicate_summary_comments
+
+  OWNER="owner"; REPO="repo"; PR_NUMBER="3"
+  MARKER_PREFIX="<!-- ai-pr-review-summary"
+  DELETED_LOG=$(mktemp)
+
+  gh() {
+    if printf '%s\n' "$@" | grep -q -- '--paginate'; then
+      printf '42\n'
+    elif [[ " $* " == *" --method DELETE "* ]] || [[ " $* " == *"--method DELETE"* ]]; then
+      local id
+      id=$(printf '%s\n' "$@" | grep -oE '/comments/[0-9]+' | grep -oE '[0-9]+$' | head -1)
+      echo "$id" >> "$DELETED_LOG"
+    fi
+  }
+  gh_api_retry() { gh "$@"; }
+
+  _cleanup_duplicate_summary_comments "42"
+
+  deleted=$(cat "$DELETED_LOG")
+  [ -z "$deleted" ]
+  rm -f "$DELETED_LOG"
+}
+
+@test "_cleanup_duplicate_summary_comments: continues and returns 0 when a DELETE fails" {
+  load_function "${PROJECT_ROOT}/post-review.sh" _cleanup_duplicate_summary_comments
+
+  OWNER="owner"; REPO="repo"; PR_NUMBER="4"
+  MARKER_PREFIX="<!-- ai-pr-review-summary"
+  DELETED_LOG=$(mktemp)
+
+  # 200 fails, 300 succeeds; function must still return 0 and process 300
+  gh() {
+    if printf '%s\n' "$@" | grep -q -- '--paginate'; then
+      printf '100\n200\n300\n'
+    elif [[ " $* " == *" --method DELETE "* ]] || [[ " $* " == *"--method DELETE"* ]]; then
+      local id
+      id=$(printf '%s\n' "$@" | grep -oE '/comments/[0-9]+' | grep -oE '[0-9]+$' | head -1)
+      if [ "$id" = "200" ]; then return 1; fi
+      echo "$id" >> "$DELETED_LOG"
+    fi
+  }
+  gh_api_retry() { gh "$@"; }
+
+  # Must return 0 even when a DELETE fails
+  _cleanup_duplicate_summary_comments "100"
+  local retval=$?
+  [ "$retval" -eq 0 ]
+
+  deleted=$(cat "$DELETED_LOG")
+  [ "$deleted" = "300" ]
+  rm -f "$DELETED_LOG"
+}
+
+# ---------------------------------------------------------------------------
 # gh_api_retry — structural tests (no real API calls)
 # ---------------------------------------------------------------------------
 

@@ -558,6 +558,7 @@ ${truncated_summary}
     --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .id" \
     2>/dev/null | head -1) || true
 
+  local kept_comment_id
   if [[ -n "$existing_comment_id" ]]; then
     echo "Updating existing summary comment #${existing_comment_id}..." >&2
     gh_api_retry api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
@@ -566,17 +567,52 @@ ${truncated_summary}
       echo "ERROR: Failed to update summary comment #${existing_comment_id}." >&2
       return 1
     }
+    kept_comment_id="$existing_comment_id"
   else
     echo "Posting new summary comment..." >&2
-    gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    local new_comment_id
+    new_comment_id=$(gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
-      --field body="$body" > /dev/null || {
+      --field body="$body" \
+      --jq ".id" < /dev/null) || {
       echo "ERROR: Failed to post summary comment." >&2
       return 1
     }
+    if [[ -z "$new_comment_id" ]]; then
+      echo "ERROR: Posted summary comment but could not capture its ID." >&2
+      return 1
+    fi
+    kept_comment_id="$new_comment_id"
   fi
 
+  _cleanup_duplicate_summary_comments "$kept_comment_id"
+
   echo "Summary comment posted to PR #${PR_NUMBER}." >&2
+}
+
+# Delete all summary marker comments except the one identified by kept_id.
+# Cosmetic failures are non-fatal — the next run will clean up any leftovers.
+_cleanup_duplicate_summary_comments() {
+  local kept_id="$1"
+  # Safety: if kept_id is empty, grep -v "^$" would pass all IDs for deletion.
+  [[ -z "$kept_id" ]] && return 0
+  local duplicate_ids listing
+  listing=$(gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --paginate \
+    --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .id" \
+    < /dev/null 2>&1) || {
+    echo "WARNING: Could not list summary comments for cleanup: ${listing}" >&2
+    return 0
+  }
+  duplicate_ids=$(printf '%s\n' "$listing" | grep -v "^${kept_id}$") || true
+  [[ -z "$duplicate_ids" ]] && return 0
+  while IFS= read -r dup_id; do
+    [[ -z "$dup_id" ]] && continue
+    echo "Deleting duplicate summary comment #${dup_id}..." >&2
+    gh_api_retry api "repos/${OWNER}/${REPO}/issues/comments/${dup_id}" \
+      --method DELETE > /dev/null < /dev/null \
+      || echo "WARNING: Failed to delete duplicate summary comment #${dup_id}." >&2
+  done <<< "$duplicate_ids"
 }
 
 # ---------------------------------------------------------------------------
