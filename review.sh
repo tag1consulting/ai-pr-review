@@ -569,6 +569,18 @@ call_agent_bg() {
   fi
 }
 
+# Wait for a tier of background agents identified by parallel PID and output-file arrays.
+# If a subshell exits non-zero but never wrote a .failed sidecar (killed by signal before
+# reaching that line), synthesize the sidecar so collect_parallel_results counts it as failed.
+# Args: interleaved "pid output_file" pairs: wait_tier_pids p1 f1 p2 f2 ...
+wait_tier_pids() {
+  local pid f
+  while [[ "$#" -ge 2 ]]; do
+    pid="$1" f="$2"; shift 2
+    wait "$pid" || { [[ ! -f "${f}.failed" ]] && touch "${f}.failed"; }
+  done
+}
+
 # Collect results from a completed tier of parallel agents into parent arrays.
 # Args: roster-ordered list of output file paths (the same $output passed to call_agent_bg).
 # Reads ${f}.name, ${f}.failed, ${f}.tokens sidecars; appends to FAILED_AGENTS / TOKEN_LOG.
@@ -582,11 +594,17 @@ collect_parallel_results() {
     done
 
     local agent_name
-    agent_name=$(cat "${f}.name" 2>/dev/null || echo "unknown")
+    if [[ -f "${f}.name" ]]; then
+      agent_name=$(cat "${f}.name")
+    else
+      echo "WARNING: Missing .name sidecar for output file ${f}; agent identity unknown." >&2
+      agent_name="unknown"
+    fi
 
     if [[ -f "${f}.failed" ]]; then
       FAILED_AGENTS+=("$agent_name")
-    elif [[ -f "${f}.tokens" ]]; then
+    fi
+    if [[ -f "${f}.tokens" ]]; then
       TOKEN_LOG+=("$(cat "${f}.tokens")")
     fi
   done
@@ -650,14 +668,18 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
   SC_PID="" CVE_PID=""
 
   if [[ -n "$CHANGED_FILES" ]]; then
-    ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" 2>&1 ) &
+    ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
     SC_PID=$!
-    ( "${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES" > "$CVE_TMPFILE" 2>&1 ) &
+    ( "${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES" > "$CVE_TMPFILE" ) &
     CVE_PID=$!
   fi
 
-  # Wait for Tier 1 agents
-  for pid in "${TIER1_PIDS[@]}"; do wait "$pid" || true; done
+  # Wait for Tier 1 agents (interleave PIDs and output paths for signal-safe failure detection)
+  TIER1_WAIT_ARGS=()
+  for (( i=0; i<${#TIER1_PIDS[@]}; i++ )); do
+    TIER1_WAIT_ARGS+=("${TIER1_PIDS[$i]}" "${TIER1_OUTPUTS[$i]}")
+  done
+  wait_tier_pids "${TIER1_WAIT_ARGS[@]}"
   collect_parallel_results "${TIER1_OUTPUTS[@]}"
   # code-reviewer and SFH outputs go into AGENT_OUTPUTS; summary is separate
   for f in "${TIER1_OUTPUTS[@]}"; do
@@ -699,14 +721,22 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
       "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" &
     TIER2_PIDS+=($!)
 
-    for pid in "${TIER2_PIDS[@]}"; do wait "$pid" || true; done
+    TIER2_WAIT_ARGS=()
+    for (( i=0; i<${#TIER2_PIDS[@]}; i++ )); do
+      TIER2_WAIT_ARGS+=("${TIER2_PIDS[$i]}" "${TIER2_OUTPUTS[$i]}")
+    done
+    wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
     collect_parallel_results "${TIER2_OUTPUTS[@]}"
     AGENT_OUTPUTS+=("${TIER2_OUTPUTS[@]}")
   fi
 
   # Wait for static analyzers and collect their JSON output
-  [[ -n "$SC_PID"  ]] && { wait "$SC_PID"  || true; }
-  [[ -n "$CVE_PID" ]] && { wait "$CVE_PID" || true; }
+  if [[ -n "$SC_PID" ]]; then
+    wait "$SC_PID" || echo "WARNING: run-shellcheck.sh subshell exited non-zero; shellcheck findings may be incomplete." >&2
+  fi
+  if [[ -n "$CVE_PID" ]]; then
+    wait "$CVE_PID" || echo "WARNING: run-cve-check.sh subshell exited non-zero; CVE findings may be incomplete." >&2
+  fi
 
   SHELLCHECK_JSON=$(cat "$SHELLCHECK_TMPFILE" 2>/dev/null || echo "[]")
   if ! echo "$SHELLCHECK_JSON" | jq -e '.' >/dev/null 2>&1; then
@@ -811,7 +841,7 @@ AGENT_COUNT=${#AGENT_OUTPUTS[@]}
 FAILED_COUNT=${#FAILED_AGENTS[@]}
 if [[ "$FAILED_COUNT" -gt 0 ]]; then
   echo "Agents complete. (${AGENT_COUNT} finding agents ran, ${FAILED_COUNT} failed: ${FAILED_AGENTS[*]})" >&2
-  if [[ "$FAILED_COUNT" -eq "$AGENT_COUNT" && "$AGENT_COUNT" -gt 0 ]]; then
+  if [[ "$FAILED_COUNT" -ge "$AGENT_COUNT" && "$AGENT_COUNT" -gt 0 ]]; then
     echo "ERROR: All ${AGENT_COUNT} agents failed. Aborting review." >&2
     exit 1
   fi
