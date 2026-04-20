@@ -62,5 +62,12 @@
     "match": {
       "pattern": "get_last_reviewed_sha.*indistinguishable|indistinguishable.*first.run|api.failure.*full.re-review|transient.*api.*full"
     }
+  },
+  {
+    "id": "version-post-knowledge-cutoff-false-positive",
+    "reason": "LLMs flag versions released after their training cutoff as 'nonexistent', 'unreleased', or claim an older version is 'latest'. All finding-producing prompts already instruct the model not to do this; this suppression is a deterministic safety net for when the model ignores that instruction. Each phrase in the pattern is only used for this false-positive class — legitimate version findings use 'malformed', 'downgrade', or 'known CVE' language instead.",
+    "match": {
+      "pattern": "does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|version .* does not exist|references? a non-existent (tag|version|release)"
+    }
   }
 ]
