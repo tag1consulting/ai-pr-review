@@ -39,7 +39,7 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 ## Findings pipeline (review.sh phases)
 
 1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
-2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()`.
+2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()` (sequential, default) or `call_agent_bg()` (parallel, opt-in). See [Parallel agent execution](#parallel-agent-execution) below.
 3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Apply `suppressions.json`. Filter by confidence ≥ 75. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
 4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub.
 
@@ -59,11 +59,44 @@ Three message files are built and passed selectively to agents:
 - **`CODE_CONTEXT_MSG`** — manifest + language profiles + diff (no commit log or project context)
 - **`BLIND_MSG`** — raw diff only (intentional zero context for `blind-hunter`)
 
+## Parallel agent execution
+
+Phase 1 supports an opt-in tiered fan-out mode that reduces wall-clock time from ~5–7 minutes to ~2 minutes in `full` mode.
+
+Enable via the `parallel` action input or `AI_PARALLEL=true` env var (default: `false`).
+
+### Tier groupings
+
+| Tier | Agents | When |
+|------|--------|------|
+| Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional) | Always |
+| Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh` | Always |
+| Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
+
+Tier 1 and Tier 2 are separated by a `wait` barrier so Tier 2 never starts until all Tier 1 agents complete.
+
+### IPC mechanism
+
+Backgrounded agents (via `call_agent_bg`) cannot mutate parent arrays. State is passed via sidecar files:
+- `${output}.name` — agent name (written at start, read on failure)
+- `${output}.tokens` — token log entry (written on success)
+- `${output}.failed` — exists if the agent failed (empty sentinel file)
+- `${output}.truncated` — exists if the response was truncated
+
+`collect_parallel_results <output_files...>` reads these sidecars in roster order after each `wait` and reconstructs `FAILED_AGENTS` and `TOKEN_LOG` in the parent shell.
+
+### Adding a new parallel agent
+
+When `AI_PARALLEL=true`, new agents must be placed into a tier and added to both the parallel and sequential code paths:
+- Add to the appropriate `TIER{1,2}_OUTPUTS+=` and `call_agent_bg ... &` block.
+- Also add the sequential `call_agent` call in the `else` branch (unchanged from the existing pattern).
+
 ## Adding a new agent
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
 2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384.
 3. If the agent should only run conditionally (like `silent-failure-hunter`), gate it with a grep check on `$DIFF_FILE`.
+4. Also add the agent to the parallel tier block (see "Parallel agent execution" above).
 
 ## Adding a language profile
 
@@ -129,7 +162,7 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | `LLM_RETRY_COUNT` | `3` | Number of retry attempts (set to 0 to disable) |
 | `LLM_RETRY_BASE_DELAY` | `2` | Base delay in seconds (doubles each retry) |
 
-The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`.
+The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`. The `parallel` input maps to `AI_PARALLEL`.
 
 Additional env vars consumed by the scripts (not exposed as action inputs):
 
@@ -137,6 +170,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 |----------|---------|-------------|
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
+| `AI_PARALLEL` | `false` | Enable tiered parallel agent execution (mapped from `parallel` action input) |
 
 Exit codes from `llm-call.sh`:
 - **0** — success

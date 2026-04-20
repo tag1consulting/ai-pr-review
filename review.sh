@@ -507,6 +507,109 @@ call_agent() {
   fi
 }
 
+# --- Background variant of call_agent for parallel execution ---
+# Writes results to sidecar files instead of mutating parent arrays:
+#   ${output}.tokens  — token log entry (one line, empty on failure)
+#   ${output}.failed  — exists (empty) iff the agent failed
+# The .truncated sidecar is written by the same touch as in call_agent.
+# Callers must invoke collect_parallel_results() after wait to merge state.
+call_agent_bg() {
+  local name="$1" model="$2" prompt="$3" msg="$4" output="$5" max_tokens="${6:-16384}"
+  echo "Calling ${name} (${model##*.})..." >&2
+  # Write agent name so collect_parallel_results can recover it regardless of success/failure
+  echo "$name" > "${output}.name"
+
+  local agent_stderr
+  agent_stderr=$(mktemp /tmp/ai-review-stderr-XXXXXXXX.txt)
+
+  local exit_code=0
+  "${SCRIPT_DIR}/llm-call.sh" "$model" "$prompt" "$msg" "$max_tokens" \
+    > "$output" 2> "$agent_stderr" || exit_code=$?
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    local last_err failure_type
+    last_err=$(grep -m1 'ERROR:' "$agent_stderr" 2>/dev/null || tail -1 "$agent_stderr" 2>/dev/null)
+    case "$exit_code" in
+      2) failure_type="transient API error, retries exhausted" ;;
+      3) failure_type="response blocked by provider content filter" ;;
+      *) failure_type="configuration or request error" ;;
+    esac
+    echo "WARNING: ${name} failed (${failure_type}): ${last_err:-no stderr output}. Continuing without its output." >&2
+    cat "$agent_stderr" >&2
+    touch "${output}.failed"
+    echo "" > "$output"
+    rm -f "$agent_stderr"
+    return
+  fi
+
+  # Parse token usage and truncation lines; forward remaining stderr to workflow log
+  local token_line="" was_truncated=false
+  while IFS= read -r line; do
+    if [[ "$line" == TOKENS:* ]]; then
+      token_line="$line"
+    elif [[ "$line" == "TRUNCATED:true" ]]; then
+      was_truncated=true
+    else
+      echo "$line" >&2
+    fi
+  done < "$agent_stderr"
+  rm -f "$agent_stderr"
+
+  if [[ "$was_truncated" == "true" ]]; then
+    touch "${output}.truncated"
+  fi
+
+  if [[ -n "$token_line" ]]; then
+    local input_tokens output_tokens model_id
+    input_tokens=$(echo "$token_line" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
+    output_tokens=$(echo "$token_line" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
+    model_id=$(echo "$token_line" | grep -oE 'model=[^ ]+' | sed 's/model=//' || echo "unknown")
+    echo "  tokens: input=${input_tokens} output=${output_tokens} model=${model_id}" >&2
+    echo "${name}: input=${input_tokens} output=${output_tokens} model=${model_id}" > "${output}.tokens"
+  fi
+}
+
+# Wait for a tier of background agents identified by parallel PID and output-file arrays.
+# If a subshell exits non-zero but never wrote a .failed sidecar (killed by signal before
+# reaching that line), synthesize the sidecar so collect_parallel_results counts it as failed.
+# Args: interleaved "pid output_file" pairs: wait_tier_pids p1 f1 p2 f2 ...
+wait_tier_pids() {
+  local pid f
+  while [[ "$#" -ge 2 ]]; do
+    pid="$1" f="$2"; shift 2
+    wait "$pid" || { [[ ! -f "${f}.failed" ]] && touch "${f}.failed"; }
+  done
+}
+
+# Collect results from a completed tier of parallel agents into parent arrays.
+# Args: roster-ordered list of output file paths (the same $output passed to call_agent_bg).
+# Reads ${f}.name, ${f}.failed, ${f}.tokens sidecars; appends to FAILED_AGENTS / TOKEN_LOG.
+# Registers sidecars with TMPFILES for cleanup on EXIT.
+collect_parallel_results() {
+  local output_files=("$@")
+  for f in "${output_files[@]}"; do
+    # Register sidecars for cleanup
+    for ext in name tokens failed truncated; do
+      [[ -f "${f}.${ext}" ]] && TMPFILES+=("${f}.${ext}")
+    done
+
+    local agent_name
+    if [[ -f "${f}.name" ]]; then
+      agent_name=$(cat "${f}.name")
+    else
+      echo "WARNING: Missing .name sidecar for output file ${f}; agent identity unknown." >&2
+      agent_name="unknown"
+    fi
+
+    if [[ -f "${f}.failed" ]]; then
+      FAILED_AGENTS+=("$agent_name")
+    fi
+    if [[ -f "${f}.tokens" ]]; then
+      TOKEN_LOG+=("$(cat "${f}.tokens")")
+    fi
+  done
+}
+
 # --- Detect conditional agent triggers ---
 HAS_ERROR_PATTERNS=0
 if grep -qE '(catch|if err|try \{|rescue|Result<|unwrap|except|\.catch\()' "$DIFF_FILE" 2>/dev/null; then
@@ -518,64 +621,219 @@ SUMMARY_FILE=$(mktemp_tracked /tmp/ai-review-summary-XXXXXXXX.md)
 FINDINGS_FILE=$(mktemp_tracked /tmp/ai-review-findings-XXXXXXXX.md)
 
 # --- Agent roster ---
-# Tier 1: Always run (quick + full)
 AGENT_OUTPUTS=()
 
-# pr-summarizer: only on the first run. Follow-up runs leave the existing
-# summary comment untouched — it describes the full PR; re-running it on an
-# incremental diff would replace a useful whole-PR overview with a partial one.
-if [[ -z "$LAST_REVIEWED_SHA" ]]; then
-  call_agent "pr-summarizer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE"
+if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
+  # -------------------------------------------------------------------------
+  # Parallel path: tiered fan-out to cap simultaneous LLM calls and reduce
+  # provider rate-limit pressure. Tier 1 (essential) and Tier 2 (full-only)
+  # run as separate batches separated by a wait barrier.
+  # Static analyzers (shellcheck, CVE check) run alongside Tier 1 since they
+  # are independent of agent state and complete in seconds.
+  # -------------------------------------------------------------------------
+
+  echo "Running Phase 1 in parallel mode (tiered fan-out)." >&2
+
+  # Tier 1: build TIER1_WAIT_ARGS inline at each call site so PID/output pairs
+  # are always in sync — no post-hoc array-zip that could misalign on conditional agents.
+  TIER1_OUTPUTS=()
+  TIER1_WAIT_ARGS=()
+
+  # pr-summarizer: only on first review (gate evaluated in parent)
+  if [[ -z "$LAST_REVIEWED_SHA" ]]; then
+    TIER1_OUTPUTS+=("$SUMMARY_FILE")
+    call_agent_bg "pr-summarizer" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" &
+    TIER1_WAIT_ARGS+=($! "$SUMMARY_FILE")
+  else
+    echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
+  fi
+
+  TIER1_OUTPUTS+=("$FINDINGS_FILE")
+  call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" &
+  TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
+
+  if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
+    SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
+    TIER1_OUTPUTS+=("$SFH_FILE")
+    call_agent_bg "silent-failure-hunter" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" &
+    TIER1_WAIT_ARGS+=($! "$SFH_FILE")
+  fi
+
+  # Static analyzers run concurrently with Tier 1 agents
+  SHELLCHECK_TMPFILE=$(mktemp_tracked /tmp/ai-review-sc-XXXXXXXX.json)
+  CVE_TMPFILE=$(mktemp_tracked /tmp/ai-review-cve-XXXXXXXX.json)
+  SC_PID="" CVE_PID=""
+
+  if [[ -n "$CHANGED_FILES" ]]; then
+    ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
+    SC_PID=$!
+    ( "${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES" > "$CVE_TMPFILE" ) &
+    CVE_PID=$!
+  fi
+
+  # Wait for Tier 1 agents
+  wait_tier_pids "${TIER1_WAIT_ARGS[@]}"
+  collect_parallel_results "${TIER1_OUTPUTS[@]}"
+  # code-reviewer and SFH outputs go into AGENT_OUTPUTS; summary is separate
+  for f in "${TIER1_OUTPUTS[@]}"; do
+    [[ "$f" != "$SUMMARY_FILE" ]] && AGENT_OUTPUTS+=("$f")
+  done
+
+  # Tier 2: Full mode only
+  if [[ "$REVIEW_MODE" == "full" ]]; then
+    TIER2_OUTPUTS=()
+    TIER2_WAIT_ARGS=()
+
+    ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
+    TIER2_OUTPUTS+=("$ARCH_FILE")
+    call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" &
+    TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
+
+    SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
+    TIER2_OUTPUTS+=("$SEC_FILE")
+    call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" &
+    TIER2_WAIT_ARGS+=($! "$SEC_FILE")
+
+    BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
+    TIER2_OUTPUTS+=("$BLIND_FILE")
+    call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" &
+    TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
+
+    EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
+    TIER2_OUTPUTS+=("$EDGE_FILE")
+    call_agent_bg "edge-case-hunter" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" &
+    TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
+
+    ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
+    TIER2_OUTPUTS+=("$ADV_FILE")
+    call_agent_bg "adversarial-general" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" &
+    TIER2_WAIT_ARGS+=($! "$ADV_FILE")
+
+    wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
+    collect_parallel_results "${TIER2_OUTPUTS[@]}"
+    AGENT_OUTPUTS+=("${TIER2_OUTPUTS[@]}")
+  fi
+
+  # Wait for static analyzers and collect their JSON output
+  if [[ -n "$SC_PID" ]]; then
+    wait "$SC_PID" || echo "WARNING: run-shellcheck.sh subshell exited non-zero; shellcheck findings may be incomplete." >&2
+  fi
+  if [[ -n "$CVE_PID" ]]; then
+    wait "$CVE_PID" || echo "WARNING: run-cve-check.sh subshell exited non-zero; CVE findings may be incomplete." >&2
+  fi
+
+  SHELLCHECK_JSON=$(cat "$SHELLCHECK_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$SHELLCHECK_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-shellcheck.sh failed; shellcheck findings will be skipped." >&2
+    SHELLCHECK_JSON="[]"
+  fi
+  SC_COUNT=$(echo "$SHELLCHECK_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$SC_COUNT" -gt 0 ]] && echo "Shellcheck: ${SC_COUNT} findings" >&2
+
+  CVE_JSON=$(cat "$CVE_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$CVE_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-cve-check.sh failed; CVE findings will be skipped." >&2
+    CVE_JSON="[]"
+  fi
+  CVE_COUNT=$(echo "$CVE_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$CVE_COUNT" -gt 0 ]] && echo "CVE check: ${CVE_COUNT} findings" >&2
+
 else
-  echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
-fi
+  # -------------------------------------------------------------------------
+  # Sequential path (default): unchanged from pre-parallel behavior.
+  # -------------------------------------------------------------------------
 
-call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
-  "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE"
-AGENT_OUTPUTS+=("$FINDINGS_FILE")
+  # pr-summarizer: only on the first run. Follow-up runs leave the existing
+  # summary comment untouched — it describes the full PR; re-running it on an
+  # incremental diff would replace a useful whole-PR overview with a partial one.
+  if [[ -z "$LAST_REVIEWED_SHA" ]]; then
+    call_agent "pr-summarizer" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE"
+  else
+    echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
+  fi
 
-# Tier 1 conditional: run in both quick and full when triggered
-if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
-  SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
-  call_agent "silent-failure-hunter" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE"
-  AGENT_OUTPUTS+=("$SFH_FILE")
-fi
+  call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE"
+  AGENT_OUTPUTS+=("$FINDINGS_FILE")
 
-# Tier 2: Full mode only
-if [[ "$REVIEW_MODE" == "full" ]]; then
-  ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
-  call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-    "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE"
-  AGENT_OUTPUTS+=("$ARCH_FILE")
+  # Tier 1 conditional: run in both quick and full when triggered
+  if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
+    SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
+    call_agent "silent-failure-hunter" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE"
+    AGENT_OUTPUTS+=("$SFH_FILE")
+  fi
 
-  SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
-  call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-    "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE"
-  AGENT_OUTPUTS+=("$SEC_FILE")
+  # Tier 2: Full mode only
+  if [[ "$REVIEW_MODE" == "full" ]]; then
+    ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
+    call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE"
+    AGENT_OUTPUTS+=("$ARCH_FILE")
 
-  BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
-  call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE"
-  AGENT_OUTPUTS+=("$BLIND_FILE")
+    SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
+    call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE"
+    AGENT_OUTPUTS+=("$SEC_FILE")
 
-  EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
-  call_agent "edge-case-hunter" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE"
-  AGENT_OUTPUTS+=("$EDGE_FILE")
+    BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
+    call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE"
+    AGENT_OUTPUTS+=("$BLIND_FILE")
 
-  ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
-  call_agent "adversarial-general" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE"
-  AGENT_OUTPUTS+=("$ADV_FILE")
-fi
+    EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
+    call_agent "edge-case-hunter" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE"
+    AGENT_OUTPUTS+=("$EDGE_FILE")
+
+    ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
+    call_agent "adversarial-general" "$AI_MODEL_STANDARD" \
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE"
+    AGENT_OUTPUTS+=("$ADV_FILE")
+  fi
+
+  # --- Run shellcheck if shell files changed ---
+  SHELLCHECK_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    SHELLCHECK_JSON=$("${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-shellcheck.sh failed; shellcheck findings will be skipped." >&2
+      SHELLCHECK_JSON="[]"
+    }
+    SC_COUNT=$(echo "$SHELLCHECK_JSON" | jq 'length' 2>/dev/null || echo "0")
+    if [[ "$SC_COUNT" -gt 0 ]]; then
+      echo "Shellcheck: ${SC_COUNT} findings" >&2
+    fi
+  fi
+
+  # --- Run CVE check if dependency manifests changed ---
+  CVE_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    CVE_JSON=$("${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-cve-check.sh failed; CVE findings will be skipped." >&2
+      CVE_JSON="[]"
+    }
+    CVE_COUNT=$(echo "$CVE_JSON" | jq 'length' 2>/dev/null || echo "0")
+    if [[ "$CVE_COUNT" -gt 0 ]]; then
+      echo "CVE check: ${CVE_COUNT} findings" >&2
+    fi
+  fi
+
+fi  # end AI_PARALLEL branch
 
 AGENT_COUNT=${#AGENT_OUTPUTS[@]}
 FAILED_COUNT=${#FAILED_AGENTS[@]}
 if [[ "$FAILED_COUNT" -gt 0 ]]; then
   echo "Agents complete. (${AGENT_COUNT} finding agents ran, ${FAILED_COUNT} failed: ${FAILED_AGENTS[*]})" >&2
-  if [[ "$FAILED_COUNT" -eq "$AGENT_COUNT" && "$AGENT_COUNT" -gt 0 ]]; then
+  if [[ "$FAILED_COUNT" -ge "$AGENT_COUNT" && "$AGENT_COUNT" -gt 0 ]]; then
     echo "ERROR: All ${AGENT_COUNT} agents failed. Aborting review." >&2
     exit 1
   fi
@@ -596,32 +854,6 @@ if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
     TOTAL_OUTPUT=$(( TOTAL_OUTPUT + out_tok ))
   done
   echo "  TOTAL: input=${TOTAL_INPUT} output=${TOTAL_OUTPUT} (combined=$(( TOTAL_INPUT + TOTAL_OUTPUT )))" >&2
-fi
-
-# --- Run shellcheck if shell files changed ---
-SHELLCHECK_JSON="[]"
-if [[ -n "$CHANGED_FILES" ]]; then
-  SHELLCHECK_JSON=$("${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES") || {
-    echo "WARNING: run-shellcheck.sh failed; shellcheck findings will be skipped." >&2
-    SHELLCHECK_JSON="[]"
-  }
-  SC_COUNT=$(echo "$SHELLCHECK_JSON" | jq 'length' 2>/dev/null || echo "0")
-  if [[ "$SC_COUNT" -gt 0 ]]; then
-    echo "Shellcheck: ${SC_COUNT} findings" >&2
-  fi
-fi
-
-# --- Run CVE check if dependency manifests changed ---
-CVE_JSON="[]"
-if [[ -n "$CHANGED_FILES" ]]; then
-  CVE_JSON=$("${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES") || {
-    echo "WARNING: run-cve-check.sh failed; CVE findings will be skipped." >&2
-    CVE_JSON="[]"
-  }
-  CVE_COUNT=$(echo "$CVE_JSON" | jq 'length' 2>/dev/null || echo "0")
-  if [[ "$CVE_COUNT" -gt 0 ]]; then
-    echo "CVE check: ${CVE_COUNT} findings" >&2
-  fi
 fi
 
 # ---------------------------------------------------------------------------
