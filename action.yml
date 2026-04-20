@@ -120,10 +120,9 @@ inputs:
       analyzers (shellcheck, CVE check) run concurrently; Tier 2 full-mode agents
       (architecture, security, blind, edge-case, adversarial) run as a second
       concurrent batch after Tier 1 completes.
-      Defaults to false for conservative rollout. Enable after verifying your LLM
-      provider's rate limits can sustain 3–5 concurrent requests.
+      Set to false to revert to sequential execution if you hit provider rate limits.
     required: false
-    default: 'false'
+    default: 'true'
 
 runs:
   using: composite
