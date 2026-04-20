@@ -761,20 +761,212 @@ apply_suppressions() {
       . as $f |
       ([$active_rules[] | select(. as $r | $f | rule_matches($r))][0].id // "?");
 
+    def find_verify_field:
+      . as $f |
+      ([$active_rules[] | select(. as $r | $f | rule_matches($r))][0].verify // "") ;
+
     def is_suppressed:
       . as $finding |
       any($active_rules[]; . as $rule | $finding | rule_matches($rule));
 
     {
       kept: [.[] | select(is_suppressed | not)],
-      suppressed: [.[] | select(is_suppressed) | . + {suppression_id: find_rule_id}]
+      suppressed: [.[] | select(is_suppressed) | . + {suppression_id: find_rule_id, verify: find_verify_field}]
     }
   ' "$FINDINGS_JSON_FILE") || {
     echo "WARNING: apply_suppressions jq failed; skipping suppression filter." >&2
     return 0
   }
 
-  if echo "$result" | jq '.kept' > "${FINDINGS_JSON_FILE}.tmp"; then
+  # For findings suppressed by rules with a verify field, confirm the version exists
+  # via the appropriate registry API before accepting the suppression. If the version
+  # genuinely does not exist (404), keep the finding — the AI may be correct after all.
+  local verified_suppressed
+  verified_suppressed=$(echo "$result" | jq '.suppressed')
+
+  # Restored findings (failed verification) are written to a temp file as newline-
+  # delimited JSON objects, then assembled into an array once after the loop.
+  local restored_tmp
+  restored_tmp=$(mktemp /tmp/ai-review-restored-XXXXXXXX.jsonl)
+  TMPFILES+=("$restored_tmp")
+
+  # Namespaced helper — removes a finding from verified_suppressed.
+  # (bash functions are global; the prefix prevents collisions.)
+  _suppression_restore() {
+    local fj="$1"
+    echo "$fj" | jq 'del(.suppression_id, .verify)' >> "$restored_tmp"
+    verified_suppressed=$(echo "$verified_suppressed" | jq --argjson f "$fj" \
+      '[.[] | select(.finding != $f.finding or .file != $f.file or .line != $f.line)]')
+  }
+
+  while IFS= read -r finding_json; do
+    local verify_type finding_text
+    verify_type=$(echo "$finding_json" | jq -r '.verify // ""')
+    [[ -z "$verify_type" ]] && continue
+    finding_text=$(echo "$finding_json" | jq -r '.finding')
+
+    case "$verify_type" in
+
+      github-release)
+        # Extract owner/repo@vN.N.N — captures both major tags (v6) and patch tags (v4.1.0)
+        local action_ref owner_repo tag
+        action_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+@v[0-9]+(\.[0-9]+)*' | head -1)
+        if [[ -z "$action_ref" ]]; then continue; fi
+        owner_repo="${action_ref%@*}"; tag="${action_ref#*@}"
+        echo "Verifying GitHub release: ${owner_repo}@${tag}" >&2
+        if gh api "repos/${owner_repo}/git/ref/tags/${tag}" > /dev/null 2>&1 \
+           || gh api "repos/${owner_repo}/releases/tags/${tag}" > /dev/null 2>&1; then
+          echo "  Confirmed tag/release exists — suppressing finding." >&2
+        else
+          echo "  Version not found via GitHub API — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
+      npm)
+        # Extract @scope/pkg@version or pkg@version, or "pkg": "version" in JSON.
+        # Scoped packages (@scope/pkg) are URL-encoded as %40scope%2Fpkg for the registry.
+        local npm_pkg npm_ver npm_pkg_enc
+        local npm_ref
+        # Try scoped package first: @scope/pkg@version
+        npm_ref=$(echo "$finding_text" | grep -oE '@[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+@[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -n "$npm_ref" ]]; then
+          npm_pkg="${npm_ref%@[0-9]*}"; npm_ver="${npm_ref##*@}"
+        else
+          # Unscoped: pkg@version
+          npm_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+@[0-9][0-9a-zA-Z._-]*' | head -1)
+          if [[ -n "$npm_ref" ]]; then
+            npm_pkg="${npm_ref%@*}"; npm_ver="${npm_ref#*@}"
+          else
+            # "pkg": "version" in package.json snippet
+            npm_ref=$(echo "$finding_text" | grep -oP '"([a-zA-Z0-9._-]+)":\s*"([0-9][^"]+)"' | head -1)
+            npm_pkg=$(echo "$npm_ref" | grep -oP '(?<=")[a-zA-Z0-9._-]+(?=":\s*")')
+            npm_ver=$(echo "$npm_ref" | grep -oP '(?<=":\s*")[0-9][^"]+')
+          fi
+        fi
+        if [[ -z "$npm_pkg" || -z "$npm_ver" ]]; then continue; fi
+        # URL-encode scoped package names: @scope/pkg -> %40scope%2Fpkg
+        npm_pkg_enc="${npm_pkg//@/%40}"
+        npm_pkg_enc="${npm_pkg_enc//\//%2F}"
+        echo "Verifying npm: ${npm_pkg}@${npm_ver}" >&2
+        if curl -sf "https://registry.npmjs.org/${npm_pkg_enc}/${npm_ver}" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on npm — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
+      pypi)
+        # Extract pkg==version (e.g. "requests==3.0.0") or "pkg version X.Y.Z"
+        local pypi_ref pypi_pkg pypi_ver
+        pypi_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+==[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -n "$pypi_ref" ]]; then
+          pypi_pkg="${pypi_ref%%==*}"; pypi_ver="${pypi_ref##*==}"
+        else
+          pypi_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+ version [0-9][0-9a-zA-Z._-]*' | head -1)
+          pypi_pkg=$(echo "$pypi_ref" | awk '{print $1}')
+          pypi_ver=$(echo "$pypi_ref" | awk '{print $3}')
+        fi
+        if [[ -z "$pypi_pkg" || -z "$pypi_ver" ]]; then continue; fi
+        echo "Verifying PyPI: ${pypi_pkg}==${pypi_ver}" >&2
+        if curl -sf "https://pypi.org/pypi/${pypi_pkg}/${pypi_ver}/json" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on PyPI — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
+      go-module)
+        # Extract module@vX.Y.Z (e.g. "github.com/gin-gonic/gin@v1.10.0").
+        # Go module proxy requires: slashes encoded as %2F, uppercase letters as
+        # !lowercase (e.g. BurntSushi -> !burnt!sushi).
+        local go_ref go_mod go_ver go_mod_enc go_char
+        go_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}/[a-zA-Z0-9._/@-]+@v[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -z "$go_ref" ]]; then continue; fi
+        go_mod="${go_ref%@*}"; go_ver="${go_ref#*@}"
+        # Apply Go module proxy encoding: uppercase A-Z -> !lowercase, / -> %2F
+        go_mod_enc=""
+        while IFS= read -r -n1 go_char; do
+          if [[ "$go_char" =~ [A-Z] ]]; then
+            go_mod_enc+="!${go_char,,}"
+          elif [[ "$go_char" == "/" ]]; then
+            go_mod_enc+="%2F"
+          else
+            go_mod_enc+="$go_char"
+          fi
+        done <<< "$go_mod"
+        # Remove trailing newline added by herestring
+        go_mod_enc="${go_mod_enc%$'\n'}"
+        echo "Verifying Go module: ${go_mod}@${go_ver}" >&2
+        if curl -sf "https://proxy.golang.org/${go_mod_enc}/@v/${go_ver}.info" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on Go module proxy — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
+      cargo)
+        # Extract pkg = "version" or pkg@version (e.g. serde = "1.1.0" or tokio@2.0.0)
+        local cargo_pkg cargo_ver cargo_ref
+        cargo_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9_-]+ = "[0-9][^"]*"' | head -1)
+        if [[ -n "$cargo_ref" ]]; then
+          cargo_pkg=$(echo "$cargo_ref" | grep -oE '^[a-zA-Z0-9_-]+')
+          cargo_ver=$(echo "$cargo_ref" | grep -oE '"[0-9][^"]*"' | tr -d '"')
+        else
+          cargo_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9_-]+@[0-9][0-9a-zA-Z._-]*' | head -1)
+          cargo_pkg="${cargo_ref%@*}"; cargo_ver="${cargo_ref#*@}"
+        fi
+        if [[ -z "$cargo_pkg" || -z "$cargo_ver" ]]; then continue; fi
+        echo "Verifying Cargo: ${cargo_pkg}@${cargo_ver}" >&2
+        if curl -sf "https://crates.io/api/v1/crates/${cargo_pkg}/${cargo_ver}" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on crates.io — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
+      docker-hub)
+        # Extract image:tag (e.g. "nginx:1.27.0" or "bitnami/postgresql:17.4.0").
+        # Uses /v2/namespaces/ endpoint which supports anonymous access for public images.
+        local docker_ref docker_img docker_tag docker_ns docker_name
+        docker_ref=$(echo "$finding_text" | grep -oE '([a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+:[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -z "$docker_ref" ]]; then continue; fi
+        docker_img="${docker_ref%:*}"; docker_tag="${docker_ref#*:}"
+        if [[ "$docker_img" == */* ]]; then
+          docker_ns="${docker_img%/*}"; docker_name="${docker_img#*/}"
+        else
+          docker_ns="library"; docker_name="$docker_img"
+        fi
+        echo "Verifying Docker Hub: ${docker_ns}/${docker_name}:${docker_tag}" >&2
+        if curl -sf "https://hub.docker.com/v2/namespaces/${docker_ns}/repositories/${docker_name}/tags/${docker_tag}" > /dev/null 2>&1; then
+          echo "  Confirmed tag exists — suppressing finding." >&2
+        else
+          echo "  Tag not found on Docker Hub — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
+    esac
+  done < <(echo "$result" | jq -c '.suppressed[]' 2>/dev/null)
+
+  # Build verified_kept from the temp file (single jq pass, O(n) not O(n²))
+  local verified_kept
+  if [[ -s "$restored_tmp" ]]; then
+    verified_kept=$(jq -s '.' "$restored_tmp")
+  else
+    verified_kept="[]"
+  fi
+
+  # Merge verified_kept back with the originally kept findings; // [] guards against
+  # jq -s 'add' returning null when both inputs are empty arrays.
+  local final_kept
+  final_kept=$(jq -s 'add // []' <(echo "$result" | jq '.kept') <(echo "$verified_kept"))
+
+  if echo "$final_kept" > "${FINDINGS_JSON_FILE}.tmp"; then
     mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
   else
     echo "WARNING: apply_suppressions failed to write filtered findings; keeping original." >&2
@@ -782,12 +974,12 @@ apply_suppressions() {
   fi
 
   local suppressed_count
-  suppressed_count=$(echo "$result" | jq '.suppressed | length')
+  suppressed_count=$(echo "$verified_suppressed" | jq 'length')
   SUPPRESSED_COUNT=$suppressed_count
 
   if [[ "$suppressed_count" -gt 0 ]]; then
     echo "Suppressed findings: ${suppressed_count}" >&2
-    echo "$result" | jq -r '.suppressed[] | "  SUPPRESSED [\(.suppression_id)] \(.file // "?"):\(.line // "?") — \(.finding | .[0:80])"' >&2
+    echo "$verified_suppressed" | jq -r '.[] | "  SUPPRESSED [\(.suppression_id)] \(.file // "?"):\(.line // "?") — \(.finding | .[0:80])"' >&2
   fi
 }
 
