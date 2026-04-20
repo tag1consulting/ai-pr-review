@@ -77,7 +77,16 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 An optional `verify` field triggers pre-suppression verification before accepting the suppression:
 
-- `"verify": "github-release"` — extracts an `owner/repo@vN` reference from the finding text and confirms the tag/release exists via `gh api`. If the version is not found (404), the finding is kept rather than suppressed. Use this for rules that suppress "version does not exist" false positives so genuinely nonexistent versions are still reported.
+| Value | Extracts | Checks |
+|-------|----------|--------|
+| `github-release` | `owner/repo@vN` | `gh api repos/{owner}/{repo}/git/ref/tags/{tag}` |
+| `npm` | `pkg@version` or `"pkg": "version"` | `registry.npmjs.org/{pkg}/{version}` |
+| `pypi` | `pkg==version` | `pypi.org/pypi/{pkg}/{version}/json` |
+| `go-module` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
+| `cargo` | `pkg = "version"` or `pkg@version` | `crates.io/api/v1/crates/{pkg}/{version}` |
+| `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com/v2/repositories/{ns}/{name}/tags/{tag}` |
+
+If verification confirms the version exists, the suppression stands. If the API returns a non-zero exit (version not found), the finding is kept — the AI reviewer may be correct. Private registries (GHCR, GCR, ECR) are not supported as they require authentication.
 
 When adding a suppression, include an `id` and a `reason` explaining why it is a false positive.
 

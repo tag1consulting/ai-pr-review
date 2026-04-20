@@ -64,11 +64,51 @@
     }
   },
   {
-    "id": "version-post-knowledge-cutoff-false-positive",
-    "reason": "LLMs flag GitHub Action versions released after their training cutoff as 'nonexistent' or claim an older major version is 'latest'. Scoped to findings that reference an actions/ path so legitimate non-existent-version findings on other packages are not suppressed. The verify field causes review.sh to confirm the version exists via GitHub API before accepting the suppression — if the version genuinely does not exist (404), the finding is kept.",
+    "id": "version-post-knowledge-cutoff-github-actions",
+    "reason": "LLMs flag GitHub Action versions released after their training cutoff as 'nonexistent' or claim an older major version is 'latest'. Scoped to findings that reference an actions/ path. The verify field causes review.sh to confirm the tag/release exists via GitHub API before accepting the suppression — if the version genuinely does not exist (404), the finding is kept.",
     "verify": "github-release",
     "match": {
       "pattern": "(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release)).{0,300}actions/|actions/.{0,300}(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release))"
+    }
+  },
+  {
+    "id": "version-post-knowledge-cutoff-npm",
+    "reason": "LLMs flag npm package versions released after their training cutoff as 'nonexistent'. Scoped to findings with pkg@version or \"pkg\": \"version\" patterns. The verify field causes review.sh to confirm existence on registry.npmjs.org before suppressing.",
+    "verify": "npm",
+    "match": {
+      "pattern": "(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version).{0,200}[a-zA-Z0-9._-]+@[0-9]|[a-zA-Z0-9._-]+@[0-9].{0,200}(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version)"
+    }
+  },
+  {
+    "id": "version-post-knowledge-cutoff-pypi",
+    "reason": "LLMs flag PyPI package versions released after their training cutoff as 'nonexistent'. Scoped to findings with pkg==version patterns. The verify field causes review.sh to confirm existence on pypi.org before suppressing.",
+    "verify": "pypi",
+    "match": {
+      "pattern": "(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version).{0,200}[a-zA-Z0-9._-]==[0-9]|[a-zA-Z0-9._-]==[0-9].{0,200}(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version)"
+    }
+  },
+  {
+    "id": "version-post-knowledge-cutoff-go-module",
+    "reason": "LLMs flag Go module versions released after their training cutoff as 'nonexistent'. Scoped to findings with module@vX.Y.Z patterns (requires a domain-like module path). The verify field causes review.sh to confirm existence on proxy.golang.org before suppressing.",
+    "verify": "go-module",
+    "match": {
+      "pattern": "(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version).{0,200}[a-zA-Z0-9._-]+\\.[a-zA-Z]{2,}/[a-zA-Z0-9._/@-]+@v[0-9]|[a-zA-Z0-9._-]+\\.[a-zA-Z]{2,}/[a-zA-Z0-9._/@-]+@v[0-9].{0,200}(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version)"
+    }
+  },
+  {
+    "id": "version-post-knowledge-cutoff-cargo",
+    "reason": "LLMs flag Rust crate versions released after their training cutoff as 'nonexistent'. Scoped to findings with pkg = \"version\" or pkg@version Cargo patterns. The verify field causes review.sh to confirm existence on crates.io before suppressing.",
+    "verify": "cargo",
+    "match": {
+      "pattern": "(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version).{0,200}[a-zA-Z0-9_-]+ = \"[0-9]|[a-zA-Z0-9_-]+ = \"[0-9].{0,200}(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such version)"
+    }
+  },
+  {
+    "id": "version-post-knowledge-cutoff-docker-hub",
+    "reason": "LLMs flag Docker Hub image tags released after their training cutoff as 'nonexistent'. Scoped to findings with image:tag patterns. The verify field causes review.sh to confirm existence on hub.docker.com before suppressing. Private registries (GHCR, GCR, ECR) are excluded as they require auth.",
+    "verify": "docker-hub",
+    "match": {
+      "pattern": "(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such (tag|version|image)).{0,200}([a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+:[0-9]|([a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+:[0-9].{0,200}(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such (tag|version|image))"
     }
   }
 ]

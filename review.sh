@@ -772,31 +772,141 @@ apply_suppressions() {
   local verified_suppressed
   verified_suppressed=$(echo "$result" | jq '.suppressed')
 
-  while IFS= read -r finding_json; do
-    local verify_type action_ref owner_repo tag
-    verify_type=$(echo "$finding_json" | jq -r '.verify // ""')
+  # Restore a finding that failed verification back to the kept list.
+  _restore_finding() {
+    local fj="$1"
+    local restored
+    restored=$(echo "$fj" | jq 'del(.suppression_id, .verify)')
+    verified_kept=$(echo "$verified_kept" | jq --argjson f "$restored" '. + [$f]')
+    verified_suppressed=$(echo "$verified_suppressed" | jq --argjson f "$fj" \
+      '[.[] | select(.finding != $f.finding or .file != $f.file or .line != $f.line)]')
+  }
 
-    if [[ "$verify_type" == "github-release" ]]; then
-      # Extract owner/repo@vN from the finding text (e.g. "actions/checkout@v6")
-      action_ref=$(echo "$finding_json" | jq -r '.finding' | grep -oE '[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+@v[0-9]+' | head -1)
-      if [[ -n "$action_ref" ]]; then
-        owner_repo="${action_ref%@*}"
-        tag="${action_ref#*@}"
+  while IFS= read -r finding_json; do
+    local verify_type finding_text
+    verify_type=$(echo "$finding_json" | jq -r '.verify // ""')
+    [[ -z "$verify_type" ]] && continue
+    finding_text=$(echo "$finding_json" | jq -r '.finding')
+
+    case "$verify_type" in
+
+      github-release)
+        # Extract owner/repo@vN (e.g. "actions/checkout@v6")
+        local action_ref owner_repo tag
+        action_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+@v[0-9]+' | head -1)
+        if [[ -z "$action_ref" ]]; then continue; fi
+        owner_repo="${action_ref%@*}"; tag="${action_ref#*@}"
         echo "Verifying GitHub release: ${owner_repo}@${tag}" >&2
         if gh api "repos/${owner_repo}/git/ref/tags/${tag}" > /dev/null 2>&1 \
            || gh api "repos/${owner_repo}/releases/tags/${tag}" > /dev/null 2>&1; then
           echo "  Confirmed tag/release exists — suppressing finding." >&2
         else
           echo "  Version not found via GitHub API — keeping finding (may be genuine)." >&2
-          # Move back to kept; strip the verify/suppression_id fields
-          local restored
-          restored=$(echo "$finding_json" | jq 'del(.suppression_id, .verify)')
-          verified_kept=$(echo "$verified_kept" | jq --argjson f "$restored" '. + [$f]')
-          verified_suppressed=$(echo "$verified_suppressed" | jq --argjson f "$finding_json" '[.[] | select(.finding != $f.finding or .file != $f.file or .line != $f.line)]')
-          continue
+          _restore_finding "$finding_json"
         fi
-      fi
-    fi
+        ;;
+
+      npm)
+        # Extract pkg@version (e.g. "lodash@5.0.0") or "pkg": "version"
+        local npm_ref npm_pkg npm_ver
+        npm_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9@._-]+@[0-9][0-9a-zA-Z._-]*' | grep -v '^@' | head -1)
+        if [[ -z "$npm_ref" ]]; then
+          npm_ref=$(echo "$finding_text" | grep -oP '"([a-zA-Z0-9._-]+)":\s*"([0-9][^"]+)"' | head -1)
+          npm_pkg=$(echo "$npm_ref" | grep -oP '(?<=")[a-zA-Z0-9._-]+(?=":)')
+          npm_ver=$(echo "$npm_ref" | grep -oP '[0-9][^"]+' | head -1)
+        else
+          npm_pkg="${npm_ref%@*}"; npm_ver="${npm_ref#*@}"
+        fi
+        if [[ -z "$npm_pkg" || -z "$npm_ver" ]]; then continue; fi
+        echo "Verifying npm: ${npm_pkg}@${npm_ver}" >&2
+        if curl -sf "https://registry.npmjs.org/${npm_pkg}/${npm_ver}" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on npm — keeping finding (may be genuine)." >&2
+          _restore_finding "$finding_json"
+        fi
+        ;;
+
+      pypi)
+        # Extract pkg==version (e.g. "requests==3.0.0") or "pkg version X.Y.Z"
+        local pypi_ref pypi_pkg pypi_ver
+        pypi_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+==[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -n "$pypi_ref" ]]; then
+          pypi_pkg="${pypi_ref%%==*}"; pypi_ver="${pypi_ref##*==}"
+        else
+          pypi_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+ version [0-9][0-9a-zA-Z._-]*' | head -1)
+          pypi_pkg=$(echo "$pypi_ref" | awk '{print $1}')
+          pypi_ver=$(echo "$pypi_ref" | awk '{print $3}')
+        fi
+        if [[ -z "$pypi_pkg" || -z "$pypi_ver" ]]; then continue; fi
+        echo "Verifying PyPI: ${pypi_pkg}==${pypi_ver}" >&2
+        if curl -sf "https://pypi.org/pypi/${pypi_pkg}/${pypi_ver}/json" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on PyPI — keeping finding (may be genuine)." >&2
+          _restore_finding "$finding_json"
+        fi
+        ;;
+
+      go-module)
+        # Extract module@vX.Y.Z (e.g. "github.com/gin-gonic/gin@v1.10.0")
+        local go_ref go_mod go_ver go_mod_enc
+        go_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}/[a-zA-Z0-9._/@-]+@v[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -z "$go_ref" ]]; then continue; fi
+        go_mod="${go_ref%@*}"; go_ver="${go_ref#*@}"
+        go_mod_enc="${go_mod//\//%2F}"
+        echo "Verifying Go module: ${go_mod}@${go_ver}" >&2
+        if curl -sf "https://proxy.golang.org/${go_mod_enc}/@v/${go_ver}.info" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on Go module proxy — keeping finding (may be genuine)." >&2
+          _restore_finding "$finding_json"
+        fi
+        ;;
+
+      cargo)
+        # Extract pkg = "version" or pkg@version (e.g. serde = "1.1.0" or tokio@2.0.0)
+        local cargo_pkg cargo_ver
+        local cargo_ref
+        cargo_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9_-]+ = "[0-9][^"]*"' | head -1)
+        if [[ -n "$cargo_ref" ]]; then
+          cargo_pkg=$(echo "$cargo_ref" | grep -oE '^[a-zA-Z0-9_-]+')
+          cargo_ver=$(echo "$cargo_ref" | grep -oE '"[0-9][^"]*"' | tr -d '"')
+        else
+          cargo_ref=$(echo "$finding_text" | grep -oE '[a-zA-Z0-9_-]+@[0-9][0-9a-zA-Z._-]*' | head -1)
+          cargo_pkg="${cargo_ref%@*}"; cargo_ver="${cargo_ref#*@}"
+        fi
+        if [[ -z "$cargo_pkg" || -z "$cargo_ver" ]]; then continue; fi
+        echo "Verifying Cargo: ${cargo_pkg}@${cargo_ver}" >&2
+        if curl -sf "https://crates.io/api/v1/crates/${cargo_pkg}/${cargo_ver}" > /dev/null 2>&1; then
+          echo "  Confirmed released — suppressing finding." >&2
+        else
+          echo "  Version not found on crates.io — keeping finding (may be genuine)." >&2
+          _restore_finding "$finding_json"
+        fi
+        ;;
+
+      docker-hub)
+        # Extract image:tag (e.g. "nginx:1.27.0" or "bitnami/postgresql:17.4.0")
+        local docker_ref docker_img docker_tag docker_ns docker_name
+        docker_ref=$(echo "$finding_text" | grep -oE '([a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+:[0-9][0-9a-zA-Z._-]*' | head -1)
+        if [[ -z "$docker_ref" ]]; then continue; fi
+        docker_img="${docker_ref%:*}"; docker_tag="${docker_ref#*:}"
+        if [[ "$docker_img" == */* ]]; then
+          docker_ns="${docker_img%/*}"; docker_name="${docker_img#*/}"
+        else
+          docker_ns="library"; docker_name="$docker_img"
+        fi
+        echo "Verifying Docker Hub: ${docker_ns}/${docker_name}:${docker_tag}" >&2
+        if curl -sf "https://hub.docker.com/v2/repositories/${docker_ns}/${docker_name}/tags/${docker_tag}" > /dev/null 2>&1; then
+          echo "  Confirmed tag exists — suppressing finding." >&2
+        else
+          echo "  Tag not found on Docker Hub — keeping finding (may be genuine)." >&2
+          _restore_finding "$finding_json"
+        fi
+        ;;
+
+    esac
   done < <(echo "$result" | jq -c '.suppressed[]' 2>/dev/null)
 
   # Merge verified_kept back with the originally kept findings
