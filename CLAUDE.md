@@ -61,9 +61,9 @@ Three message files are built and passed selectively to agents:
 
 ## Parallel agent execution
 
-Phase 1 supports an opt-in tiered fan-out mode that reduces wall-clock time from ~5–7 minutes to ~2 minutes in `full` mode.
+Phase 1 runs agents in a tiered fan-out mode by default, reducing wall-clock time from ~5–7 minutes to ~2 minutes in `full` mode.
 
-Enable via the `parallel` action input or `AI_PARALLEL=true` env var (default: `false`).
+Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (default: `true`). Set to `false` if your LLM provider's rate limits cannot sustain 3–5 concurrent requests.
 
 ### Tier groupings
 
@@ -170,7 +170,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 |----------|---------|-------------|
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
-| `AI_PARALLEL` | `false` | Enable tiered parallel agent execution (mapped from `parallel` action input) |
+| `AI_PARALLEL` | `true` | Enable tiered parallel agent execution (mapped from `parallel` action input) |
 
 Exit codes from `llm-call.sh`:
 - **0** — success
