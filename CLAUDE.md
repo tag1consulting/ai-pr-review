@@ -170,7 +170,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 |----------|---------|-------------|
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
-| `AI_PARALLEL` | `true` | Enable tiered parallel agent execution (mapped from `parallel` action input) |
+| `AI_PARALLEL` | `true` | Tiered parallel agent execution; set to `false` to disable (mapped from `parallel` action input) |
 
 Exit codes from `llm-call.sh`:
 - **0** — success

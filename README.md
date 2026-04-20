@@ -342,6 +342,7 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `retry-count` | No | `3` | Retry attempts for transient LLM failures |
+| `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 
 ## Review modes
 
@@ -365,6 +366,8 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
 
 **LLM retries**: Transient API failures (HTTP 429, 500, 502, 503) and transient curl errors (connection refused, timeout) are retried with exponential backoff and jitter. Controlled by the `retry-count` input (default: 3).
+
+**Parallel execution**: Agents run in a tiered fan-out by default (Tier 1: up to 3 concurrent; Tier 2 full-mode: up to 5 concurrent). If your LLM provider's rate limits cannot sustain this throughput, set `parallel: false` to revert to sequential execution.
 
 **GitHub API retries**: Critical GitHub API calls (posting reviews, comments) retry on 502, 503, 429, and ETIMEDOUT with fixed backoff.
 
