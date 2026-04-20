@@ -65,9 +65,10 @@
   },
   {
     "id": "version-post-knowledge-cutoff-false-positive",
-    "reason": "LLMs flag versions released after their training cutoff as 'nonexistent', 'unreleased', or claim an older version is 'latest'. All finding-producing prompts already instruct the model not to do this; this suppression is a deterministic safety net for when the model ignores that instruction. Each phrase in the pattern is only used for this false-positive class — legitimate version findings use 'malformed', 'downgrade', or 'known CVE' language instead.",
+    "reason": "LLMs flag GitHub Action versions released after their training cutoff as 'nonexistent' or claim an older major version is 'latest'. Scoped to findings that reference an actions/ path so legitimate non-existent-version findings on other packages are not suppressed. The verify field causes review.sh to confirm the version exists via GitHub API before accepting the suppression — if the version genuinely does not exist (404), the finding is kept.",
+    "verify": "github-release",
     "match": {
-      "pattern": "does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|version .* does not exist|references? a non-existent (tag|version|release)"
+      "pattern": "(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release)).{0,300}actions/|actions/.{0,300}(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release))"
     }
   }
 ]

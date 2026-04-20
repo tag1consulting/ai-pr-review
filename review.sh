@@ -748,20 +748,62 @@ apply_suppressions() {
       . as $f |
       ([$active_rules[] | select(. as $r | $f | rule_matches($r))][0].id // "?");
 
+    def find_verify_field:
+      . as $f |
+      ([$active_rules[] | select(. as $r | $f | rule_matches($r))][0].verify // "") ;
+
     def is_suppressed:
       . as $finding |
       any($active_rules[]; . as $rule | $finding | rule_matches($rule));
 
     {
       kept: [.[] | select(is_suppressed | not)],
-      suppressed: [.[] | select(is_suppressed) | . + {suppression_id: find_rule_id}]
+      suppressed: [.[] | select(is_suppressed) | . + {suppression_id: find_rule_id, verify: find_verify_field}]
     }
   ' "$FINDINGS_JSON_FILE") || {
     echo "WARNING: apply_suppressions jq failed; skipping suppression filter." >&2
     return 0
   }
 
-  if echo "$result" | jq '.kept' > "${FINDINGS_JSON_FILE}.tmp"; then
+  # For findings suppressed by rules with verify="github-release", confirm the version
+  # exists via GitHub API before accepting the suppression. If the version genuinely
+  # does not exist (404), keep the finding — the AI may be correct after all.
+  local verified_kept="[]"
+  local verified_suppressed
+  verified_suppressed=$(echo "$result" | jq '.suppressed')
+
+  while IFS= read -r finding_json; do
+    local verify_type action_ref owner_repo tag
+    verify_type=$(echo "$finding_json" | jq -r '.verify // ""')
+
+    if [[ "$verify_type" == "github-release" ]]; then
+      # Extract owner/repo@vN from the finding text (e.g. "actions/checkout@v6")
+      action_ref=$(echo "$finding_json" | jq -r '.finding' | grep -oE '[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+@v[0-9]+' | head -1)
+      if [[ -n "$action_ref" ]]; then
+        owner_repo="${action_ref%@*}"
+        tag="${action_ref#*@}"
+        echo "Verifying GitHub release: ${owner_repo}@${tag}" >&2
+        if gh api "repos/${owner_repo}/git/ref/tags/${tag}" > /dev/null 2>&1 \
+           || gh api "repos/${owner_repo}/releases/tags/${tag}" > /dev/null 2>&1; then
+          echo "  Confirmed tag/release exists — suppressing finding." >&2
+        else
+          echo "  Version not found via GitHub API — keeping finding (may be genuine)." >&2
+          # Move back to kept; strip the verify/suppression_id fields
+          local restored
+          restored=$(echo "$finding_json" | jq 'del(.suppression_id, .verify)')
+          verified_kept=$(echo "$verified_kept" | jq --argjson f "$restored" '. + [$f]')
+          verified_suppressed=$(echo "$verified_suppressed" | jq --argjson f "$finding_json" '[.[] | select(.finding != $f.finding or .file != $f.file or .line != $f.line)]')
+          continue
+        fi
+      fi
+    fi
+  done < <(echo "$result" | jq -c '.suppressed[]' 2>/dev/null)
+
+  # Merge verified_kept back with the originally kept findings
+  local final_kept
+  final_kept=$(jq -s 'add' <(echo "$result" | jq '.kept') <(echo "$verified_kept"))
+
+  if echo "$final_kept" > "${FINDINGS_JSON_FILE}.tmp"; then
     mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
   else
     echo "WARNING: apply_suppressions failed to write filtered findings; keeping original." >&2
@@ -769,12 +811,12 @@ apply_suppressions() {
   fi
 
   local suppressed_count
-  suppressed_count=$(echo "$result" | jq '.suppressed | length')
+  suppressed_count=$(echo "$verified_suppressed" | jq 'length')
   SUPPRESSED_COUNT=$suppressed_count
 
   if [[ "$suppressed_count" -gt 0 ]]; then
     echo "Suppressed findings: ${suppressed_count}" >&2
-    echo "$result" | jq -r '.suppressed[] | "  SUPPRESSED [\(.suppression_id)] \(.file // "?"):\(.line // "?") — \(.finding | .[0:80])"' >&2
+    echo "$verified_suppressed" | jq -r '.[] | "  SUPPRESSED [\(.suppression_id)] \(.file // "?"):\(.line // "?") — \(.finding | .[0:80])"' >&2
   fi
 }
 

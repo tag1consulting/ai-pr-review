@@ -75,6 +75,10 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 - `code` — finding text starts with this prefix
 - `pattern` — regex (case-insensitive) matched against finding text
 
+An optional `verify` field triggers pre-suppression verification before accepting the suppression:
+
+- `"verify": "github-release"` — extracts an `owner/repo@vN` reference from the finding text and confirms the tag/release exists via `gh api`. If the version is not found (404), the finding is kept rather than suppressed. Use this for rules that suppress "version does not exist" false positives so genuinely nonexistent versions are still reported.
+
 When adding a suppression, include an `id` and a `reason` explaining why it is a false positive.
 
 Consuming repos can add **local suppressions** by placing a `suppressions.json` file at `.github/ai-pr-review/suppressions.json` in their repository. Local rules are merged with the global rules at runtime — no action input required. Use the same schema as the global file.
