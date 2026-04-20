@@ -47,6 +47,8 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 
 The SHA of the last-reviewed commit is stored in an HTML comment embedded in the PR summary comment (`<!-- ai-pr-review-summary sha=<sha> -->`). `post-review.sh --get-last-sha` extracts it. Subsequent pushes diff from that SHA to HEAD. `post-review.sh` calls `update_sha_marker()` at the end to advance it.
 
+`post_summary()` keeps at most one summary comment on the PR by calling `_cleanup_duplicate_summary_comments()` after each upsert. Duplicates can accumulate when two runs fire concurrently. Cleanup is non-fatal: DELETE failures emit a WARNING and are retried via `gh_api_retry`, but the review never blocks on cleanup.
+
 To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. This sets the `force-full-diff` action input to `true`, which causes `review.sh` to skip the `--get-last-sha` call (leaving `LAST_REVIEWED_SHA=""`) and fall through to the full `origin/BASE_REF...HEAD_SHA` diff. The watermark still advances normally at the end of the run.
 
 ## Context message variants

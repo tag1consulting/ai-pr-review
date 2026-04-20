@@ -126,9 +126,14 @@ jobs:
 
   # Always attempt to remove the ai-review-rescan label after the review,
   # even if the review job was cancelled by the concurrency rule on a new push.
+  # Exclude skip-ai-review PRs so we don't strip the rescan label from a PR
+  # that intentionally bypasses the review.
   cleanup-rescan-label:
     needs: review
-    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -164,7 +169,8 @@ In the **consuming** repository's settings:
 If you prefer explicit version pinning via a submodule (useful for auditing exactly which version of the action is used):
 
 ```bash
-git submodule add git@github.com:tag1consulting/ai-pr-review.git ai-pr-review
+mkdir -p .github/actions
+git submodule add git@github.com:tag1consulting/ai-pr-review.git .github/actions/ai-pr-review
 git commit -m "Add ai-pr-review submodule"
 ```
 
@@ -304,18 +310,16 @@ jobs:
             || true
 ```
 
-> **Note:** The submodule is typically placed at `.github/actions/ai-pr-review` so the `uses:` path matches the above. Adjust if you chose a different path.
->
 > **Why 3 jobs for the submodule pattern?** `actions/checkout` with a PAT writes the token into `.git/config` as a persistent credential readable by any subsequent step in the same job. Isolating checkout into its own job (and scrubbing credentials before the workspace is passed to the review job as an artifact) keeps the PAT out of the job that executes third-party shell scripts.
 
 To update the submodule pin:
 
 ```bash
-cd ai-pr-review
+cd .github/actions/ai-pr-review
 git fetch --all
 git checkout v1.0
-cd ..
-git add ai-pr-review
+cd ../../..
+git add .github/actions/ai-pr-review
 git commit -m "Bump ai-pr-review submodule to v1.0"
 ```
 
