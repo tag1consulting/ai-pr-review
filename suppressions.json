@@ -104,6 +104,13 @@
     }
   },
   {
+    "id": "upload-download-artifact-version-mismatch-false-positive",
+    "reason": "actions/upload-artifact and actions/download-artifact have intentionally offset major version numbers — they are separate packages released independently. upload-artifact@v7 is fully compatible with download-artifact@v8; the download-artifact@v8 README explicitly uses upload-artifact@v7 in its examples. Flagging mismatched major versions as an incompatibility is a false positive for this specific action pair.",
+    "match": {
+      "pattern": "upload-artifact.{0,200}download-artifact|download-artifact.{0,200}upload-artifact"
+    }
+  },
+  {
     "id": "version-post-knowledge-cutoff-docker-hub",
     "reason": "LLMs flag Docker Hub image tags released after their training cutoff as 'nonexistent'. Scoped to findings with image:tag patterns. The verify field causes review.sh to confirm existence on hub.docker.com before suppressing. Private registries (GHCR, GCR, ECR) are excluded as they require auth.",
     "verify": "docker-hub",
