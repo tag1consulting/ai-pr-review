@@ -558,6 +558,7 @@ ${truncated_summary}
     --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .id" \
     2>/dev/null | head -1) || true
 
+  local kept_comment_id
   if [[ -n "$existing_comment_id" ]]; then
     echo "Updating existing summary comment #${existing_comment_id}..." >&2
     gh_api_retry api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
@@ -566,17 +567,42 @@ ${truncated_summary}
       echo "ERROR: Failed to update summary comment #${existing_comment_id}." >&2
       return 1
     }
+    kept_comment_id="$existing_comment_id"
   else
     echo "Posting new summary comment..." >&2
-    gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    local new_comment_id
+    new_comment_id=$(gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
-      --field body="$body" > /dev/null || {
+      --field body="$body" \
+      --jq ".id") || {
       echo "ERROR: Failed to post summary comment." >&2
       return 1
     }
+    kept_comment_id="$new_comment_id"
   fi
 
+  _cleanup_duplicate_summary_comments "$kept_comment_id"
+
   echo "Summary comment posted to PR #${PR_NUMBER}." >&2
+}
+
+# Delete all summary marker comments except the one identified by kept_id.
+# Cosmetic failures are non-fatal — the next run will clean up any leftovers.
+_cleanup_duplicate_summary_comments() {
+  local kept_id="$1"
+  local duplicate_ids
+  duplicate_ids=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --paginate \
+    --jq ".[] | select(.body | contains(\"${MARKER_PREFIX}\")) | .id" \
+    2>/dev/null | grep -v "^${kept_id}$") || true
+  [[ -z "$duplicate_ids" ]] && return 0
+  while IFS= read -r dup_id; do
+    [[ -z "$dup_id" ]] && continue
+    echo "Deleting duplicate summary comment #${dup_id}..." >&2
+    gh_api_retry api "repos/${OWNER}/${REPO}/issues/comments/${dup_id}" \
+      --method DELETE > /dev/null < /dev/null \
+      || echo "WARNING: Failed to delete duplicate summary comment #${dup_id}." >&2
+  done <<< "$duplicate_ids"
 }
 
 # ---------------------------------------------------------------------------
