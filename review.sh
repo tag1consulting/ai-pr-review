@@ -82,7 +82,8 @@ case "$AI_PROVIDER" in
     ;;
   bedrock-proxy)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-us.anthropic.claude-sonnet-4-6}"
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-7-v1}"
+    # TODO: update to global.anthropic.claude-opus-4-7-v1 once Opus 4.7 is available via bedrock-proxy
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-6-v1}"
     ;;
 esac
 
