@@ -5,7 +5,7 @@ When reviewing Python code, pay particular attention to:
 ### Python Validation Idioms (Do NOT Flag)
 - `try/except SpecificError` with `logger.exception(...)` or `raise` — this IS error handling
 - `if __name__ == "__main__":` guard — this IS correct entry-point isolation
-- `@dataclass(default_factory=list)` / `field(default_factory=dict)` — this IS safe mutable-default handling
+- `@dataclass` with `field(default_factory=list)` / `field(default_factory=dict)` on mutable fields — this IS safe mutable-default handling
 - `with open(...) as f:` / `with contextlib.suppress(...)` — this IS resource management
 - Type hints in scripts and tests are optional; only flag missing hints on public library API surfaces
 

@@ -44,6 +44,6 @@ When reviewing TypeScript code, pay particular attention to:
 ### Idiomatic TypeScript / React
 - Prefer `unknown` over `any` for externally-sourced data; narrow with a type guard before use
 - Prefer named interfaces or type aliases over repeated inline shapes
-- React: stable values (`dispatch`, `setState`, refs) don't need to be in the deps array; don't flag exhaustive-deps warnings on these without context
+- React: `dispatch` (useReducer) and `setState` (useState) are guaranteed stable — omitting them from deps is intentional and NOT a bug. Ref objects (`useRef` return value) are stable, but `ref.current` is mutable — do not suppress deps warnings involving `ref.current` without context
 - `as const` on literal objects and arrays preserves narrowest types and is idiomatic
 - Don't flag `// @ts-ignore` or `// @ts-expect-error` if a comment explains the suppression

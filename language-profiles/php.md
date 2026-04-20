@@ -7,6 +7,7 @@ When reviewing PHP code, pay particular attention to:
 - PDO `prepare()`/`execute()` or mysqli `bind_param()` — these ARE SQL-injection-safe patterns
 - Drupal: `$connection->query($sql, [':placeholder' => $val])` — the placeholder array IS parameterized
 - Drupal: `Html::escape()`, `Xss::filter()`, `Xss::filterAdmin()` on rendered output — XSS-safe in the correct context
+- Drupal: `'#plain_text' => $value` in render arrays — `Html::escape()` is applied automatically at render time; this IS XSS-safe
 - `declare(strict_types=1)` at file top — this IS a type-coercion guardrail; do not flag it
 - `===` / `!==` comparisons — this IS strict type-safe comparison
 
