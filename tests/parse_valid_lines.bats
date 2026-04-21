@@ -78,11 +78,10 @@ diff --git a/foo.sh b/foo.sh
  line at 13
  line at 14
 EOF
-  run parse_valid_lines "$DIFF_FILE"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -qF "foo.sh:12"
+  result=$(parse_valid_lines "$DIFF_FILE")
+  echo "$result" | grep -qF "foo.sh:12"
   # Context lines should not appear
-  echo "$output" | grep -vqF "foo.sh:10" || true
+  [ "$(echo "$result" | grep -cF "foo.sh:10")" -eq 0 ]
 }
 
 @test "parse_valid_lines: handles multiple hunks in the same file" {

@@ -128,6 +128,9 @@ retry_curl() {
   # would be consumed on the first curl attempt, leaving retries with empty bodies.
   local stdin_file
   stdin_file=$(mktemp /tmp/llm-retry-stdin-XXXXXXXX)
+  # Ensure the temp file is removed on all exit paths (success return, exit, or signal).
+  # shellcheck disable=SC2064
+  trap "rm -f '${stdin_file}'" RETURN EXIT
   cat > "$stdin_file"
 
   # Rewrite --data-binary @- to --data-binary @<file> so each retry
@@ -192,30 +195,27 @@ emit_response() {
 
   # Check provider-specific content filter reasons before the empty-response check
   # so error messages are specific rather than generic "Could not extract response text"
+  _dump_response_file() {
+    echo "Raw response:" >&2
+    if [[ -s "${RESPONSE_FILE:-}" ]]; then cat "$RESPONSE_FILE" >&2; else echo "(response body unavailable)" >&2; fi
+  }
+
   if [[ "$stop_reason" == "SAFETY" ]]; then
     echo "ERROR: Response blocked by provider safety filter (finishReason=SAFETY)" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 3
+    _dump_response_file; exit 3
   fi
   if [[ "$stop_reason" == "RECITATION" ]]; then
     echo "ERROR: Response blocked by provider recitation filter (finishReason=RECITATION)" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 3
+    _dump_response_file; exit 3
   fi
   if [[ "$stop_reason" == "refusal" ]]; then
     echo "ERROR: Response blocked by model refusal (stop_reason=refusal)" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 3
+    _dump_response_file; exit 3
   fi
 
   if [[ -z "$response_text" ]]; then
     echo "ERROR: Could not extract response text from API response" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 1
+    _dump_response_file; exit 1
   fi
   echo "TOKENS: input=${input_tokens} output=${output_tokens} model=${MODEL_ID}" >&2
   # Warn and signal callers when the model hit the token limit

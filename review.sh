@@ -936,7 +936,7 @@ merge_findings() {
   )]' 2>/dev/null) || valid_incoming="[]"
 
   local incoming_count valid_count
-  incoming_count=$(echo "$incoming" | jq 'length' 2>/dev/null || echo "?")
+  incoming_count=$(echo "$incoming" | jq 'length' 2>/dev/null || echo "0")
   valid_count=$(echo "$valid_incoming" | jq 'length' 2>/dev/null || echo "0")
   if [[ "$valid_count" != "$incoming_count" ]]; then
     echo "WARNING: merge_findings: dropped $(( incoming_count - valid_count )) malformed finding(s) (missing required fields)." >&2

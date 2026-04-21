@@ -63,7 +63,7 @@ Do NOT flag dependency versions, GitHub Action versions, or package versions as 
 
 ## Empty State
 
-If you have no findings at Medium or higher, output "This change is architecturally
+If you find no architectural concerns, output "This change is architecturally
 sound. No significant concerns identified." followed by an empty json-findings block.
 Do NOT output the bare word `NONE`.
 

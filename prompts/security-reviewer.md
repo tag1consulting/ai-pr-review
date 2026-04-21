@@ -82,7 +82,7 @@ a security vulnerability (e.g., swallowed auth failures, stack traces leaked to 
 
 ## Empty State
 
-If you find no security vulnerabilities at Medium or higher, output a brief statement
+If you find no security vulnerabilities, output a brief statement
 ("No security vulnerabilities identified") followed by an empty json-findings block.
 Do NOT output the bare word `NONE`.
 

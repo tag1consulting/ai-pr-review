@@ -61,7 +61,10 @@ EOF
   call_agent "my-agent" "test-model" "/dev/null" "/dev/null" "$out" "8192"
 
   # The 4th positional to llm-call.sh is max_tokens
-  grep -q "8192" /tmp/llm-call-args-$$.txt 2>/dev/null && rm -f /tmp/llm-call-args-$$.txt
+  local args_file="/tmp/llm-call-args-$$.txt"
+  run grep -q "8192" "$args_file"
+  rm -f "$args_file"
+  [ "$status" -eq 0 ]
   [ "${#FAILED_AGENTS[@]}" -eq 0 ]
 }
 
