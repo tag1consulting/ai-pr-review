@@ -90,7 +90,7 @@ _run_dedup() {
     def merge_cluster(cur; f):
       if (cur.best.severity | sev_rank) >= (f.severity | sev_rank)
       then {start: cur.start, best: cur.best, sources: (cur.sources + [f.source // "unknown"])}
-      else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown", f.source // "unknown"])}
+      else {start: cur.start, best: f, sources: (cur.sources + [f.source // "unknown"])}
       end;
     group_by(.file // "unknown")
     | map(

@@ -1240,14 +1240,9 @@ apply_suppressions() {
 }
 
 for agent_output in "${AGENT_OUTPUTS[@]}"; do
-  # Recover agent name from sidecar (written by call_agent_bg) or filename fallback
-  local_agent_name=""
-  if [[ -f "${agent_output}.name" ]]; then
-    local_agent_name=$(cat "${agent_output}.name")
-  else
-    local_agent_name=$(basename "$agent_output" | sed 's/-[A-Z0-9]*\.txt$//')
-  fi
-  AGENT_JSON=$(extract_findings "$agent_output" "$local_agent_name")
+  # .name sidecar is written by both call_agent and call_agent_bg
+  agent_name_for_output=$(cat "${agent_output}.name" 2>/dev/null || echo "unknown")
+  AGENT_JSON=$(extract_findings "$agent_output" "$agent_name_for_output")
   if [[ "$AGENT_JSON" != "[]" ]]; then
     merge_findings "$AGENT_JSON"
   fi
@@ -1290,11 +1285,11 @@ if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
   # Merge two cluster states: carry best finding and accumulate all sources.
-  # Both cur.best.source and f.source are appended regardless of which wins.
+  # cur.best.source is already in cur.sources; only f.source is new each call.
   def merge_cluster(cur; f):
     if (cur.best.severity | sev_rank) >= (f.severity | sev_rank)
     then {start: cur.start, best: cur.best, sources: (cur.sources + [f.source // "unknown"])}
-    else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown", f.source // "unknown"])}
+    else {start: cur.start, best: f, sources: (cur.sources + [f.source // "unknown"])}
     end;
   group_by(.file // "unknown")
   | map(
