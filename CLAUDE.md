@@ -155,7 +155,7 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 
 ## Retry and resilience
 
-`llm-call.sh` retries transient API failures (HTTP 429, 500, 502, 503) and transient curl failures (exit codes 7, 28, 56) with exponential backoff and jitter. Configuration via env vars:
+`llm-call.sh` retries transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl failures (exit codes 7, 28, 56) with exponential backoff and jitter. Configuration via env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|

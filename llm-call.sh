@@ -116,8 +116,8 @@ check_http_status() {
 
 # retry_curl — wrapper around curl that retries on transient failures.
 # Usage: retry_curl <provider_label> [curl_args...]
-# Retries on transient HTTP codes (429, 500, 502, 503) and transient curl
-# exit codes (7=connection refused, 28=timeout, 56=network failure).
+# Retries on transient HTTP codes (408, 429, 500, 502, 503, 504, 520–524) and
+# transient curl exit codes (7=connection refused, 28=timeout, 56=network failure).
 # Uses exponential backoff with jitter.
 retry_curl() {
   local provider_label="$1"; shift

@@ -45,10 +45,13 @@ EOF
 }
 
 @test "call_agent: success with custom max_tokens passes it to llm-call.sh" {
-  # Stub captures its arguments so we can assert max_tokens was forwarded
-  cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'
+  # Stub captures its arguments to a known path under MOCK_DIR.
+  # Use an unquoted heredoc so the path expands at write time (not at
+  # stub execution time, which would give a different PID).
+  local args_file="${MOCK_DIR}/llm-call-args.txt"
+  cat > "${MOCK_DIR}/llm-call.sh" <<EOF
 #!/usr/bin/env bash
-echo "args: $*" > /tmp/llm-call-args-$$.txt
+echo "args: \$*" > "${args_file}"
 echo "response"
 echo "TOKENS: input=1 output=1 model=m" >&2
 EOF
@@ -60,10 +63,8 @@ EOF
 
   call_agent "my-agent" "test-model" "/dev/null" "/dev/null" "$out" "8192"
 
-  # The 4th positional to llm-call.sh is max_tokens
-  local args_file="/tmp/llm-call-args-$$.txt"
+  # The 4th positional to llm-call.sh is max_tokens — assert it was forwarded
   run grep -q "8192" "$args_file"
-  rm -f "$args_file"
   [ "$status" -eq 0 ]
   [ "${#FAILED_AGENTS[@]}" -eq 0 ]
 }
