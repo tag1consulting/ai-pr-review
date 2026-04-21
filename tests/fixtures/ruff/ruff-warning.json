@@ -1,0 +1,10 @@
+[
+  {
+    "code": "W291",
+    "filename": "app/models.py",
+    "location": { "row": 22, "column": 1 },
+    "end_location": { "row": 22, "column": 5 },
+    "message": "Trailing whitespace",
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  }
+]
