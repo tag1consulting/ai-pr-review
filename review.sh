@@ -621,10 +621,21 @@ fi
 SUMMARY_FILE=$(mktemp_tracked /tmp/ai-review-summary-XXXXXXXX.md)
 FINDINGS_FILE=$(mktemp_tracked /tmp/ai-review-findings-XXXXXXXX.md)
 
+# --- Configurable limits ---
+# Validate AI_MAX_TOKENS_PER_AGENT: must be a positive integer; clamp to [256, 65536].
+_raw_tokens="${AI_MAX_TOKENS_PER_AGENT:-8192}"
+if [[ "$_raw_tokens" =~ ^[0-9]+$ ]] && [[ "$_raw_tokens" -ge 256 ]] && [[ "$_raw_tokens" -le 65536 ]]; then
+  AI_MAX_TOKENS_PER_AGENT="$_raw_tokens"
+else
+  echo "WARNING: AI_MAX_TOKENS_PER_AGENT='${_raw_tokens}' is invalid; using default 8192." >&2
+  AI_MAX_TOKENS_PER_AGENT=8192
+fi
+unset _raw_tokens
+
 # --- Agent roster ---
 AGENT_OUTPUTS=()
 
-if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
+if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   # -------------------------------------------------------------------------
   # Parallel path: tiered fan-out to cap simultaneous LLM calls and reduce
   # provider rate-limit pressure. Tier 1 (essential) and Tier 2 (full-only)
@@ -644,7 +655,7 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     TIER1_OUTPUTS+=("$SUMMARY_FILE")
     call_agent_bg "pr-summarizer" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER1_WAIT_ARGS+=($! "$SUMMARY_FILE")
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
@@ -652,14 +663,14 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
 
   TIER1_OUTPUTS+=("$FINDINGS_FILE")
   call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" 8192 &
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
   TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
     TIER1_OUTPUTS+=("$SFH_FILE")
     call_agent_bg "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
 
@@ -691,31 +702,31 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ARCH_FILE")
     call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$SEC_FILE")
     call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
     call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$EDGE_FILE")
     call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ADV_FILE")
     call_agent_bg "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" 8192 &
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$ADV_FILE")
 
     wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
@@ -757,20 +768,20 @@ else
   # incremental diff would replace a useful whole-PR overview with a partial one.
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     call_agent "pr-summarizer" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" 8192
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" "$AI_MAX_TOKENS_PER_AGENT"
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
   fi
 
   call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" 8192
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT"
   AGENT_OUTPUTS+=("$FINDINGS_FILE")
 
   # Tier 1 conditional: run in both quick and full when triggered
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
     call_agent "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" 8192
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SFH_FILE")
   fi
 
@@ -778,27 +789,27 @@ else
   if [[ "$REVIEW_MODE" == "full" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" 8192
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" 8192
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" 8192
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" 8192
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     call_agent "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" 8192
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$ADV_FILE")
   fi
 
@@ -1258,10 +1269,20 @@ if [[ "$CVE_JSON" != "[]" ]]; then
   merge_findings "$CVE_JSON"
 fi
 
-# Filter out findings below confidence threshold (75) BEFORE suppressions so that
+# Filter out findings below confidence threshold BEFORE suppressions so that
 # verify-gated suppression rules don't fire registry HTTP calls on sub-threshold noise.
+_raw_conf="${AI_CONFIDENCE_THRESHOLD:-75}"
+if [[ "$_raw_conf" =~ ^[0-9]+$ ]] && [[ "$_raw_conf" -ge 0 ]] && [[ "$_raw_conf" -le 100 ]]; then
+  CONFIDENCE_THRESHOLD="$_raw_conf"
+else
+  echo "WARNING: AI_CONFIDENCE_THRESHOLD='${_raw_conf}' is invalid; using default 75." >&2
+  CONFIDENCE_THRESHOLD=75
+fi
+unset _raw_conf
+
 PRE_FILTER_COUNT=$(jq 'length' "$FINDINGS_JSON_FILE" 2>/dev/null || echo "0")
-if jq '[.[] | select((.confidence // 0) >= 75)]' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
+if jq --argjson t "$CONFIDENCE_THRESHOLD" '[.[] | select((.confidence // 0) >= $t)]' \
+    "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
   mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
 else
   echo "WARNING: Confidence filter jq failed; keeping all findings unfiltered." >&2
@@ -1269,7 +1290,7 @@ else
 fi
 POST_FILTER_COUNT=$(jq 'length' "$FINDINGS_JSON_FILE" 2>/dev/null || echo "0")
 if [[ "$PRE_FILTER_COUNT" -ne "$POST_FILTER_COUNT" ]]; then
-  echo "Filtered findings: ${PRE_FILTER_COUNT} → ${POST_FILTER_COUNT} (confidence >= 75)" >&2
+  echo "Filtered findings: ${PRE_FILTER_COUNT} → ${POST_FILTER_COUNT} (confidence >= ${CONFIDENCE_THRESHOLD})" >&2
 fi
 
 # Apply declarative suppressions (won't-fix / false positives) after confidence filter

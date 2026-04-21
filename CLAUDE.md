@@ -164,7 +164,7 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | `LLM_RETRY_COUNT` | `3` | Number of retry attempts (set to 0 to disable) |
 | `LLM_RETRY_BASE_DELAY` | `2` | Base delay in seconds (doubles each retry) |
 
-The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`. The `parallel` input maps to `AI_PARALLEL`.
+The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`. The `parallel` input maps to `AI_PARALLEL`. The `confidence-threshold` input maps to `AI_CONFIDENCE_THRESHOLD`. The `max-inline` input maps to `AI_MAX_INLINE`. The `max-tokens-per-agent` input maps to `AI_MAX_TOKENS_PER_AGENT`.
 
 Additional env vars consumed by the scripts (not exposed as action inputs):
 
@@ -173,6 +173,9 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
 | `AI_PARALLEL` | `true` | Tiered parallel agent execution; set to `false` to disable (mapped from `parallel` action input) |
+| `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings to be included (mapped from `confidence-threshold` action input) |
+| `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
+| `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
 
 Exit codes from `llm-call.sh`:
 - **0** — success
