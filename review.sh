@@ -82,8 +82,7 @@ case "$AI_PROVIDER" in
     ;;
   bedrock-proxy)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-us.anthropic.claude-sonnet-4-6}"
-    # TODO(#72): update to global.anthropic.claude-opus-4-7-v1 once Opus 4.7 is available via bedrock-proxy
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-6-v1}"
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-7}"
     ;;
 esac
 
@@ -644,7 +643,7 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     TIER1_OUTPUTS+=("$SUMMARY_FILE")
     call_agent_bg "pr-summarizer" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" &
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" 8192 &
     TIER1_WAIT_ARGS+=($! "$SUMMARY_FILE")
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
@@ -652,14 +651,14 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
 
   TIER1_OUTPUTS+=("$FINDINGS_FILE")
   call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" &
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" 8192 &
   TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
     TIER1_OUTPUTS+=("$SFH_FILE")
-    call_agent_bg "silent-failure-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" &
+    call_agent_bg "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" 8192 &
     TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
 
@@ -691,31 +690,31 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ARCH_FILE")
     call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" &
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$SEC_FILE")
     call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" &
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
     call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" &
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$EDGE_FILE")
-    call_agent_bg "edge-case-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" &
+    call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ADV_FILE")
     call_agent_bg "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" &
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$ADV_FILE")
 
     wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
@@ -757,20 +756,20 @@ else
   # incremental diff would replace a useful whole-PR overview with a partial one.
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     call_agent "pr-summarizer" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE"
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" 8192
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
   fi
 
   call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE"
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" 8192
   AGENT_OUTPUTS+=("$FINDINGS_FILE")
 
   # Tier 1 conditional: run in both quick and full when triggered
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
-    call_agent "silent-failure-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE"
+    call_agent "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" 8192
     AGENT_OUTPUTS+=("$SFH_FILE")
   fi
 
@@ -778,27 +777,27 @@ else
   if [[ "$REVIEW_MODE" == "full" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE"
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" 8192
     AGENT_OUTPUTS+=("$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE"
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" 8192
     AGENT_OUTPUTS+=("$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE"
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" 8192
     AGENT_OUTPUTS+=("$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
-    call_agent "edge-case-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE"
+    call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" 8192
     AGENT_OUTPUTS+=("$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     call_agent "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE"
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" 8192
     AGENT_OUTPUTS+=("$ADV_FILE")
   fi
 

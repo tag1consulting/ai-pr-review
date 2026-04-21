@@ -59,7 +59,7 @@ relationships, or restructure modules.
 
 Do NOT assess: security implications (security-reviewer), code-level style/formatting
 (code-reviewer), error handling quality (silent-failure-hunter), test coverage.
-Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," or problematic solely because the version is unfamiliar — your training data has a cutoff and newer releases exist. Only flag a version if the diff provides concrete evidence of a problem (e.g., a downgrade, a known-vulnerable version, or a syntactically malformed version string).
+Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," or problematic solely because the version is unfamiliar. Only flag a version if the diff provides concrete evidence of a problem (e.g., a downgrade, a known-vulnerable version, or a syntactically malformed version string).
 
 ## Empty State
 
@@ -72,8 +72,9 @@ Do NOT output the bare word `NONE`.
 - **Critical**: Design flaw that will cause failures or make the system unmaintainable
 - **High**: Significant architectural problem that should be fixed before merge
 - **Medium**: Design concern that should be tracked and addressed soon
+- **Low**: Minor design observation worth noting but with negligible impact
 
-**Only report findings at Medium or higher.**
+**Only include findings with confidence ≥ 75.**
 
 ## Output Format
 
@@ -119,5 +120,6 @@ After your markdown output, emit a JSON block fenced with ```json-findings:
 ```json-findings
 [{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
 ```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`.
+`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
+`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
 If no findings, emit an empty array: `[]`

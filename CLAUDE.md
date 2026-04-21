@@ -94,7 +94,7 @@ When `AI_PARALLEL=true`, new agents must be placed into a tier and added to both
 ## Adding a new agent
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
-2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384.
+2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384; all current agents pass 8192 explicitly.
 3. If the agent should only run conditionally (like `silent-failure-hunter`), gate it with a grep check on `$DIFF_FILE`.
 4. Also add the agent to the parallel tier block (see "Parallel agent execution" above).
 
@@ -151,7 +151,7 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-7` |
 | `openai` / `openai-compatible` | `gpt-4o` | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
-| `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-6-v1` (update to `claude-opus-4-7-v1` once available) |
+| `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-7` |
 
 ## Retry and resilience
 
