@@ -57,17 +57,19 @@ if [[ -n "${GOLANGCI_MOCK_FILE:-}" ]]; then
   GL_OUTPUT=$(cat "$GOLANGCI_MOCK_FILE")
 else
   # golangci-lint must run from the Go module root (where go.mod lives).
-  # Walk up from the first changed file's directory to find go.mod.
+  # Walk up from the first changed file's directory to find go.mod,
+  # checking each directory before moving to its parent (do-while pattern).
   MODULE_ROOT=""
   _dir=$(dirname "${GO_FILES[0]}")
-  while [[ "$_dir" != "/" && "$_dir" != "." ]]; do
+  while true; do
     if [[ -f "$_dir/go.mod" ]]; then
       MODULE_ROOT="$_dir"
       break
     fi
+    [[ "$_dir" == "/" || "$_dir" == "." ]] && break
     _dir=$(dirname "$_dir")
   done
-  # Also check CWD itself
+  # Final check: CWD itself (handles the case where dirname returns '.')
   if [[ -z "$MODULE_ROOT" && -f "go.mod" ]]; then
     MODULE_ROOT="."
   fi
@@ -82,9 +84,14 @@ else
   declare -A _seen_dirs
   for f in "${GO_FILES[@]}"; do
     d=$(dirname "$f")
-    # Make relative to module root
-    rel_d="${d#"${MODULE_ROOT}/"}"
-    [[ "$rel_d" == "$d" ]] && rel_d="."  # file is in module root itself
+    if [[ "$MODULE_ROOT" == "." ]]; then
+      # Paths are already relative to CWD/module root; use as-is
+      rel_d="$d"
+    else
+      rel_d="${d#"${MODULE_ROOT}/"}"
+      # If strip had no effect, the file is directly in the module root
+      [[ "$rel_d" == "$d" ]] && rel_d="."
+    fi
     if [[ -z "${_seen_dirs[$rel_d]+x}" ]]; then
       _seen_dirs[$rel_d]=1
       PKG_PATTERNS+=("./${rel_d}/...")
@@ -92,14 +99,13 @@ else
   done
 
   GOLANGCI_STDERR=$(mktemp)
+  trap 'rm -f "$GOLANGCI_STDERR"' EXIT
   GL_OUTPUT=$(cd "$MODULE_ROOT" && golangci-lint run --out-format=json --issues-exit-code=0 "${PKG_PATTERNS[@]}" 2>"$GOLANGCI_STDERR") || true
   if [[ -z "$GL_OUTPUT" ]]; then
     echo "WARNING: golangci-lint produced no output. stderr: $(cat "$GOLANGCI_STDERR")" >&2
-    rm -f "$GOLANGCI_STDERR"
     echo "[]"
     exit 0
   fi
-  rm -f "$GOLANGCI_STDERR"
 fi
 
 if [[ -z "$GL_OUTPUT" ]]; then
