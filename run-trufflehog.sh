@@ -78,8 +78,8 @@ if [[ -n "${TRUFFLEHOG_MOCK_FILE:-}" ]]; then
   exit 0
 fi
 
-# Production path: run trufflehog once per file and accumulate findings
-FINDINGS="[]"
+# Production path: run trufflehog once per file, collect arrays, merge once at the end
+FILE_ARRAYS=()
 for file in "${TARGET_FILES[@]}"; do
   TH_OUTPUT=$(trufflehog filesystem --json --no-update "$file" 2>/dev/null || true)
   [[ -z "$TH_OUTPUT" ]] && continue
@@ -89,7 +89,13 @@ for file in "${TARGET_FILES[@]}"; do
     continue
   }
 
-  FINDINGS=$(printf '%s\n%s' "$FINDINGS" "$FILE_FINDINGS" | jq -s '.[0] + .[1]' 2>/dev/null) || true
+  FILE_ARRAYS+=("$FILE_FINDINGS")
 done
 
-echo "${FINDINGS:-[]}"
+if [[ ${#FILE_ARRAYS[@]} -eq 0 ]]; then
+  echo "[]"
+  exit 0
+fi
+
+# Single merge: concatenate all per-file arrays and flatten
+printf '%s\n' "${FILE_ARRAYS[@]}" | jq -s 'add // []'

@@ -51,7 +51,15 @@ if [[ -n "${SEMGREP_MOCK_FILE:-}" ]]; then
   fi
   SEMGREP_OUTPUT=$(cat "$SEMGREP_MOCK_FILE")
 else
-  SEMGREP_OUTPUT=$(semgrep --json --config=auto --quiet "${TARGET_FILES[@]}" 2>/dev/null || true)
+  SEMGREP_STDERR=$(mktemp)
+  SEMGREP_OUTPUT=$(semgrep --json --config=auto --quiet "${TARGET_FILES[@]}" 2>"$SEMGREP_STDERR") || true
+  if [[ -z "$SEMGREP_OUTPUT" ]]; then
+    echo "WARNING: semgrep produced no output — possible network failure or config error. semgrep stderr: $(cat "$SEMGREP_STDERR")" >&2
+    rm -f "$SEMGREP_STDERR"
+    echo "[]"
+    exit 0
+  fi
+  rm -f "$SEMGREP_STDERR"
 fi
 
 if [[ -z "$SEMGREP_OUTPUT" ]]; then
