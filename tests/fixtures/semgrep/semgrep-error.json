@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.subprocess-shell-true",
+      "path": "app/runner.py",
+      "start": { "line": 42, "col": 5 },
+      "end":   { "line": 42, "col": 50 },
+      "extra": {
+        "severity": "ERROR",
+        "message": "subprocess call with shell=True is a security hazard",
+        "metadata": {
+          "references": ["https://semgrep.dev/r/python.lang.security.audit.subprocess-shell-true"]
+        }
+      }
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,13 @@
+{
+  "Issues": [
+    {
+      "FromLinter": "errcheck",
+      "Text": "Error return value of `file.Close()` is not checked",
+      "Pos": {
+        "Filename": "pkg/store/db.go",
+        "Line": 88,
+        "Column": 2
+      }
+    }
+  ]
+}

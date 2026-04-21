@@ -699,13 +699,25 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   # Static analyzers run concurrently with Tier 1 agents
   SHELLCHECK_TMPFILE=$(mktemp_tracked /tmp/ai-review-sc-XXXXXXXX.json)
   CVE_TMPFILE=$(mktemp_tracked /tmp/ai-review-cve-XXXXXXXX.json)
-  SC_PID="" CVE_PID=""
+  SEMGREP_TMPFILE=$(mktemp_tracked /tmp/ai-review-semgrep-XXXXXXXX.json)
+  TRUFFLEHOG_TMPFILE=$(mktemp_tracked /tmp/ai-review-th-XXXXXXXX.json)
+  RUFF_TMPFILE=$(mktemp_tracked /tmp/ai-review-ruff-XXXXXXXX.json)
+  GOLANGCI_TMPFILE=$(mktemp_tracked /tmp/ai-review-gl-XXXXXXXX.json)
+  SC_PID="" CVE_PID="" SEMGREP_PID="" TRUFFLEHOG_PID="" RUFF_PID="" GOLANGCI_PID=""
 
   if [[ -n "$CHANGED_FILES" ]]; then
     ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
     SC_PID=$!
     ( "${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES" > "$CVE_TMPFILE" ) &
     CVE_PID=$!
+    ( "${SCRIPT_DIR}/run-semgrep.sh" "$CHANGED_FILES" > "$SEMGREP_TMPFILE" ) &
+    SEMGREP_PID=$!
+    ( "${SCRIPT_DIR}/run-trufflehog.sh" "$CHANGED_FILES" > "$TRUFFLEHOG_TMPFILE" ) &
+    TRUFFLEHOG_PID=$!
+    ( "${SCRIPT_DIR}/run-ruff.sh" "$CHANGED_FILES" > "$RUFF_TMPFILE" ) &
+    RUFF_PID=$!
+    ( "${SCRIPT_DIR}/run-golangci-lint.sh" "$CHANGED_FILES" > "$GOLANGCI_TMPFILE" ) &
+    GOLANGCI_PID=$!
   fi
 
   # Wait for Tier 1 agents
@@ -763,6 +775,18 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   if [[ -n "$CVE_PID" ]]; then
     wait "$CVE_PID" || echo "WARNING: run-cve-check.sh subshell exited non-zero; CVE findings may be incomplete." >&2
   fi
+  if [[ -n "$SEMGREP_PID" ]]; then
+    wait "$SEMGREP_PID" || echo "WARNING: run-semgrep.sh subshell exited non-zero; semgrep findings may be incomplete." >&2
+  fi
+  if [[ -n "$TRUFFLEHOG_PID" ]]; then
+    wait "$TRUFFLEHOG_PID" || echo "WARNING: run-trufflehog.sh subshell exited non-zero; trufflehog findings may be incomplete." >&2
+  fi
+  if [[ -n "$RUFF_PID" ]]; then
+    wait "$RUFF_PID" || echo "WARNING: run-ruff.sh subshell exited non-zero; ruff findings may be incomplete." >&2
+  fi
+  if [[ -n "$GOLANGCI_PID" ]]; then
+    wait "$GOLANGCI_PID" || echo "WARNING: run-golangci-lint.sh subshell exited non-zero; golangci-lint findings may be incomplete." >&2
+  fi
 
   SHELLCHECK_JSON=$(cat "$SHELLCHECK_TMPFILE" 2>/dev/null || echo "[]")
   if ! echo "$SHELLCHECK_JSON" | jq -e '.' >/dev/null 2>&1; then
@@ -779,6 +803,38 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   fi
   CVE_COUNT=$(echo "$CVE_JSON" | jq 'length' 2>/dev/null || echo "0")
   [[ "$CVE_COUNT" -gt 0 ]] && echo "CVE check: ${CVE_COUNT} findings" >&2
+
+  SEMGREP_JSON=$(cat "$SEMGREP_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$SEMGREP_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-semgrep.sh failed; semgrep findings will be skipped." >&2
+    SEMGREP_JSON="[]"
+  fi
+  SEMGREP_COUNT=$(echo "$SEMGREP_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$SEMGREP_COUNT" -gt 0 ]] && echo "Semgrep: ${SEMGREP_COUNT} findings" >&2
+
+  TRUFFLEHOG_JSON=$(cat "$TRUFFLEHOG_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$TRUFFLEHOG_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-trufflehog.sh failed; trufflehog findings will be skipped." >&2
+    TRUFFLEHOG_JSON="[]"
+  fi
+  TH_COUNT=$(echo "$TRUFFLEHOG_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$TH_COUNT" -gt 0 ]] && echo "Trufflehog: ${TH_COUNT} findings" >&2
+
+  RUFF_JSON=$(cat "$RUFF_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$RUFF_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-ruff.sh failed; ruff findings will be skipped." >&2
+    RUFF_JSON="[]"
+  fi
+  RUFF_COUNT=$(echo "$RUFF_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$RUFF_COUNT" -gt 0 ]] && echo "Ruff: ${RUFF_COUNT} findings" >&2
+
+  GOLANGCI_JSON=$(cat "$GOLANGCI_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$GOLANGCI_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-golangci-lint.sh failed; golangci-lint findings will be skipped." >&2
+    GOLANGCI_JSON="[]"
+  fi
+  GL_COUNT=$(echo "$GOLANGCI_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$GL_COUNT" -gt 0 ]] && echo "Golangci-lint: ${GL_COUNT} findings" >&2
 
 else
   # -------------------------------------------------------------------------
@@ -856,9 +912,51 @@ else
       CVE_JSON="[]"
     }
     CVE_COUNT=$(echo "$CVE_JSON" | jq 'length' 2>/dev/null || echo "0")
-    if [[ "$CVE_COUNT" -gt 0 ]]; then
-      echo "CVE check: ${CVE_COUNT} findings" >&2
-    fi
+    [[ "$CVE_COUNT" -gt 0 ]] && echo "CVE check: ${CVE_COUNT} findings" >&2
+  fi
+
+  # --- Run semgrep ---
+  SEMGREP_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    SEMGREP_JSON=$("${SCRIPT_DIR}/run-semgrep.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-semgrep.sh failed; semgrep findings will be skipped." >&2
+      SEMGREP_JSON="[]"
+    }
+    SEMGREP_COUNT=$(echo "$SEMGREP_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$SEMGREP_COUNT" -gt 0 ]] && echo "Semgrep: ${SEMGREP_COUNT} findings" >&2
+  fi
+
+  # --- Run trufflehog ---
+  TRUFFLEHOG_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    TRUFFLEHOG_JSON=$("${SCRIPT_DIR}/run-trufflehog.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-trufflehog.sh failed; trufflehog findings will be skipped." >&2
+      TRUFFLEHOG_JSON="[]"
+    }
+    TH_COUNT=$(echo "$TRUFFLEHOG_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$TH_COUNT" -gt 0 ]] && echo "Trufflehog: ${TH_COUNT} findings" >&2
+  fi
+
+  # --- Run ruff (Python files only) ---
+  RUFF_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    RUFF_JSON=$("${SCRIPT_DIR}/run-ruff.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-ruff.sh failed; ruff findings will be skipped." >&2
+      RUFF_JSON="[]"
+    }
+    RUFF_COUNT=$(echo "$RUFF_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$RUFF_COUNT" -gt 0 ]] && echo "Ruff: ${RUFF_COUNT} findings" >&2
+  fi
+
+  # --- Run golangci-lint (Go files only) ---
+  GOLANGCI_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    GOLANGCI_JSON=$("${SCRIPT_DIR}/run-golangci-lint.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-golangci-lint.sh failed; golangci-lint findings will be skipped." >&2
+      GOLANGCI_JSON="[]"
+    }
+    GL_COUNT=$(echo "$GOLANGCI_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$GL_COUNT" -gt 0 ]] && echo "Golangci-lint: ${GL_COUNT} findings" >&2
   fi
 
 fi  # end AI_PARALLEL branch
@@ -1289,6 +1387,26 @@ fi
 # Merge CVE findings
 if [[ "$CVE_JSON" != "[]" ]]; then
   merge_findings "$CVE_JSON"
+fi
+
+# Merge semgrep findings
+if [[ "$SEMGREP_JSON" != "[]" ]]; then
+  merge_findings "$SEMGREP_JSON"
+fi
+
+# Merge trufflehog findings
+if [[ "$TRUFFLEHOG_JSON" != "[]" ]]; then
+  merge_findings "$TRUFFLEHOG_JSON"
+fi
+
+# Merge ruff findings
+if [[ "$RUFF_JSON" != "[]" ]]; then
+  merge_findings "$RUFF_JSON"
+fi
+
+# Merge golangci-lint findings
+if [[ "$GOLANGCI_JSON" != "[]" ]]; then
+  merge_findings "$GOLANGCI_JSON"
 fi
 
 # Filter out findings below confidence threshold BEFORE suppressions so that

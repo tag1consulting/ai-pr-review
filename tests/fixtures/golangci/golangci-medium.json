@@ -1,0 +1,13 @@
+{
+  "Issues": [
+    {
+      "FromLinter": "gofmt",
+      "Text": "File is not gofmt-ed with -s",
+      "Pos": {
+        "Filename": "pkg/util/helper.go",
+        "Line": 5,
+        "Column": 1
+      }
+    }
+  ]
+}
