@@ -50,6 +50,7 @@ for file in "${SHELL_FILES[@]}"; do
     [.comments[]? | select(.level == "warning" or .level == "error") | {
       severity: (if .level == "error" then "High" else "Medium" end),
       confidence: 95,
+      source: "shellcheck",
       file: $file,
       line: .line,
       finding: ("SC\(.code): \(.message)"),
