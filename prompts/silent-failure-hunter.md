@@ -56,8 +56,7 @@ on unchanged lines.
 
 Do NOT assess: whether error paths *exist* (edge-case-hunter checks that), security
 implications of error handling (security-reviewer), code style, architecture.
-Do NOT flag dependency or action versions as "nonexistent" or "unreleased" — your
-training data has a knowledge cutoff and newer releases exist. Only flag a version if
+Do NOT flag dependency or action versions as "nonexistent" or "unreleased." Only flag a version if
 the diff itself provides concrete evidence of a problem (e.g., a syntactically malformed
 version string).
 
@@ -108,4 +107,5 @@ After your markdown output, emit a JSON block fenced with ```json-findings:
 [{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
 ```
 `severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
+`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
 If no findings, emit an empty array: `[]`

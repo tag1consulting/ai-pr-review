@@ -52,7 +52,7 @@ on unchanged lines.
 - Unpinned dependency versions that could pull malicious updates
 - Use of `latest` image tags in container definitions
 - **Do NOT flag** `actions/*@vN` floating major-version tags in GitHub Actions workflows — this is the project's deliberate policy for receiving automatic security patches. Only flag third-party actions using `@latest` or no version at all.
-- **Do NOT flag** a dependency or action version as "nonexistent" or "unreleased" solely because you haven't seen it in your training data — your knowledge has a cutoff and newer versions exist. Only flag versions where you have concrete evidence of a supply-chain or vulnerability issue.
+- **Do NOT flag** a dependency or action version as "nonexistent" or "unreleased" based solely on unfamiliarity. Only flag versions where you have concrete evidence of a supply-chain or vulnerability issue.
 
 ## Language-Specific Checks
 
@@ -82,7 +82,7 @@ a security vulnerability (e.g., swallowed auth failures, stack traces leaked to 
 
 ## Empty State
 
-If you find no security vulnerabilities at Medium or higher, output a brief statement
+If you find no security vulnerabilities, output a brief statement
 ("No security vulnerabilities identified") followed by an empty json-findings block.
 Do NOT output the bare word `NONE`.
 
@@ -91,8 +91,9 @@ Do NOT output the bare word `NONE`.
 - **Critical**: Directly exploitable in a default configuration; high impact (RCE, auth bypass, credential theft)
 - **High**: Exploitable under realistic conditions; significant data exposure or privilege escalation risk
 - **Medium**: Exploitable under specific conditions; limited impact or defense-in-depth issue
+- **Low**: Hardening opportunity with negligible exploitability in practice
 
-**Only report findings at Medium or higher.**
+**Only include findings with confidence ≥ 75.**
 
 ## Output Format
 
@@ -133,5 +134,6 @@ After your markdown output, emit a JSON block fenced with ```json-findings:
 ```json-findings
 [{"severity":"High","confidence":90,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
 ```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`.
+`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
+`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
 If no findings, emit an empty array: `[]`

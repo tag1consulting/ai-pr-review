@@ -88,7 +88,7 @@ fi
 is_transient_http() {
   local code="$1"
   case "$code" in
-    429|500|502|503) return 0 ;;
+    408|429|500|502|503|504|520|521|522|523|524) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -116,8 +116,8 @@ check_http_status() {
 
 # retry_curl — wrapper around curl that retries on transient failures.
 # Usage: retry_curl <provider_label> [curl_args...]
-# Retries on transient HTTP codes (429, 500, 502, 503) and transient curl
-# exit codes (7=connection refused, 28=timeout, 56=network failure).
+# Retries on transient HTTP codes (408, 429, 500, 502, 503, 504, 520–524) and
+# transient curl exit codes (7=connection refused, 28=timeout, 56=network failure).
 # Uses exponential backoff with jitter.
 retry_curl() {
   local provider_label="$1"; shift
@@ -128,6 +128,11 @@ retry_curl() {
   # would be consumed on the first curl attempt, leaving retries with empty bodies.
   local stdin_file
   stdin_file=$(mktemp /tmp/llm-retry-stdin-XXXXXXXX)
+  # Clean up on function return (covers both success return 0 and exit N paths).
+  # EXIT is intentionally omitted: EXIT traps inside functions accumulate on the
+  # shell's EXIT handler across calls and are never cleared on RETURN.
+  # shellcheck disable=SC2064
+  trap "rm -f '${stdin_file}'" RETURN
   cat > "$stdin_file"
 
   # Rewrite --data-binary @- to --data-binary @<file> so each retry
@@ -192,24 +197,27 @@ emit_response() {
 
   # Check provider-specific content filter reasons before the empty-response check
   # so error messages are specific rather than generic "Could not extract response text"
+  _dump_response_file() {
+    echo "Raw response:" >&2
+    if [[ -s "${RESPONSE_FILE:-}" ]]; then cat "$RESPONSE_FILE" >&2; else echo "(response body unavailable)" >&2; fi
+  }
+
   if [[ "$stop_reason" == "SAFETY" ]]; then
     echo "ERROR: Response blocked by provider safety filter (finishReason=SAFETY)" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 3
+    _dump_response_file; exit 3
   fi
   if [[ "$stop_reason" == "RECITATION" ]]; then
     echo "ERROR: Response blocked by provider recitation filter (finishReason=RECITATION)" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 3
+    _dump_response_file; exit 3
+  fi
+  if [[ "$stop_reason" == "refusal" ]]; then
+    echo "ERROR: Response blocked by model refusal (stop_reason=refusal)" >&2
+    _dump_response_file; exit 3
   fi
 
   if [[ -z "$response_text" ]]; then
     echo "ERROR: Could not extract response text from API response" >&2
-    echo "Raw response:" >&2
-    cat "$RESPONSE_FILE" >&2
-    exit 1
+    _dump_response_file; exit 1
   fi
   echo "TOKENS: input=${input_tokens} output=${output_tokens} model=${MODEL_ID}" >&2
   # Warn and signal callers when the model hit the token limit

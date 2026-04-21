@@ -64,8 +64,7 @@ Do NOT assess: project convention conformance (invisible to you), architectural 
 (no context), in-depth security vulnerabilities (security-reviewer handles this),
 test coverage.
 Do NOT flag dependency versions, GitHub Action versions, or package versions as
-"nonexistent," "unreleased," or "unknown" — your training data has a knowledge cutoff
-and newer releases exist beyond it. Only raise a version-related finding if the diff
+"nonexistent," "unreleased," or "unknown." Only raise a version-related finding if the diff
 itself provides concrete evidence of a problem (e.g., a syntactically malformed version
 string, a downgrade, or a clearly contradictory reference).
 
@@ -118,6 +117,7 @@ After your markdown output, emit a JSON block fenced with ```json-findings:
 [{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
 ```
 `severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
+`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
 If no findings, emit an empty array: `[]`
 
 ---

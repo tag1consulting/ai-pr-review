@@ -94,7 +94,7 @@ When `AI_PARALLEL=true`, new agents must be placed into a tier and added to both
 ## Adding a new agent
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
-2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384.
+2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384; all current agents pass 8192 explicitly.
 3. If the agent should only run conditionally (like `silent-failure-hunter`), gate it with a grep check on `$DIFF_FILE`.
 4. Also add the agent to the parallel tier block (see "Parallel agent execution" above).
 
@@ -136,7 +136,7 @@ An optional `verify` field triggers pre-suppression verification before acceptin
 | `pypi` | `pkg==version` | `pypi.org/pypi/{pkg}/{version}/json` |
 | `go-module` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
 | `cargo` | `pkg = "version"` or `pkg@version` | `crates.io/api/v1/crates/{pkg}/{version}` |
-| `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com/v2/repositories/{ns}/{name}/tags/{tag}` |
+| `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com/v2/namespaces/{ns}/repositories/{name}/tags/{tag}` |
 
 If verification confirms the version exists, the suppression stands. If the API returns a non-zero exit (version not found), the finding is kept — the AI reviewer may be correct. Private registries (GHCR, GCR, ECR) are not supported as they require authentication.
 
@@ -151,11 +151,11 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-7` |
 | `openai` / `openai-compatible` | `gpt-4o` | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
-| `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-6-v1` (update to `claude-opus-4-7-v1` once available) |
+| `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-7` |
 
 ## Retry and resilience
 
-`llm-call.sh` retries transient API failures (HTTP 429, 500, 502, 503) and transient curl failures (exit codes 7, 28, 56) with exponential backoff and jitter. Configuration via env vars:
+`llm-call.sh` retries transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl failures (exit codes 7, 28, 56) with exponential backoff and jitter. Configuration via env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -257,7 +257,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `severity_icon`, `extract_findings`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`), and from `post-review.sh` (`gh_api_retry`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.

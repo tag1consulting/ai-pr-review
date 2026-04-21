@@ -82,8 +82,7 @@ case "$AI_PROVIDER" in
     ;;
   bedrock-proxy)
     AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-us.anthropic.claude-sonnet-4-6}"
-    # TODO(#72): update to global.anthropic.claude-opus-4-7-v1 once Opus 4.7 is available via bedrock-proxy
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-6-v1}"
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-global.anthropic.claude-opus-4-7}"
     ;;
 esac
 
@@ -644,7 +643,7 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     TIER1_OUTPUTS+=("$SUMMARY_FILE")
     call_agent_bg "pr-summarizer" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" &
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" 8192 &
     TIER1_WAIT_ARGS+=($! "$SUMMARY_FILE")
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
@@ -652,14 +651,14 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
 
   TIER1_OUTPUTS+=("$FINDINGS_FILE")
   call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" &
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" 8192 &
   TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
     TIER1_OUTPUTS+=("$SFH_FILE")
-    call_agent_bg "silent-failure-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" &
+    call_agent_bg "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" 8192 &
     TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
 
@@ -691,31 +690,31 @@ if [[ "${AI_PARALLEL:-false}" == "true" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ARCH_FILE")
     call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" &
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$SEC_FILE")
     call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" &
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
     call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" &
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$EDGE_FILE")
-    call_agent_bg "edge-case-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" &
+    call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ADV_FILE")
     call_agent_bg "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" &
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" 8192 &
     TIER2_WAIT_ARGS+=($! "$ADV_FILE")
 
     wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
@@ -757,20 +756,20 @@ else
   # incremental diff would replace a useful whole-PR overview with a partial one.
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     call_agent "pr-summarizer" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE"
+      "${SCRIPT_DIR}/prompts/pr-summarizer.md" "$FULL_CONTEXT_MSG" "$SUMMARY_FILE" 8192
   else
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
   fi
 
   call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE"
+    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" 8192
   AGENT_OUTPUTS+=("$FINDINGS_FILE")
 
   # Tier 1 conditional: run in both quick and full when triggered
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
-    call_agent "silent-failure-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE"
+    call_agent "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" 8192
     AGENT_OUTPUTS+=("$SFH_FILE")
   fi
 
@@ -778,27 +777,27 @@ else
   if [[ "$REVIEW_MODE" == "full" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE"
+      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" 8192
     AGENT_OUTPUTS+=("$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE"
+      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" 8192
     AGENT_OUTPUTS+=("$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE"
+      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" 8192
     AGENT_OUTPUTS+=("$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
-    call_agent "edge-case-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE"
+    call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
+      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" 8192
     AGENT_OUTPUTS+=("$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     call_agent "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE"
+      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" 8192
     AGENT_OUTPUTS+=("$ADV_FILE")
   fi
 
@@ -926,12 +925,31 @@ extract_findings() {
 
 merge_findings() {
   local incoming="$1"
-  if jq -s '.[0] + .[1]' "$FINDINGS_JSON_FILE" <(echo "$incoming") > "${FINDINGS_JSON_FILE}.tmp" 2>/dev/null; then
+  # Validate and filter incoming findings element-by-element so a single malformed
+  # object doesn't discard the rest of the batch. Required fields: severity, finding,
+  # confidence. Missing file or line is accepted (body-only findings).
+  local valid_incoming
+  valid_incoming=$(echo "$incoming" | jq '[.[] | select(
+    (.severity | type) == "string" and
+    (.finding  | type) == "string" and
+    (.confidence | type) == "number"
+  )]' 2>/dev/null) || valid_incoming="[]"
+
+  local incoming_count valid_count
+  incoming_count=$(echo "$incoming" | jq 'length' 2>/dev/null || echo "0")
+  valid_count=$(echo "$valid_incoming" | jq 'length' 2>/dev/null || echo "0")
+  if [[ "$valid_count" != "$incoming_count" ]]; then
+    echo "WARNING: merge_findings: dropped $(( incoming_count - valid_count )) malformed finding(s) (missing required fields)." >&2
+  fi
+
+  if [[ "$valid_count" == "0" ]]; then
+    return 0
+  fi
+
+  if jq -s '.[0] + .[1]' "$FINDINGS_JSON_FILE" <(echo "$valid_incoming") > "${FINDINGS_JSON_FILE}.tmp" 2>/dev/null; then
     mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
   else
-    local count
-    count=$(echo "$incoming" | jq 'length' 2>/dev/null || echo "?")
-    echo "WARNING: Failed to merge findings JSON; skipping batch of ${count} finding(s)." >&2
+    echo "WARNING: Failed to merge findings JSON; skipping batch of ${valid_count} finding(s)." >&2
     rm -f "${FINDINGS_JSON_FILE}.tmp"
   fi
 }
@@ -1233,11 +1251,8 @@ if [[ "$CVE_JSON" != "[]" ]]; then
   merge_findings "$CVE_JSON"
 fi
 
-# Apply declarative suppressions (won't-fix / false positives)
-SUPPRESSED_COUNT=0
-apply_suppressions
-
-# Filter out findings below confidence threshold (75)
+# Filter out findings below confidence threshold (75) BEFORE suppressions so that
+# verify-gated suppression rules don't fire registry HTTP calls on sub-threshold noise.
 PRE_FILTER_COUNT=$(jq 'length' "$FINDINGS_JSON_FILE" 2>/dev/null || echo "0")
 if jq '[.[] | select((.confidence // 0) >= 75)]' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
   mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
@@ -1250,29 +1265,38 @@ if [[ "$PRE_FILTER_COUNT" -ne "$POST_FILTER_COUNT" ]]; then
   echo "Filtered findings: ${PRE_FILTER_COUNT} → ${POST_FILTER_COUNT} (confidence >= 75)" >&2
 fi
 
-# Deduplicate findings: merge same file:line exact duplicates, then merge findings
-# within 3 lines of each other in the same file (adjacent-line dedup). The highest
-# severity finding in each proximity cluster is kept.
+# Apply declarative suppressions (won't-fix / false positives) after confidence filter
+SUPPRESSED_COUNT=0
+apply_suppressions
+
+# Deduplicate findings: merge findings within 3 lines of the cluster *start* in the
+# same file. Clusters are closed when a new finding is more than 3 lines from the
+# first item in the current cluster (not from the previous item), preventing
+# single-linkage drift where the cluster stretches unboundedly. The highest severity
+# finding in each cluster is kept.
 if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
-  # Sort within each file by line number, then reduce adjacent findings within 3 lines
   group_by(.file // "unknown")
   | map(
       sort_by(.line // 0) |
       reduce .[] as $f (
-        [];
-        if length == 0 then [$f]
-        elif (($f.line // 0) - (.[-1].line // 0)) <= 3
+        {clusters: [], cur: null};
+        if .cur == null then
+          {clusters: .clusters, cur: {start: ($f.line // 0), best: $f}}
+        elif (($f.line // 0) - .cur.start) <= 3
         then
-          # Same proximity cluster: keep the higher-severity finding
-          if ((.[-1].severity | sev_rank) >= ($f.severity | sev_rank))
+          # Still within 3 lines of cluster start: keep higher-severity
+          if ((.cur.best.severity | sev_rank) >= ($f.severity | sev_rank))
           then .
-          else .[:-1] + [$f]
+          else {clusters: .clusters, cur: {start: .cur.start, best: $f}}
           end
-        else . + [$f]
+        else
+          # Beyond 3 lines of cluster start: close current cluster, open new one
+          {clusters: (.clusters + [.cur.best]), cur: {start: ($f.line // 0), best: $f}}
         end
       )
+      | if .cur != null then .clusters + [.cur.best] else .clusters end
     )
   | flatten
 ' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
