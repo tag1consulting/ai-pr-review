@@ -1,0 +1,107 @@
+#!/usr/bin/env bats
+# Tests for run-semgrep.sh. Uses SEMGREP_MOCK_FILE to bypass the binary.
+
+bats_require_minimum_version 1.5.0
+
+setup() {
+  command -v jq >/dev/null 2>&1 || skip "jq not available"
+  load test_helper
+  SCRIPT="${PROJECT_ROOT}/run-semgrep.sh"
+  FIXTURES="${PROJECT_ROOT}/tests/fixtures/semgrep"
+  WORK=$(mktemp -d)
+}
+
+teardown() {
+  rm -rf "$WORK"
+}
+
+# ---------------------------------------------------------------------------
+# No-op paths
+# ---------------------------------------------------------------------------
+
+@test "semgrep: empty input returns empty array" {
+  run --separate-stderr "$SCRIPT" ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "semgrep: nonexistent file path returns empty array" {
+  run --separate-stderr "$SCRIPT" "nonexistent/file.py"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "semgrep: empty semgrep output returns empty array" {
+  touch "$WORK/app.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-empty.json" run --separate-stderr "$SCRIPT" "$WORK/app.py"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "semgrep: malformed output falls through safely" {
+  touch "$WORK/app.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-malformed.json" run --separate-stderr "$SCRIPT" "$WORK/app.py"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+# ---------------------------------------------------------------------------
+# Severity mapping
+# ---------------------------------------------------------------------------
+
+@test "semgrep: ERROR severity maps to High" {
+  touch "$WORK/runner.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-error.json" run --separate-stderr "$SCRIPT" "$WORK/runner.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'length > 0' > /dev/null
+  echo "$output" | jq -e '.[0].severity == "High"' > /dev/null
+}
+
+@test "semgrep: WARNING severity maps to Medium" {
+  touch "$WORK/utils.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-warning.json" run --separate-stderr "$SCRIPT" "$WORK/utils.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].severity == "Medium"' > /dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Schema conformance
+# ---------------------------------------------------------------------------
+
+@test "semgrep: findings conform to required schema" {
+  touch "$WORK/runner.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-error.json" run --separate-stderr "$SCRIPT" "$WORK/runner.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '
+    all(.[]; has("severity") and has("confidence") and has("source")
+        and has("file") and has("line") and has("finding") and has("remediation"))
+  ' > /dev/null
+}
+
+@test "semgrep: confidence is 90 on all findings" {
+  touch "$WORK/runner.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-error.json" run --separate-stderr "$SCRIPT" "$WORK/runner.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'all(.[]; .confidence == 90)' > /dev/null
+}
+
+@test "semgrep: source field is 'semgrep' on all findings" {
+  touch "$WORK/runner.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-error.json" run --separate-stderr "$SCRIPT" "$WORK/runner.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'all(.[]; .source == "semgrep")' > /dev/null
+}
+
+@test "semgrep: finding text contains check_id" {
+  touch "$WORK/runner.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-error.json" run --separate-stderr "$SCRIPT" "$WORK/runner.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].finding | test("subprocess-shell-true")' > /dev/null
+}
+
+@test "semgrep: remediation includes reference URL when present" {
+  touch "$WORK/runner.py"
+  SEMGREP_MOCK_FILE="$FIXTURES/semgrep-error.json" run --separate-stderr "$SCRIPT" "$WORK/runner.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].remediation | test("semgrep.dev")' > /dev/null
+}

@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "check_id": "python.lang.maintainability.useless-comparison",
+      "path": "app/utils.py",
+      "start": { "line": 10, "col": 1 },
+      "end":   { "line": 10, "col": 20 },
+      "extra": {
+        "severity": "WARNING",
+        "message": "Useless comparison: result is always True",
+        "metadata": {}
+      }
+    }
+  ],
+  "errors": []
+}
