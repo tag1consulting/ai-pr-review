@@ -457,6 +457,7 @@ TOKEN_LOG=()  # entries: "agent_name input=N output=N"
 # forwards all other stderr to the workflow log.
 call_agent() {
   local name="$1" model="$2" prompt="$3" msg="$4" output="$5" max_tokens="${6:-16384}"
+  echo "$name" > "${output}.name"
   echo "Calling ${name} (${model##*.})..." >&2
 
   local agent_stderr
@@ -883,21 +884,20 @@ extract_findings() {
   extracted=$(sed -n '/```json-findings/,/```/p' "$agent_file" | sed '1d;$d')
 
   # Stamp source on findings that don't already carry one, then validate.
-  _stamp_and_validate() {
+  # Returns the stamped array on success; exits non-zero on invalid input.
+  _ef_stamp_and_validate() {
     local raw="$1"
     echo "$raw" | jq -e --arg s "$agent_name" '
-      (type == "array") and
-      (if length > 0 then
-        all(.[]; has("severity") and has("finding") and has("confidence"))
-      else true end)
-      and
-      (map(. + {source: (.source // $s)}) | . != null)
-    ' > /dev/null 2>&1 || return 1
-    echo "$raw" | jq --arg s "$agent_name" 'map(. + {source: (.source // $s)})'
+      if (type == "array") and
+         (if length > 0 then all(.[]; has("severity") and has("finding") and has("confidence")) else true end)
+      then map(. + {source: (.source // $s)})
+      else error("invalid")
+      end
+    ' 2>/dev/null
   }
 
   local stamped
-  if stamped=$(_stamp_and_validate "$extracted"); then
+  if stamped=$(_ef_stamp_and_validate "$extracted"); then
     printf '%s' "$stamped"
     return
   fi
@@ -912,7 +912,7 @@ extract_findings() {
     while IFS=: read -r candidate_line _; do
       repaired=$(printf '%s' "$extracted" | head -n "$candidate_line" | sed '$ s/,$//')
       repaired=$(printf '%s\n]' "$repaired")
-      if stamped=$(_stamp_and_validate "$repaired"); then
+      if stamped=$(_ef_stamp_and_validate "$repaired"); then
         local count
         count=$(printf '%s' "$stamped" | jq 'length')
         echo "NOTE: $(basename "$agent_file") was truncated; salvaged ${count} finding(s) from partial JSON." >&2
@@ -1289,11 +1289,12 @@ apply_suppressions
 if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
-  # Merge two cluster states: carry best finding and accumulate all sources
+  # Merge two cluster states: carry best finding and accumulate all sources.
+  # Both cur.best.source and f.source are appended regardless of which wins.
   def merge_cluster(cur; f):
     if (cur.best.severity | sev_rank) >= (f.severity | sev_rank)
     then {start: cur.start, best: cur.best, sources: (cur.sources + [f.source // "unknown"])}
-    else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown"])}
+    else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown", f.source // "unknown"])}
     end;
   group_by(.file // "unknown")
   | map(

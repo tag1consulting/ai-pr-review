@@ -90,7 +90,7 @@ _run_dedup() {
     def merge_cluster(cur; f):
       if (cur.best.severity | sev_rank) >= (f.severity | sev_rank)
       then {start: cur.start, best: cur.best, sources: (cur.sources + [f.source // "unknown"])}
-      else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown"])}
+      else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown", f.source // "unknown"])}
       end;
     group_by(.file // "unknown")
     | map(
@@ -365,4 +365,26 @@ EOF
   count=$(echo "$output" | jq 'length')
   [ "$count" -eq 1 ]
   echo "$output" | jq -e '.[0].sources | all(. == "unknown")' > /dev/null
+}
+
+@test "dedup: higher-severity winner keeps both sources (regression: merge_cluster else branch)" {
+  # A Low finding from code-reviewer, then a High from shellcheck in the same cluster.
+  # The High wins; both sources must appear in the output sources array.
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Low","confidence":80,"source":"code-reviewer","file":"a.sh","line":10,"finding":"minor","remediation":"y"},
+  {"severity":"High","confidence":90,"source":"shellcheck","file":"a.sh","line":12,"finding":"serious","remediation":"y"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -eq 1 ]
+  # Winning finding must be the High one
+  echo "$output" | jq -e '.[0].severity == "High"' > /dev/null
+  echo "$output" | jq -e '.[0].finding == "serious"' > /dev/null
+  # Both sources must survive — this is the bug the else-branch fix closes
+  echo "$output" | jq -e '.[0].sources | length == 2' > /dev/null
+  echo "$output" | jq -e '[.[0].sources[] | select(. == "code-reviewer")] | length == 1' > /dev/null
+  echo "$output" | jq -e '[.[0].sources[] | select(. == "shellcheck")] | length == 1' > /dev/null
 }

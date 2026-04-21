@@ -685,16 +685,18 @@ severity_icon() {
 format_source_tag() {
   local finding_obj="$1"
   local sources primary rest
-  # Prefer the deduplicated sources array; fall back to the scalar source field
+  # Prefer the deduplicated sources array (already unique+sorted by dedup jq);
+  # fall back to the scalar source field for findings that bypassed dedup.
   sources=$(echo "$finding_obj" | jq -r '
     if (.sources | type) == "array" and (.sources | length) > 0 then
       .sources[]
     else
       (.source // "unknown")
     end
-  ' 2>/dev/null | sort -u)
+  ' 2>/dev/null)
 
   primary=$(echo "$sources" | head -1)
+  [[ -z "$primary" ]] && { echo "[unknown]"; return; }
   rest=$(echo "$sources" | tail -n +2 | paste -sd ', ' -)
 
   if [[ -n "$rest" ]]; then

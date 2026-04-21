@@ -46,22 +46,6 @@ _write_suppressions() {
   printf '%s\n' "$1" > "${SUPPRESSION_DIR}/suppressions.json"
 }
 
-# Run apply_suppressions and print resulting findings JSON
-_run() {
-  # Use a fresh harness that directly sources apply_suppressions via process substitution
-  bash - "$SUPPRESSION_DIR" "$FINDINGS_FILE" <<'INLINE'
-set -euo pipefail
-SCRIPT_DIR="$1"
-FINDINGS_JSON_FILE="$2"
-TMPFILES=()
-GITHUB_WORKSPACE=""
-SUPPRESSED_COUNT=0
-mktemp_tracked() { local f; f=$(mktemp "$@"); TMPFILES+=("$f"); echo "$f"; }
-INLINE
-  # Can't easily source a complex function inline; use a wrapper script written at setup
-  "$HARNESS" "$SUPPRESSION_DIR" "$FINDINGS_FILE"
-}
-
 # ---------------------------------------------------------------------------
 # No-op cases
 # ---------------------------------------------------------------------------

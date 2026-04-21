@@ -36,13 +36,13 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 
 The `source` field is optional in agent output — `extract_findings()` stamps the agent name automatically if the field is absent. Static analyzers (`run-shellcheck.sh`, `run-cve-check.sh`) hard-code their source values (`"shellcheck"`, `"osv"`) in their jq projection.
 
-`review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding. The dedup step carries a `sources` array on the surviving finding, unioning all sources from the cluster. When multiple sources are present, `post-review.sh` renders `[primary] *(also flagged by: other)*` attribution.
+`review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding. The dedup step carries a `sources` array on the surviving finding, unioning all sources from the cluster. When multiple sources are present, `post-review.sh` renders `[first-source] *(also flagged by: other)*` attribution (sources are sorted alphabetically; the first is not necessarily the "winning" agent).
 
 ## Findings pipeline (review.sh phases)
 
 1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
 2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()` (sequential, default) or `call_agent_bg()` (parallel, opt-in). See [Parallel agent execution](#parallel-agent-execution) below.
-3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Apply `suppressions.json`. Filter by confidence ≥ 75. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
+3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Filter by confidence ≥ 75. Apply `suppressions.json`. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
 4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub.
 
 ## Incremental review / SHA watermark
