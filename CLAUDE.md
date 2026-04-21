@@ -34,7 +34,9 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 ]
 ```
 
-`review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding.
+The `source` field is optional in agent output — `extract_findings()` stamps the agent name automatically if the field is absent. Static analyzers (`run-shellcheck.sh`, `run-cve-check.sh`) hard-code their source values (`"shellcheck"`, `"osv"`) in their jq projection.
+
+`review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding. The dedup step carries a `sources` array on the surviving finding, unioning all sources from the cluster. When multiple sources are present, `post-review.sh` renders `[primary] *(also flagged by: other)*` attribution.
 
 ## Findings pipeline (review.sh phases)
 

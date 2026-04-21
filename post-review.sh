@@ -190,7 +190,14 @@ $(echo "$findings_json" | jq -r '
     elif (.severity | ascii_downcase) == "medium" then 2
     else 3 end
   ) | .[] |
-  "- **[\(.severity)]** `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n"
+  (
+    if (.sources | type) == "array" and (.sources | length) > 1 then
+      "[\(.sources[0])] *(also flagged by: \(.sources[1:] | join(", ")))*"
+    else
+      "[" + (.sources[0] // .source // "unknown") + "]"
+    end
+  ) as $stag |
+  "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n"
 ')"
     else
       issue_body="${issue_body}
@@ -672,6 +679,31 @@ severity_icon() {
   esac
 }
 
+# Build the source attribution tag for a finding JSON object.
+# Single source → "[source]"
+# Multiple sources (cross-source dedup) → "[primary] *(also flagged by: other1, other2)*"
+format_source_tag() {
+  local finding_obj="$1"
+  local sources primary rest
+  # Prefer the deduplicated sources array; fall back to the scalar source field
+  sources=$(echo "$finding_obj" | jq -r '
+    if (.sources | type) == "array" and (.sources | length) > 0 then
+      .sources[]
+    else
+      (.source // "unknown")
+    end
+  ' 2>/dev/null | sort -u)
+
+  primary=$(echo "$sources" | head -1)
+  rest=$(echo "$sources" | tail -n +2 | paste -sd ', ' -)
+
+  if [[ -n "$rest" ]]; then
+    echo "[${primary}] *(also flagged by: ${rest})*"
+  else
+    echo "[${primary}]"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Post Block B: Findings as a pull request review with inline comments
 # ---------------------------------------------------------------------------
@@ -713,12 +745,13 @@ post_findings() {
 
   while IFS= read -r finding_obj; do
     [[ -z "$finding_obj" ]] && continue
-    local file line severity finding remediation
+    local file line severity finding remediation source_tag
     file=$(echo "$finding_obj" | jq -r '.file // empty')
     line=$(echo "$finding_obj" | jq -r '.line // empty')
     severity=$(echo "$finding_obj" | jq -r '.severity // "Medium"')
     finding=$(echo "$finding_obj" | jq -r '.finding // empty')
     remediation=$(echo "$finding_obj" | jq -r '.remediation // empty')
+    source_tag=$(format_source_tag "$finding_obj")
 
     if [[ -z "$file" || -z "$line" || -z "$finding" ]]; then
       continue
@@ -728,14 +761,14 @@ post_findings() {
     if ! [[ "$line" =~ ^[0-9]+$ ]]; then
       echo "WARNING: Skipping finding with non-numeric line: ${file}:${line}" >&2
       body_findings="${body_findings}
-- $(severity_icon "$severity") **[${severity}]** ${finding} — \`${file}:${line}\`"
+- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${file}:${line}\`"
       continue
     fi
 
     # Check if this line is a valid inline comment target (whole-line match)
     if grep -qxF "${file}:${line}" "$valid_lines_file" && [[ "$inline_count" -lt "$max_inline" ]]; then
       local comment_body
-      comment_body="$(severity_icon "$severity") **[${severity}]** ${finding}"
+      comment_body="$(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding}"
       if [[ -n "$remediation" ]]; then
         comment_body="${comment_body}
 
@@ -757,7 +790,7 @@ post_findings() {
         loc_note=" *(line not in diff)*"
       fi
       body_findings="${body_findings}
-- $(severity_icon "$severity") **[${severity}]** ${finding} — \`${file}:${line}\`${loc_note}"
+- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${file}:${line}\`${loc_note}"
     fi
   done <<< "$findings_ndjson"
 

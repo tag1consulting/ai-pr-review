@@ -87,24 +87,29 @@ _run_dedup() {
   jq '
     def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
       elif . == "Medium" then 2 else 1 end;
+    def merge_cluster(cur; f):
+      if (cur.best.severity | sev_rank) >= (f.severity | sev_rank)
+      then {start: cur.start, best: cur.best, sources: (cur.sources + [f.source // "unknown"])}
+      else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown"])}
+      end;
     group_by(.file // "unknown")
     | map(
         sort_by(.line // 0) |
         reduce .[] as $f (
           {clusters: [], cur: null};
           if .cur == null then
-            {clusters: .clusters, cur: {start: ($f.line // 0), best: $f}}
+            {clusters: .clusters, cur: {start: ($f.line // 0), best: $f, sources: [$f.source // "unknown"]}}
           elif (($f.line // 0) - .cur.start) <= 3
           then
-            if ((.cur.best.severity | sev_rank) >= ($f.severity | sev_rank))
-            then .
-            else {clusters: .clusters, cur: {start: .cur.start, best: $f}}
-            end
+            {clusters: .clusters, cur: (merge_cluster(.cur; $f))}
           else
-            {clusters: (.clusters + [.cur.best]), cur: {start: ($f.line // 0), best: $f}}
+            {clusters: (.clusters + [.cur.best + {sources: (.cur.sources | unique | sort)}]),
+             cur: {start: ($f.line // 0), best: $f, sources: [$f.source // "unknown"]}}
           end
         )
-        | if .cur != null then .clusters + [.cur.best] else .clusters end
+        | if .cur != null
+          then .clusters + [.cur.best + {sources: (.cur.sources | unique | sort)}]
+          else .clusters end
       )
     | flatten
   ' "$FINDINGS_JSON_FILE"
@@ -281,4 +286,83 @@ _setup_merge() {
   merge_findings '[]'
   count=$(jq 'length' "$FINDINGS_JSON_FILE")
   [ "$count" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# sources array: provenance tracking through dedup
+# ---------------------------------------------------------------------------
+
+@test "dedup: single finding gets sources array with its own source" {
+  echo '[{"severity":"High","confidence":90,"file":"a.sh","line":10,"finding":"x","remediation":"y","source":"code-reviewer"}]' \
+    > "$FINDINGS_JSON_FILE"
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -eq 1 ]
+  sources=$(echo "$output" | jq -r '.[0].sources | length')
+  [ "$sources" -eq 1 ]
+  echo "$output" | jq -e '.[0].sources[0] == "code-reviewer"' > /dev/null
+}
+
+@test "dedup: same-source cluster collapses to single source entry" {
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Low","confidence":80,"file":"a.sh","line":10,"finding":"a","remediation":"y","source":"code-reviewer"},
+  {"severity":"High","confidence":90,"file":"a.sh","line":12,"finding":"b","remediation":"y","source":"code-reviewer"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -eq 1 ]
+  # Same source deduped — sources should only contain one unique entry
+  echo "$output" | jq -e '.[0].sources | length == 1' > /dev/null
+  echo "$output" | jq -e '.[0].sources[0] == "code-reviewer"' > /dev/null
+}
+
+@test "dedup: cross-source cluster preserves both sources in winner" {
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"High","confidence":90,"file":"a.sh","line":10,"finding":"llm finding","remediation":"y","source":"code-reviewer"},
+  {"severity":"High","confidence":95,"file":"a.sh","line":11,"finding":"shellcheck finding","remediation":"y","source":"shellcheck"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -eq 1 ]
+  # sources must contain both
+  echo "$output" | jq -e '.[0].sources | length == 2' > /dev/null
+  echo "$output" | jq -e '[.[0].sources[] | select(. == "code-reviewer")] | length == 1' > /dev/null
+  echo "$output" | jq -e '[.[0].sources[] | select(. == "shellcheck")] | length == 1' > /dev/null
+}
+
+@test "dedup: sources array is sorted and deduplicated" {
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Medium","confidence":80,"file":"a.sh","line":10,"finding":"a","remediation":"y","source":"shellcheck"},
+  {"severity":"Medium","confidence":80,"file":"a.sh","line":11,"finding":"b","remediation":"y","source":"code-reviewer"},
+  {"severity":"High","confidence":90,"file":"a.sh","line":12,"finding":"c","remediation":"y","source":"shellcheck"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -eq 1 ]
+  # shellcheck appears twice but should be deduped to once
+  echo "$output" | jq -e '.[0].sources | length == 2' > /dev/null
+}
+
+@test "dedup: findings without source field get unknown in sources" {
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Low","confidence":80,"file":"a.sh","line":10,"finding":"a","remediation":"y"},
+  {"severity":"High","confidence":90,"file":"a.sh","line":12,"finding":"b","remediation":"y"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  count=$(echo "$output" | jq 'length')
+  [ "$count" -eq 1 ]
+  echo "$output" | jq -e '.[0].sources | all(. == "unknown")' > /dev/null
 }

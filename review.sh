@@ -865,6 +865,7 @@ echo "[]" > "$FINDINGS_JSON_FILE"
 # Extract json-findings from each agent output, validate shape, and return clean array.
 extract_findings() {
   local agent_file="$1"
+  local agent_name="${2:-unknown}"
   local was_truncated=false
   [[ -f "${agent_file}.truncated" ]] && was_truncated=true
 
@@ -881,14 +882,23 @@ extract_findings() {
   local extracted
   extracted=$(sed -n '/```json-findings/,/```/p' "$agent_file" | sed '1d;$d')
 
-  # Validate it is an array and each item has required fields
-  if echo "$extracted" | jq -e '
-    type == "array" and
-    (if length > 0 then
-      all(.[]; has("severity") and has("finding") and has("confidence"))
-    else true end)
-  ' > /dev/null 2>&1; then
-    printf '%s' "$extracted"
+  # Stamp source on findings that don't already carry one, then validate.
+  _stamp_and_validate() {
+    local raw="$1"
+    echo "$raw" | jq -e --arg s "$agent_name" '
+      (type == "array") and
+      (if length > 0 then
+        all(.[]; has("severity") and has("finding") and has("confidence"))
+      else true end)
+      and
+      (map(. + {source: (.source // $s)}) | . != null)
+    ' > /dev/null 2>&1 || return 1
+    echo "$raw" | jq --arg s "$agent_name" 'map(. + {source: (.source // $s)})'
+  }
+
+  local stamped
+  if stamped=$(_stamp_and_validate "$extracted"); then
+    printf '%s' "$stamped"
     return
   fi
 
@@ -902,16 +912,11 @@ extract_findings() {
     while IFS=: read -r candidate_line _; do
       repaired=$(printf '%s' "$extracted" | head -n "$candidate_line" | sed '$ s/,$//')
       repaired=$(printf '%s\n]' "$repaired")
-      if echo "$repaired" | jq -e '
-        type == "array" and
-        (if length > 0 then
-          all(.[]; has("severity") and has("finding") and has("confidence"))
-        else true end)
-      ' > /dev/null 2>&1; then
+      if stamped=$(_stamp_and_validate "$repaired"); then
         local count
-        count=$(echo "$repaired" | jq 'length')
+        count=$(printf '%s' "$stamped" | jq 'length')
         echo "NOTE: $(basename "$agent_file") was truncated; salvaged ${count} finding(s) from partial JSON." >&2
-        printf '%s' "$repaired"
+        printf '%s' "$stamped"
         return
       fi
     done < <(printf '%s' "$extracted" | grep -n '^[[:space:]]*}' | tac)
@@ -1235,7 +1240,14 @@ apply_suppressions() {
 }
 
 for agent_output in "${AGENT_OUTPUTS[@]}"; do
-  AGENT_JSON=$(extract_findings "$agent_output")
+  # Recover agent name from sidecar (written by call_agent_bg) or filename fallback
+  local_agent_name=""
+  if [[ -f "${agent_output}.name" ]]; then
+    local_agent_name=$(cat "${agent_output}.name")
+  else
+    local_agent_name=$(basename "$agent_output" | sed 's/-[A-Z0-9]*\.txt$//')
+  fi
+  AGENT_JSON=$(extract_findings "$agent_output" "$local_agent_name")
   if [[ "$AGENT_JSON" != "[]" ]]; then
     merge_findings "$AGENT_JSON"
   fi
@@ -1277,26 +1289,32 @@ apply_suppressions
 if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
+  # Merge two cluster states: carry best finding and accumulate all sources
+  def merge_cluster(cur; f):
+    if (cur.best.severity | sev_rank) >= (f.severity | sev_rank)
+    then {start: cur.start, best: cur.best, sources: (cur.sources + [f.source // "unknown"])}
+    else {start: cur.start, best: f, sources: (cur.sources + [cur.best.source // "unknown"])}
+    end;
   group_by(.file // "unknown")
   | map(
       sort_by(.line // 0) |
       reduce .[] as $f (
         {clusters: [], cur: null};
         if .cur == null then
-          {clusters: .clusters, cur: {start: ($f.line // 0), best: $f}}
+          {clusters: .clusters, cur: {start: ($f.line // 0), best: $f, sources: [$f.source // "unknown"]}}
         elif (($f.line // 0) - .cur.start) <= 3
         then
-          # Still within 3 lines of cluster start: keep higher-severity
-          if ((.cur.best.severity | sev_rank) >= ($f.severity | sev_rank))
-          then .
-          else {clusters: .clusters, cur: {start: .cur.start, best: $f}}
-          end
+          # Still within 3 lines of cluster start: keep higher-severity, accumulate sources
+          {clusters: .clusters, cur: (merge_cluster(.cur; $f))}
         else
           # Beyond 3 lines of cluster start: close current cluster, open new one
-          {clusters: (.clusters + [.cur.best]), cur: {start: ($f.line // 0), best: $f}}
+          {clusters: (.clusters + [.cur.best + {sources: (.cur.sources | unique | sort)}]),
+           cur: {start: ($f.line // 0), best: $f, sources: [$f.source // "unknown"]}}
         end
       )
-      | if .cur != null then .clusters + [.cur.best] else .clusters end
+      | if .cur != null
+        then .clusters + [.cur.best + {sources: (.cur.sources | unique | sort)}]
+        else .clusters end
     )
   | flatten
 ' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then

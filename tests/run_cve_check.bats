@@ -143,7 +143,7 @@ teardown() {
   OSV_MOCK_FILE="$FIXTURES/osv-critical.json" run --separate-stderr "$SCRIPT" "$WORK/go.mod"
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '
-    all(.[]; has("severity") and has("confidence") and has("file")
+    all(.[]; has("severity") and has("confidence") and has("source") and has("file")
         and has("line") and has("finding") and has("remediation"))
   ' > /dev/null
   echo "$output" | jq -e '
@@ -152,4 +152,11 @@ teardown() {
   echo "$output" | jq -e '
     all(.[]; .confidence >= 75 and .confidence <= 100)
   ' > /dev/null
+}
+
+@test "cve-check: source field is 'osv' on all findings" {
+  cp "$FIXTURES/go.mod.sample" "$WORK/go.mod"
+  OSV_MOCK_FILE="$FIXTURES/osv-critical.json" run --separate-stderr "$SCRIPT" "$WORK/go.mod"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'all(.[]; .source == "osv")' > /dev/null
 }

@@ -106,3 +106,44 @@ teardown() {
     all(.[]; has("severity") and has("finding") and has("confidence"))
   ' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# source field stamping
+# ---------------------------------------------------------------------------
+
+@test "extract_findings: stamps agent name as source when source absent" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/sample-findings.md"
+  run extract_findings "$fixture" "code-reviewer"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'all(.[]; .source == "code-reviewer")' > /dev/null
+}
+
+@test "extract_findings: preserves explicit source field from agent output" {
+  local fixture
+  fixture=$(mktemp /tmp/bats-findings-XXXXXXXX.md)
+  cat > "$fixture" <<'EOF'
+```json-findings
+[{"severity":"High","confidence":90,"file":"a.go","line":1,"finding":"test","remediation":"fix","source":"shellcheck"}]
+```
+EOF
+  run extract_findings "$fixture" "code-reviewer"
+  [ "$status" -eq 0 ]
+  # source from the finding wins over the agent_name arg
+  echo "$output" | jq -e '.[0].source == "shellcheck"' > /dev/null
+  rm -f "$fixture"
+}
+
+@test "extract_findings: defaults source to unknown when no agent name given" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/sample-findings.md"
+  run extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'all(.[]; .source == "unknown")' > /dev/null
+}
+
+@test "extract_findings: salvaged truncated findings also get source stamped" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/truncated-findings.md"
+  touch "${fixture}.truncated"
+  run --separate-stderr extract_findings "$fixture" "security-reviewer"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'all(.[]; .source == "security-reviewer")' > /dev/null
+}
