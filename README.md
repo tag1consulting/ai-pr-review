@@ -63,7 +63,7 @@ Findings use shape-distinct icons for accessibility:
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4o` |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
-| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7-v1` |
+| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7` |
 
 ## Installation
 
@@ -419,7 +419,10 @@ Local rules are merged with the global suppression rules at runtime — no actio
 The action auto-detects languages from file extensions and injects per-language context into agent prompts. Language profiles are markdown files in `language-profiles/`:
 
 - `go.md` — Go-specific review context
+- `php.md` — PHP/Drupal-specific review context
+- `python.md` — Python-specific review context
 - `shell.md` — Shell/Bash-specific review context
+- `typescript.md` — TypeScript/JavaScript-specific review context
 
 To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) should match the language key detected from file extensions.
 

@@ -136,7 +136,7 @@ An optional `verify` field triggers pre-suppression verification before acceptin
 | `pypi` | `pkg==version` | `pypi.org/pypi/{pkg}/{version}/json` |
 | `go-module` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
 | `cargo` | `pkg = "version"` or `pkg@version` | `crates.io/api/v1/crates/{pkg}/{version}` |
-| `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com/v2/repositories/{ns}/{name}/tags/{tag}` |
+| `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com/v2/namespaces/{ns}/repositories/{name}/tags/{tag}` |
 
 If verification confirms the version exists, the suppression stands. If the API returns a non-zero exit (version not found), the finding is kept — the AI reviewer may be correct. Private registries (GHCR, GCR, ECR) are not supported as they require authentication.
 
@@ -257,7 +257,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `severity_icon`, `extract_findings`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`), and from `post-review.sh` (`gh_api_retry`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
