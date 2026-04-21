@@ -925,12 +925,31 @@ extract_findings() {
 
 merge_findings() {
   local incoming="$1"
-  if jq -s '.[0] + .[1]' "$FINDINGS_JSON_FILE" <(echo "$incoming") > "${FINDINGS_JSON_FILE}.tmp" 2>/dev/null; then
+  # Validate and filter incoming findings element-by-element so a single malformed
+  # object doesn't discard the rest of the batch. Required fields: severity, finding,
+  # confidence. Missing file or line is accepted (body-only findings).
+  local valid_incoming
+  valid_incoming=$(echo "$incoming" | jq '[.[] | select(
+    (.severity | type) == "string" and
+    (.finding  | type) == "string" and
+    (.confidence | type) == "number"
+  )]' 2>/dev/null) || valid_incoming="[]"
+
+  local incoming_count valid_count
+  incoming_count=$(echo "$incoming" | jq 'length' 2>/dev/null || echo "?")
+  valid_count=$(echo "$valid_incoming" | jq 'length' 2>/dev/null || echo "0")
+  if [[ "$valid_count" != "$incoming_count" ]]; then
+    echo "WARNING: merge_findings: dropped $(( incoming_count - valid_count )) malformed finding(s) (missing required fields)." >&2
+  fi
+
+  if [[ "$valid_count" == "0" ]]; then
+    return 0
+  fi
+
+  if jq -s '.[0] + .[1]' "$FINDINGS_JSON_FILE" <(echo "$valid_incoming") > "${FINDINGS_JSON_FILE}.tmp" 2>/dev/null; then
     mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
   else
-    local count
-    count=$(echo "$incoming" | jq 'length' 2>/dev/null || echo "?")
-    echo "WARNING: Failed to merge findings JSON; skipping batch of ${count} finding(s)." >&2
+    echo "WARNING: Failed to merge findings JSON; skipping batch of ${valid_count} finding(s)." >&2
     rm -f "${FINDINGS_JSON_FILE}.tmp"
   fi
 }
@@ -1232,11 +1251,8 @@ if [[ "$CVE_JSON" != "[]" ]]; then
   merge_findings "$CVE_JSON"
 fi
 
-# Apply declarative suppressions (won't-fix / false positives)
-SUPPRESSED_COUNT=0
-apply_suppressions
-
-# Filter out findings below confidence threshold (75)
+# Filter out findings below confidence threshold (75) BEFORE suppressions so that
+# verify-gated suppression rules don't fire registry HTTP calls on sub-threshold noise.
 PRE_FILTER_COUNT=$(jq 'length' "$FINDINGS_JSON_FILE" 2>/dev/null || echo "0")
 if jq '[.[] | select((.confidence // 0) >= 75)]' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then
   mv "${FINDINGS_JSON_FILE}.tmp" "$FINDINGS_JSON_FILE"
@@ -1249,29 +1265,38 @@ if [[ "$PRE_FILTER_COUNT" -ne "$POST_FILTER_COUNT" ]]; then
   echo "Filtered findings: ${PRE_FILTER_COUNT} → ${POST_FILTER_COUNT} (confidence >= 75)" >&2
 fi
 
-# Deduplicate findings: merge same file:line exact duplicates, then merge findings
-# within 3 lines of each other in the same file (adjacent-line dedup). The highest
-# severity finding in each proximity cluster is kept.
+# Apply declarative suppressions (won't-fix / false positives) after confidence filter
+SUPPRESSED_COUNT=0
+apply_suppressions
+
+# Deduplicate findings: merge findings within 3 lines of the cluster *start* in the
+# same file. Clusters are closed when a new finding is more than 3 lines from the
+# first item in the current cluster (not from the previous item), preventing
+# single-linkage drift where the cluster stretches unboundedly. The highest severity
+# finding in each cluster is kept.
 if jq '
   def sev_rank: if . == "Critical" then 4 elif . == "High" then 3
     elif . == "Medium" then 2 else 1 end;
-  # Sort within each file by line number, then reduce adjacent findings within 3 lines
   group_by(.file // "unknown")
   | map(
       sort_by(.line // 0) |
       reduce .[] as $f (
-        [];
-        if length == 0 then [$f]
-        elif (($f.line // 0) - (.[-1].line // 0)) <= 3
+        {clusters: [], cur: null};
+        if .cur == null then
+          {clusters: .clusters, cur: {start: ($f.line // 0), best: $f}}
+        elif (($f.line // 0) - .cur.start) <= 3
         then
-          # Same proximity cluster: keep the higher-severity finding
-          if ((.[-1].severity | sev_rank) >= ($f.severity | sev_rank))
+          # Still within 3 lines of cluster start: keep higher-severity
+          if ((.cur.best.severity | sev_rank) >= ($f.severity | sev_rank))
           then .
-          else .[:-1] + [$f]
+          else {clusters: .clusters, cur: {start: .cur.start, best: $f}}
           end
-        else . + [$f]
+        else
+          # Beyond 3 lines of cluster start: close current cluster, open new one
+          {clusters: (.clusters + [.cur.best]), cur: {start: ($f.line // 0), best: $f}}
         end
       )
+      | if .cur != null then .clusters + [.cur.best] else .clusters end
     )
   | flatten
 ' "$FINDINGS_JSON_FILE" > "${FINDINGS_JSON_FILE}.tmp"; then

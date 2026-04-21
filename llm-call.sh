@@ -88,7 +88,7 @@ fi
 is_transient_http() {
   local code="$1"
   case "$code" in
-    429|500|502|503) return 0 ;;
+    408|429|500|502|503|504|520|521|522|523|524) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -200,6 +200,12 @@ emit_response() {
   fi
   if [[ "$stop_reason" == "RECITATION" ]]; then
     echo "ERROR: Response blocked by provider recitation filter (finishReason=RECITATION)" >&2
+    echo "Raw response:" >&2
+    cat "$RESPONSE_FILE" >&2
+    exit 3
+  fi
+  if [[ "$stop_reason" == "refusal" ]]; then
+    echo "ERROR: Response blocked by model refusal (stop_reason=refusal)" >&2
     echo "Raw response:" >&2
     cat "$RESPONSE_FILE" >&2
     exit 3
