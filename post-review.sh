@@ -738,7 +738,14 @@ post_findings() {
   local inline_comments="[]"
   local body_findings=""
   local inline_count=0
-  local max_inline=25
+  local max_inline
+  local _raw_mi="${AI_MAX_INLINE:-25}"
+  if [[ "$_raw_mi" =~ ^[0-9]+$ ]]; then
+    max_inline="$_raw_mi"
+  else
+    echo "WARNING: AI_MAX_INLINE='${_raw_mi}' is invalid; using default 25." >&2
+    max_inline=25
+  fi
 
   # Extract findings as newline-delimited JSON objects for safe iteration
   # (avoids seq 0 $((total-1)) which breaks on BSD when total=0)

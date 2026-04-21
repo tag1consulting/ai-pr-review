@@ -124,6 +124,33 @@ inputs:
     required: false
     default: 'true'
 
+  # --- Filtering ---
+  confidence-threshold:
+    description: >
+      Minimum confidence score (0–100) a finding must have to be included in the review.
+      Findings below this threshold are dropped before suppressions are evaluated.
+      Lowering this value surfaces more findings; raising it reduces noise.
+    required: false
+    default: '75'
+
+  # --- Output limits ---
+  max-inline:
+    description: >
+      Maximum number of inline review comments posted per run.
+      Findings beyond this limit are included in the PR summary comment body instead.
+      Set to 0 to post all findings in the summary body with no inline comments.
+    required: false
+    default: '25'
+
+  max-tokens-per-agent:
+    description: >
+      Maximum number of output tokens each LLM agent may generate per call.
+      Lower values reduce cost and latency; higher values allow more detailed output
+      on large diffs. Must be a positive integer; values outside [256, 65536] are
+      clamped to that range.
+    required: false
+    default: '8192'
+
 runs:
   using: composite
   steps:
@@ -173,4 +200,7 @@ runs:
         HEAD_SHA: ${{ inputs.head-sha }}
         LLM_RETRY_COUNT: ${{ inputs.retry-count }}
         AI_PARALLEL: ${{ inputs.parallel }}
+        AI_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
+        AI_MAX_INLINE: ${{ inputs.max-inline }}
+        AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
       run: bash "${{ github.action_path }}/review.sh"
