@@ -15,6 +15,10 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
 | `run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
+| `run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"` |
+| `run-trufflehog.sh` | Wraps trufflehog secret scanning for any changed file; verified→Critical/95, unverified→High/85; source `"trufflehog"` |
+| `run-ruff.sh` | Wraps ruff for changed `.py` files; `F`/`E` prefix→High, `W`/`C`→Medium, else→Low; confidence 90; source `"ruff"` |
+| `run-golangci-lint.sh` | Wraps golangci-lint for changed `.go` files; `errcheck`/`govet`/`staticcheck`→High, others→Medium; confidence 90; source `"golangci-lint"` |
 | `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
 
 ## Agent output schema
@@ -155,6 +159,23 @@ CVSS severity mapping:
 If OSV.dev is unreachable the script emits WARNING on stderr and returns `[]` — the review never blocks on CVE-check outage. Tests bypass the network via the `OSV_MOCK_FILE` env var which reads a canned response from a file; do not set this in production.
 
 Suppressions work the same as for LLM findings — match on `pattern` against the finding text (e.g. `"CVE-2025-12345"` or `"GHSA-xxxx-yyyy-zzzz"`).
+
+## Static analyzers (semgrep / trufflehog / ruff / golangci-lint)
+
+All four analyzer scripts follow the same pattern as `run-shellcheck.sh`: accept a newline-separated `$CHANGED_FILES` argument, emit a JSON findings array on stdout, emit warnings on stderr, and return `[]` if the binary is missing or no files match their language gate. They run concurrently with shellcheck and cve-check in the parallel path.
+
+**Binary installation** — consumers must install the binaries in their workflow. The action does not install them. If a binary is absent, the script emits `WARNING: <tool> not found` to stderr and returns `[]`; the review continues normally.
+
+**Mock env vars for testing** (bypass binary execution in bats tests):
+
+| Script | Mock env var | Fixture directory |
+|--------|-------------|-------------------|
+| `run-semgrep.sh` | `SEMGREP_MOCK_FILE` | `tests/fixtures/semgrep/` |
+| `run-trufflehog.sh` | `TRUFFLEHOG_MOCK_FILE` | `tests/fixtures/trufflehog/` |
+| `run-ruff.sh` | `RUFF_MOCK_FILE` | `tests/fixtures/ruff/` |
+| `run-golangci-lint.sh` | `GOLANGCI_MOCK_FILE` | `tests/fixtures/golangci/` |
+
+Do not set mock vars in production.
 
 ## Suppressions
 
@@ -302,6 +323,8 @@ Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-cor
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
+
+Static analyzer scripts (`run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh`) are tested via their own `.bats` files using the mock env var pattern — the test sets `<TOOL>_MOCK_FILE` to a fixture file path and the script reads that instead of invoking the binary. This avoids the `load_function` awk pattern entirely since the scripts are simple enough to be invoked directly.
 
 ## Release process
 
