@@ -46,7 +46,8 @@ fi
 
 # Run golangci-lint (or read mock).
 # --out-format=json --issues-exit-code=0 ensures JSON output even when issues exist.
-# Pass only the specific files via --path-prefix-strip for cleaner paths.
+# golangci-lint does not accept individual file paths; derive unique package
+# directories from the changed Go files and pass them as ./dir/... patterns.
 if [[ -n "${GOLANGCI_MOCK_FILE:-}" ]]; then
   if [[ ! -r "$GOLANGCI_MOCK_FILE" ]]; then
     echo "WARNING: GOLANGCI_MOCK_FILE '${GOLANGCI_MOCK_FILE}' is not readable." >&2
@@ -55,7 +56,16 @@ if [[ -n "${GOLANGCI_MOCK_FILE:-}" ]]; then
   fi
   GL_OUTPUT=$(cat "$GOLANGCI_MOCK_FILE")
 else
-  GL_OUTPUT=$(golangci-lint run --out-format=json --issues-exit-code=0 "${GO_FILES[@]}" 2>/dev/null || true)
+  PKG_PATTERNS=()
+  declare -A _seen_dirs
+  for f in "${GO_FILES[@]}"; do
+    d=$(dirname "$f")
+    if [[ -z "${_seen_dirs[$d]+x}" ]]; then
+      _seen_dirs[$d]=1
+      PKG_PATTERNS+=("./${d}/...")
+    fi
+  done
+  GL_OUTPUT=$(golangci-lint run --out-format=json --issues-exit-code=0 "${PKG_PATTERNS[@]}" 2>/dev/null || true)
 fi
 
 if [[ -z "$GL_OUTPUT" ]]; then
