@@ -106,6 +106,40 @@ When `AI_PARALLEL=true`, new agents must be placed into a tier and added to both
 
 Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `review.sh`). The file content is injected verbatim into `FULL_CONTEXT_MSG` and `CODE_CONTEXT_MSG` when that language is detected.
 
+Supported languages and their profile files:
+
+| Extension(s) | Language key | Profile file |
+|---|---|---|
+| `go` | `Go` | `language-profiles/go.md` |
+| `py` | `Python` | `language-profiles/python.md` |
+| `js`, `jsx` | `JavaScript` | *(no profile — uses TypeScript profile conventions)* |
+| `ts`, `tsx` | `TypeScript` | `language-profiles/typescript.md` |
+| `php`, `module`, `theme`, `inc` | `PHP` | `language-profiles/php.md` |
+| `sh`, `bash` | `Shell` | `language-profiles/shell.md` |
+| `rb`, `rake`, `gemspec` | `Ruby` | `language-profiles/ruby.md` |
+| `rs` | `Rust` | `language-profiles/rust.md` |
+| `java` | `Java` | `language-profiles/java.md` |
+| `c`, `h`, `cpp`, `hpp`, `cc`, `cxx` | `C++` | `language-profiles/c++.md` |
+| `tf`, `tfvars` | `Terraform` | *(no profile)* |
+| `yaml`, `yml` | `YAML` | *(no profile)* |
+
+## Test-file detection
+
+`is_test_file()` in `review.sh` classifies changed files as test files for the manifest. Patterns covered:
+
+| Pattern | Language |
+|---|---|
+| `*_test.go` | Go |
+| `test_*.py`, `*_test.py` | Python |
+| `*.test.[jt]sx?`, `*.spec.[jt]sx?` | JS/TS |
+| `*_spec.rb`, `*_test.rb` | Ruby |
+| `*Test.java` | Java |
+| `*Test.php`, `*TestBase.php` | PHP |
+| `*_test.cpp`, `*_test.cc`, `*_test.ts` | C++/TS |
+| Any file under `/tests/`, `/test/`, or `/spec/` | Any |
+
+Known gap: Rust `#[cfg(test)]` modules share their source file's name — there is no filename convention to detect them without file-content inspection.
+
 ## CVE check
 
 `run-cve-check.sh` inspects changed dependency manifests and queries OSV.dev for known vulnerabilities affecting the declared versions. Currently supports `go.mod`, `package.json`, `requirements.txt`, and `composer.json`.
@@ -264,7 +298,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.

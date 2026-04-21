@@ -281,8 +281,32 @@ detect_language() {
     tf|tfvars) echo "Terraform" ;;
     sh|bash) echo "Shell" ;;
     yaml|yml) echo "YAML" ;;
+    rb|rake|gemspec) echo "Ruby" ;;
+    rs) echo "Rust" ;;
+    java) echo "Java" ;;
+    c|h|cpp|hpp|cc|cxx) echo "C++" ;;
     *) echo "" ;;
   esac
+}
+
+is_test_file() {
+  local file="$1"
+  [[ "$file" =~ _test\.go$ ]] ||
+  [[ "$file" =~ test_.*\.py$ ]] ||
+  [[ "$file" =~ _test\.py$ ]] ||
+  [[ "$file" =~ \.test\.[jt]sx?$ ]] ||
+  [[ "$file" =~ \.spec\.[jt]sx?$ ]] ||
+  [[ "$file" =~ _spec\.rb$ ]] ||
+  [[ "$file" =~ _test\.rb$ ]] ||
+  [[ "$file" =~ Test\.java$ ]] ||
+  [[ "$file" =~ TestBase\.php$ ]] ||
+  [[ "$file" =~ Test\.php$ ]] ||
+  [[ "$file" =~ _test\.cpp$ ]] ||
+  [[ "$file" =~ _test\.cc$ ]] ||
+  [[ "$file" =~ _test\.ts$ ]] ||
+  [[ "$file" =~ /tests/ ]] ||
+  [[ "$file" =~ /test/ ]] ||
+  [[ "$file" =~ /spec/ ]]
 }
 
 DETECTED_LANGS=()
@@ -314,9 +338,7 @@ TEST_FILES=""
 CONFIG_FILES=""
 DOC_FILES=""
 while IFS= read -r file; do
-  if [[ "$file" =~ _test\.go$ ]] || [[ "$file" =~ test_.*\.py$ ]] || \
-     [[ "$file" =~ \.test\.[jt]sx?$ ]] || [[ "$file" =~ \.spec\.[jt]sx?$ ]] || \
-     [[ "$file" =~ Test\.php$ ]] || [[ "$file" =~ /tests/ ]]; then
+  if is_test_file "$file"; then
     TEST_FILES="${TEST_FILES}${file}\n"
   elif [[ "$file" =~ \.(md|txt|rst)$ ]]; then
     DOC_FILES="${DOC_FILES}${file}\n"

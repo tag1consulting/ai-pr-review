@@ -7,6 +7,7 @@ setup() {
   load test_helper
   MODEL_PRICING_FILE="${PROJECT_ROOT}/model-pricing.json"
   load_function "${PROJECT_ROOT}/review.sh" detect_language
+  load_function "${PROJECT_ROOT}/review.sh" is_test_file
   load_function "${PROJECT_ROOT}/review.sh" model_pricing
   load_function "${PROJECT_ROOT}/review.sh" model_display_name
   load_function "${PROJECT_ROOT}/review.sh" format_cost
@@ -80,6 +81,72 @@ setup() {
   run detect_language "yml"
   [ "$status" -eq 0 ]
   [ "$output" = "YAML" ]
+}
+
+@test "detect_language: rb -> Ruby" {
+  run detect_language "rb"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Ruby" ]
+}
+
+@test "detect_language: rake -> Ruby" {
+  run detect_language "rake"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Ruby" ]
+}
+
+@test "detect_language: gemspec -> Ruby" {
+  run detect_language "gemspec"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Ruby" ]
+}
+
+@test "detect_language: rs -> Rust" {
+  run detect_language "rs"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Rust" ]
+}
+
+@test "detect_language: java -> Java" {
+  run detect_language "java"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Java" ]
+}
+
+@test "detect_language: c -> C++" {
+  run detect_language "c"
+  [ "$status" -eq 0 ]
+  [ "$output" = "C++" ]
+}
+
+@test "detect_language: h -> C++" {
+  run detect_language "h"
+  [ "$status" -eq 0 ]
+  [ "$output" = "C++" ]
+}
+
+@test "detect_language: cpp -> C++" {
+  run detect_language "cpp"
+  [ "$status" -eq 0 ]
+  [ "$output" = "C++" ]
+}
+
+@test "detect_language: hpp -> C++" {
+  run detect_language "hpp"
+  [ "$status" -eq 0 ]
+  [ "$output" = "C++" ]
+}
+
+@test "detect_language: cc -> C++" {
+  run detect_language "cc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "C++" ]
+}
+
+@test "detect_language: cxx -> C++" {
+  run detect_language "cxx"
+  [ "$status" -eq 0 ]
+  [ "$output" = "C++" ]
 }
 
 @test "detect_language: unknown extension -> empty string" {
