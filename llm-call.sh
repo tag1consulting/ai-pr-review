@@ -128,9 +128,11 @@ retry_curl() {
   # would be consumed on the first curl attempt, leaving retries with empty bodies.
   local stdin_file
   stdin_file=$(mktemp /tmp/llm-retry-stdin-XXXXXXXX)
-  # Ensure the temp file is removed on all exit paths (success return, exit, or signal).
+  # Clean up on function return (covers both success return 0 and exit N paths).
+  # EXIT is intentionally omitted: EXIT traps inside functions accumulate on the
+  # shell's EXIT handler across calls and are never cleared on RETURN.
   # shellcheck disable=SC2064
-  trap "rm -f '${stdin_file}'" RETURN EXIT
+  trap "rm -f '${stdin_file}'" RETURN
   cat > "$stdin_file"
 
   # Rewrite --data-binary @- to --data-binary @<file> so each retry
