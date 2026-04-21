@@ -78,7 +78,7 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 | Tier | Agents | When |
 |------|--------|------|
 | Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional) | Always |
-| Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh` | Always |
+| Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh`, `run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh` | Always (graceful no-op if binary absent) |
 | Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
 
 Tier 1 and Tier 2 are separated by a `wait` barrier so Tier 2 never starts until all Tier 1 agents complete.
@@ -102,7 +102,7 @@ When `AI_PARALLEL=true`, new agents must be placed into a tier and added to both
 ## Adding a new agent
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
-2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384; all current agents pass 8192 explicitly.
+2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`. The optional 6th parameter `max_tokens` defaults to 16384; all current agents pass `"$AI_MAX_TOKENS_PER_AGENT"` explicitly (default 8192, configurable via the `max-tokens-per-agent` action input).
 3. If the agent should only run conditionally (like `silent-failure-hunter`), gate it with a grep check on `$DIFF_FILE`.
 4. Also add the agent to the parallel tier block (see "Parallel agent execution" above).
 

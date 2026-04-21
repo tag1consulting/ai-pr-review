@@ -20,7 +20,7 @@ On every PR push, this action:
 1. Computes the diff (full on first run, incremental on subsequent pushes)
 2. Detects languages from changed file extensions
 3. Runs a roster of AI review agents against the diff
-4. Runs deterministic checks on changed files: shellcheck on shell scripts, CVE lookups against [OSV.dev](https://osv.dev/) for dependency manifest changes
+4. Runs deterministic checks on changed files: shellcheck on shell scripts, CVE lookups against [OSV.dev](https://osv.dev/) for dependency manifest changes, and (when binaries are installed) semgrep SAST, trufflehog secret scanning, ruff Python linting, and golangci-lint Go linting
 5. Posts a summary comment (first run only) and a review with inline findings
 6. Auto-resolves stale bot threads and dismisses superseded reviews
 
@@ -343,6 +343,9 @@ git commit -m "Bump ai-pr-review submodule to v1.0"
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `retry-count` | No | `3` | Retry attempts for transient LLM failures |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
+| `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
+| `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
+| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
 
 ## Review modes
 
@@ -418,13 +421,19 @@ Local rules are merged with the global suppression rules at runtime — no actio
 
 The action auto-detects languages from file extensions and injects per-language context into agent prompts. Language profiles are markdown files in `language-profiles/`:
 
-- `go.md` — Go-specific review context
-- `php.md` — PHP/Drupal-specific review context
-- `python.md` — Python-specific review context
-- `shell.md` — Shell/Bash-specific review context
-- `typescript.md` — TypeScript/JavaScript-specific review context
+| Profile file | Covers |
+|---|---|
+| `go.md` | Go |
+| `php.md` | PHP / Drupal |
+| `python.md` | Python |
+| `shell.md` | Shell / Bash |
+| `typescript.md` | TypeScript / JavaScript |
+| `ruby.md` | Ruby / Rails |
+| `rust.md` | Rust |
+| `java.md` | Java |
+| `c++.md` | C and C++ |
 
-To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) should match the language key detected from file extensions.
+To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `review.sh` for the relevant file extensions. See CLAUDE.md for the full extension-to-language mapping.
 
 ## Dependency vulnerability check
 
@@ -453,6 +462,21 @@ To accept a specific CVE (e.g. library used only in a test fixture), add a suppr
 }
 ```
 
+## Static analyzers
+
+When the corresponding binary is installed in the workflow, the action runs four additional deterministic analyzers alongside shellcheck and the CVE check. Their findings flow through the same dedup, suppress, and render pipeline as LLM findings.
+
+| Analyzer | Language gate | Severity mapping | Confidence |
+|----------|--------------|-----------------|------------|
+| **semgrep** | Any file | `ERROR`→High, `WARNING`→Medium, else→Low | 90 |
+| **trufflehog** | Any file | Verified secret→Critical, Unverified→High | 95 / 85 |
+| **ruff** | `.py` files | `F`/`E` prefix→High, `W`/`C`→Medium, else→Low | 90 |
+| **golangci-lint** | `.go` files | `errcheck`/`govet`/`staticcheck`→High, others→Medium | 90 |
+
+All four run concurrently in the parallel path (alongside shellcheck and cve-check) and fall back to sequential when `parallel: false`. If a binary is missing, the wrapper script emits a WARNING to stderr and returns `[]` — the review is never blocked.
+
+See [Dependencies](#dependencies) for install instructions.
+
 ## Token usage
 
 After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
@@ -478,6 +502,10 @@ ai-pr-review/
 ├── post-review.sh          # GitHub API posting: summary, review, thread management
 ├── run-shellcheck.sh       # Shellcheck wrapper for shell script findings
 ├── run-cve-check.sh        # OSV.dev vulnerability lookup for dependency manifests
+├── run-semgrep.sh          # Semgrep SAST wrapper (optional binary)
+├── run-trufflehog.sh       # Trufflehog secret scanning wrapper (optional binary)
+├── run-ruff.sh             # Ruff Python linter wrapper (optional binary)
+├── run-golangci-lint.sh    # golangci-lint Go linter wrapper (optional binary)
 ├── model-pricing.json      # Per-model token pricing for cost estimation
 ├── suppressions.json       # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
@@ -491,12 +519,30 @@ ai-pr-review/
 │   └── adversarial-general.md
 ├── language-profiles/      # Per-language review context
 │   ├── go.md
-│   └── shell.md
+│   ├── python.md
+│   ├── typescript.md
+│   ├── php.md
+│   ├── shell.md
+│   ├── ruby.md
+│   ├── rust.md
+│   ├── java.md
+│   └── c++.md
 ├── tests/                  # bats-core unit tests
 │   ├── review_functions.bats
 │   ├── extract_findings.bats
+│   ├── is_test_file.bats
+│   ├── configurable_inputs.bats
+│   ├── dedup_filter.bats
+│   ├── apply_suppressions.bats
+│   ├── call_agent.bats
 │   ├── llm_call_functions.bats
 │   ├── post_review_functions.bats
+│   ├── run_shellcheck.bats
+│   ├── run_cve_check.bats
+│   ├── run_semgrep.bats
+│   ├── run_trufflehog.bats
+│   ├── run_ruff.bats
+│   ├── run_golangci_lint.bats
 │   ├── test_helper.bash
 │   └── fixtures/
 └── .github/workflows/
@@ -517,6 +563,23 @@ ai-pr-review/
 The action runs on `ubuntu-latest` and requires only standard tools:
 - `bash`, `curl`, `jq`, `git`, `gh` (all pre-installed on GitHub Actions runners)
 - `shellcheck` (installed automatically by the action if not present)
+
+**Optional static analyzer binaries** — the action degrades gracefully if these are absent (emits a WARNING and continues):
+- `semgrep` — SAST analysis on any changed file
+- `trufflehog` — secret scanning on any changed file
+- `ruff` — Python linting (`.py` files only)
+- `golangci-lint` — Go linting (`.go` files only); must be run from the Go module root
+
+Install them in your workflow before invoking the action if you want their findings. Example:
+
+```yaml
+- name: Install static analyzers
+  run: |
+    pip install semgrep
+    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+    pip install ruff
+    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
+```
 
 ## License
 
