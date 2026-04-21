@@ -18,48 +18,45 @@ setup() {
 # ---------------------------------------------------------------------------
 
 # Evaluates AI_MAX_TOKENS_PER_AGENT validation logic and prints the result.
+# Value is passed via env var to avoid bash -c injection.
 _eval_tokens() {
-  local raw="$1"
-  bash -c "
-    AI_MAX_TOKENS_PER_AGENT='${raw}'
-    _raw_tokens=\"\${AI_MAX_TOKENS_PER_AGENT:-8192}\"
-    if [[ \"\$_raw_tokens\" =~ ^[0-9]+\$ ]] && [[ \"\$_raw_tokens\" -ge 256 ]] && [[ \"\$_raw_tokens\" -le 65536 ]]; then
-      AI_MAX_TOKENS_PER_AGENT=\"\$_raw_tokens\"
+  AI_MAX_TOKENS_PER_AGENT="$1" bash << 'EOF'
+    _raw_tokens="${AI_MAX_TOKENS_PER_AGENT:-8192}"
+    if [[ "$_raw_tokens" =~ ^[0-9]+$ ]] && [[ "$_raw_tokens" -ge 256 ]] && [[ "$_raw_tokens" -le 65536 ]]; then
+      AI_MAX_TOKENS_PER_AGENT="$_raw_tokens"
     else
       AI_MAX_TOKENS_PER_AGENT=8192
     fi
-    echo \"\$AI_MAX_TOKENS_PER_AGENT\"
-  "
+    echo "$AI_MAX_TOKENS_PER_AGENT"
+EOF
 }
 
 # Evaluates AI_CONFIDENCE_THRESHOLD validation logic and prints the result.
+# Value is passed via env var to avoid bash -c injection.
 _eval_confidence() {
-  local raw="$1"
-  bash -c "
-    AI_CONFIDENCE_THRESHOLD='${raw}'
-    _raw_conf=\"\${AI_CONFIDENCE_THRESHOLD:-75}\"
-    if [[ \"\$_raw_conf\" =~ ^[0-9]+\$ ]] && [[ \"\$_raw_conf\" -ge 0 ]] && [[ \"\$_raw_conf\" -le 100 ]]; then
-      CONFIDENCE_THRESHOLD=\"\$_raw_conf\"
+  AI_CONFIDENCE_THRESHOLD="$1" bash << 'EOF'
+    _raw_conf="${AI_CONFIDENCE_THRESHOLD:-75}"
+    if [[ "$_raw_conf" =~ ^[0-9]+$ ]] && [[ "$_raw_conf" -ge 0 ]] && [[ "$_raw_conf" -le 100 ]]; then
+      CONFIDENCE_THRESHOLD="$_raw_conf"
     else
       CONFIDENCE_THRESHOLD=75
     fi
-    echo \"\$CONFIDENCE_THRESHOLD\"
-  "
+    echo "$CONFIDENCE_THRESHOLD"
+EOF
 }
 
 # Evaluates AI_MAX_INLINE validation logic and prints the result.
+# Value is passed via env var to avoid bash -c injection.
 _eval_max_inline() {
-  local raw="$1"
-  bash -c "
-    AI_MAX_INLINE='${raw}'
-    _raw_mi=\"\${AI_MAX_INLINE:-25}\"
-    if [[ \"\$_raw_mi\" =~ ^[0-9]+\$ ]]; then
-      max_inline=\"\$_raw_mi\"
+  AI_MAX_INLINE="$1" bash << 'EOF'
+    _raw_mi="${AI_MAX_INLINE:-25}"
+    if [[ "$_raw_mi" =~ ^[0-9]+$ ]]; then
+      max_inline="$_raw_mi"
     else
       max_inline=25
     fi
-    echo \"\$max_inline\"
-  "
+    echo "$max_inline"
+EOF
 }
 
 # ---------------------------------------------------------------------------

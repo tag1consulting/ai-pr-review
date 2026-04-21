@@ -67,6 +67,8 @@ Phase 1 runs agents in a tiered fan-out mode by default, reducing wall-clock tim
 
 Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (default: `true`). Set to `false` if your LLM provider's rate limits cannot sustain 3–5 concurrent requests.
 
+> **Breaking change (direct-script users):** Prior to issue #73, `review.sh` defaulted to `AI_PARALLEL=false` when the variable was unset, while `action.yml` defaulted to `true`. The default is now `true` in both invocation paths. If you invoke `review.sh` directly and rely on sequential execution, set `AI_PARALLEL=false` explicitly.
+
 ### Tier groupings
 
 | Tier | Agents | When |
