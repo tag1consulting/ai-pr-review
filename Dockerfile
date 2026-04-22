@@ -87,6 +87,11 @@ RUN groupadd -r app --gid 1001 && \
     useradd -r -g app --uid 1001 -d /home/app -m app && \
     chown -R app:app /opt/ai-pr-review
 
+# Allow git to operate on /workspace regardless of the host uid that owns it.
+# Needed when the mounted workspace uid differs from the container's app uid (1001),
+# which is common on self-hosted runners and local dev.
+RUN git config --system --add safe.directory /workspace
+
 USER 1001:1001
 
 # Consumers mount their repo checkout here
