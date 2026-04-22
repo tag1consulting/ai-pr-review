@@ -44,7 +44,7 @@ Once `comment-triggers.yml` is merged to your default branch, post these command
 | `/ai-pr-review skip` | Add `skip-ai-review` label to suppress the next review |
 | `/ai-pr-review help` | Post the command list as a reply |
 
-Only users with **write access** to the repo can trigger commands. GitHub enforces this automatically for `issue_comment` events.
+Only users with `OWNER`, `MEMBER`, or `COLLABORATOR` association can trigger commands. This is enforced via an `author_association` guard in the workflow — GitHub does **not** do this automatically.
 
 See [docs/slash-commands.md](../docs/slash-commands.md) for full details.
 

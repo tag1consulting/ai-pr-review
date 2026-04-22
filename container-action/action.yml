@@ -193,6 +193,7 @@ runs:
           -e AI_MAX_INLINE \
           -e AI_MAX_TOKENS_PER_AGENT \
           ${GITHUB_STEP_SUMMARY:+-e GITHUB_STEP_SUMMARY} \
+          -e GITHUB_WORKSPACE=/workspace \
           -v "$GITHUB_WORKSPACE:/workspace" \
           ${GITHUB_STEP_SUMMARY:+-v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY"} \
           "$IMAGE"

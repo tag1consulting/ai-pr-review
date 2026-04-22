@@ -26,7 +26,7 @@ Posts the command list as a reply comment.
 
 ## Access control
 
-Commands can only be triggered by users with **write access** to the repository. GitHub enforces this automatically — `issue_comment` events from users with only read/triage access do not dispatch the workflow.
+Commands can only be triggered by users with `OWNER`, `MEMBER`, or `COLLABORATOR` association on the repository. This is enforced via an `author_association` guard on the job's `if:` condition in `comment-triggers.yml`. GitHub does **not** enforce this automatically — without the guard, any authenticated user who can comment on a PR could trigger reviews.
 
 ## Feedback via emoji reactions
 
