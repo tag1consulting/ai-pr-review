@@ -323,6 +323,70 @@ git add .github/actions/ai-pr-review
 git commit -m "Bump ai-pr-review submodule to v1.0"
 ```
 
+## Running in a container
+
+The container image ships all analyzer binaries pre-installed at pinned versions, so consumers don't need to install shellcheck, semgrep, trufflehog, ruff, or golangci-lint on their runners.
+
+### Registry authentication
+
+The image is hosted privately at `ghcr.io/tag1consulting/ai-pr-review`. Every consumer needs a GitHub Personal Access Token with `read:packages` scope stored as a repository secret named `GHCR_TOKEN`.
+
+Create the token at **Settings → Developer settings → Personal access tokens (classic)**, grant `read:packages`, then add it under **Settings → Secrets and variables → Actions** in your repo.
+
+### Container action
+
+Use `container-action` in place of the root action:
+
+```yaml
+- uses: tag1consulting/ai-pr-review/container-action@main
+  with:
+    image-tag: 'latest'            # or pin to 'v2.1.0'
+    registry-token: ${{ secrets.GHCR_TOKEN }}
+    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github-token: ${{ github.token }}
+    pr-number: ${{ github.event.pull_request.number }}
+    base-ref: ${{ github.event.pull_request.base.ref }}
+    head-sha: ${{ github.event.pull_request.head.sha }}
+```
+
+Ready-to-use workflow files are in [examples/workflows/](examples/workflows/). See [examples/README.md](examples/README.md) for setup instructions.
+
+### Local development
+
+Run reviews locally without a CI runner:
+
+```bash
+# One-time login
+docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_PAT
+
+# Dry run (prints findings, does not post to GitHub)
+docker run --rm \
+  -e AI_PROVIDER=anthropic \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e GH_TOKEN=ghp_... \
+  -e GITHUB_REPOSITORY=owner/repo \
+  -e PR_NUMBER=42 \
+  -e BASE_REF=main \
+  -e HEAD_SHA=abc1234 \
+  -e AI_DRY_RUN=true \
+  ghcr.io/tag1consulting/ai-pr-review:latest
+```
+
+See [docs/local-development.md](docs/local-development.md) for the full reference.
+
+## Slash commands
+
+Once the comment-trigger workflow is merged to your default branch, users with write access can post commands on any PR:
+
+| Command | Effect |
+|---|---|
+| `/ai-pr-review rescan` | Force full-diff re-review |
+| `/ai-pr-review review-full` | Run all agents (full mode) |
+| `/ai-pr-review skip` | Add `skip-ai-review` label |
+| `/ai-pr-review help` | Post command list as reply |
+
+Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch gotcha.
+
 ## Action inputs
 
 | Input | Required | Default | Description |
