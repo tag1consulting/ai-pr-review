@@ -41,8 +41,8 @@ jobs:
         env:
           COMMENT: ${{ github.event.comment.body }}
         run: |
-          # Extract the first word after /ai-pr-review
-          command=$(echo "$COMMENT" | awk '{print $2}')
+          # Extract the first word after /ai-pr-review; strip CR so Windows \r\n line endings don't break the case match
+          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
           case "$command" in
             rescan|review-full|skip|help)
               echo "command=$command" >> "$GITHUB_OUTPUT"

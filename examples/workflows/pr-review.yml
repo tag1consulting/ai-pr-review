@@ -12,14 +12,15 @@
 #   - ANTHROPIC_API_KEY secret (or substitute your provider's key)
 #
 # Pair with examples/workflows/comment-triggers.yml to enable slash commands.
+# Note: for rescan/review-full on labeled events, use slash commands instead of
+# pull_request_target — the labeled trigger on pull_request_target exposes secrets
+# to fork PRs and is intentionally omitted here.
 
 name: AI PR Review
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
-  pull_request_target:
-    types: [labeled]
 
 permissions:
   contents: read
@@ -49,6 +50,4 @@ jobs:
           base-ref: ${{ github.event.pull_request.base.ref }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           review-mode: 'quick'
-          # Set force-full-diff: 'true' when the ai-review-rescan label is added
-          force-full-diff: >-
-            ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
+          # Use /ai-pr-review rescan in a PR comment to trigger a full-diff re-review

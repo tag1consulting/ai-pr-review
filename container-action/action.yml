@@ -167,6 +167,12 @@ runs:
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
       run: |
         docker pull "$IMAGE"
+        # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
+        # word-splitting if the path contains spaces.
+        SUMMARY_MOUNT=()
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+          SUMMARY_MOUNT=(-e GITHUB_STEP_SUMMARY -v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY")
+        fi
         docker run --rm \
           -e AI_PROVIDER \
           -e AI_REVIEW_MODE \
@@ -192,8 +198,7 @@ runs:
           -e AI_CONFIDENCE_THRESHOLD \
           -e AI_MAX_INLINE \
           -e AI_MAX_TOKENS_PER_AGENT \
-          ${GITHUB_STEP_SUMMARY:+-e GITHUB_STEP_SUMMARY} \
           -e GITHUB_WORKSPACE=/workspace \
           -v "$GITHUB_WORKSPACE:/workspace" \
-          ${GITHUB_STEP_SUMMARY:+-v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY"} \
+          "${SUMMARY_MOUNT[@]}" \
           "$IMAGE"
