@@ -67,9 +67,15 @@ Findings use shape-distinct icons for accessibility:
 
 ## Installation
 
-### Direct action reference (recommended)
+### Container action (recommended)
 
-This is the simplest approach. No submodule or extra checkout configuration needed.
+The container action pulls a pre-built image with all analyzer binaries pre-installed at pinned, verified versions. No toolchain setup on your runner.
+
+See **[Running in a container](#running-in-a-container)** above for prerequisites (GHCR token) and the example workflows in `examples/workflows/`.
+
+### Direct action reference (legacy / opt-in)
+
+Use this if you cannot or do not want to pull a private container image. Installs shellcheck on the runner; does not install semgrep, trufflehog, ruff, or golangci-lint.
 
 **Prerequisites:** In this repo's settings, go to **Settings → Actions → General → Access** and set it to **"Accessible from repositories in the 'tag1consulting' organization"**. This allows other repos in the org to use it as an action.
 

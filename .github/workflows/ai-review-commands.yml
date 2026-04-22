@@ -1,0 +1,161 @@
+name: AI PR Review — slash commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  handle-command:
+    # Only fire on PR comments starting with /ai-pr-review from org members or collaborators.
+    # GitHub does NOT enforce this automatically — the author_association guard is required.
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/ai-pr-review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse command
+        id: cmd
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          # Strip CR so Windows CRLF line endings don't break the case match
+          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          case "$command" in
+            rescan|review-full|skip|help)
+              echo "command=$command" >> "$GITHUB_OUTPUT"
+              echo "valid=true"       >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "valid=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: React — seen
+        if: steps.cmd.outputs.valid == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=eyes
+
+      - name: Reply with help text
+        if: steps.cmd.outputs.command == 'help'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --body "$(cat <<'HELP'
+          **AI PR Review commands:**
+          - `/ai-pr-review rescan` — force full diff re-review
+          - `/ai-pr-review review-full` — run all agents (full mode)
+          - `/ai-pr-review skip` — suppress the next automated review
+          - `/ai-pr-review help` — show this message
+          HELP
+          )"
+
+      - name: Add skip label
+        if: steps.cmd.outputs.command == 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr edit ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --add-label skip-ai-review
+
+      - name: Checkout PR head
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+
+      - name: Get PR metadata
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_json=$(gh pr view ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --json baseRefName,headRefOid)
+          echo "base=$(echo "$pr_json" | jq -r .baseRefName)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo  "$pr_json" | jq -r .headRefOid)"  >> "$GITHUB_OUTPUT"
+
+      - name: React — launching
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=rocket
+
+      # Use the self-referential composite action (same as ai-review.yml).
+      # After the container image is published, switch to ./container-action
+      # and add registry-token: ${{ secrets.GHCR_TOKEN }}
+      - name: Run review (rescan)
+        if: steps.cmd.outputs.command == 'rescan'
+        uses: ./
+        with:
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
+          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
+          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.issue.number }}
+          base-ref: ${{ steps.pr.outputs.base }}
+          head-sha: ${{ steps.pr.outputs.sha }}
+          force-full-diff: 'true'
+
+      - name: Run review (review-full)
+        if: steps.cmd.outputs.command == 'review-full'
+        uses: ./
+        with:
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
+          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
+          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.issue.number }}
+          base-ref: ${{ steps.pr.outputs.base }}
+          head-sha: ${{ steps.pr.outputs.sha }}
+          review-mode: 'full'
+          force-full-diff: 'true'
+
+      - name: React — done
+        if: |
+          success() && (
+            steps.cmd.outputs.command == 'rescan' ||
+            steps.cmd.outputs.command == 'review-full'
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content="+1"
+
+      - name: React — failed
+        if: |
+          failure() && (
+            steps.cmd.outputs.command == 'rescan' ||
+            steps.cmd.outputs.command == 'review-full'
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=confused
