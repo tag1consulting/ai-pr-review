@@ -74,7 +74,7 @@ jobs:
         if: |
           steps.cmd.outputs.command == 'rescan' ||
           steps.cmd.outputs.command == 'review-full'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
           fetch-depth: 0
