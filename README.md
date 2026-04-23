@@ -67,9 +67,15 @@ Findings use shape-distinct icons for accessibility:
 
 ## Installation
 
-### Direct action reference (recommended)
+### Container action (recommended)
 
-This is the simplest approach. No submodule or extra checkout configuration needed.
+The container action pulls a pre-built image with all analyzer binaries pre-installed at pinned, verified versions. No toolchain setup on your runner.
+
+See **[Running in a container](#running-in-a-container)** below for prerequisites (GHCR token) and the example workflows in `examples/workflows/`.
+
+### Direct action reference (legacy / opt-in)
+
+Use this if you cannot or do not want to pull a private container image. Installs shellcheck on the runner; does not install semgrep, trufflehog, ruff, or golangci-lint.
 
 **Prerequisites:** In this repo's settings, go to **Settings → Actions → General → Access** and set it to **"Accessible from repositories in the 'tag1consulting' organization"**. This allows other repos in the org to use it as an action.
 
@@ -322,6 +328,72 @@ cd ../../..
 git add .github/actions/ai-pr-review
 git commit -m "Bump ai-pr-review submodule to v1.0"
 ```
+
+## Running in a container
+
+The container image ships all analyzer binaries pre-installed at pinned versions, so consumers don't need to install shellcheck, semgrep, trufflehog, ruff, or golangci-lint on their runners.
+
+### Registry authentication
+
+The image is hosted privately at `ghcr.io/tag1consulting/ai-pr-review`. Every consumer needs a GitHub Personal Access Token with `read:packages` scope stored as a repository secret named `GHCR_TOKEN`.
+
+Create the token at **Settings → Developer settings → Personal access tokens (classic)**, grant `read:packages`, then add it under **Settings → Secrets and variables → Actions** in your repo.
+
+### Container action
+
+Use `container-action` in place of the root action:
+
+```yaml
+- uses: tag1consulting/ai-pr-review/container-action@main
+  with:
+    image-tag: 'latest'            # or pin to 'v2.1.0'
+    registry-token: ${{ secrets.GHCR_TOKEN }}
+    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github-token: ${{ github.token }}
+    pr-number: ${{ github.event.pull_request.number }}
+    base-ref: ${{ github.event.pull_request.base.ref }}
+    head-sha: ${{ github.event.pull_request.head.sha }}
+```
+
+Ready-to-use workflow files are in [examples/workflows/](examples/workflows/). See [examples/README.md](examples/README.md) for setup instructions.
+
+### Local development
+
+Run reviews locally against any open PR — no CI runner needed.
+
+```bash
+# One-time: authenticate to GHCR (PAT with read:packages scope)
+docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_GHCR_PAT
+
+# Dry run: prints findings to stdout, does not post to GitHub
+docker run --rm \
+  -e AI_PROVIDER=anthropic \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e GH_TOKEN=$(gh auth token) \
+  -e GITHUB_REPOSITORY=owner/repo \
+  -e PR_NUMBER=42 \
+  -e BASE_REF=main \
+  -e HEAD_SHA=$(gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid) \
+  -e AI_DRY_RUN=true \
+  ghcr.io/tag1consulting/ai-pr-review:latest
+```
+
+Remove `-e AI_DRY_RUN=true` to post findings back to the PR. Swap `AI_PROVIDER` and the corresponding key variable for other providers (`openai`/`OPENAI_API_KEY`, `google`/`GOOGLE_API_KEY`, `bedrock-proxy`/`BEDROCK_API_KEY`+`BEDROCK_API_URL`).
+
+See [docs/local-development.md](docs/local-development.md) for the full reference including provider-specific examples, local clone mounting, git worktree support, and version pinning.
+
+## Slash commands
+
+Once the comment-trigger workflow is merged to your default branch, users with write access can post commands on any PR:
+
+| Command | Effect |
+|---|---|
+| `/ai-pr-review rescan` | Force full-diff re-review |
+| `/ai-pr-review review-full` | Run all agents (full mode) |
+| `/ai-pr-review skip` | Add `skip-ai-review` label |
+| `/ai-pr-review help` | Post command list as reply |
+
+Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch gotcha.
 
 ## Action inputs
 

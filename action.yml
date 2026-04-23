@@ -3,6 +3,13 @@ description: >
   AI-powered pull request review using multiple LLM agents.
   Posts a summary comment and inline review findings on the PR.
 
+  NOTE: This is the legacy composite action. It installs shellcheck on the
+  runner but does not install semgrep, trufflehog, ruff, or golangci-lint.
+  New consumers should use the container-action variant instead:
+    uses: tag1consulting/ai-pr-review/container-action@main
+  The container action pulls a pre-built image with all analyzer binaries
+  pinned at verified versions. See container-action/action.yml.
+
 inputs:
   # --- Provider ---
   provider:

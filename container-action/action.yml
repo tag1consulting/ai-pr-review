@@ -1,0 +1,204 @@
+name: AI PR Review (container)
+description: >
+  AI-powered pull request review using a pinned container image.
+  Authenticates to GHCR, pulls the image, and runs the review inside Docker.
+  Use this variant instead of the root action.yml when you want version-pinned
+  analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint).
+
+inputs:
+  image-tag:
+    description: >
+      Image tag to pull from ghcr.io/tag1consulting/ai-pr-review.
+      Defaults to 'latest'. Pin to a specific version (e.g. 'v2.1.0') for
+      reproducible builds.
+    required: false
+    default: 'latest'
+
+  registry-token:
+    description: >
+      GitHub PAT with read:packages scope for pulling the private image.
+      Typically stored as a repository secret named GHCR_TOKEN.
+    required: true
+
+  # --- All inputs below mirror root action.yml exactly ---
+
+  provider:
+    description: 'LLM provider: anthropic | openai | openai-compatible | google | bedrock-proxy'
+    required: false
+    default: 'anthropic'
+
+  api-key:
+    description: 'API key for the chosen LLM provider'
+    required: true
+
+  base-url:
+    description: 'Base URL for openai-compatible or bedrock-proxy endpoints'
+    required: false
+    default: ''
+
+  model-standard:
+    description: 'Model ID for standard agents. Defaults to provider default.'
+    required: false
+    default: ''
+
+  model-premium:
+    description: 'Model ID for premium agents (full mode only). Defaults to provider default.'
+    required: false
+    default: ''
+
+  github-token:
+    description: 'GitHub token for posting reviews. Defaults to GITHUB_TOKEN.'
+    required: false
+    default: ${{ github.token }}
+
+  review-mode:
+    description: 'quick (default) or full'
+    required: false
+    default: 'quick'
+
+  force-full-diff:
+    description: 'true to bypass SHA watermark and force full-PR diff'
+    required: false
+    default: 'false'
+
+  review-target:
+    description: 'pr (default) or standalone'
+    required: false
+    default: 'pr'
+
+  pr-number:
+    description: 'Pull request number'
+    required: false
+    default: ''
+
+  base-ref:
+    description: 'Base branch name (e.g. main)'
+    required: false
+    default: ''
+
+  head-sha:
+    description: 'Head commit SHA'
+    required: false
+    default: ''
+
+  max-diff-lines:
+    description: 'Skip review if diff exceeds this many lines'
+    required: false
+    default: '5000'
+
+  retry-count:
+    description: 'LLM retry attempts on transient errors'
+    required: false
+    default: '3'
+
+  parallel:
+    description: 'true to run agents in parallel (default), false to run sequentially'
+    required: false
+    default: 'true'
+
+  confidence-threshold:
+    description: 'Minimum confidence score (0-100) for findings to be included'
+    required: false
+    default: '75'
+
+  max-inline:
+    description: 'Maximum inline review comments per run'
+    required: false
+    default: '25'
+
+  max-tokens-per-agent:
+    description: 'Max output tokens per LLM agent call'
+    required: false
+    default: '8192'
+
+  standalone-depth:
+    description: 'Git fetch depth for standalone mode'
+    required: false
+    default: '50'
+
+runs:
+  using: composite
+  steps:
+    - name: Mask credentials
+      shell: bash
+      env:
+        _API_KEY: ${{ inputs.api-key }}
+        _GH_TOKEN: ${{ inputs.github-token }}
+        _REGISTRY_TOKEN: ${{ inputs.registry-token }}
+      run: |
+        [[ -n "$_API_KEY" ]]       && echo "::add-mask::$_API_KEY"
+        [[ -n "$_GH_TOKEN" ]]      && echo "::add-mask::$_GH_TOKEN"
+        [[ -n "$_REGISTRY_TOKEN" ]] && echo "::add-mask::$_REGISTRY_TOKEN"
+
+    - name: Log in to GHCR
+      shell: bash
+      env:
+        REGISTRY_TOKEN: ${{ inputs.registry-token }}
+      run: |
+        echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+    - name: Run AI review in container
+      shell: bash
+      env:
+        IMAGE: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
+        AI_PROVIDER: ${{ inputs.provider }}
+        AI_REVIEW_MODE: ${{ inputs.review-mode }}
+        FORCE_FULL_DIFF: ${{ inputs.force-full-diff }}
+        REVIEW_TARGET: ${{ inputs.review-target }}
+        STANDALONE_DEPTH: ${{ inputs.standalone-depth }}
+        MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
+        AI_MODEL_STANDARD: ${{ inputs.model-standard }}
+        AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        OPENAI_API_KEY: ${{ inputs.api-key }}
+        GOOGLE_API_KEY: ${{ inputs.api-key }}
+        BEDROCK_API_KEY: ${{ inputs.api-key }}
+        OPENAI_BASE_URL: ${{ inputs.base-url }}
+        BEDROCK_API_URL: ${{ inputs.base-url }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        BASE_REF: ${{ inputs.base-ref }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        LLM_RETRY_COUNT: ${{ inputs.retry-count }}
+        AI_PARALLEL: ${{ inputs.parallel }}
+        AI_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
+        AI_MAX_INLINE: ${{ inputs.max-inline }}
+        AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
+      run: |
+        docker pull "$IMAGE"
+        # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
+        # word-splitting if the path contains spaces.
+        SUMMARY_MOUNT=()
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+          SUMMARY_MOUNT=(-e GITHUB_STEP_SUMMARY -v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY")
+        fi
+        docker run --rm \
+          -e AI_PROVIDER \
+          -e AI_REVIEW_MODE \
+          -e FORCE_FULL_DIFF \
+          -e REVIEW_TARGET \
+          -e STANDALONE_DEPTH \
+          -e MAX_DIFF_LINES \
+          -e AI_MODEL_STANDARD \
+          -e AI_MODEL_PREMIUM \
+          -e ANTHROPIC_API_KEY \
+          -e OPENAI_API_KEY \
+          -e GOOGLE_API_KEY \
+          -e BEDROCK_API_KEY \
+          -e OPENAI_BASE_URL \
+          -e BEDROCK_API_URL \
+          -e GH_TOKEN \
+          -e GITHUB_REPOSITORY \
+          -e PR_NUMBER \
+          -e BASE_REF \
+          -e HEAD_SHA \
+          -e LLM_RETRY_COUNT \
+          -e AI_PARALLEL \
+          -e AI_CONFIDENCE_THRESHOLD \
+          -e AI_MAX_INLINE \
+          -e AI_MAX_TOKENS_PER_AGENT \
+          -e GITHUB_WORKSPACE=/workspace \
+          -v "$GITHUB_WORKSPACE:/workspace" \
+          "${SUMMARY_MOUNT[@]}" \
+          "$IMAGE"

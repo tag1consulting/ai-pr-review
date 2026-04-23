@@ -1,0 +1,180 @@
+# AI PR Review — slash command trigger
+#
+# Copy this file to .github/workflows/ai-pr-review-commands.yml in your repo.
+#
+# Supported commands (post as a PR comment):
+#   /ai-pr-review rescan       — force full diff, re-run review
+#   /ai-pr-review review-full  — run in full mode (all agents)
+#   /ai-pr-review skip         — add skip-ai-review label to suppress the next review
+#   /ai-pr-review help         — post the command list as a reply
+#
+# Requirements:
+#   - GHCR_TOKEN secret: GitHub PAT with read:packages scope (for private image pull)
+#   - ANTHROPIC_API_KEY secret (or your provider's key)
+#   - Only users with write access to this repo can trigger reviews
+#
+# IMPORTANT: issue_comment workflows run from the default branch only.
+# Changes to this file take effect only after they are merged to the default branch.
+
+name: AI PR Review — slash commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  handle-command:
+    # Only run on PR comments that start with /ai-pr-review
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/ai-pr-review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse command
+        id: cmd
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          # Extract the first word after /ai-pr-review; strip CR so Windows \r\n line endings don't break the case match
+          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          case "$command" in
+            rescan|review-full|skip|help)
+              echo "command=$command" >> "$GITHUB_OUTPUT"
+              echo "valid=true"       >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "valid=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      # Acknowledge the command immediately with eyes reaction
+      - name: React — seen
+        if: steps.cmd.outputs.valid == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=eyes
+
+      # Handle /ai-pr-review help
+      - name: Reply with help text
+        if: steps.cmd.outputs.command == 'help'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --body "$(cat <<'EOF'
+          **AI PR Review commands:**
+          - `/ai-pr-review rescan` — force full diff re-review
+          - `/ai-pr-review review-full` — run all agents (full mode)
+          - `/ai-pr-review skip` — suppress the next automated review
+          - `/ai-pr-review help` — show this message
+          EOF
+          )"
+
+      # Handle /ai-pr-review skip
+      - name: Add skip label
+        if: steps.cmd.outputs.command == 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr edit ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --add-label skip-ai-review
+
+      # Handle rescan and review-full: check out the PR head, then run the review
+      - name: Checkout PR head
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+
+      - name: Get PR metadata
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_json=$(gh pr view ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --json baseRefName,headRefOid)
+          echo "base=$(echo "$pr_json" | jq -r .baseRefName)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo  "$pr_json" | jq -r .headRefOid)"  >> "$GITHUB_OUTPUT"
+
+      # React with rocket just before the review starts
+      - name: React — launching
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=rocket
+
+      - name: Run review (rescan)
+        if: steps.cmd.outputs.command == 'rescan'
+        uses: tag1consulting/ai-pr-review/container-action@main
+        with:
+          registry-token: ${{ secrets.GHCR_TOKEN }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.issue.number }}
+          base-ref: ${{ steps.pr.outputs.base }}
+          head-sha: ${{ steps.pr.outputs.sha }}
+          force-full-diff: 'true'
+
+      - name: Run review (review-full)
+        if: steps.cmd.outputs.command == 'review-full'
+        uses: tag1consulting/ai-pr-review/container-action@main
+        with:
+          registry-token: ${{ secrets.GHCR_TOKEN }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.issue.number }}
+          base-ref: ${{ steps.pr.outputs.base }}
+          head-sha: ${{ steps.pr.outputs.sha }}
+          review-mode: 'full'
+          force-full-diff: 'true'
+
+      # React with checkmark on success
+      - name: React — done
+        if: |
+          success() && (
+            steps.cmd.outputs.command == 'rescan' ||
+            steps.cmd.outputs.command == 'review-full'
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content="+1"
+
+      # React with X on failure
+      - name: React — failed
+        if: |
+          failure() && (
+            steps.cmd.outputs.command == 'rescan' ||
+            steps.cmd.outputs.command == 'review-full'
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=confused

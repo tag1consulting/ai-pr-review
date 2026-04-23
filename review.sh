@@ -33,6 +33,8 @@
 #   AI_MODEL_PREMIUM  — Model for deep agents (architecture-reviewer, security-reviewer)
 #                       Defaults to AI_MODEL_STANDARD if not set.
 #   AI_TEMPERATURE    — Sampling temperature (default: 0.3)
+#   AI_DRY_RUN        — "true" to skip posting and print findings to stdout instead.
+#                       Useful for local iteration; no GitHub token write access needed.
 
 set -euo pipefail
 
@@ -1607,6 +1609,15 @@ fi
 # ---------------------------------------------------------------------------
 # Phase 3: Post to GitHub
 # ---------------------------------------------------------------------------
+
+if [[ "${AI_DRY_RUN:-false}" == "true" ]]; then
+  echo "--- AI_DRY_RUN=true: skipping GitHub post, printing findings ---" >&2
+  echo "=== Summary ===" && cat "$SUMMARY_FILE"
+  echo "=== Findings ===" && cat "$FINDINGS_CLEAN_FILE"
+  echo "=== AI PR Review complete (dry run) ===" >&2
+  exit 0
+fi
+
 echo "--- Posting to GitHub ---" >&2
 
 # Pass failed agents to post-review.sh so it can avoid a false APPROVE.

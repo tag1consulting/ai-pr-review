@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+tests
+claude
+memory-bank
+*.md
+!README.md
+renovate.json
+.gitignore
+.dockerignore
+container-action
+examples
+docs
