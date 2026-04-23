@@ -13,6 +13,20 @@ The action runs on `ubuntu-latest` GitHub Actions runners and requires:
 
 No additional runner setup or Docker image is required.
 
+## Supported VCS providers
+
+The same container image drives PR reviews on both GitHub and Bitbucket Cloud.
+Select the provider via the `VCS_PROVIDER` env var (default: `github`).
+
+| Provider | `VCS_PROVIDER` | Summary comment | Inline findings | Standalone (issue) mode |
+|----------|---------------|-----------------|-----------------|------------------------|
+| GitHub | `github` (default) | ✅ | ✅ | ✅ |
+| Bitbucket Cloud | `bitbucket` | ✅ (findings rendered inside) | ❌ (v0.2.0) | ❌ (no Issues product) |
+
+See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for Bitbucket Pipelines
+setup (token scopes, repo variables, starter pipeline, caveats). The
+remainder of this README applies to the GitHub path.
+
 ## What it does
 
 On every PR push, this action:
