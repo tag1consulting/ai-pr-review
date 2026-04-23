@@ -1,14 +1,14 @@
 [
   {
     "id": "self-action-pin-not-supply-chain-risk",
-    "reason": "tag1consulting/ai-pr-review referencing itself (@main, a tag, or a SHA) is not a supply-chain risk — it IS the action being run. Flagging the tool's own canonical invocation as an unpinned third-party dependency is a false positive.",
+    "reason": "tag1consulting/ai-pr-review referencing itself (@main, a tag, or a SHA) is not a supply-chain risk \u2014 it IS the action being run. Flagging the tool's own canonical invocation as an unpinned third-party dependency is a false positive.",
     "match": {
       "pattern": "tag1consulting/ai-pr-review"
     }
   },
   {
     "id": "ai-review-yml-action-pin-false-positive",
-    "reason": "uses: tag1consulting/ai-pr-review@main in ai-review.yml is intentional. Consumers deliberately pin to @main (or a tag/SHA) for this specific action. Flagging it as a supply-chain risk is a false positive — the action is the reviewed tool itself or is a known trusted dependency.",
+    "reason": "uses: tag1consulting/ai-pr-review@main in ai-review.yml is intentional. Consumers deliberately pin to @main (or a tag/SHA) for this specific action. Flagging it as a supply-chain risk is a false positive \u2014 the action is the reviewed tool itself or is a known trusted dependency.",
     "match": {
       "file": "ai-review.yml",
       "pattern": "floating branch|unpinned|supply.chain|pin.*@main|@main.*pin|commit sha|immutable"
@@ -23,7 +23,7 @@
   },
   {
     "id": "echo-zero-safe-default",
-    "reason": "Intentional: || echo '0' in arithmetic contexts provides a safe default when grep finds no match. Defaulting to 0 lines does not suppress any review output — it is the conservative path.",
+    "reason": "Intentional: || echo '0' in arithmetic contexts provides a safe default when grep finds no match. Defaulting to 0 lines does not suppress any review output \u2014 it is the conservative path.",
     "match": {
       "pattern": "silently default.*0|default.*0.*echo|echo.*0.*safe|safe.*default.*0"
     }
@@ -58,17 +58,17 @@
   },
   {
     "id": "get-last-sha-api-failure-fallback-intentional",
-    "reason": "Intentional: get_last_reviewed_sha emits a WARNING on API failure and returns empty, triggering a full PR diff. This is the safe fallback — a full re-review is correct behavior when the last SHA is unknown, and the WARNING distinguishes it from a genuine first run.",
+    "reason": "Intentional: get_last_reviewed_sha emits a WARNING on API failure and returns empty, triggering a full PR diff. This is the safe fallback \u2014 a full re-review is correct behavior when the last SHA is unknown, and the WARNING distinguishes it from a genuine first run.",
     "match": {
       "pattern": "get_last_reviewed_sha.*indistinguishable|indistinguishable.*first.run|api.failure.*full.re-review|transient.*api.*full"
     }
   },
   {
     "id": "version-post-knowledge-cutoff-github-actions",
-    "reason": "LLMs flag GitHub Action versions released after their training cutoff as 'nonexistent' or claim an older major version is 'latest'. Scoped to findings that reference an actions/ path. The verify field causes review.sh to confirm the tag/release exists via GitHub API before accepting the suppression — if the version genuinely does not exist (404), the finding is kept.",
+    "reason": "LLMs flag GitHub Action versions released after their training cutoff as 'nonexistent' or claim an older major version is 'latest'. Scoped to findings that reference an actions/ path. The verify field causes review.sh to confirm the tag/release exists via GitHub API before accepting the suppression \u2014 if the version genuinely does not exist (404), the finding is kept.",
     "verify": "github-release",
     "match": {
-      "pattern": "(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release)).{0,300}actions/|actions/.{0,300}(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release))"
+      "pattern": "(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release)|may not be a (published|valid|released) (release|version|tag)|might not (exist|be published|be a valid)|not (yet )?published|could not (be verified|exist)).{0,300}actions/|actions/.{0,300}(does not exist as a released version|is not a (released|valid|published) version|no such (release|version|tag) exists|(latest|current) (stable )?release is v[0-9]+|unreleased version|references? a non-existent (tag|version|release)|may not be a (published|valid|released) (release|version|tag)|might not (exist|be published|be a valid)|not (yet )?published|could not (be verified|exist))"
     }
   },
   {
@@ -105,7 +105,7 @@
   },
   {
     "id": "upload-download-artifact-version-mismatch-false-positive",
-    "reason": "actions/upload-artifact and actions/download-artifact have intentionally offset major version numbers — they are separate packages released independently. upload-artifact@v7 is fully compatible with download-artifact@v8; the download-artifact@v8 README explicitly uses upload-artifact@v7 in its examples. Flagging mismatched major versions as an incompatibility is a false positive for this specific action pair.",
+    "reason": "actions/upload-artifact and actions/download-artifact have intentionally offset major version numbers \u2014 they are separate packages released independently. upload-artifact@v7 is fully compatible with download-artifact@v8; the download-artifact@v8 README explicitly uses upload-artifact@v7 in its examples. Flagging mismatched major versions as an incompatibility is a false positive for this specific action pair.",
     "match": {
       "pattern": "upload-artifact.{0,200}download-artifact|download-artifact.{0,200}upload-artifact"
     }

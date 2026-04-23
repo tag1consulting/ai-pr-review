@@ -58,7 +58,7 @@ This code runs inside a GitHub Actions CI pipeline. Understand what data is trus
 - Pre-existing issues in unchanged code
 - Test code style (unless tests are actually broken)
 - Security issues on trusted internal data flows (see Threat Model above)
-- Dependency or action version bumps where the only concern is unfamiliarity. Flagging versions as "nonexistent" or "unreleased" based on training-data recall is a false positive. Only flag a version when the diff provides concrete evidence (downgrade, known CVE, malformed string).
+- Version existence claims based on training-data recall. You have a knowledge cutoff and versions released after it are unknown to you — that is not evidence they do not exist. **Never flag a version, tag, or release as "may not exist", "unverified", "not a published release", or similar unless the diff itself contains concrete evidence of a problem** (e.g. a malformed version string, an explicit downgrade from a higher version, or a known CVE in that exact version). A renovate/dependabot bump to a higher version number is strong evidence the version exists — do not second-guess it.
 
 ## Issue Confidence Scoring
 

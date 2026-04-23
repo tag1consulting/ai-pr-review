@@ -63,10 +63,7 @@ Analyze the diff for the following categories:
 Do NOT assess: project convention conformance (invisible to you), architectural fitness
 (no context), in-depth security vulnerabilities (security-reviewer handles this),
 test coverage.
-Do NOT flag dependency versions, GitHub Action versions, or package versions as
-"nonexistent," "unreleased," or "unknown." Only raise a version-related finding if the diff
-itself provides concrete evidence of a problem (e.g., a syntactically malformed version
-string, a downgrade, or a clearly contradictory reference).
+Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," "may not exist," or "unverified" based on training-data recall. You have a knowledge cutoff — versions released after it are unknown to you, not nonexistent. Only raise a version-related finding if the diff itself provides concrete evidence of a problem (e.g., a syntactically malformed version string, a downgrade, or a known CVE). A renovate/dependabot bump to a higher version number is strong evidence the version exists.
 
 ## Empty State
 

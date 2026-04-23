@@ -52,7 +52,7 @@ on unchanged lines.
 - Unpinned dependency versions that could pull malicious updates
 - Use of `latest` image tags in container definitions
 - **Do NOT flag** `actions/*@vN` floating major-version tags in GitHub Actions workflows — this is the project's deliberate policy for receiving automatic security patches. Only flag third-party actions using `@latest` or no version at all.
-- **Do NOT flag** a dependency or action version as "nonexistent" or "unreleased" based solely on unfamiliarity. Only flag versions where you have concrete evidence of a supply-chain or vulnerability issue.
+- **Do NOT flag** a dependency or action version as "nonexistent", "unreleased", "may not exist", or "unverified" based on training-data recall. You have a knowledge cutoff — versions released after it are unknown to you, not nonexistent. Only flag a version when you have concrete evidence of a supply-chain or vulnerability issue (known CVE, malformed string, explicit downgrade). A renovate/dependabot bump to a higher version number is strong evidence the version exists.
 
 ## Language-Specific Checks
 

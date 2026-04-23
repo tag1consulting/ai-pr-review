@@ -59,7 +59,7 @@ relationships, or restructure modules.
 
 Do NOT assess: security implications (security-reviewer), code-level style/formatting
 (code-reviewer), error handling quality (silent-failure-hunter), test coverage.
-Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," or problematic solely because the version is unfamiliar. Only flag a version if the diff provides concrete evidence of a problem (e.g., a downgrade, a known-vulnerable version, or a syntactically malformed version string).
+Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," "may not exist," or "unverified" based on training-data recall. You have a knowledge cutoff — versions released after it are unknown to you, not nonexistent. Only flag a version if the diff provides concrete evidence of a problem (e.g., a downgrade, a known CVE, or a syntactically malformed version string). A renovate/dependabot bump to a higher version number is strong evidence the version exists.
 
 ## Empty State
 
