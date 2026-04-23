@@ -97,6 +97,38 @@ branch. `review.sh` runs `git fetch origin $BASE_REF --depth=50` at startup,
 which fails silently on a shallow clone. Set `clone.depth: full` at the top
 of `bitbucket-pipelines.yml` (the starter does this).
 
+## Security considerations
+
+### Secret exposure to pipeline contributors
+
+`BITBUCKET_API_TOKEN` and `ANTHROPIC_API_KEY` (or your provider key) are
+exposed as secured repo variables to **any pipeline run triggered from a
+branch in this repository**. This includes PRs opened by any user with
+branch-push access.
+
+A contributor with push access to any branch can modify `bitbucket-pipelines.yml`
+in their PR to exfiltrate these secrets — this is the classic "pwn-request"
+pattern. Bitbucket Cloud's "do not expose secured variables to forks" setting
+protects against external forks, but **not against in-repo branches**.
+
+Mitigations:
+- **Use a dedicated bot user** with minimum scope: Pull request:Write on the
+  reviewed repo only, not workspace-wide admin access.
+- **Restrict who can push branches** in **Repository settings → Branch
+  restrictions**. Pipelines runs are limited to users who can push the
+  triggering branch.
+- **Enable manual approval** for pipelines triggered by non-maintainer
+  contributions (**Repository settings → Pipelines → Settings →
+  "Require manual step approval"**).
+- **Do not use this setup on a public open-source repo** without additional
+  safeguards — any fork contributor could open a PR against your repo.
+
+### `BITBUCKET_API_TOKEN` scope
+
+Use the minimum scope required (Repository:Read + Pull request:Write). If the
+bot user has broader Workspace or Project admin rights, a token compromise has
+a much larger blast radius.
+
 ## Troubleshooting
 
 ### `ERROR: bb_api POST /repositories/.../comments -> 401`

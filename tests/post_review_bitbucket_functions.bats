@@ -113,6 +113,25 @@ setup() {
   run truncate_body "$at_cap"
   [ "$status" -eq 0 ]
   [[ "$output" != *"truncated"* ]]
+  # Output must be returned byte-for-byte unchanged.
+  local out_bytes
+  out_bytes=$(printf '%s' "$output" | wc -c)
+  [ "$out_bytes" -eq 32000 ]
+}
+
+@test "bitbucket truncate_body: multi-byte UTF-8 body truncated to valid UTF-8" {
+  MAX_BODY_SIZE=32000
+  load_function "${PROJECT_ROOT}/post-review-bitbucket.sh" truncate_body
+  # '日' is 3 bytes; 11000 repetitions = 33000 bytes (over cap).
+  # head -c 32000 cuts mid-codepoint at byte 32000; iconv strips the partial
+  # codepoint so the output must round-trip as valid UTF-8.
+  local long_utf8
+  long_utf8=$(printf '日%.0s' {1..11000})
+  run truncate_body "$long_utf8"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Review output truncated"* ]]
+  # Verify the truncated prefix is valid UTF-8 (iconv exits 0 on clean input).
+  printf '%s' "$output" | iconv -f UTF-8 -t UTF-8 > /dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -147,6 +166,7 @@ setup() {
     '{"sources":[]}'
     '{}'
     '{"source":"","sources":[]}'
+    '{"source":"agent-a","sources":["agent-a"]}'
   )
   local gh_fn bb_fn
   gh_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
@@ -157,4 +177,35 @@ setup() {
     bb_out=$(bash -c "${bb_fn}"'; format_source_tag "$1"' _ "$fixture")
     [ "$gh_out" = "$bb_out" ] || { echo "drift on fixture='${fixture}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
   done
+}
+
+@test "parity: truncate_body produces identical output in both scripts" {
+  local fixtures=(
+    "hello world"
+    ""
+  )
+  local gh_fn bb_fn
+  # Extract truncate_body together with its MAX_BODY_SIZE constant from each
+  # script so both run with their own cap (GitHub=64000, Bitbucket=32000).
+  gh_fn=$(awk '/^MAX_BODY_SIZE=/{print} /^truncate_body\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
+  bb_fn=$(awk '/^MAX_BODY_SIZE=/{print} /^truncate_body\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
+  for fixture in "${fixtures[@]}"; do
+    local gh_out bb_out
+    gh_out=$(bash -c "${gh_fn}"'; truncate_body "$1"' _ "$fixture")
+    bb_out=$(bash -c "${bb_fn}"'; truncate_body "$1"' _ "$fixture")
+    [ "$gh_out" = "$bb_out" ] || { echo "drift on fixture (len=${#fixture}): gh_len=${#gh_out} bb_len=${#bb_out}" >&2; return 1; }
+  done
+}
+
+@test "parity: mktemp_tracked registers files for cleanup in both scripts" {
+  local gh_fn bb_fn
+  gh_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
+  bb_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
+  # Both should create a real temp file and echo its path.
+  local gh_path bb_path
+  gh_path=$(bash -c 'TMPFILES=(); '"${gh_fn}"'; mktemp_tracked /tmp/parity-gh-XXXXXXXX')
+  bb_path=$(bash -c 'TMPFILES=(); '"${bb_fn}"'; mktemp_tracked /tmp/parity-bb-XXXXXXXX')
+  [ -f "$gh_path" ] || { echo "GitHub mktemp_tracked did not create a file" >&2; return 1; }
+  [ -f "$bb_path" ] || { echo "Bitbucket mktemp_tracked did not create a file" >&2; return 1; }
+  rm -f "$gh_path" "$bb_path"
 }

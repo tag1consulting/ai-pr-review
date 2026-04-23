@@ -42,6 +42,12 @@ resolve_repo_id() {
     WORKSPACE="$BITBUCKET_WORKSPACE"
     REPO_SLUG="$BITBUCKET_REPO_SLUG"
   elif [[ -n "${GITHUB_REPOSITORY:-}" && "$GITHUB_REPOSITORY" == */* ]]; then
+    # Validate exactly one slash to catch misconfigured values like "ws/proj/repo"
+    # where ##*/ would silently drop the middle segment.
+    if [[ ! "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
+      echo "ERROR: GITHUB_REPOSITORY must be in 'workspace/repo_slug' format (got '${GITHUB_REPOSITORY}')." >&2
+      exit 1
+    fi
     WORKSPACE="${GITHUB_REPOSITORY%%/*}"
     REPO_SLUG="${GITHUB_REPOSITORY##*/}"
   else
@@ -90,17 +96,21 @@ bb_api() {
   : "${BITBUCKET_EMAIL:?BITBUCKET_EMAIL is required for Bitbucket Cloud auth}"
   : "${BITBUCKET_API_TOKEN:?BITBUCKET_API_TOKEN is required for Bitbucket Cloud auth}"
 
-  local attempt=0 max_retries=3 http_code body_file
+  local attempt=0 max_retries=3 http_code body_file curl_err_file
   body_file=$(mktemp_tracked /tmp/bb-api-body-XXXXXXXX)
+  curl_err_file=$(mktemp_tracked /tmp/bb-api-err-XXXXXXXX)
 
   while true; do
+    # Capture curl stderr separately so diagnostic output (TLS errors, DNS
+    # failures, connection timeouts) is preserved for the error log rather
+    # than discarded. exit-code → 000 sentinel on curl failure.
     http_code=$(curl -sS \
       -u "${BITBUCKET_EMAIL}:${BITBUCKET_API_TOKEN}" \
       -o "$body_file" \
       -w '%{http_code}' \
       -X "$method" \
       "$@" \
-      "${BB_API}${path}" 2>/dev/null || echo "000")
+      "${BB_API}${path}" 2>"$curl_err_file" || echo "000")
 
     if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
       cat "$body_file"
@@ -112,14 +122,16 @@ bb_api() {
        [[ "$http_code" =~ ^(408|429|500|502|503|504|000)$ ]]; then
       attempt=$((attempt + 1))
       local backoff=$(( 2 * (1 << (attempt - 1)) ))
-      local jitter=$(( RANDOM % 1000 ))
+      # Zero-pad jitter to 3 digits so "sleep 2.007" means 7ms, not 700ms.
+      local jitter; jitter=$(printf '%03d' $(( RANDOM % 1000 )))
       echo "WARNING: bb_api ${method} ${path} -> ${http_code} (attempt ${attempt}/${max_retries}), retrying in ${backoff}.${jitter}s..." >&2
       sleep "${backoff}.${jitter}"
       continue
     fi
 
-    # Permanent failure or retries exhausted.
+    # Permanent failure or retries exhausted — emit full diagnostics.
     echo "ERROR: bb_api ${method} ${path} -> ${http_code}" >&2
+    [[ -s "$curl_err_file" ]] && cat "$curl_err_file" >&2
     cat "$body_file" >&2
     return 1
   done
@@ -134,18 +146,31 @@ if [[ "${1:-}" == "--get-last-sha" ]]; then
   PR_NUMBER="${2:?--get-last-sha requires PR number as second argument}"
   resolve_repo_id
 
-  comments_json=$(bb_api GET \
-    "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22" \
-    2>/dev/null) || {
-    echo "WARNING: get_last_reviewed_sha: Bitbucket API error (treating as first run)." >&2
-    exit 0
-  }
+  # Follow Bitbucket's pagination cursor until the marker comment is found or
+  # all pages are exhausted. pagelen=100 with the q= filter minimises pages.
+  next_url="/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22&sort=-updated_on"
+  comment_body=""
+  while [[ -n "$next_url" ]]; do
+    comments_json=$(bb_api GET "$next_url") || {
+      echo "WARNING: get_last_reviewed_sha: Bitbucket API error (treating as first run)." >&2
+      exit 0
+    }
 
-  # Bitbucket may not honour the `q` filter for rich-text fields; also
-  # grep the body to be safe. Take the most recent match.
-  comment_body=$(echo "$comments_json" | jq -r --arg marker "$MARKER_PREFIX" \
-    '.values // [] | map(select(.content.raw // "" | contains($marker))) | last.content.raw // empty' \
-    2>/dev/null || true)
+    # Bitbucket may not honour the `q` filter for rich-text fields; also
+    # check the body client-side. Take the first match (sort=-updated_on means
+    # most-recently-updated first, so the summary comment appears on page 1).
+    comment_body=$(echo "$comments_json" | jq -r --arg marker "$MARKER_PREFIX" \
+      '.values // [] | map(select(.content.raw // "" | contains($marker))) | first.content.raw // empty') || {
+      echo "WARNING: get_last_reviewed_sha: could not parse comments response (treating as first run)." >&2
+      exit 0
+    }
+
+    [[ -n "$comment_body" ]] && break
+
+    # Advance to the next page, if any. Strip the base URL prefix so bb_api
+    # can prepend BB_API again via the path argument.
+    next_url=$(echo "$comments_json" | jq -r '.next // empty' | sed "s|${BB_API}||")
+  done
 
   if [[ -n "$comment_body" ]]; then
     echo "$comment_body" | grep -oE 'sha=[0-9a-f]+' | sed 's/sha=//' | head -1 || true
@@ -178,6 +203,13 @@ DIFF_FILE="${5:?Missing diff file}"
 HEAD_SHA="${6:?Missing head SHA}"
 TOKEN_TABLE_FILE="${7:-}"
 
+# Validate HEAD_SHA is a hex git SHA before it is interpolated into sed
+# expressions or embedded in the SHA watermark marker.
+if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+  echo "ERROR: HEAD_SHA must be a hex git SHA (got '${HEAD_SHA}')." >&2
+  exit 1
+fi
+
 resolve_repo_id
 
 # ---------------------------------------------------------------------------
@@ -191,7 +223,18 @@ truncate_body() {
   byte_len=$(printf '%s' "$body" | wc -c)
   if [[ "$byte_len" -gt "$MAX_BODY_SIZE" ]]; then
     local truncated
-    truncated=$(printf '%s' "$body" | head -c "$MAX_BODY_SIZE" | iconv -f UTF-8 -t UTF-8//IGNORE 2>/dev/null)
+    # iconv strips incomplete multi-byte codepoints at the cut boundary.
+    # //IGNORE exits non-zero when it drops chars, so we can't use || for
+    # fallback detection. Instead: run iconv and fall back to raw head -c
+    # only if iconv is absent (command -v check) or produces no output.
+    local raw_cut
+    raw_cut=$(printf '%s' "$body" | head -c "$MAX_BODY_SIZE")
+    if command -v iconv > /dev/null 2>&1; then
+      truncated=$(printf '%s' "$raw_cut" | iconv -f UTF-8 -t UTF-8//IGNORE 2>/dev/null)
+      [[ -z "$truncated" ]] && truncated="$raw_cut"
+    else
+      truncated="$raw_cut"
+    fi
     printf '%s\n\n---\n*Review output truncated — body exceeded Bitbucket Cloud comment limit (32,768 chars). Run a full review locally to see complete output.*\n' \
       "$truncated"
   else
@@ -240,7 +283,10 @@ format_source_tag() {
 render_findings_markdown() {
   local findings_json="$1"
   local findings_ndjson
-  findings_ndjson=$(echo "$findings_json" | jq -c '.[]' 2>/dev/null || true)
+  if ! findings_ndjson=$(echo "$findings_json" | jq -c '.[]' 2>/dev/null); then
+    echo "WARNING: render_findings_markdown: could not iterate findings JSON; findings section will be empty." >&2
+    return 0
+  fi
 
   [[ -z "$findings_ndjson" ]] && return 0
 
@@ -308,6 +354,11 @@ classify_risk() {
 # ---------------------------------------------------------------------------
 build_comment_body() {
   local summary findings_json
+
+  if [[ ! -f "$SUMMARY_FILE" ]]; then
+    echo "ERROR: Summary file not found: ${SUMMARY_FILE}. This indicates an upstream agent failure." >&2
+    return 1
+  fi
   summary=$(cat "$SUMMARY_FILE")
 
   # Strip mermaid fenced blocks — Bitbucket PR comments do not render mermaid.
@@ -321,8 +372,9 @@ build_comment_body() {
   if [[ -f "$FINDINGS_JSON_FILE" ]]; then
     findings_json=$(cat "$FINDINGS_JSON_FILE")
     if ! echo "$findings_json" | jq -e 'type == "array"' > /dev/null 2>&1; then
-      echo "WARNING: Invalid findings JSON; rendering summary without findings." >&2
-      findings_json="[]"
+      echo "ERROR: Findings JSON file is not a valid JSON array. Review results may be incomplete." >&2
+      echo "       Re-run the pipeline to retry. File: ${FINDINGS_JSON_FILE}" >&2
+      return 1
     fi
   fi
 
@@ -400,17 +452,28 @@ ${token_block}
 # stdout, or empty if none exists.
 # ---------------------------------------------------------------------------
 find_existing_summary_id() {
-  # Same server-side filter as --get-last-sha so the summary is found even on
-  # PRs with >100 comments. The jq-side contains() check below is kept as a
-  # safety net since Bitbucket may not always honour `q` on rich-text fields.
-  local comments_json
-  comments_json=$(bb_api GET \
-    "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22" \
-    2>/dev/null) || return 1
+  # Same server-side filter and sort as --get-last-sha. sort=-updated_on puts
+  # the summary comment (always recently touched) on the first page so we
+  # rarely need to paginate. The jq contains() check below is a safety net
+  # since Bitbucket may not always honour `q` on rich-text fields.
+  local next_url="/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22&sort=-updated_on"
+  while [[ -n "$next_url" ]]; do
+    local comments_json
+    comments_json=$(bb_api GET "$next_url") || return 1
 
-  echo "$comments_json" | jq -r --arg marker "$MARKER_PREFIX" \
-    '.values // [] | map(select(.content.raw // "" | contains($marker))) | last.id // empty' \
-    2>/dev/null || true
+    local found_id
+    found_id=$(echo "$comments_json" | jq -r --arg marker "$MARKER_PREFIX" \
+      '.values // [] | map(select(.content.raw // "" | contains($marker))) | first.id // empty') || {
+      echo "WARNING: find_existing_summary_id: could not parse comments response." >&2
+      return 1
+    }
+
+    [[ -n "$found_id" ]] && { echo "$found_id"; return 0; }
+
+    next_url=$(echo "$comments_json" | jq -r '.next // empty' | sed "s|${BB_API}||")
+  done
+  # No matching comment found across all pages.
+  echo ""
 }
 
 # ---------------------------------------------------------------------------
@@ -418,21 +481,25 @@ find_existing_summary_id() {
 # ---------------------------------------------------------------------------
 post_summary_with_findings() {
   local body
-  body=$(build_comment_body)
-
-  if [[ -z "$body" ]]; then
-    echo "No summary body to post." >&2
-    return 0
-  fi
+  body=$(build_comment_body) || return 1
 
   local payload_file
   payload_file=$(mktemp_tracked /tmp/bb-comment-XXXXXXXX.json)
-  jq -n --arg raw "$body" '{content: {raw: $raw}}' > "$payload_file"
+  if ! jq -n --arg raw "$body" '{content: {raw: $raw}}' > "$payload_file"; then
+    echo "ERROR: Failed to build comment payload (jq failed)." >&2
+    return 1
+  fi
 
   local existing_id
-  existing_id=$(find_existing_summary_id || true)
+  # Propagate API errors from find_existing_summary_id rather than treating
+  # them as "no existing comment" — the latter causes duplicate POSTs on
+  # transient GET failures.
+  if ! existing_id=$(find_existing_summary_id); then
+    echo "ERROR: Could not query existing comments; cannot safely upsert." >&2
+    return 1
+  fi
 
-  local result
+  local result new_id
   if [[ -n "$existing_id" ]]; then
     echo "Updating existing summary comment #${existing_id}..." >&2
     if result=$(bb_api PUT \
@@ -440,6 +507,7 @@ post_summary_with_findings() {
       -H 'Content-Type: application/json' \
       --data-binary "@${payload_file}"); then
       echo "Summary comment updated on PR #${PR_NUMBER}." >&2
+      _cleanup_duplicate_summary_comments "$existing_id"
       return 0
     fi
     echo "ERROR: Failed to update summary comment #${existing_id}." >&2
@@ -451,13 +519,38 @@ post_summary_with_findings() {
     "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments" \
     -H 'Content-Type: application/json' \
     --data-binary "@${payload_file}"); then
-    local new_id
     new_id=$(echo "$result" | jq -r '.id // empty')
     echo "Summary comment posted to PR #${PR_NUMBER} (id=${new_id:-unknown})." >&2
+    _cleanup_duplicate_summary_comments "${new_id:-}"
     return 0
   fi
-  echo "ERROR: Failed to post summary comment." >&2
+  echo "ERROR: Failed to post summary comment to PR #${PR_NUMBER}. Review results were not delivered." >&2
   return 1
+}
+
+# Delete all summary-marker comments except the one we just kept. Non-fatal:
+# duplicates are cosmetic; we never block the review on cleanup failures.
+_cleanup_duplicate_summary_comments() {
+  local kept_id="$1"
+  [[ -z "$kept_id" ]] && return 0
+
+  local next_url="/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22"
+  while [[ -n "$next_url" ]]; do
+    local page_json
+    page_json=$(bb_api GET "$next_url" 2>/dev/null) || break
+
+    while IFS= read -r dup_id; do
+      [[ -z "$dup_id" || "$dup_id" == "$kept_id" ]] && continue
+      echo "Removing duplicate summary comment #${dup_id}..." >&2
+      bb_api DELETE \
+        "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments/${dup_id}" \
+        > /dev/null 2>&1 \
+        || echo "WARNING: Could not delete duplicate summary comment #${dup_id}." >&2
+    done < <(echo "$page_json" | jq -r --arg marker "$MARKER_PREFIX" \
+      '.values // [] | map(select(.content.raw // "" | contains($marker))) | .[].id' 2>/dev/null)
+
+    next_url=$(echo "$page_json" | jq -r '.next // empty' | sed "s|${BB_API}||")
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -474,7 +567,7 @@ update_sha_marker() {
 
   existing_body=$(bb_api GET \
     "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments/${existing_id}" \
-    2>/dev/null | jq -r '.content.raw // empty') || {
+    | jq -r '.content.raw // empty') || {
     echo "WARNING: Could not fetch summary comment body for SHA update." >&2
     return 0
   }
@@ -509,19 +602,10 @@ update_sha_marker() {
 # ---------------------------------------------------------------------------
 echo "--- Posting review to Bitbucket Cloud PR #${PR_NUMBER} ---" >&2
 
-summary_ok=true
-post_summary_with_findings || {
-  echo "WARNING: Summary posting failed; the next run will fall back to a full PR diff." >&2
-  summary_ok=false
-}
-
-# Findings are rendered inside the summary body in v0.2.0 — no separate
-# "post_findings" step. If post_summary_with_findings succeeded, the SHA
-# marker is already embedded; update_sha_marker is a safety net in case
-# build_comment_body regenerates the body but leaves the marker stale.
-if [[ "$summary_ok" == "true" ]]; then
-  update_sha_marker
-else
-  echo "Skipping SHA marker update — summary comment was not posted." >&2
+# Findings are rendered inside the summary body in v0.2.0 (no inline comments).
+# build_comment_body embeds HEAD_SHA directly, so the SHA watermark is always
+# current after a successful post — no separate update_sha_marker call needed.
+if ! post_summary_with_findings; then
+  echo "ERROR: Review results were not delivered to PR #${PR_NUMBER}." >&2
   exit 1
 fi

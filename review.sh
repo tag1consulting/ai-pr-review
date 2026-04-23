@@ -44,7 +44,7 @@ set -euo pipefail
 # Mask provider API keys in GitHub Actions logs (defense-in-depth; also covers
 # direct invocations outside action.yml). Keep in sync with the env: mapping in
 # action.yml (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY / BEDROCK_API_KEY).
-for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY GH_TOKEN; do
+for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY GH_TOKEN BITBUCKET_API_TOKEN; do
   if [[ -n "${!key_var:-}" ]]; then
     echo "::add-mask::${!key_var}"
   fi
@@ -56,24 +56,30 @@ REVIEW_TARGET="${REVIEW_TARGET:-pr}"
 PR_NUMBER="${PR_NUMBER:-}"
 VCS_PROVIDER="${VCS_PROVIDER:-github}"
 
+# log_error emits ::error:: on GitHub Actions (where it renders in the UI) and
+# a plain ERROR: prefix elsewhere (Bitbucket Pipelines, local runs) so the log
+# annotation directives don't appear as literal noise outside GitHub Actions.
+log_error() { [[ "${VCS_PROVIDER:-github}" == "github" ]] && echo "::error::$*" >&2 || echo "ERROR: $*" >&2; }
+log_warn()  { [[ "${VCS_PROVIDER:-github}" == "github" ]] && echo "::warning::$*" >&2 || echo "WARNING: $*" >&2; }
+
 # Resolve the provider-specific post-review script. GitHub uses the canonical
 # post-review.sh; other providers use sibling scripts (e.g. post-review-bitbucket.sh).
 case "$VCS_PROVIDER" in
   github)    POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review.sh" ;;
   bitbucket) POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review-bitbucket.sh" ;;
   *)
-    echo "::error::Invalid VCS_PROVIDER '${VCS_PROVIDER}'. Valid values: github, bitbucket" >&2
+    log_error "Invalid VCS_PROVIDER '${VCS_PROVIDER}'. Valid values: github, bitbucket"
     exit 1
     ;;
 esac
 
 if [[ ! -x "$POST_REVIEW_SCRIPT" ]]; then
-  echo "::error::Post-review script not found or not executable: ${POST_REVIEW_SCRIPT}" >&2
+  log_error "Post-review script not found or not executable: ${POST_REVIEW_SCRIPT}"
   exit 1
 fi
 
 if [[ "$VCS_PROVIDER" == "bitbucket" && "$REVIEW_TARGET" == "standalone" ]]; then
-  echo "::error::Standalone review mode is not supported for VCS_PROVIDER=bitbucket." >&2
+  log_error "Standalone review mode is not supported for VCS_PROVIDER=bitbucket."
   echo "Bitbucket Cloud has no Issues product; use REVIEW_TARGET=pr instead." >&2
   exit 1
 fi
@@ -84,7 +90,7 @@ fi
 case "$AI_PROVIDER" in
   anthropic|openai|openai-compatible|google|bedrock-proxy) ;;
   *)
-    echo "::error::Invalid AI_PROVIDER '${AI_PROVIDER}'. Valid values: anthropic, openai, openai-compatible, google, bedrock-proxy" >&2
+    log_error "Invalid AI_PROVIDER '${AI_PROVIDER}'. Valid values: anthropic, openai, openai-compatible, google, bedrock-proxy"
     exit 1
     ;;
 esac
@@ -247,12 +253,12 @@ if ! [[ "$MAX_DIFF_LINES" =~ ^[0-9]+$ ]]; then
   MAX_DIFF_LINES=5000
 fi
 if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
-  echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
+  log_warn "Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review."
   echo "To review large diffs, increase MAX_DIFF_LINES or split into smaller changes." >&2
   if [[ "$REVIEW_TARGET" != "standalone" && "$VCS_PROVIDER" == "github" ]]; then
   # Post (or update) a comment explaining the skip — idempotent via marker to avoid
   # accumulating duplicate comments across repeated oversized pushes. GitHub-only
-  # in v0.2.0; Bitbucket consumers will see the ::warning:: message in the log but
+  # in v0.2.0; Bitbucket consumers will see the log_warn output but
   # no comment will be posted (the review still exits cleanly).
   : "${GH_TOKEN:?GH_TOKEN is required}"
   : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
