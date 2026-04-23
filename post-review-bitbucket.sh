@@ -54,6 +54,25 @@ BB_API="https://api.bitbucket.org/2.0"
 MARKER_PREFIX="<!-- ai-pr-review-summary"
 
 # ---------------------------------------------------------------------------
+# Temp file bookkeeping (keep in sync with post-review.sh:282).
+# Defined here (ahead of bb_api) so bb_api can use mktemp_tracked rather than
+# a RETURN trap that would not fire on SIGKILL or in some subshell contexts.
+# ---------------------------------------------------------------------------
+TMPFILES=()
+cleanup() {
+  rm -f "${TMPFILES[@]}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# keep in sync with post-review.sh:291
+mktemp_tracked() {
+  local f
+  f=$(mktemp "$@")
+  TMPFILES+=("$f")
+  echo "$f"
+}
+
+# ---------------------------------------------------------------------------
 # bb_api — invoke the Bitbucket Cloud REST API with Basic auth.
 # Mirrors the gh_api_retry pattern: retries on transient failures (502/503/
 # 429/timeouts) with exponential backoff + jitter. Prints response body to
@@ -72,9 +91,7 @@ bb_api() {
   : "${BITBUCKET_API_TOKEN:?BITBUCKET_API_TOKEN is required for Bitbucket Cloud auth}"
 
   local attempt=0 max_retries=3 http_code body_file
-  body_file=$(mktemp /tmp/bb-api-body-XXXXXXXX)
-  # shellcheck disable=SC2064  # expand now so the file path is captured
-  trap "rm -f '$body_file'" RETURN
+  body_file=$(mktemp_tracked /tmp/bb-api-body-XXXXXXXX)
 
   while true; do
     http_code=$(curl -sS \
@@ -162,23 +179,6 @@ HEAD_SHA="${6:?Missing head SHA}"
 TOKEN_TABLE_FILE="${7:-}"
 
 resolve_repo_id
-
-# ---------------------------------------------------------------------------
-# Temp file bookkeeping (keep in sync with post-review.sh:282).
-# ---------------------------------------------------------------------------
-TMPFILES=()
-cleanup() {
-  rm -f "${TMPFILES[@]}" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# keep in sync with post-review.sh:291
-mktemp_tracked() {
-  local f
-  f=$(mktemp "$@")
-  TMPFILES+=("$f")
-  echo "$f"
-}
 
 # ---------------------------------------------------------------------------
 # Bitbucket Cloud's content.raw field is capped at 32,768 chars. Truncate at
@@ -400,9 +400,12 @@ ${token_block}
 # stdout, or empty if none exists.
 # ---------------------------------------------------------------------------
 find_existing_summary_id() {
+  # Same server-side filter as --get-last-sha so the summary is found even on
+  # PRs with >100 comments. The jq-side contains() check below is kept as a
+  # safety net since Bitbucket may not always honour `q` on rich-text fields.
   local comments_json
   comments_json=$(bb_api GET \
-    "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100" \
+    "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22" \
     2>/dev/null) || return 1
 
   echo "$comments_json" | jq -r --arg marker "$MARKER_PREFIX" \

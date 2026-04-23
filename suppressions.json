@@ -111,6 +111,13 @@
     }
   },
   {
+    "id": "semgrep-ifs-tampering-subshell-scoped",
+    "reason": "semgrep's bash.lang.security.ifs-tampering rule flags any IFS= assignment, but all IFS= uses in this repo are either (a) loop-local 'while IFS= read -r ...' — the standard bash idiom for preserving whitespace in read — or (b) subshell-scoped inside $(IFS=X; echo \"${arr[*]}\") — the standard idiom for joining a bash array with a delimiter. Neither tampers with the global IFS. The rule does not recognize subshell/loop scoping, so this is a false positive.",
+    "match": {
+      "pattern": "ifs-tampering|IFS affects how splitting takes place"
+    }
+  },
+  {
     "id": "version-post-knowledge-cutoff-docker-hub",
     "reason": "LLMs flag Docker Hub image tags released after their training cutoff as 'nonexistent'. Scoped to findings with image:tag patterns. The verify field causes review.sh to confirm existence on hub.docker.com before suppressing. Private registries (GHCR, GCR, ECR) are excluded as they require auth.",
     "verify": "docker-hub",

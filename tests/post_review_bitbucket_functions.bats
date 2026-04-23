@@ -123,16 +123,24 @@ setup() {
 
 @test "parity: severity_icon produces identical output in both scripts" {
   # Fresh shell per run to avoid function collision.
+  # Fixtures are passed as positional args ($1), not interpolated into the
+  # bash -c script string, so embedded quotes / metacharacters cannot break
+  # quoting or execute unintended commands.
   local inputs=("critical" "Critical" "high" "HIGH" "medium" "Medium" "low" "LOW" "info" "")
+  local gh_fn bb_fn
+  gh_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
+  bb_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
   for input in "${inputs[@]}"; do
     local gh_out bb_out
-    gh_out=$(bash -c "$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh"); severity_icon '${input}'")
-    bb_out=$(bash -c "$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh"); severity_icon '${input}'")
+    gh_out=$(bash -c "${gh_fn}"'; severity_icon "$1"' _ "$input")
+    bb_out=$(bash -c "${bb_fn}"'; severity_icon "$1"' _ "$input")
     [ "$gh_out" = "$bb_out" ] || { echo "drift on input='${input}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
   done
 }
 
 @test "parity: format_source_tag produces identical output in both scripts" {
+  # Fixtures are passed as positional args ($1), not interpolated (see note
+  # above). This matters because fixtures contain single quotes and braces.
   local fixtures=(
     '{"source":"code-reviewer"}'
     '{"sources":["a","b","c"]}'
@@ -140,10 +148,13 @@ setup() {
     '{}'
     '{"source":"","sources":[]}'
   )
+  local gh_fn bb_fn
+  gh_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
+  bb_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
   for fixture in "${fixtures[@]}"; do
     local gh_out bb_out
-    gh_out=$(bash -c "$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh"); format_source_tag '${fixture}'")
-    bb_out=$(bash -c "$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh"); format_source_tag '${fixture}'")
+    gh_out=$(bash -c "${gh_fn}"'; format_source_tag "$1"' _ "$fixture")
+    bb_out=$(bash -c "${bb_fn}"'; format_source_tag "$1"' _ "$fixture")
     [ "$gh_out" = "$bb_out" ] || { echo "drift on fixture='${fixture}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
   done
 }
