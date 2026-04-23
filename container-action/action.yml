@@ -9,7 +9,7 @@ inputs:
   image-tag:
     description: >
       Image tag to pull from ghcr.io/tag1consulting/ai-pr-review.
-      Defaults to 'latest'. Pin to a specific version (e.g. 'v2.1.0') for
+      Defaults to 'latest'. Pin to a specific version (e.g. '0.1.0') for
       reproducible builds.
     required: false
     default: 'latest'

@@ -80,7 +80,7 @@ For reproducible builds, pin the image tag instead of using `latest`:
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: 'v2.1.0'   # pin to a specific release
+    image-tag: '0.1.0'   # pin to a specific release
     ...
 ```
 

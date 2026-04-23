@@ -197,9 +197,9 @@ By default the container runs in `quick` mode (code-reviewer + silent-failure-hu
 Replace `:latest` with a specific version tag for reproducible runs:
 
 ```bash
-ghcr.io/tag1consulting/ai-pr-review:v2.0.0
+ghcr.io/tag1consulting/ai-pr-review:0.1.0
 # or pin to a major version:
-ghcr.io/tag1consulting/ai-pr-review:v2
+ghcr.io/tag1consulting/ai-pr-review:0
 ```
 
 Available tags: `latest`, `v<major>` (e.g. `v2`), `v<major.minor.patch>`.

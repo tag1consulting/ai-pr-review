@@ -346,7 +346,7 @@ Use `container-action` in place of the root action:
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: 'latest'            # or pin to 'v2.1.0'
+    image-tag: 'latest'            # or pin to '0.1.0'
     registry-token: ${{ secrets.GHCR_TOKEN }}
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ github.token }}
