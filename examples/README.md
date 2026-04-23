@@ -25,10 +25,26 @@ Add your provider API key as a repository secret. The examples use `ANTHROPIC_AP
 
 ### 3. Copy the workflow files
 
+Download the files directly from GitHub into your repo:
+
 ```bash
 mkdir -p .github/workflows
-cp path/to/ai-pr-review/examples/workflows/pr-review.yml       .github/workflows/ai-pr-review.yml
-cp path/to/ai-pr-review/examples/workflows/comment-triggers.yml .github/workflows/ai-pr-review-commands.yml
+
+curl -fsSL \
+  https://raw.githubusercontent.com/tag1consulting/ai-pr-review/main/examples/workflows/pr-review.yml \
+  -o .github/workflows/ai-pr-review.yml
+
+curl -fsSL \
+  https://raw.githubusercontent.com/tag1consulting/ai-pr-review/main/examples/workflows/comment-triggers.yml \
+  -o .github/workflows/ai-pr-review-commands.yml
+```
+
+Or, if you have the repo cloned locally:
+
+```bash
+mkdir -p .github/workflows
+cp /path/to/ai-pr-review/examples/workflows/pr-review.yml       .github/workflows/ai-pr-review.yml
+cp /path/to/ai-pr-review/examples/workflows/comment-triggers.yml .github/workflows/ai-pr-review-commands.yml
 ```
 
 Commit and push. The review runs automatically on the next opened or updated PR.

@@ -71,7 +71,7 @@ Findings use shape-distinct icons for accessibility:
 
 The container action pulls a pre-built image with all analyzer binaries pre-installed at pinned, verified versions. No toolchain setup on your runner.
 
-See **[Running in a container](#running-in-a-container)** above for prerequisites (GHCR token) and the example workflows in `examples/workflows/`.
+See **[Running in a container](#running-in-a-container)** below for prerequisites (GHCR token) and the example workflows in `examples/workflows/`.
 
 ### Direct action reference (legacy / opt-in)
 
@@ -359,26 +359,28 @@ Ready-to-use workflow files are in [examples/workflows/](examples/workflows/). S
 
 ### Local development
 
-Run reviews locally without a CI runner:
+Run reviews locally against any open PR — no CI runner needed.
 
 ```bash
-# One-time login
-docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_PAT
+# One-time: authenticate to GHCR (PAT with read:packages scope)
+docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_GHCR_PAT
 
-# Dry run (prints findings, does not post to GitHub)
+# Dry run: prints findings to stdout, does not post to GitHub
 docker run --rm \
   -e AI_PROVIDER=anthropic \
   -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e GH_TOKEN=ghp_... \
+  -e GH_TOKEN=$(gh auth token) \
   -e GITHUB_REPOSITORY=owner/repo \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
-  -e HEAD_SHA=abc1234 \
+  -e HEAD_SHA=$(gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid) \
   -e AI_DRY_RUN=true \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
-See [docs/local-development.md](docs/local-development.md) for the full reference.
+Remove `-e AI_DRY_RUN=true` to post findings back to the PR. Swap `AI_PROVIDER` and the corresponding key variable for other providers (`openai`/`OPENAI_API_KEY`, `google`/`GOOGLE_API_KEY`, `bedrock-proxy`/`BEDROCK_API_KEY`+`BEDROCK_API_URL`).
+
+See [docs/local-development.md](docs/local-development.md) for the full reference including provider-specific examples, local clone mounting, git worktree support, and version pinning.
 
 ## Slash commands
 
