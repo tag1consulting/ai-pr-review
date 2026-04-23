@@ -35,6 +35,9 @@
 #   AI_TEMPERATURE    — Sampling temperature (default: 0.3)
 #   AI_DRY_RUN        — "true" to skip posting and print findings to stdout instead.
 #                       Useful for local iteration; no GitHub token write access needed.
+#   VCS_PROVIDER      — "github" (default) or "bitbucket". Selects the post-review
+#                       script. Bitbucket support requires BITBUCKET_EMAIL and
+#                       BITBUCKET_API_TOKEN for auth; standalone mode is GitHub-only.
 
 set -euo pipefail
 
@@ -51,6 +54,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
 REVIEW_TARGET="${REVIEW_TARGET:-pr}"
 PR_NUMBER="${PR_NUMBER:-}"
+VCS_PROVIDER="${VCS_PROVIDER:-github}"
+
+# Resolve the provider-specific post-review script. GitHub uses the canonical
+# post-review.sh; other providers use sibling scripts (e.g. post-review-bitbucket.sh).
+case "$VCS_PROVIDER" in
+  github)    POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review.sh" ;;
+  bitbucket) POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review-bitbucket.sh" ;;
+  *)
+    echo "::error::Invalid VCS_PROVIDER '${VCS_PROVIDER}'. Valid values: github, bitbucket" >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! -x "$POST_REVIEW_SCRIPT" ]]; then
+  echo "::error::Post-review script not found or not executable: ${POST_REVIEW_SCRIPT}" >&2
+  exit 1
+fi
+
+if [[ "$VCS_PROVIDER" == "bitbucket" && "$REVIEW_TARGET" == "standalone" ]]; then
+  echo "::error::Standalone review mode is not supported for VCS_PROVIDER=bitbucket." >&2
+  echo "Bitbucket Cloud has no Issues product; use REVIEW_TARGET=pr instead." >&2
+  exit 1
+fi
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
 
@@ -136,7 +162,7 @@ DIFF_LABEL=""
 DIFF_TWO_DOT=false
 
 if [[ "$REVIEW_TARGET" != "standalone" && "${FORCE_FULL_DIFF:-false}" != "true" ]]; then
-  LAST_REVIEWED_SHA=$("${SCRIPT_DIR}/post-review.sh" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
+  LAST_REVIEWED_SHA=$("$POST_REVIEW_SCRIPT" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
     echo "WARNING: Could not retrieve last-reviewed SHA; falling back to full PR diff." >&2
     LAST_REVIEWED_SHA=""
   }
@@ -1618,7 +1644,7 @@ if [[ "${AI_DRY_RUN:-false}" == "true" ]]; then
   exit 0
 fi
 
-echo "--- Posting to GitHub ---" >&2
+echo "--- Posting review (provider: ${VCS_PROVIDER}) ---" >&2
 
 # Pass failed agents to post-review.sh so it can avoid a false APPROVE.
 # Use colon as delimiter (agent names never contain colons).
@@ -1628,7 +1654,7 @@ if [[ "${#FAILED_AGENTS[@]}" -gt 0 ]]; then
 fi
 
 if [[ "$REVIEW_TARGET" == "standalone" ]]; then
-  "${SCRIPT_DIR}/post-review.sh" \
+  "$POST_REVIEW_SCRIPT" \
     --standalone \
     "$SUMMARY_FILE" \
     "$FINDINGS_CLEAN_FILE" \
@@ -1637,7 +1663,7 @@ if [[ "$REVIEW_TARGET" == "standalone" ]]; then
     "$HEAD_SHA" \
     "$TOKEN_TABLE_FILE"
 else
-  "${SCRIPT_DIR}/post-review.sh" \
+  "$POST_REVIEW_SCRIPT" \
     "$PR_NUMBER" \
     "$SUMMARY_FILE" \
     "$FINDINGS_CLEAN_FILE" \
