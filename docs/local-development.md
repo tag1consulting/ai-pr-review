@@ -47,7 +47,7 @@ docker run --rm \
 
 ## With a local repo checkout
 
-Mount your workspace to use a local clone (skips the remote git fetch):
+Mount your workspace to use a local clone. The container still needs to fetch the base branch ref — configure HTTPS auth via `GIT_CONFIG_GLOBAL` or pass `GH_TOKEN` (used automatically by `gh` inside the container):
 
 ```bash
 docker run --rm \
@@ -61,6 +61,36 @@ docker run --rm \
   -e AI_DRY_RUN=true \
   -v "$(pwd):/workspace" \
   ghcr.io/tag1consulting/ai-pr-review:latest
+```
+
+### Git worktrees
+
+If your checkout is a **git worktree** (the `.git` entry is a file pointer rather than a directory), you must also mount the parent repository's `.git` directory so the container can resolve refs:
+
+```bash
+# Find the parent .git path
+PARENT_GIT=$(git rev-parse --git-common-dir)
+
+docker run --rm \
+  -e AI_PROVIDER=anthropic \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e GH_TOKEN=ghp_... \
+  -e GITHUB_REPOSITORY=owner/repo \
+  -e PR_NUMBER=42 \
+  -e BASE_REF=main \
+  -e HEAD_SHA=$(git rev-parse HEAD) \
+  -e AI_DRY_RUN=true \
+  -v "$(pwd):/workspace" \
+  -v "$PARENT_GIT:$PARENT_GIT" \
+  ghcr.io/tag1consulting/ai-pr-review:latest
+```
+
+### Bypassing the SHA watermark
+
+If the PR has already been reviewed at the current HEAD, the container will exit with "No new changes since last review." To force a full-diff re-review:
+
+```bash
+  -e FORCE_FULL_DIFF=true \
 ```
 
 ## Environment variables
