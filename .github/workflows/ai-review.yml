@@ -40,7 +40,7 @@ jobs:
         github.event.label.name == 'ai-review-rescan'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
@@ -66,9 +66,10 @@ jobs:
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           echo "base_ref=${{ github.event.repository.default_branch }}" >> "$GITHUB_OUTPUT"
 
-      # Self-referential: use the checked-out action at the repo root.
-      - uses: ./
+      - uses: ./container-action
         with:
+          image-tag: 'latest'
+          registry-token: ${{ secrets.GHCR_TOKEN }}
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
