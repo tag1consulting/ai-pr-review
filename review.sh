@@ -249,9 +249,11 @@ fi
 if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
   echo "::warning::Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review." >&2
   echo "To review large diffs, increase MAX_DIFF_LINES or split into smaller changes." >&2
-  if [[ "$REVIEW_TARGET" != "standalone" ]]; then
+  if [[ "$REVIEW_TARGET" != "standalone" && "$VCS_PROVIDER" == "github" ]]; then
   # Post (or update) a comment explaining the skip — idempotent via marker to avoid
-  # accumulating duplicate comments across repeated oversized pushes.
+  # accumulating duplicate comments across repeated oversized pushes. GitHub-only
+  # in v0.2.0; Bitbucket consumers will see the ::warning:: message in the log but
+  # no comment will be posted (the review still exits cleanly).
   : "${GH_TOKEN:?GH_TOKEN is required}"
   : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
   : "${PR_NUMBER:?PR_NUMBER is required}"
@@ -275,7 +277,7 @@ To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR i
     gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST --field body="$SKIP_BODY" > /dev/null 2>&1 || true
   fi
-  fi  # end REVIEW_TARGET != standalone
+  fi  # end REVIEW_TARGET != standalone && VCS_PROVIDER == github
   exit 0
 fi
 
