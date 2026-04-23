@@ -1042,6 +1042,9 @@ extract_findings() {
   fi
 
   local extracted
+  # Single quotes are intentional — $ is sed's end-of-range/last-line anchor,
+  # not a shell expansion. Same rationale below at the FINDINGS_CLEAN_FILE loop.
+  # shellcheck disable=SC2016
   extracted=$(sed -n '/```json-findings/,/```/p' "$agent_file" | sed '1d;$d')
 
   # Stamp source on findings that don't already carry one, then validate.
@@ -1517,6 +1520,9 @@ echo "Total findings after dedup: ${DEDUP_COUNT}" >&2
 FINDINGS_CLEAN_FILE=$(mktemp_tracked /tmp/ai-review-findings-clean-XXXXXXXX.md)
 : > "$FINDINGS_CLEAN_FILE"
 for agent_output in "${AGENT_OUTPUTS[@]}"; do
+  # Single quotes are intentional — the fenced marker is a literal sed pattern,
+  # not a shell expansion.
+  # shellcheck disable=SC2016
   AGENT_CONTENT=$(sed '/```json-findings/,/```/d' "$agent_output")
   if [[ -n "$AGENT_CONTENT" ]]; then
     echo "$AGENT_CONTENT" >> "$FINDINGS_CLEAN_FILE"
