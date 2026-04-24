@@ -11,7 +11,7 @@ The action runs on `ubuntu-latest` GitHub Actions runners and requires:
 - A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
 - An API key for one of the [supported LLM providers](#supported-llm-providers)
 
-No additional runner setup or Docker image is required.
+The container action (recommended) additionally requires a GHCR token with `read:packages` scope — see [Installation](#installation).
 
 ## Supported VCS providers
 
@@ -81,299 +81,56 @@ Findings use shape-distinct icons for accessibility:
 
 ## Installation
 
-### Container action (recommended)
+The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint) pre-installed at pinned, verified versions. No toolchain setup on your runner.
 
-The container action pulls a pre-built image with all analyzer binaries pre-installed at pinned, verified versions. No toolchain setup on your runner.
+### Quickstart
 
-See **[Running in a container](#running-in-a-container)** below for prerequisites (GHCR token) and the example workflows in `examples/workflows/`.
+**Step 1: Create a GHCR token**
 
-### Direct action reference (legacy / opt-in)
+The container image is hosted privately at `ghcr.io/tag1consulting/ai-pr-review`. Create a GitHub Personal Access Token with `read:packages` scope at **Settings → Developer settings → Personal access tokens (classic)**, then add it as a repository secret named `GHCR_TOKEN` under **Settings → Secrets and variables → Actions**.
 
-Use this if you cannot or do not want to pull a private container image. Installs shellcheck on the runner; does not install semgrep, trufflehog, ruff, or golangci-lint.
+**Step 2: Add your LLM API key**
 
-**Prerequisites:** In this repo's settings, go to **Settings → Actions → General → Access** and set it to **"Accessible from repositories in the 'tag1consulting' organization"**. This allows other repos in the org to use it as an action.
+Add your provider's API key as a repository secret (e.g. `ANTHROPIC_API_KEY` for Anthropic).
 
-#### 1. Create the workflow
+**Step 3: Copy the workflow**
 
-Create `.github/workflows/ai-review.yml` in your repository:
+Copy [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) to `.github/workflows/` in your repository. That's it — reviews start firing on the next PR.
 
-```yaml
-name: AI PR Review
+### Full setup
 
-on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, labeled]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-jobs:
-  review:
-    # head.repo.full_name check is defense-in-depth against fork PRs, which
-    # cannot access secrets anyway but should not trigger review jobs that
-    # hold pull-requests: write.
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.draft == false &&
-      github.actor != 'dependabot[bot]' &&
-      github.actor != 'renovate[bot]' &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
-      (github.event.action != 'labeled' ||
-       github.event.label.name == 'ai-review-full' ||
-       github.event.label.name == 'ai-review-rescan')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: tag1consulting/ai-pr-review@main
-        with:
-          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
-          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
-          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
-          review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
-          force-full-diff: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') && 'true' || 'false' }}
-          pr-number: ${{ github.event.pull_request.number }}
-          base-ref: ${{ github.event.pull_request.base.ref }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  # Always attempt to remove the ai-review-rescan label after the review,
-  # even if the review job was cancelled by the concurrency rule on a new push.
-  # Exclude skip-ai-review PRs so we don't strip the rescan label from a PR
-  # that intentionally bypasses the review.
-  cleanup-rescan-label:
-    needs: review
-    if: >-
-      always() &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Remove ai-review-rescan label
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api \
-            --method DELETE \
-            repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/ai-review-rescan \
-            || true
-```
-
-Pin to a specific version by using a tag or commit SHA instead of `@main` (e.g., `@v1.0` or `@d613707`).
-
-#### 2. Configure secrets and variables
-
-In the **consuming** repository's settings:
-
-**Secrets:**
-- `AI_REVIEW_API_KEY` — API key for your chosen LLM provider
-
-**Variables** (optional):
-- `AI_REVIEW_PROVIDER` — Provider name (default: `anthropic`)
-- `AI_REVIEW_BASE_URL` — Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`)
-- `AI_REVIEW_MODEL_STANDARD` — Override the standard model ID
-- `AI_REVIEW_MODEL_PREMIUM` — Override the premium model ID (full mode only)
-
-### Alternative: git submodule
-
-If you prefer explicit version pinning via a submodule (useful for auditing exactly which version of the action is used):
-
-```bash
-mkdir -p .github/actions
-git submodule add git@github.com:tag1consulting/ai-pr-review.git .github/actions/ai-pr-review
-git commit -m "Add ai-pr-review submodule"
-```
-
-Then create `.github/workflows/ai-review.yml` in your repository. The submodule approach uses a **3-job pattern** (`prepare` → `review` → `cleanup-rescan-label`) that isolates the PAT used for submodule checkout from the job that executes the composite action. This prevents the PAT from landing in the review job's `.git/config` where the action's shell scripts could read it.
-
-```yaml
-name: AI PR Review
-
-on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, labeled]
-
-# Fork PRs cannot access secrets anyway; per-job guards below prevent
-# untrusted fork branches from triggering jobs with write permissions.
-permissions:
-  contents: read
-  pull-requests: write
-  # issues: write is declared only on cleanup-rescan-label (least-privilege)
-
-concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-jobs:
-  # Job 1: validate config and check out the repo (including the private
-  # submodule) using the PAT. Credentials are scrubbed from .git/config
-  # before uploading the workspace artifact so the PAT does not travel
-  # to the review job.
-  prepare:
-    runs-on: ubuntu-latest
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.draft == false &&
-      github.actor != 'dependabot[bot]' &&
-      github.actor != 'renovate[bot]' &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
-      (github.event.action != 'labeled' ||
-       github.event.label.name == 'ai-review-full' ||
-       github.event.label.name == 'ai-review-rescan')
-    steps:
-      # Fail fast with a clear error when required config is missing, rather
-      # than a cryptic git auth or API failure deeper in the pipeline.
-      - name: Validate required configuration
-        env:
-          AI_REVIEW_API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
-          AI_PR_REVIEW_TOKEN: ${{ secrets.AI_PR_REVIEW_TOKEN }}
-        run: |
-          missing=()
-          [ -z "$AI_REVIEW_API_KEY" ] && missing+=("secret AI_REVIEW_API_KEY")
-          [ -z "$AI_PR_REVIEW_TOKEN" ] && missing+=("secret AI_PR_REVIEW_TOKEN")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "ERROR: Missing required configuration: ${missing[*]}"
-            echo "See the README for setup instructions."
-            exit 1
-          fi
-
-      # AI_PR_REVIEW_TOKEN needs repo scope (or fine-grained read access to
-      # tag1consulting/ai-pr-review) to clone the private submodule.
-      # GITHUB_TOKEN cannot cross-repo clone private submodules.
-      - name: Checkout with submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          token: ${{ secrets.AI_PR_REVIEW_TOKEN }}
-          fetch-depth: 0
-
-      # actions/checkout writes the PAT into .git/config as a persistent
-      # credential. Scrubbing it before upload prevents the PAT from
-      # travelling to the review job via the artifact.
-      - name: Scrub git credentials before artifact upload
-        run: git config --unset-all http.https://github.com/.extraheader || true
-
-      - name: Upload workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: workspace
-          path: .
-          include-hidden-files: true
-          retention-days: 1
-
-  # Job 2: run the composite action against the downloaded workspace.
-  # This job does NOT run actions/checkout with the PAT, so the repo-scoped
-  # PAT is never in its git config or accessible to the action.
-  review:
-    needs: prepare
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - name: Download workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: workspace
-          path: .
-
-      # actions/upload-artifact strips file permissions. Restore execute
-      # bits on the composite action's shell scripts only — NOT on
-      # .git/hooks/*, which would allow arbitrary code execution via a
-      # malicious hook committed to the PR branch.
-      - name: Restore executable bits
-        run: find .github/actions/ai-pr-review -name "*.sh" -exec chmod +x {} +
-
-      - uses: ./.github/actions/ai-pr-review
-        with:
-          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
-          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
-          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
-          review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
-          force-full-diff: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') && 'true' || 'false' }}
-          pr-number: ${{ github.event.pull_request.number }}
-          base-ref: ${{ github.event.pull_request.base.ref }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  # Job 3: always attempt to remove the ai-review-rescan label.
-  # needs: [prepare, review] with if: always() ensures this runs even when
-  # the review job is cancelled (e.g. by the concurrency rule on a new push)
-  # and when prepare is skipped (e.g. fork PRs). The gh api DELETE call
-  # returns 404 when the label is absent; || true swallows it.
-  cleanup-rescan-label:
-    needs: [prepare, review]
-    if: >-
-      always() &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Remove ai-review-rescan label
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api \
-            --method DELETE \
-            repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/ai-review-rescan \
-            || true
-```
-
-> **Why 3 jobs for the submodule pattern?** `actions/checkout` with a PAT writes the token into `.git/config` as a persistent credential readable by any subsequent step in the same job. Isolating checkout into its own job (and scrubbing credentials before the workspace is passed to the review job as an artifact) keeps the PAT out of the job that executes third-party shell scripts.
-
-To update the submodule pin:
-
-```bash
-cd .github/actions/ai-pr-review
-git fetch --all
-git checkout v1.0
-cd ../../..
-git add .github/actions/ai-pr-review
-git commit -m "Bump ai-pr-review submodule to v1.0"
-```
-
-## Running in a container
-
-The container image ships all analyzer binaries pre-installed at pinned versions, so consumers don't need to install shellcheck, semgrep, trufflehog, ruff, or golangci-lint on their runners.
-
-### Registry authentication
-
-The image is hosted privately at `ghcr.io/tag1consulting/ai-pr-review`. Every consumer needs a GitHub Personal Access Token with `read:packages` scope stored as a repository secret named `GHCR_TOKEN`.
-
-Create the token at **Settings → Developer settings → Personal access tokens (classic)**, grant `read:packages`, then add it under **Settings → Secrets and variables → Actions** in your repo.
-
-### Container action
-
-Use `container-action` in place of the root action:
+The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) uses the container action:
 
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: 'latest'            # or pin to '0.1.0'
+    image-tag: 'latest'            # or pin to a release tag, e.g. 'v0.2.0'
     registry-token: ${{ secrets.GHCR_TOKEN }}
-    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-    github-token: ${{ github.token }}
+    provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
+    api-key: ${{ secrets.AI_REVIEW_API_KEY }}
+    base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+    review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
+    force-full-diff: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') && 'true' || 'false' }}
     pr-number: ${{ github.event.pull_request.number }}
     base-ref: ${{ github.event.pull_request.base.ref }}
     head-sha: ${{ github.event.pull_request.head.sha }}
+    github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Ready-to-use workflow files are in [examples/workflows/](examples/workflows/). See [examples/README.md](examples/README.md) for setup instructions.
+See [examples/README.md](examples/README.md) for a complete setup walkthrough including slash commands and provider configuration.
 
-### Local development
+**Secrets and variables** — configure in the consuming repository's settings:
 
-Run reviews locally against any open PR — no CI runner needed.
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `GHCR_TOKEN` | Secret | Yes | GitHub PAT with `read:packages` scope |
+| `AI_REVIEW_API_KEY` | Secret | Yes | API key for your LLM provider |
+| `AI_REVIEW_PROVIDER` | Variable | No | Provider name (default: `anthropic`) |
+| `AI_REVIEW_BASE_URL` | Variable | No | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
+| `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
+| `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
+
+**Local development** — run reviews against any open PR without a CI runner:
 
 ```bash
 # One-time: authenticate to GHCR (PAT with read:packages scope)
@@ -395,6 +152,11 @@ docker run --rm \
 Remove `-e AI_DRY_RUN=true` to post findings back to the PR. Swap `AI_PROVIDER` and the corresponding key variable for other providers (`openai`/`OPENAI_API_KEY`, `google`/`GOOGLE_API_KEY`, `bedrock-proxy`/`BEDROCK_API_KEY`+`BEDROCK_API_URL`).
 
 See [docs/local-development.md](docs/local-development.md) for the full reference including provider-specific examples, local clone mounting, git worktree support, and version pinning.
+
+### Other installation methods
+
+- **[Direct action reference](docs/installation-direct-action.md)** — no GHCR token required; uses the root composite action directly. Installs shellcheck automatically; does not install semgrep, trufflehog, ruff, or golangci-lint.
+- **[Git submodule](docs/installation-submodule.md)** — explicit, auditable version pinning; commits the exact action source into your repository. Uses a 3-job pattern to isolate the PAT used for submodule checkout.
 
 ## Slash commands
 
