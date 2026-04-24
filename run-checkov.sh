@@ -96,8 +96,7 @@ FINDINGS=$(echo "$CHECKOV_OUTPUT" | jq -r '
     .[].results?.failed_checks[]? |
     {
       severity: (
-        if (.check_id | test("^(CKV2|CKV_SECRET)"; "i"))   then "High"
-        elif (.check_id | test("^CKV_[A-Z]+_(1[0-9]{2,}|[2-9][0-9]+)$")) then "Medium"
+        if (.check_id | test("^(CKV2_|CKV_SECRET_)")) then "High"
         else "Medium"
         end
       ),

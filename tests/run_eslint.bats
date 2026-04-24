@@ -9,17 +9,15 @@ setup() {
   SCRIPT="${PROJECT_ROOT}/run-eslint.sh"
   FIXTURES="${PROJECT_ROOT}/tests/fixtures/eslint"
   WORK=$(mktemp -d)
-  # Create a minimal ESLint config so the no-config check doesn't block
+  # Create a minimal ESLint config so the no-config check doesn't block.
+  # Set GITHUB_WORKSPACE so config detection finds it regardless of test CWD.
   touch "$WORK/.eslintrc.json"
+  export GITHUB_WORKSPACE="$WORK"
 }
 
 teardown() {
   rm -rf "$WORK"
-}
-
-_run_in_work() {
-  # Run the script from WORK so the config-detection uses the right CWD
-  (cd "$WORK" && run --separate-stderr "$SCRIPT" "$@")
+  unset GITHUB_WORKSPACE
 }
 
 # ---------------------------------------------------------------------------

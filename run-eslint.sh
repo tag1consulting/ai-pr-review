@@ -31,23 +31,34 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # Resolve eslint binary: prefer local node_modules, fall back to npx
-ESLINT_BIN=""
+ESLINT_BIN=()
+ESLINT_SUPPORTS_NO_WARN_IGNORED=false
 if [[ -z "${ESLINT_MOCK_FILE:-}" ]]; then
   if [[ -x "./node_modules/.bin/eslint" ]]; then
-    ESLINT_BIN="./node_modules/.bin/eslint"
+    ESLINT_BIN=("./node_modules/.bin/eslint")
   elif command -v npx >/dev/null 2>&1 && npx --no eslint --version >/dev/null 2>&1; then
-    ESLINT_BIN="npx eslint"
+    ESLINT_BIN=("npx" "eslint")
   else
     echo "WARNING: eslint not found (tried node_modules/.bin/eslint and npx); eslint check skipped." >&2
     echo "[]"
     exit 0
   fi
 
-  # Only run if a config file is present — avoids polluting repos without ESLint
+  # --no-warn-ignored was added in ESLint 8.x; guard against older versions
+  if "${ESLINT_BIN[@]}" --no-warn-ignored --version >/dev/null 2>&1; then
+    ESLINT_SUPPORTS_NO_WARN_IGNORED=true
+  fi
+
+  # Only run if a config file is present — avoids polluting repos without ESLint.
+  # Check CWD, GITHUB_WORKSPACE, and the directory of the first changed JS file.
   ESLINT_CONFIG_FOUND=false
+  SEARCH_DIRS=(".")
+  [[ -n "${GITHUB_WORKSPACE:-}" ]] && SEARCH_DIRS+=("$GITHUB_WORKSPACE")
   for cfg in eslint.config.js eslint.config.mjs eslint.config.cjs \
              .eslintrc.js .eslintrc.cjs .eslintrc.yaml .eslintrc.yml .eslintrc.json .eslintrc; do
-    [[ -f "$cfg" ]] && { ESLINT_CONFIG_FOUND=true; break; }
+    for dir in "${SEARCH_DIRS[@]}"; do
+      [[ -f "$dir/$cfg" ]] && { ESLINT_CONFIG_FOUND=true; break 2; }
+    done
   done
   if [[ "$ESLINT_CONFIG_FOUND" == "false" ]]; then
     echo "[]"
@@ -78,10 +89,11 @@ if [[ -n "${ESLINT_MOCK_FILE:-}" ]]; then
   fi
   ESLINT_OUTPUT=$(cat "$ESLINT_MOCK_FILE")
 else
-  # --format json; --no-warn-ignored prevents noise on paths the config ignores;
+  # --format json; --no-warn-ignored (ESLint ≥8) prevents noise on ignored paths;
   # || true because eslint exits 1 when findings are present
-  # shellcheck disable=SC2086
-  ESLINT_OUTPUT=$($ESLINT_BIN --format json --no-warn-ignored "${JS_FILES[@]}" 2>/dev/null) || true
+  ESLINT_EXTRA_FLAGS=()
+  [[ "$ESLINT_SUPPORTS_NO_WARN_IGNORED" == "true" ]] && ESLINT_EXTRA_FLAGS+=(--no-warn-ignored)
+  ESLINT_OUTPUT=$("${ESLINT_BIN[@]}" --format json "${ESLINT_EXTRA_FLAGS[@]}" "${JS_FILES[@]}" 2>/dev/null) || true
 fi
 
 if [[ -z "$ESLINT_OUTPUT" ]]; then
