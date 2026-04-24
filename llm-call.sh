@@ -47,6 +47,14 @@ elif awk "BEGIN { exit !($TEMPERATURE > 2) }"; then
   TEMPERATURE="2"
 fi
 
+# Some models (e.g. Claude Opus 4.7) reject the temperature parameter.
+model_supports_temperature() {
+  case "$1" in
+    *opus-4-7*|*opus-4.7*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # Do NOT pre-expand SYSTEM_PROMPT / USER_MESSAGE into shell variables.
 # Passing large strings via --arg hits ARG_MAX on big diffs.
 # All provider functions use --rawfile to let jq read the files directly.
@@ -235,16 +243,28 @@ call_anthropic() {
   : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required for AI_PROVIDER=anthropic}"
 
   local request_body
-  request_body=$(jq -n \
-    --arg model "$MODEL_ID" \
-    --rawfile system "$SYSTEM_PROMPT_FILE" \
-    --rawfile user "$USER_MESSAGE_FILE" \
-    --argjson max_tokens "$MAX_TOKENS" \
-    --argjson temperature "$TEMPERATURE" \
-    '{model: $model, system: $system, messages: [{role: "user", content: $user}], max_tokens: $max_tokens, temperature: $temperature}') || {
-    echo "ERROR: jq failed to build Anthropic request body" >&2
-    exit 1
-  }
+  if model_supports_temperature "$MODEL_ID"; then
+    request_body=$(jq -n \
+      --arg model "$MODEL_ID" \
+      --rawfile system "$SYSTEM_PROMPT_FILE" \
+      --rawfile user "$USER_MESSAGE_FILE" \
+      --argjson max_tokens "$MAX_TOKENS" \
+      --argjson temperature "$TEMPERATURE" \
+      '{model: $model, system: $system, messages: [{role: "user", content: $user}], max_tokens: $max_tokens, temperature: $temperature}') || {
+      echo "ERROR: jq failed to build Anthropic request body" >&2
+      exit 1
+    }
+  else
+    request_body=$(jq -n \
+      --arg model "$MODEL_ID" \
+      --rawfile system "$SYSTEM_PROMPT_FILE" \
+      --rawfile user "$USER_MESSAGE_FILE" \
+      --argjson max_tokens "$MAX_TOKENS" \
+      '{model: $model, system: $system, messages: [{role: "user", content: $user}], max_tokens: $max_tokens}') || {
+      echo "ERROR: jq failed to build Anthropic request body" >&2
+      exit 1
+    }
+  fi
 
   echo "$request_body" | retry_curl "Anthropic" \
     -s -w "%{http_code}" -o "$RESPONSE_FILE" \
@@ -346,21 +366,37 @@ call_bedrock_proxy() {
   : "${BEDROCK_API_KEY:?BEDROCK_API_KEY is required for AI_PROVIDER=bedrock-proxy}"
 
   local request_body
-  request_body=$(jq -n \
-    --rawfile system "$SYSTEM_PROMPT_FILE" \
-    --rawfile user "$USER_MESSAGE_FILE" \
-    --argjson max_tokens "$MAX_TOKENS" \
-    --argjson temperature "$TEMPERATURE" \
-    '{
-      anthropic_version: "bedrock-2023-05-31",
-      system: $system,
-      messages: [{role: "user", content: $user}],
-      max_tokens: $max_tokens,
-      temperature: $temperature
-    }') || {
-    echo "ERROR: jq failed to build Bedrock request body" >&2
-    exit 1
-  }
+  if model_supports_temperature "$MODEL_ID"; then
+    request_body=$(jq -n \
+      --rawfile system "$SYSTEM_PROMPT_FILE" \
+      --rawfile user "$USER_MESSAGE_FILE" \
+      --argjson max_tokens "$MAX_TOKENS" \
+      --argjson temperature "$TEMPERATURE" \
+      '{
+        anthropic_version: "bedrock-2023-05-31",
+        system: $system,
+        messages: [{role: "user", content: $user}],
+        max_tokens: $max_tokens,
+        temperature: $temperature
+      }') || {
+      echo "ERROR: jq failed to build Bedrock request body" >&2
+      exit 1
+    }
+  else
+    request_body=$(jq -n \
+      --rawfile system "$SYSTEM_PROMPT_FILE" \
+      --rawfile user "$USER_MESSAGE_FILE" \
+      --argjson max_tokens "$MAX_TOKENS" \
+      '{
+        anthropic_version: "bedrock-2023-05-31",
+        system: $system,
+        messages: [{role: "user", content: $user}],
+        max_tokens: $max_tokens
+      }') || {
+      echo "ERROR: jq failed to build Bedrock request body" >&2
+      exit 1
+    }
+  fi
 
   local encoded_model_id
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)
