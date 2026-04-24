@@ -40,9 +40,15 @@ while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   [[ -f "$file" ]] || continue
   case "$file" in
-    *.yaml|*.yml|*.json)
-      # Quick heuristic: file contains 'apiVersion:' and 'kind:' on separate lines
+    *.yaml|*.yml)
+      # YAML K8s heuristic: apiVersion: and kind: as top-level keys
       if grep -qE '^apiVersion:' "$file" 2>/dev/null && grep -qE '^kind:' "$file" 2>/dev/null; then
+        K8S_FILES+=("$file")
+      fi
+      ;;
+    *.json)
+      # JSON K8s heuristic: "apiVersion": and "kind": as object keys
+      if grep -qE '"apiVersion"\s*:' "$file" 2>/dev/null && grep -qE '"kind"\s*:' "$file" 2>/dev/null; then
         K8S_FILES+=("$file")
       fi
       ;;

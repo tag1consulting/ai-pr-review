@@ -107,7 +107,7 @@ fi
 #   "errors": []
 # }
 # PHPStan has no severity field — all findings are errors; map to High.
-FINDINGS=$(echo "$PHPSTAN_OUTPUT" | jq -r '
+FINDINGS=$(echo "$PHPSTAN_OUTPUT" | jq -r --arg root "$PWD" '
   [
     .files // {} |
     to_entries[] |
@@ -118,7 +118,7 @@ FINDINGS=$(echo "$PHPSTAN_OUTPUT" | jq -r '
       severity: "High",
       confidence: 85,
       source: "phpstan",
-      file: $entry.key,
+      file: ($entry.key | ltrimstr($root + "/")),
       line: (.line // 1),
       finding: .message,
       remediation: "Fix the type error reported by PHPStan. See https://phpstan.org/user-guide/getting-started"

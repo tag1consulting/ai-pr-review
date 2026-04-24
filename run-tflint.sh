@@ -70,13 +70,21 @@ if [[ -n "${TFLINT_MOCK_FILE:-}" ]]; then
   TFLINT_OUTPUT=$(cat "$TFLINT_MOCK_FILE")
 else
   # tflint must be run per-directory (it reads the full module in each dir).
-  # Collect JSON output from each directory and merge.
+  # tflint --chdir emits bare filenames (e.g. "main.tf"), so prepend the dir
+  # prefix to produce repo-relative paths for inline comment posting.
   ALL_ISSUES="[]"
   for dir in "${TF_DIRS[@]}"; do
     DIR_OUTPUT=$(tflint --chdir="$dir" --format=json 2>/dev/null) || true
     if [[ -n "$DIR_OUTPUT" ]]; then
-      DIR_ISSUES=$(echo "$DIR_OUTPUT" | jq '.issues // []' 2>/dev/null || echo "[]")
-      ALL_ISSUES=$(echo "$ALL_ISSUES $DIR_ISSUES" | jq -s 'add' 2>/dev/null || echo "$ALL_ISSUES")
+      # Prepend dir/ to each issue's filename, stripping a leading "./" if present
+      DIR_ISSUES=$(echo "$DIR_OUTPUT" | jq --arg dir "$dir" '
+        [.issues[]? | .range.filename = (
+          if $dir == "." then .range.filename
+          else (($dir | ltrimstr("./")) + "/" + .range.filename)
+          end
+        )]
+      ' 2>/dev/null || echo "[]")
+      ALL_ISSUES=$(printf '%s\n%s' "$ALL_ISSUES" "$DIR_ISSUES" | jq -s 'add' 2>/dev/null || echo "$ALL_ISSUES")
     fi
   done
   TFLINT_OUTPUT=$(printf '{"issues":%s}' "$ALL_ISSUES")
