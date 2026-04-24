@@ -240,21 +240,31 @@ setup() {
   # mktemp_tracked must be called directly (not in $()) so TMPFILES+=("$f")
   # mutates the same shell's TMPFILES array — a $() subshell would get a copy
   # and the parent would never see the registration.
+  #
+  # Use mktemp to pre-allocate path-passing files before the bash -c call.
+  # $$ inside bash -c expands to the subprocess PID, not the outer shell's PID,
+  # so /tmp/...$$ names would mismatch between writer and reader.
+  local gh_path_file bb_path_file
+  gh_path_file=$(mktemp /tmp/parity-gh-pathfile-XXXXXXXX)
+  bb_path_file=$(mktemp /tmp/parity-bb-pathfile-XXXXXXXX)
+
   local gh_result bb_result
   gh_result=$(bash -c '
     TMPFILES=()
     '"${gh_fn}"'
-    mktemp_tracked /tmp/parity-gh-XXXXXXXX > /tmp/parity-gh-path.$$
-    f=$(cat /tmp/parity-gh-path.$$); rm -f /tmp/parity-gh-path.$$
+    mktemp_tracked /tmp/parity-gh-XXXXXXXX > "$1"
+    f=$(cat "$1")
     [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ')
+  ' _ "$gh_path_file")
   bb_result=$(bash -c '
     TMPFILES=()
     '"${bb_fn}"'
-    mktemp_tracked /tmp/parity-bb-XXXXXXXX > /tmp/parity-bb-path.$$
-    f=$(cat /tmp/parity-bb-path.$$); rm -f /tmp/parity-bb-path.$$
+    mktemp_tracked /tmp/parity-bb-XXXXXXXX > "$1"
+    f=$(cat "$1")
     [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ')
+  ' _ "$bb_path_file")
+
+  rm -f "$gh_path_file" "$bb_path_file"
 
   [[ "$gh_result" == ok:* ]] || { echo "GitHub mktemp_tracked did not register in TMPFILES: ${gh_result}" >&2; return 1; }
   [[ "$bb_result" == ok:* ]] || { echo "Bitbucket mktemp_tracked did not register in TMPFILES: ${bb_result}" >&2; return 1; }
