@@ -408,26 +408,9 @@ ai-pr-review/
 
 ### Dependencies
 
-The action runs on `ubuntu-latest` and requires only standard tools:
-- `bash`, `curl`, `jq`, `git`, `gh` (all pre-installed on GitHub Actions runners)
-- `shellcheck` (installed automatically by the action if not present)
+The action requires `bash`, `curl`, `jq`, `git`, and `gh` — all pre-installed on standard GitHub-hosted runners. `shellcheck` is installed automatically if not already present.
 
-**Optional static analyzer binaries** — the action degrades gracefully if these are absent (emits a WARNING and continues):
-- `semgrep` — SAST analysis on any changed file
-- `trufflehog` — secret scanning on any changed file
-- `ruff` — Python linting (`.py` files only)
-- `golangci-lint` — Go linting (`.go` files only); must be run from the Go module root
-
-Install them in your workflow before invoking the action if you want their findings. Example:
-
-```yaml
-- name: Install static analyzers
-  run: |
-    pip install semgrep
-    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
-    pip install ruff
-    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
-```
+The **container action** (recommended) ships all static analyzer binaries pre-installed at pinned versions — no runner setup needed. The **direct action reference** and **git submodule** paths do not install analyzer binaries; see [docs/installation-direct-action.md](docs/installation-direct-action.md#runtime-dependencies) for the optional install-in-workflow snippet.
 
 ## License
 
