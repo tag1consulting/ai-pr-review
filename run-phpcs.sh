@@ -62,16 +62,20 @@ else
     PHPCS_STANDARD="Drupal,DrupalPractice"
   fi
 
-  # --report=json emits structured output; -q suppresses progress; --runtime-set
-  # ignore_warnings_on_exit 1 ensures non-zero exit only on errors (not warnings),
-  # but we use || true anyway since any findings produce exit 1
+  # phpcs exits 0 (clean), 1 (violations found), or 2 (config/processing error).
+  PHPCS_EC=0
   PHPCS_OUTPUT=$(phpcs \
     --report=json \
     --standard="$PHPCS_STANDARD" \
     --extensions=php,module,inc,theme,install,profile \
     -q \
     "${PHP_FILES[@]}" \
-    2>/dev/null) || true
+    2>/dev/null) || PHPCS_EC=$?
+  if [[ "$PHPCS_EC" -eq 2 ]]; then
+    echo "WARNING: phpcs exited with error code 2; standard '${PHPCS_STANDARD}' may not be installed or phpcs encountered a fatal error." >&2
+    echo "[]"
+    exit 0
+  fi
 fi
 
 if [[ -z "$PHPCS_OUTPUT" ]]; then
@@ -93,7 +97,7 @@ fi
 # Severity mapping:
 #   type == "ERROR"   → High
 #   type == "WARNING" → Medium
-FINDINGS=$(echo "$PHPCS_OUTPUT" | jq -r '
+FINDINGS=$(echo "$PHPCS_OUTPUT" | jq -r --arg root "$PWD" '
   [
     .files // {} |
     to_entries[] |
@@ -103,7 +107,7 @@ FINDINGS=$(echo "$PHPCS_OUTPUT" | jq -r '
       severity: (if .type == "ERROR" then "High" else "Medium" end),
       confidence: 90,
       source: "phpcs",
-      file: $entry.key,
+      file: ($entry.key | ltrimstr($root + "/")),
       line: (.line // 1),
       finding: ("\(.source): \(.message)"),
       remediation: (

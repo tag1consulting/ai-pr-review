@@ -66,14 +66,20 @@ else
   done
 
   # --output json --quiet suppresses progress output; --compact omits passing checks
+  # checkov exits 1 when findings are found (expected); exit ≥2 indicates a real error.
+  CHECKOV_EC=0
   CHECKOV_OUTPUT=$(checkov \
     "${CHECKOV_FILE_ARGS[@]}" \
     --output json \
     --quiet \
     --compact \
-    2>/dev/null) || true
+    2>/dev/null) || CHECKOV_EC=$?
+  if [[ "$CHECKOV_EC" -ge 2 ]]; then
+    echo "WARNING: checkov exited with error code ${CHECKOV_EC}; checkov may not be installed correctly." >&2
+    echo "[]"
+    exit 0
+  fi
 
-  # checkov exits non-zero when findings are found; that is expected
   if [[ -z "$CHECKOV_OUTPUT" ]]; then
     echo "[]"
     exit 0
@@ -87,8 +93,9 @@ fi
 
 # checkov JSON can be a single object or an array of objects (one per framework).
 # Normalise to an array, extract failed_checks from each, project to findings schema.
-# Severity mapping: checkov has no severity field on its checks; map by check_type / id prefix:
-#   HIGH_* prefixes or CRITICAL in name → High; else → Medium
+# Severity mapping: checkov has no severity field on its checks; map by check_id prefix:
+#   CKV2_* (v2 rules) and CKV_SECRET_* (secret detection) → High
+#   All other checks → Medium
 # We use confidence 80 (static analysis without runtime context).
 FINDINGS=$(echo "$CHECKOV_OUTPUT" | jq -r '
   (if type == "array" then . else [.] end) |

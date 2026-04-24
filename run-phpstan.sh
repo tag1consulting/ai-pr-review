@@ -84,8 +84,14 @@ else
 
   PHPSTAN_ARGS+=("${PHP_FILES[@]}")
 
-  # phpstan exits 1 when errors are found — use || true to capture output
-  PHPSTAN_OUTPUT=$(phpstan "${PHPSTAN_ARGS[@]}" 2>/dev/null) || true
+  # phpstan exits 1 when errors found (expected); exit ≥2 indicates a real error.
+  PHPSTAN_EC=0
+  PHPSTAN_OUTPUT=$(phpstan "${PHPSTAN_ARGS[@]}" 2>/dev/null) || PHPSTAN_EC=$?
+  if [[ "$PHPSTAN_EC" -ge 2 ]]; then
+    echo "WARNING: phpstan exited with error code ${PHPSTAN_EC}; phpstan may not be configured correctly." >&2
+    echo "[]"
+    exit 0
+  fi
 fi
 
 if [[ -z "$PHPSTAN_OUTPUT" ]]; then

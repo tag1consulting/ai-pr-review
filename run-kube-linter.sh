@@ -68,8 +68,14 @@ if [[ -n "${KUBELINTER_MOCK_FILE:-}" ]]; then
   fi
   KUBELINTER_OUTPUT=$(cat "$KUBELINTER_MOCK_FILE")
 else
-  # kube-linter lint --format json exits 1 when violations found; use || true
-  KUBELINTER_OUTPUT=$(kube-linter lint --format json "${K8S_FILES[@]}" 2>/dev/null) || true
+  # kube-linter exits 1 when violations found (expected); capture stderr to
+  # distinguish genuine errors from a no-violations run.
+  KUBELINTER_STDERR=$(mktemp)
+  KUBELINTER_OUTPUT=$(kube-linter lint --format json "${K8S_FILES[@]}" 2>"$KUBELINTER_STDERR") || true
+  if [[ -z "$KUBELINTER_OUTPUT" ]] && [[ -s "$KUBELINTER_STDERR" ]]; then
+    echo "WARNING: kube-linter failed: $(cat "$KUBELINTER_STDERR")" >&2
+  fi
+  rm -f "$KUBELINTER_STDERR"
 fi
 
 if [[ -z "$KUBELINTER_OUTPUT" ]]; then

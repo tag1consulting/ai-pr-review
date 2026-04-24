@@ -74,7 +74,13 @@ else
   # prefix to produce repo-relative paths for inline comment posting.
   ALL_ISSUES="[]"
   for dir in "${TF_DIRS[@]}"; do
-    DIR_OUTPUT=$(tflint --chdir="$dir" --format=json 2>/dev/null) || true
+    DIR_STDERR=$(mktemp)
+    DIR_EC=0
+    DIR_OUTPUT=$(tflint --chdir="$dir" --format=json 2>"$DIR_STDERR") || DIR_EC=$?
+    if [[ "$DIR_EC" -ne 0 ]] && [[ -z "$DIR_OUTPUT" ]] && [[ -s "$DIR_STDERR" ]]; then
+      echo "WARNING: tflint failed in '${dir}': $(cat "$DIR_STDERR")" >&2
+    fi
+    rm -f "$DIR_STDERR"
     if [[ -n "$DIR_OUTPUT" ]]; then
       # Prepend dir/ to each issue's filename, stripping a leading "./" if present
       DIR_ISSUES=$(echo "$DIR_OUTPUT" | jq --arg dir "$dir" '
@@ -84,7 +90,7 @@ else
           end
         )]
       ' 2>/dev/null || echo "[]")
-      ALL_ISSUES=$(printf '%s\n%s' "$ALL_ISSUES" "$DIR_ISSUES" | jq -s 'add' 2>/dev/null || echo "$ALL_ISSUES")
+      ALL_ISSUES=$(printf '%s\n%s' "$ALL_ISSUES" "$DIR_ISSUES" | jq -s 'add // []' 2>/dev/null || echo "$ALL_ISSUES")
     fi
   done
   TFLINT_OUTPUT=$(printf '{"issues":%s}' "$ALL_ISSUES")

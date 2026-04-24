@@ -55,8 +55,15 @@ if [[ -n "${HADOLINT_MOCK_FILE:-}" ]]; then
   HADOLINT_OUTPUT=$(cat "$HADOLINT_MOCK_FILE")
 else
   # --format json emits one JSON object per line (NDJSON); --no-fail prevents
-  # non-zero exit when findings are present
-  HADOLINT_OUTPUT=$(hadolint --format json --no-fail "${DOCKERFILE_FILES[@]}" 2>/dev/null || true)
+  # non-zero exit when findings are present. Any remaining failure is a real error.
+  HADOLINT_STDERR=$(mktemp)
+  HADOLINT_OUTPUT=$(hadolint --format json --no-fail "${DOCKERFILE_FILES[@]}" 2>"$HADOLINT_STDERR") || {
+    echo "WARNING: hadolint failed: $(cat "$HADOLINT_STDERR")" >&2
+    rm -f "$HADOLINT_STDERR"
+    echo "[]"
+    exit 0
+  }
+  rm -f "$HADOLINT_STDERR"
 fi
 
 if [[ -z "$HADOLINT_OUTPUT" ]]; then

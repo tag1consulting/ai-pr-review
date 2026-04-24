@@ -90,10 +90,16 @@ if [[ -n "${ESLINT_MOCK_FILE:-}" ]]; then
   ESLINT_OUTPUT=$(cat "$ESLINT_MOCK_FILE")
 else
   # --format json; --no-warn-ignored (ESLint ≥8) prevents noise on ignored paths;
-  # || true because eslint exits 1 when findings are present
+  # ESLint exits 0 (clean), 1 (lint issues found), or 2 (fatal config/plugin error).
+  ESLINT_EC=0
   ESLINT_EXTRA_FLAGS=()
   [[ "$ESLINT_SUPPORTS_NO_WARN_IGNORED" == "true" ]] && ESLINT_EXTRA_FLAGS+=(--no-warn-ignored)
-  ESLINT_OUTPUT=$("${ESLINT_BIN[@]}" --format json "${ESLINT_EXTRA_FLAGS[@]}" "${JS_FILES[@]}" 2>/dev/null) || true
+  ESLINT_OUTPUT=$("${ESLINT_BIN[@]}" --format json "${ESLINT_EXTRA_FLAGS[@]}" "${JS_FILES[@]}" 2>/dev/null) || ESLINT_EC=$?
+  if [[ "$ESLINT_EC" -eq 2 ]]; then
+    echo "WARNING: eslint exited with fatal error (exit 2); broken config or missing plugin." >&2
+    echo "[]"
+    exit 0
+  fi
 fi
 
 if [[ -z "$ESLINT_OUTPUT" ]]; then
@@ -111,7 +117,7 @@ fi
 #   }
 # ]
 # severity: 2 = error → High, 1 = warning → Medium
-FINDINGS=$(echo "$ESLINT_OUTPUT" | jq -r '
+FINDINGS=$(echo "$ESLINT_OUTPUT" | jq -r --arg root "$PWD" '
   [
     .[]? |
     . as $file |
@@ -121,7 +127,7 @@ FINDINGS=$(echo "$ESLINT_OUTPUT" | jq -r '
       severity: (if .severity == 2 then "High" else "Medium" end),
       confidence: 90,
       source: "eslint",
-      file: $file.filePath,
+      file: ($file.filePath | ltrimstr($root + "/")),
       line: (.line // 1),
       finding: ("\(.ruleId): \(.message)"),
       remediation: (
