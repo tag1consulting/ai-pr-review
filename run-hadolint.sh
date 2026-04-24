@@ -71,22 +71,15 @@ if [[ -z "$HADOLINT_OUTPUT" ]]; then
   exit 0
 fi
 
-# hadolint --format json emits one JSON object per line:
-# {"file":"Dockerfile","line":12,"column":1,"level":"error","code":"DL3008","message":"Pin versions..."}
-# Wrap lines into an array, then project to findings schema.
+# hadolint --format json emits a JSON array:
+# [{"file":"Dockerfile","line":12,"column":1,"level":"error","code":"DL3008","message":"Pin versions..."}]
 # Severity mapping:
 #   error  → High   (DL3xxx rule violations, syntax errors)
 #   warning → Medium
 #   info, style → Low
-FINDINGS=$(echo "$HADOLINT_OUTPUT" | jq -Rs '
+FINDINGS=$(echo "$HADOLINT_OUTPUT" | jq -r '
   [
-    split("\n")[] |
-    select(length > 0) |
-    (. | ltrimstr(" ") | rtrimstr(" ")) |
-    select(startswith("{")) |
-    . as $raw |
-    (try fromjson catch null) |
-    select(. != null) |
+    .[]? |
     {
       severity: (
         if .level == "error"   then "High"

@@ -15,6 +15,22 @@ ARG GOLANGCI_LINT_SHA256=200c5b7503f67b59a6743ccf32133026c174e272b930ee79aa2aa6f
 ARG RUFF_VERSION=0.15.11
 ARG SEMGREP_VERSION=1.161.0
 
+ARG HADOLINT_VERSION=v2.14.0
+ARG HADOLINT_SHA256=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
+
+ARG KUBELINTER_VERSION=v0.8.3
+ARG KUBELINTER_SHA256=618d299a3e2839c8ca9d86fce0db617be0fba41f0fecbbbfb7fbf1c04299fae1
+
+ARG TFLINT_VERSION=v0.62.0
+ARG TFLINT_SHA256=000400d7f4c2236d9ed4b35fec3ee95617c3747571593cc6138169fc78cc226a
+
+ARG CHECKOV_VERSION=3.2.524
+
+ARG PHPCS_VERSION=4.0.1
+ARG DRUPAL_CODER_VERSION=9.0.0
+ARG PHPSTAN_VERSION=2.1.51
+ARG PHPSTAN_DRUPAL_VERSION=2.0.15
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -qq && \
@@ -24,8 +40,12 @@ RUN apt-get update -qq && \
       curl \
       git \
       jq \
+      php-cli \
+      php-xml \
+      php-mbstring \
       python3 \
       python3-pip \
+      unzip \
       xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -64,11 +84,47 @@ RUN curl -fsSL -o /tmp/golangci-lint.tar.gz \
     chmod +x /usr/local/bin/golangci-lint && \
     rm /tmp/golangci-lint.tar.gz
 
-# ruff and semgrep via pip
+# hadolint
+RUN curl -fsSL -o /usr/local/bin/hadolint \
+      "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" && \
+    echo "${HADOLINT_SHA256}  /usr/local/bin/hadolint" | sha256sum -c - && \
+    chmod +x /usr/local/bin/hadolint
+
+# kube-linter
+RUN curl -fsSL -o /usr/local/bin/kube-linter \
+      "https://github.com/stackrox/kube-linter/releases/download/${KUBELINTER_VERSION}/kube-linter-linux" && \
+    echo "${KUBELINTER_SHA256}  /usr/local/bin/kube-linter" | sha256sum -c - && \
+    chmod +x /usr/local/bin/kube-linter
+
+# tflint
+RUN curl -fsSL -o /tmp/tflint.zip \
+      "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip" && \
+    echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c - && \
+    unzip -o /tmp/tflint.zip -d /usr/local/bin && \
+    chmod +x /usr/local/bin/tflint && \
+    rm /tmp/tflint.zip
+
+# ruff, semgrep, and checkov via pip
 # --break-system-packages required on Ubuntu 24.04 (PEP 668)
 RUN pip3 install --no-cache-dir --break-system-packages \
       "ruff==${RUFF_VERSION}" \
-      "semgrep==${SEMGREP_VERSION}"
+      "semgrep==${SEMGREP_VERSION}" \
+      "checkov==${CHECKOV_VERSION}"
+
+# phpcs with Drupal coding standards + phpstan with phpstan-drupal
+RUN curl -fsSL -o /usr/local/bin/composer \
+      "https://getcomposer.org/download/latest-stable/composer.phar" && \
+    chmod +x /usr/local/bin/composer && \
+    COMPOSER_HOME=/opt/composer COMPOSER_ALLOW_SUPERUSER=1 \
+      composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true && \
+    COMPOSER_HOME=/opt/composer COMPOSER_ALLOW_SUPERUSER=1 \
+      composer global require --no-interaction \
+      "squizlabs/php_codesniffer:${PHPCS_VERSION}" \
+      "drupal/coder:${DRUPAL_CODER_VERSION}" \
+      "phpstan/phpstan:${PHPSTAN_VERSION}" \
+      "mglaman/phpstan-drupal:${PHPSTAN_DRUPAL_VERSION}" && \
+    ln -s /opt/composer/vendor/bin/phpcs /usr/local/bin/phpcs && \
+    ln -s /opt/composer/vendor/bin/phpstan /usr/local/bin/phpstan
 
 # Copy action scripts and supporting files. Uses a glob for post-review*.sh
 # so sibling provider scripts (post-review-bitbucket.sh, future providers)
@@ -76,6 +132,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 COPY review.sh post-review*.sh llm-call.sh \
      run-shellcheck.sh run-cve-check.sh run-semgrep.sh \
      run-trufflehog.sh run-ruff.sh run-golangci-lint.sh \
+     run-hadolint.sh run-checkov.sh run-phpcs.sh run-eslint.sh \
+     run-phpstan.sh run-kube-linter.sh run-tflint.sh \
      /opt/ai-pr-review/
 
 COPY prompts/           /opt/ai-pr-review/prompts/

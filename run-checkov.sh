@@ -109,7 +109,7 @@ FINDINGS=$(echo "$CHECKOV_OUTPUT" | jq -r '
       ),
       confidence: 80,
       source: "checkov",
-      file: .repo_file_path,
+      file: (.repo_file_path | ltrimstr("/")),
       line: (.file_line_range[0] // 1),
       finding: ("\(.check_id): \(.check_id_name // .resource // "policy violation")"),
       remediation: (
