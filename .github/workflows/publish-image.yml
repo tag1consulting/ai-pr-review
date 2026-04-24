@@ -57,7 +57,7 @@ jobs:
 
       - name: Install cosign
         if: ${{ github.event.inputs.dry-run != 'true' }}
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.1
 
       - name: Sign image
         if: ${{ github.event.inputs.dry-run != 'true' }}
