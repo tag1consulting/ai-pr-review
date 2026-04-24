@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+#
+# run-phpstan.sh — Run PHPStan on changed PHP files and emit findings.
+#
+# Uses phpstan-drupal extension when available. Runs at level 3 by default
+# (balances coverage vs noise on mixed legacy/modern Drupal code); consumers
+# can override via PHPSTAN_LEVEL env var or a phpstan.neon in the repo root.
+#
+# Usage:
+#   ./run-phpstan.sh <changed_files_list>
+#
+# Output:
+#   JSON array of findings compatible with review.sh merge_findings.
+#   Outputs "[]" if phpstan is unavailable, no PHP files changed, or no issues found.
+#
+# Environment:
+#   PHPSTAN_MOCK_FILE   When set to a readable file path, read phpstan JSON
+#                       output from that file instead of running the binary.
+#                       Used by the bats test suite; unset in production.
+#   PHPSTAN_LEVEL       Analysis level 0–9 (default: 3). Ignored when the repo
+#                       provides its own phpstan.neon or phpstan.neon.dist.
+
+set -euo pipefail
+
+CHANGED_FILES="${1:-}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "WARNING: jq not installed; phpstan check skipped." >&2
+  echo "[]"
+  exit 0
+fi
+
+if [[ -z "${PHPSTAN_MOCK_FILE:-}" ]] && ! command -v phpstan >/dev/null 2>&1; then
+  echo "WARNING: phpstan not installed; phpstan check skipped." >&2
+  echo "[]"
+  exit 0
+fi
+
+# Filter to PHP files only
+PHP_FILES=()
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+  case "$file" in
+    *.php|*.module|*.inc|*.theme|*.install|*.profile)
+      [[ -f "$file" ]] && PHP_FILES+=("$file") ;;
+  esac
+done <<< "$CHANGED_FILES"
+
+if [[ ${#PHP_FILES[@]} -eq 0 ]]; then
+  echo "[]"
+  exit 0
+fi
+
+if [[ -n "${PHPSTAN_MOCK_FILE:-}" ]]; then
+  if [[ ! -r "$PHPSTAN_MOCK_FILE" ]]; then
+    echo "WARNING: PHPSTAN_MOCK_FILE '${PHPSTAN_MOCK_FILE}' is not readable." >&2
+    echo "[]"
+    exit 0
+  fi
+  PHPSTAN_OUTPUT=$(cat "$PHPSTAN_MOCK_FILE")
+else
+  # Determine level: honour env var, fall back to 3
+  LEVEL="${PHPSTAN_LEVEL:-3}"
+  if ! [[ "$LEVEL" =~ ^[0-9]$ ]]; then
+    echo "WARNING: PHPSTAN_LEVEL='${LEVEL}' is not a valid level (0–9); using 3." >&2
+    LEVEL=3
+  fi
+
+  # Build phpstan args: use consumer config if present, else pass --level
+  PHPSTAN_ARGS=(analyse --error-format=json --no-progress --memory-limit=512M)
+  if [[ -f "phpstan.neon" ]] || [[ -f "phpstan.neon.dist" ]]; then
+    # Consumer config drives everything — don't add --level or --autoload-file
+    :
+  else
+    PHPSTAN_ARGS+=(--level="$LEVEL")
+    # Auto-include phpstan-drupal bootstrap stub if the extension is available
+    if command -v composer >/dev/null 2>&1; then
+      DRUPAL_EXT=$(composer show mglaman/phpstan-drupal 2>/dev/null | grep -c "mglaman" || true)
+      if [[ "$DRUPAL_EXT" -gt 0 ]]; then
+        PHPSTAN_ARGS+=(--autoload-file=vendor/autoload.php)
+      fi
+    fi
+  fi
+
+  PHPSTAN_ARGS+=("${PHP_FILES[@]}")
+
+  # phpstan exits 1 when errors are found — use || true to capture output
+  PHPSTAN_OUTPUT=$(phpstan "${PHPSTAN_ARGS[@]}" 2>/dev/null) || true
+fi
+
+if [[ -z "$PHPSTAN_OUTPUT" ]]; then
+  echo "[]"
+  exit 0
+fi
+
+# PHPStan JSON structure:
+# {
+#   "totals": {"errors": 1, "file_errors": 1},
+#   "files": {
+#     "/path/file.php": {
+#       "errors": 1,
+#       "messages": [
+#         {"message": "...", "line": 42, "ignorable": true}
+#       ]
+#     }
+#   },
+#   "errors": []
+# }
+# PHPStan has no severity field — all findings are errors; map to High.
+FINDINGS=$(echo "$PHPSTAN_OUTPUT" | jq -r '
+  [
+    .files // {} |
+    to_entries[] |
+    . as $entry |
+    .value.messages[]? |
+    select(.message != null) |
+    {
+      severity: "High",
+      confidence: 85,
+      source: "phpstan",
+      file: $entry.key,
+      line: (.line // 1),
+      finding: .message,
+      remediation: "Fix the type error reported by PHPStan. See https://phpstan.org/user-guide/getting-started"
+    }
+  ]
+' 2>/dev/null) || {
+  echo "WARNING: phpstan output could not be parsed; phpstan findings skipped." >&2
+  echo "[]"
+  exit 0
+}
+
+echo "${FINDINGS:-[]}"

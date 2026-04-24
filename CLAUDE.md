@@ -24,6 +24,9 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `run-checkov.sh` | Wraps checkov for changed IaC files (`.tf`, `.tfvars`, `.yaml`/`.yml`, `Dockerfile*`, `.json`); all findings→Medium (no per-check severity from checkov); confidence 80; source `"checkov"` |
 | `run-phpcs.sh` | Wraps phpcs for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); `ERROR`→High, `WARNING`→Medium; confidence 90; source `"phpcs"`. Uses Drupal,DrupalPractice standard when drupal/coder is installed, else PSR12. |
 | `run-eslint.sh` | Wraps ESLint for changed JS/TS files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`); requires consumer's `eslint.config.*` or `.eslintrc.*` — no-op if absent; severity 2→High, 1→Medium; confidence 90; source `"eslint"` |
+| `run-phpstan.sh` | Wraps phpstan for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); all findings→High; confidence 85; source `"phpstan"`. Runs at `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist`. |
+| `run-kube-linter.sh` | Wraps kube-linter for changed YAML/JSON files containing `apiVersion:` + `kind:` headers (K8s manifests); all findings→Medium; confidence 85; source `"kube-linter"` |
+| `run-tflint.sh` | Wraps tflint for changed `.tf`/`.tfvars` files; runs per Terraform module directory; `error`→High, `warning`→Medium, `notice`→Low; confidence 90; source `"tflint"` |
 | `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
 
 ## Multi-provider support (GitHub / Bitbucket Cloud)
@@ -137,7 +140,7 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 | Tier | Agents | When |
 |------|--------|------|
 | Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional) | Always |
-| Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh`, `run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh`, `run-hadolint.sh`, `run-checkov.sh`, `run-phpcs.sh`, `run-eslint.sh` | Always (graceful no-op if binary absent) |
+| Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh`, `run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh`, `run-hadolint.sh`, `run-checkov.sh`, `run-phpcs.sh`, `run-eslint.sh`, `run-phpstan.sh`, `run-kube-linter.sh`, `run-tflint.sh` | Always (graceful no-op if binary absent) |
 | Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
 
 Tier 1 and Tier 2 are separated by a `wait` barrier so Tier 2 never starts until all Tier 1 agents complete.
@@ -237,6 +240,9 @@ All four analyzer scripts follow the same pattern as `run-shellcheck.sh`: accept
 | `run-checkov.sh` | `CHECKOV_MOCK_FILE` | `tests/fixtures/checkov/` |
 | `run-phpcs.sh` | `PHPCS_MOCK_FILE` | `tests/fixtures/phpcs/` |
 | `run-eslint.sh` | `ESLINT_MOCK_FILE` | `tests/fixtures/eslint/` |
+| `run-phpstan.sh` | `PHPSTAN_MOCK_FILE` | `tests/fixtures/phpstan/` |
+| `run-kube-linter.sh` | `KUBELINTER_MOCK_FILE` | `tests/fixtures/kubelinter/` |
+| `run-tflint.sh` | `TFLINT_MOCK_FILE` | `tests/fixtures/tflint/` |
 
 Do not set mock vars in production.
 
