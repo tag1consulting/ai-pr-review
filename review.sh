@@ -743,8 +743,12 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   CHECKOV_TMPFILE=$(mktemp_tracked /tmp/ai-review-checkov-XXXXXXXX.json)
   PHPCS_TMPFILE=$(mktemp_tracked /tmp/ai-review-phpcs-XXXXXXXX.json)
   ESLINT_TMPFILE=$(mktemp_tracked /tmp/ai-review-eslint-XXXXXXXX.json)
+  PHPSTAN_TMPFILE=$(mktemp_tracked /tmp/ai-review-phpstan-XXXXXXXX.json)
+  KUBELINTER_TMPFILE=$(mktemp_tracked /tmp/ai-review-kubelinter-XXXXXXXX.json)
+  TFLINT_TMPFILE=$(mktemp_tracked /tmp/ai-review-tflint-XXXXXXXX.json)
   SC_PID="" CVE_PID="" SEMGREP_PID="" TRUFFLEHOG_PID="" RUFF_PID="" GOLANGCI_PID=""
   HADOLINT_PID="" CHECKOV_PID="" PHPCS_PID="" ESLINT_PID=""
+  PHPSTAN_PID="" KUBELINTER_PID="" TFLINT_PID=""
 
   if [[ -n "$CHANGED_FILES" ]]; then
     ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
@@ -767,6 +771,12 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     PHPCS_PID=$!
     ( "${SCRIPT_DIR}/run-eslint.sh" "$CHANGED_FILES" > "$ESLINT_TMPFILE" ) &
     ESLINT_PID=$!
+    ( "${SCRIPT_DIR}/run-phpstan.sh" "$CHANGED_FILES" > "$PHPSTAN_TMPFILE" ) &
+    PHPSTAN_PID=$!
+    ( "${SCRIPT_DIR}/run-kube-linter.sh" "$CHANGED_FILES" > "$KUBELINTER_TMPFILE" ) &
+    KUBELINTER_PID=$!
+    ( "${SCRIPT_DIR}/run-tflint.sh" "$CHANGED_FILES" > "$TFLINT_TMPFILE" ) &
+    TFLINT_PID=$!
   fi
 
   # Wait for Tier 1 agents
@@ -848,6 +858,15 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   if [[ -n "$ESLINT_PID" ]]; then
     wait "$ESLINT_PID" || echo "WARNING: run-eslint.sh subshell exited non-zero; eslint findings may be incomplete." >&2
   fi
+  if [[ -n "$PHPSTAN_PID" ]]; then
+    wait "$PHPSTAN_PID" || echo "WARNING: run-phpstan.sh subshell exited non-zero; phpstan findings may be incomplete." >&2
+  fi
+  if [[ -n "$KUBELINTER_PID" ]]; then
+    wait "$KUBELINTER_PID" || echo "WARNING: run-kube-linter.sh subshell exited non-zero; kube-linter findings may be incomplete." >&2
+  fi
+  if [[ -n "$TFLINT_PID" ]]; then
+    wait "$TFLINT_PID" || echo "WARNING: run-tflint.sh subshell exited non-zero; tflint findings may be incomplete." >&2
+  fi
 
   SHELLCHECK_JSON=$(cat "$SHELLCHECK_TMPFILE" 2>/dev/null || echo "[]")
   if ! echo "$SHELLCHECK_JSON" | jq -e '.' >/dev/null 2>&1; then
@@ -928,6 +947,30 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   fi
   ESLINT_COUNT=$(echo "$ESLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
   [[ "$ESLINT_COUNT" -gt 0 ]] && echo "ESLint: ${ESLINT_COUNT} findings" >&2
+
+  PHPSTAN_JSON=$(cat "$PHPSTAN_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$PHPSTAN_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-phpstan.sh failed; phpstan findings will be skipped." >&2
+    PHPSTAN_JSON="[]"
+  fi
+  PHPSTAN_COUNT=$(echo "$PHPSTAN_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$PHPSTAN_COUNT" -gt 0 ]] && echo "PHPStan: ${PHPSTAN_COUNT} findings" >&2
+
+  KUBELINTER_JSON=$(cat "$KUBELINTER_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$KUBELINTER_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-kube-linter.sh failed; kube-linter findings will be skipped." >&2
+    KUBELINTER_JSON="[]"
+  fi
+  KUBELINTER_COUNT=$(echo "$KUBELINTER_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$KUBELINTER_COUNT" -gt 0 ]] && echo "Kube-linter: ${KUBELINTER_COUNT} findings" >&2
+
+  TFLINT_JSON=$(cat "$TFLINT_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$TFLINT_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-tflint.sh failed; tflint findings will be skipped." >&2
+    TFLINT_JSON="[]"
+  fi
+  TFLINT_COUNT=$(echo "$TFLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$TFLINT_COUNT" -gt 0 ]] && echo "TFLint: ${TFLINT_COUNT} findings" >&2
 
 else
   # -------------------------------------------------------------------------
@@ -1094,6 +1137,39 @@ else
     }
     ESLINT_COUNT=$(echo "$ESLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
     [[ "$ESLINT_COUNT" -gt 0 ]] && echo "ESLint: ${ESLINT_COUNT} findings" >&2
+  fi
+
+  # --- Run phpstan (PHP files only) ---
+  PHPSTAN_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    PHPSTAN_JSON=$("${SCRIPT_DIR}/run-phpstan.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-phpstan.sh failed; phpstan findings will be skipped." >&2
+      PHPSTAN_JSON="[]"
+    }
+    PHPSTAN_COUNT=$(echo "$PHPSTAN_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$PHPSTAN_COUNT" -gt 0 ]] && echo "PHPStan: ${PHPSTAN_COUNT} findings" >&2
+  fi
+
+  # --- Run kube-linter (Kubernetes YAML/JSON manifests only) ---
+  KUBELINTER_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    KUBELINTER_JSON=$("${SCRIPT_DIR}/run-kube-linter.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-kube-linter.sh failed; kube-linter findings will be skipped." >&2
+      KUBELINTER_JSON="[]"
+    }
+    KUBELINTER_COUNT=$(echo "$KUBELINTER_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$KUBELINTER_COUNT" -gt 0 ]] && echo "Kube-linter: ${KUBELINTER_COUNT} findings" >&2
+  fi
+
+  # --- Run tflint (Terraform files only) ---
+  TFLINT_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    TFLINT_JSON=$("${SCRIPT_DIR}/run-tflint.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-tflint.sh failed; tflint findings will be skipped." >&2
+      TFLINT_JSON="[]"
+    }
+    TFLINT_COUNT=$(echo "$TFLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$TFLINT_COUNT" -gt 0 ]] && echo "TFLint: ${TFLINT_COUNT} findings" >&2
   fi
 
 fi  # end AI_PARALLEL branch
@@ -1567,6 +1643,21 @@ fi
 # Merge eslint findings
 if [[ "$ESLINT_JSON" != "[]" ]]; then
   merge_findings "$ESLINT_JSON"
+fi
+
+# Merge phpstan findings
+if [[ "$PHPSTAN_JSON" != "[]" ]]; then
+  merge_findings "$PHPSTAN_JSON"
+fi
+
+# Merge kube-linter findings
+if [[ "$KUBELINTER_JSON" != "[]" ]]; then
+  merge_findings "$KUBELINTER_JSON"
+fi
+
+# Merge tflint findings
+if [[ "$TFLINT_JSON" != "[]" ]]; then
+  merge_findings "$TFLINT_JSON"
 fi
 
 # Filter out findings below confidence threshold BEFORE suppressions so that

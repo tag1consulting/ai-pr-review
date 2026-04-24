@@ -34,7 +34,7 @@ On every PR push, this action:
 1. Computes the diff (full on first run, incremental on subsequent pushes)
 2. Detects languages from changed file extensions
 3. Runs a roster of AI review agents against the diff
-4. Runs deterministic checks on changed files: shellcheck, CVE lookups ([OSV.dev](https://osv.dev/)), semgrep SAST, trufflehog secret scanning, ruff (Python), golangci-lint (Go), hadolint (Dockerfiles), checkov (Terraform/K8s/IaC), phpcs (PHP/Drupal), and eslint (JS/TS)
+4. Runs deterministic checks on changed files: shellcheck, CVE lookups ([OSV.dev](https://osv.dev/)), semgrep SAST, trufflehog secret scanning, ruff (Python), golangci-lint (Go), hadolint (Dockerfiles), checkov (Terraform/K8s/IaC), phpcs (PHP/Drupal), eslint (JS/TS), phpstan (PHP static analysis), kube-linter (Kubernetes), and tflint (Terraform)
 5. Posts a summary comment (first run only) and a review with inline findings
 6. Auto-resolves stale bot threads and dismisses superseded reviews
 
@@ -327,6 +327,9 @@ The container action ships all analyzer binaries pre-installed. For the direct-a
 | **checkov** | `.tf`, `.tfvars`, `.yaml`, `.yml`, `Dockerfile*`, `.json` | All→Medium (checkov has no per-check severity) | 80 | `checkov` |
 | **phpcs** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | `ERROR`→High, `WARNING`→Medium; Drupal+DrupalPractice standard when available, else PSR12 | 90 | `phpcs` |
 | **eslint** | `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | severity 2→High, severity 1→Medium; uses consumer's config — no-op if no `eslint.config.*` or `.eslintrc.*` found | 90 | `eslint` |
+| **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; runs at level `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist` | 85 | `phpstan` |
+| **kube-linter** | `.yaml`, `.yml`, `.json` with `apiVersion:` + `kind:` headers | All findings→Medium (reliability-focused: missing probes, resource limits, etc.) | 85 | `kube-linter` |
+| **tflint** | `.tf`, `.tfvars` | `error`→High, `warning`→Medium, `notice`→Low; runs per Terraform module directory | 90 | `tflint` |
 
 CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, `requirements*.txt`, and `composer.json`. See [Dependency vulnerability check](#dependency-vulnerability-check) for details.
 
@@ -363,6 +366,9 @@ ai-pr-review/
 ├── run-checkov.sh          # Checkov IaC scanner wrapper (optional binary)
 ├── run-phpcs.sh            # PHP_CodeSniffer wrapper, Drupal+DrupalPractice standard (optional binary)
 ├── run-eslint.sh           # ESLint JS/TS wrapper — uses consumer config, no-op if absent
+├── run-phpstan.sh          # PHPStan static analysis wrapper (optional binary)
+├── run-kube-linter.sh      # kube-linter Kubernetes manifest wrapper (optional binary)
+├── run-tflint.sh           # tflint Terraform linter wrapper (optional binary)
 ├── model-pricing.json      # Per-model token pricing for cost estimation
 ├── suppressions.json       # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
@@ -404,6 +410,9 @@ ai-pr-review/
 │   ├── run_checkov.bats
 │   ├── run_phpcs.bats
 │   ├── run_eslint.bats
+│   ├── run_phpstan.bats
+│   ├── run_kube_linter.bats
+│   ├── run_tflint.bats
 │   ├── test_helper.bash
 │   └── fixtures/
 └── .github/workflows/
