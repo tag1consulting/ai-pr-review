@@ -70,8 +70,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
       "ruff==${RUFF_VERSION}" \
       "semgrep==${SEMGREP_VERSION}"
 
-# Copy action scripts and supporting files
-COPY review.sh post-review.sh llm-call.sh \
+# Copy action scripts and supporting files. Uses a glob for post-review*.sh
+# so sibling provider scripts (post-review-bitbucket.sh, future providers)
+# are picked up automatically without per-release Dockerfile churn.
+COPY review.sh post-review*.sh llm-call.sh \
      run-shellcheck.sh run-cve-check.sh run-semgrep.sh \
      run-trufflehog.sh run-ruff.sh run-golangci-lint.sh \
      /opt/ai-pr-review/

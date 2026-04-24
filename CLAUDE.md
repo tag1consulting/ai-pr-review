@@ -13,6 +13,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `review.sh` | Main orchestrator: diff computation, manifest building, language detection, agent dispatch, findings merge/dedup/suppress, invokes `post-review.sh` |
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
+| `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Sibling-script pattern](#sibling-script-pattern)) |
 | `run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
 | `run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
 | `run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"` |
@@ -20,6 +21,60 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `run-ruff.sh` | Wraps ruff for changed `.py` files; `F`/`E` prefix→High, `W`/`C`→Medium, else→Low; confidence 90; source `"ruff"` |
 | `run-golangci-lint.sh` | Wraps golangci-lint for changed `.go` files; `errcheck`/`govet`/`staticcheck`→High, others→Medium; confidence 90; source `"golangci-lint"` |
 | `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
+
+## Multi-provider support (GitHub / Bitbucket Cloud)
+
+Since v0.2.0 the same container image drives PR reviews on either GitHub or
+Bitbucket Cloud. The provider is selected via the `VCS_PROVIDER` env var:
+
+| `VCS_PROVIDER` | Provider | Post-review script |
+|---|---|---|
+| `github` (default) | GitHub | `post-review.sh` |
+| `bitbucket` | Bitbucket Cloud | `post-review-bitbucket.sh` |
+
+`review.sh` resolves `POST_REVIEW_SCRIPT` once at startup based on
+`VCS_PROVIDER` and uses it at every post-review call site. Invalid provider
+values fail fast with a clear error. `REVIEW_TARGET=standalone` is rejected
+for Bitbucket (no Issues product).
+
+### Sibling-script pattern
+
+`post-review-bitbucket.sh` is a **sibling script**, not a refactor of
+`post-review.sh`. It duplicates pure helpers (`severity_icon`,
+`format_source_tag`, `truncate_body`, `mktemp_tracked`, `cleanup`)
+because sourcing across providers would couple two unrelated concerns.
+
+**Drift mitigation:** every duplicated helper carries a
+`# keep in sync with post-review.sh:<line>` comment above it, and
+`tests/post_review_bitbucket_functions.bats` contains parity tests that
+evaluate both implementations against shared fixtures — the test fails if
+either copy drifts.
+
+**Per-provider constants:** `MAX_BODY_SIZE` differs per provider
+(64000 for GitHub, 32000 for Bitbucket — Bitbucket's `content.raw` field
+has a 32768-char hard cap). These are defined inside each script, not
+shared.
+
+**Refactor trigger:** rework to a `vcs/<provider>.sh` abstraction when
+either (a) a third VCS provider is scoped, or (b) either post-review
+script exceeds ~500 LOC of provider-specific logic. Below those thresholds
+the sibling pattern is strictly simpler than a dispatch layer.
+
+### Bitbucket-specific feature gaps (v0.2.0)
+
+Not yet supported on the Bitbucket path:
+- Inline review comments (all findings render inside the summary comment)
+- `REVIEW_TARGET=standalone` (Bitbucket Cloud has no Issues product)
+- Slash-command triggers (Bitbucket Pipelines has no `issue_comment` event)
+- APPROVE / REQUEST_CHANGES review events (different endpoints, optional)
+- Large-diff skip comment (exits cleanly with a warning, no comment posted)
+
+See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for the full list.
+
+### Dockerfile COPY glob
+
+`Dockerfile` uses `COPY post-review*.sh` (a glob) so future provider
+scripts are picked up without per-release Dockerfile churn.
 
 ## Agent output schema
 
@@ -233,6 +288,10 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings to be included (mapped from `confidence-threshold` action input) |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
+| `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud). |
+| `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
+| `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |
+| `BITBUCKET_WORKSPACE` / `BITBUCKET_REPO_SLUG` | — | Bitbucket-only. Optional explicit override for the repo identifier; if unset, the script splits `GITHUB_REPOSITORY` |
 
 Exit codes from `llm-call.sh`:
 - **0** — success

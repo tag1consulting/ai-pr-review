@@ -1,0 +1,47 @@
+# Bitbucket Pipelines starter for ai-pr-review.
+#
+# Copy this file to `bitbucket-pipelines.yml` at the root of your Bitbucket
+# Cloud repository and enable Pipelines in repository settings.
+#
+# Required repository variables (Repository settings -> Pipelines -> Repository variables):
+#   ANTHROPIC_API_KEY   (secured)  — or OPENAI_API_KEY / GOOGLE_API_KEY etc.
+#                                    depending on AI_PROVIDER.
+#   BITBUCKET_EMAIL     (plain)    — Atlassian account email for the bot user.
+#   BITBUCKET_API_TOKEN (secured)  — Atlassian API token with
+#                                    Repository:Read + PR:Write scopes.
+#
+# Optional repository variables:
+#   AI_PROVIDER         (plain, default: anthropic)
+#   AI_REVIEW_MODE      (plain, default: quick; set to 'full' for deep agents)
+#
+# `clone.depth: full` is required: review.sh calls `git fetch origin $BASE_REF`
+# to compute the diff, and the default shallow Pipelines clone does not always
+# include the base branch history.
+
+image:
+  name: ghcr.io/tag1consulting/ai-pr-review:0
+  # For private pulls (ai-pr-review is currently public — use the public
+  # pull below unless/until you host your own mirror). If you fork to a
+  # private registry, uncomment and configure:
+  # username: $GHCR_USER
+  # password: $GHCR_TOKEN
+
+clone:
+  depth: full
+
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: AI PR Review
+          script:
+            - export VCS_PROVIDER=bitbucket
+            - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
+            - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+            - export PR_NUMBER="$BITBUCKET_PR_ID"
+            - export BASE_REF="$BITBUCKET_PR_DESTINATION_BRANCH"
+            - export HEAD_SHA="$BITBUCKET_COMMIT"
+            - export GITHUB_REPOSITORY="${BITBUCKET_WORKSPACE}/${BITBUCKET_REPO_SLUG}"
+            # BITBUCKET_EMAIL + BITBUCKET_API_TOKEN come from repo variables.
+            # ANTHROPIC_API_KEY (or your provider's key) also from repo variables.
+            - /opt/ai-pr-review/review.sh
