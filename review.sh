@@ -739,7 +739,12 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   TRUFFLEHOG_TMPFILE=$(mktemp_tracked /tmp/ai-review-th-XXXXXXXX.json)
   RUFF_TMPFILE=$(mktemp_tracked /tmp/ai-review-ruff-XXXXXXXX.json)
   GOLANGCI_TMPFILE=$(mktemp_tracked /tmp/ai-review-gl-XXXXXXXX.json)
+  HADOLINT_TMPFILE=$(mktemp_tracked /tmp/ai-review-hadolint-XXXXXXXX.json)
+  CHECKOV_TMPFILE=$(mktemp_tracked /tmp/ai-review-checkov-XXXXXXXX.json)
+  PHPCS_TMPFILE=$(mktemp_tracked /tmp/ai-review-phpcs-XXXXXXXX.json)
+  ESLINT_TMPFILE=$(mktemp_tracked /tmp/ai-review-eslint-XXXXXXXX.json)
   SC_PID="" CVE_PID="" SEMGREP_PID="" TRUFFLEHOG_PID="" RUFF_PID="" GOLANGCI_PID=""
+  HADOLINT_PID="" CHECKOV_PID="" PHPCS_PID="" ESLINT_PID=""
 
   if [[ -n "$CHANGED_FILES" ]]; then
     ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
@@ -754,6 +759,14 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     RUFF_PID=$!
     ( "${SCRIPT_DIR}/run-golangci-lint.sh" "$CHANGED_FILES" > "$GOLANGCI_TMPFILE" ) &
     GOLANGCI_PID=$!
+    ( "${SCRIPT_DIR}/run-hadolint.sh" "$CHANGED_FILES" > "$HADOLINT_TMPFILE" ) &
+    HADOLINT_PID=$!
+    ( "${SCRIPT_DIR}/run-checkov.sh" "$CHANGED_FILES" > "$CHECKOV_TMPFILE" ) &
+    CHECKOV_PID=$!
+    ( "${SCRIPT_DIR}/run-phpcs.sh" "$CHANGED_FILES" > "$PHPCS_TMPFILE" ) &
+    PHPCS_PID=$!
+    ( "${SCRIPT_DIR}/run-eslint.sh" "$CHANGED_FILES" > "$ESLINT_TMPFILE" ) &
+    ESLINT_PID=$!
   fi
 
   # Wait for Tier 1 agents
@@ -823,6 +836,18 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   if [[ -n "$GOLANGCI_PID" ]]; then
     wait "$GOLANGCI_PID" || echo "WARNING: run-golangci-lint.sh subshell exited non-zero; golangci-lint findings may be incomplete." >&2
   fi
+  if [[ -n "$HADOLINT_PID" ]]; then
+    wait "$HADOLINT_PID" || echo "WARNING: run-hadolint.sh subshell exited non-zero; hadolint findings may be incomplete." >&2
+  fi
+  if [[ -n "$CHECKOV_PID" ]]; then
+    wait "$CHECKOV_PID" || echo "WARNING: run-checkov.sh subshell exited non-zero; checkov findings may be incomplete." >&2
+  fi
+  if [[ -n "$PHPCS_PID" ]]; then
+    wait "$PHPCS_PID" || echo "WARNING: run-phpcs.sh subshell exited non-zero; phpcs findings may be incomplete." >&2
+  fi
+  if [[ -n "$ESLINT_PID" ]]; then
+    wait "$ESLINT_PID" || echo "WARNING: run-eslint.sh subshell exited non-zero; eslint findings may be incomplete." >&2
+  fi
 
   SHELLCHECK_JSON=$(cat "$SHELLCHECK_TMPFILE" 2>/dev/null || echo "[]")
   if ! echo "$SHELLCHECK_JSON" | jq -e '.' >/dev/null 2>&1; then
@@ -871,6 +896,38 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   fi
   GL_COUNT=$(echo "$GOLANGCI_JSON" | jq 'length' 2>/dev/null || echo "0")
   [[ "$GL_COUNT" -gt 0 ]] && echo "Golangci-lint: ${GL_COUNT} findings" >&2
+
+  HADOLINT_JSON=$(cat "$HADOLINT_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$HADOLINT_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-hadolint.sh failed; hadolint findings will be skipped." >&2
+    HADOLINT_JSON="[]"
+  fi
+  HADOLINT_COUNT=$(echo "$HADOLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$HADOLINT_COUNT" -gt 0 ]] && echo "Hadolint: ${HADOLINT_COUNT} findings" >&2
+
+  CHECKOV_JSON=$(cat "$CHECKOV_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$CHECKOV_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-checkov.sh failed; checkov findings will be skipped." >&2
+    CHECKOV_JSON="[]"
+  fi
+  CHECKOV_COUNT=$(echo "$CHECKOV_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$CHECKOV_COUNT" -gt 0 ]] && echo "Checkov: ${CHECKOV_COUNT} findings" >&2
+
+  PHPCS_JSON=$(cat "$PHPCS_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$PHPCS_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-phpcs.sh failed; phpcs findings will be skipped." >&2
+    PHPCS_JSON="[]"
+  fi
+  PHPCS_COUNT=$(echo "$PHPCS_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$PHPCS_COUNT" -gt 0 ]] && echo "Phpcs: ${PHPCS_COUNT} findings" >&2
+
+  ESLINT_JSON=$(cat "$ESLINT_TMPFILE" 2>/dev/null || echo "[]")
+  if ! echo "$ESLINT_JSON" | jq -e '.' >/dev/null 2>&1; then
+    echo "WARNING: run-eslint.sh failed; eslint findings will be skipped." >&2
+    ESLINT_JSON="[]"
+  fi
+  ESLINT_COUNT=$(echo "$ESLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
+  [[ "$ESLINT_COUNT" -gt 0 ]] && echo "ESLint: ${ESLINT_COUNT} findings" >&2
 
 else
   # -------------------------------------------------------------------------
@@ -993,6 +1050,50 @@ else
     }
     GL_COUNT=$(echo "$GOLANGCI_JSON" | jq 'length' 2>/dev/null || echo "0")
     [[ "$GL_COUNT" -gt 0 ]] && echo "Golangci-lint: ${GL_COUNT} findings" >&2
+  fi
+
+  # --- Run hadolint (Dockerfiles only) ---
+  HADOLINT_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    HADOLINT_JSON=$("${SCRIPT_DIR}/run-hadolint.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-hadolint.sh failed; hadolint findings will be skipped." >&2
+      HADOLINT_JSON="[]"
+    }
+    HADOLINT_COUNT=$(echo "$HADOLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$HADOLINT_COUNT" -gt 0 ]] && echo "Hadolint: ${HADOLINT_COUNT} findings" >&2
+  fi
+
+  # --- Run checkov (Terraform, K8s YAML, Dockerfiles, JSON) ---
+  CHECKOV_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    CHECKOV_JSON=$("${SCRIPT_DIR}/run-checkov.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-checkov.sh failed; checkov findings will be skipped." >&2
+      CHECKOV_JSON="[]"
+    }
+    CHECKOV_COUNT=$(echo "$CHECKOV_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$CHECKOV_COUNT" -gt 0 ]] && echo "Checkov: ${CHECKOV_COUNT} findings" >&2
+  fi
+
+  # --- Run phpcs (PHP files only) ---
+  PHPCS_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    PHPCS_JSON=$("${SCRIPT_DIR}/run-phpcs.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-phpcs.sh failed; phpcs findings will be skipped." >&2
+      PHPCS_JSON="[]"
+    }
+    PHPCS_COUNT=$(echo "$PHPCS_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$PHPCS_COUNT" -gt 0 ]] && echo "Phpcs: ${PHPCS_COUNT} findings" >&2
+  fi
+
+  # --- Run eslint (JS/TS files only, requires consumer config) ---
+  ESLINT_JSON="[]"
+  if [[ -n "$CHANGED_FILES" ]]; then
+    ESLINT_JSON=$("${SCRIPT_DIR}/run-eslint.sh" "$CHANGED_FILES") || {
+      echo "WARNING: run-eslint.sh failed; eslint findings will be skipped." >&2
+      ESLINT_JSON="[]"
+    }
+    ESLINT_COUNT=$(echo "$ESLINT_JSON" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$ESLINT_COUNT" -gt 0 ]] && echo "ESLint: ${ESLINT_COUNT} findings" >&2
   fi
 
 fi  # end AI_PARALLEL branch
@@ -1446,6 +1547,26 @@ fi
 # Merge golangci-lint findings
 if [[ "$GOLANGCI_JSON" != "[]" ]]; then
   merge_findings "$GOLANGCI_JSON"
+fi
+
+# Merge hadolint findings
+if [[ "$HADOLINT_JSON" != "[]" ]]; then
+  merge_findings "$HADOLINT_JSON"
+fi
+
+# Merge checkov findings
+if [[ "$CHECKOV_JSON" != "[]" ]]; then
+  merge_findings "$CHECKOV_JSON"
+fi
+
+# Merge phpcs findings
+if [[ "$PHPCS_JSON" != "[]" ]]; then
+  merge_findings "$PHPCS_JSON"
+fi
+
+# Merge eslint findings
+if [[ "$ESLINT_JSON" != "[]" ]]; then
+  merge_findings "$ESLINT_JSON"
 fi
 
 # Filter out findings below confidence threshold BEFORE suppressions so that

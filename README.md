@@ -34,7 +34,7 @@ On every PR push, this action:
 1. Computes the diff (full on first run, incremental on subsequent pushes)
 2. Detects languages from changed file extensions
 3. Runs a roster of AI review agents against the diff
-4. Runs deterministic checks on changed files: shellcheck on shell scripts, CVE lookups against [OSV.dev](https://osv.dev/) for dependency manifest changes, and (when binaries are installed) semgrep SAST, trufflehog secret scanning, ruff Python linting, and golangci-lint Go linting
+4. Runs deterministic checks on changed files: shellcheck, CVE lookups ([OSV.dev](https://osv.dev/)), semgrep SAST, trufflehog secret scanning, ruff (Python), golangci-lint (Go), hadolint (Dockerfiles), checkov (Terraform/K8s/IaC), phpcs (PHP/Drupal), and eslint (JS/TS)
 5. Posts a summary comment (first run only) and a review with inline findings
 6. Auto-resolves stale bot threads and dismisses superseded reviews
 
@@ -312,18 +312,23 @@ To accept a specific CVE (e.g. library used only in a test fixture), add a suppr
 
 ## Static analyzers
 
-When the corresponding binary is installed in the workflow, the action runs four additional deterministic analyzers alongside shellcheck and the CVE check. Their findings flow through the same dedup, suppress, and render pipeline as LLM findings.
+The action runs deterministic analyzers alongside the LLM agents. Their findings flow through the same dedup, suppress, and render pipeline as LLM findings. All analyzers run concurrently in the parallel path and fall back to sequential when `parallel: false`. If a binary is missing, the wrapper script emits a WARNING to stderr and returns `[]` — the review is never blocked.
 
-| Analyzer | Language gate | Severity mapping | Confidence |
-|----------|--------------|-----------------|------------|
-| **semgrep** | Any file | `ERROR`→High, `WARNING`→Medium, else→Low | 90 |
-| **trufflehog** | Any file | Verified secret→Critical, Unverified→High | 95 / 85 |
-| **ruff** | `.py` files | `F`/`E` prefix→High, `W`/`C`→Medium, else→Low | 90 |
-| **golangci-lint** | `.go` files | `errcheck`/`govet`/`staticcheck`→High, others→Medium | 90 |
+The container action ships all analyzer binaries pre-installed. For the direct-action or submodule paths, install the binaries you need; see [docs/installation-direct-action.md](docs/installation-direct-action.md#runtime-dependencies).
 
-All four run concurrently in the parallel path (alongside shellcheck and cve-check) and fall back to sequential when `parallel: false`. If a binary is missing, the wrapper script emits a WARNING to stderr and returns `[]` — the review is never blocked.
+| Analyzer | Language gate | Severity mapping | Confidence | Source tag |
+|----------|--------------|-----------------|------------|------------|
+| **shellcheck** | `.sh`, `.bash` | `error`→High, `warning`→Medium | 95 | `shellcheck` |
+| **semgrep** | Any file | `ERROR`→High, `WARNING`→Medium, else→Low | 90 | `semgrep` |
+| **trufflehog** | Any file | Verified secret→Critical, Unverified→High | 95 / 85 | `trufflehog` |
+| **ruff** | `.py` files | `F`/`E` prefix→High, `W`/`C`→Medium, else→Low | 90 | `ruff` |
+| **golangci-lint** | `.go` files | `errcheck`/`govet`/`staticcheck`→High, others→Medium | 90 | `golangci-lint` |
+| **hadolint** | `Dockerfile*`, `*.dockerfile` | `error`→High, `warning`→Medium, else→Low | 90 | `hadolint` |
+| **checkov** | `.tf`, `.tfvars`, `.yaml`, `.yml`, `Dockerfile*`, `.json` | All→Medium (checkov has no per-check severity) | 80 | `checkov` |
+| **phpcs** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | `ERROR`→High, `WARNING`→Medium; Drupal+DrupalPractice standard when available, else PSR12 | 90 | `phpcs` |
+| **eslint** | `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | severity 2→High, severity 1→Medium; uses consumer's config — no-op if no `eslint.config.*` or `.eslintrc.*` found | 90 | `eslint` |
 
-See [Dependencies](#dependencies) for install instructions.
+CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, `requirements*.txt`, and `composer.json`. See [Dependency vulnerability check](#dependency-vulnerability-check) for details.
 
 ## Token usage
 
@@ -354,6 +359,10 @@ ai-pr-review/
 ├── run-trufflehog.sh       # Trufflehog secret scanning wrapper (optional binary)
 ├── run-ruff.sh             # Ruff Python linter wrapper (optional binary)
 ├── run-golangci-lint.sh    # golangci-lint Go linter wrapper (optional binary)
+├── run-hadolint.sh         # Hadolint Dockerfile linter wrapper (optional binary)
+├── run-checkov.sh          # Checkov IaC scanner wrapper (optional binary)
+├── run-phpcs.sh            # PHP_CodeSniffer wrapper, Drupal+DrupalPractice standard (optional binary)
+├── run-eslint.sh           # ESLint JS/TS wrapper — uses consumer config, no-op if absent
 ├── model-pricing.json      # Per-model token pricing for cost estimation
 ├── suppressions.json       # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
@@ -391,6 +400,10 @@ ai-pr-review/
 │   ├── run_trufflehog.bats
 │   ├── run_ruff.bats
 │   ├── run_golangci_lint.bats
+│   ├── run_hadolint.bats
+│   ├── run_checkov.bats
+│   ├── run_phpcs.bats
+│   ├── run_eslint.bats
 │   ├── test_helper.bash
 │   └── fixtures/
 └── .github/workflows/

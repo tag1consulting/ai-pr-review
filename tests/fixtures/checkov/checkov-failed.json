@@ -1,0 +1,17 @@
+{
+  "results": {
+    "passed_checks": [],
+    "failed_checks": [
+      {
+        "check_id": "CKV_AWS_57",
+        "check_id_name": "S3 Bucket has access control list (ACL) enabled",
+        "check_result": {"result": "FAILED"},
+        "resource": "aws_s3_bucket.example",
+        "repo_file_path": "main.tf",
+        "file_line_range": [10, 25],
+        "guideline": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-overview.html"
+      }
+    ],
+    "skipped_checks": []
+  }
+}
