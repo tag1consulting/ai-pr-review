@@ -93,9 +93,11 @@ canonical contract. If you write your own pipeline, ensure these are set:
 ## `clone.depth: full` is required
 
 The default Bitbucket Pipelines clone is shallow and may not include the base
-branch. `review.sh` runs `git fetch origin $BASE_REF --depth=50` at startup,
-which fails silently on a shallow clone. Set `clone.depth: full` at the top
-of `bitbucket-pipelines.yml` (the starter does this).
+branch. If `git fetch origin $BASE_REF --depth=50` fails (e.g. on a shallow clone
+missing the base branch), the script emits a warning and falls back to
+existing local refs; if the base ref is still unreachable it aborts with an
+error. Set `clone.depth: full` at the top of `bitbucket-pipelines.yml`
+(the starter does this) to avoid this.
 
 ## Security considerations
 

@@ -41,7 +41,7 @@ for Bitbucket (no Issues product).
 
 `post-review-bitbucket.sh` is a **sibling script**, not a refactor of
 `post-review.sh`. It duplicates pure helpers (`severity_icon`,
-`format_source_tag`, `truncate_body`, `parse_valid_lines`, `mktemp_tracked`)
+`format_source_tag`, `truncate_body`, `mktemp_tracked`, `cleanup`)
 because sourcing across providers would couple two unrelated concerns.
 
 **Drift mitigation:** every duplicated helper carries a

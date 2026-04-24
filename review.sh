@@ -168,7 +168,7 @@ DIFF_LABEL=""
 DIFF_TWO_DOT=false
 
 if [[ "$REVIEW_TARGET" != "standalone" && "${FORCE_FULL_DIFF:-false}" != "true" ]]; then
-  LAST_REVIEWED_SHA=$("$POST_REVIEW_SCRIPT" --get-last-sha "$PR_NUMBER" 2>/dev/null) || {
+  LAST_REVIEWED_SHA=$("$POST_REVIEW_SCRIPT" --get-last-sha "$PR_NUMBER") || {
     echo "WARNING: Could not retrieve last-reviewed SHA; falling back to full PR diff." >&2
     LAST_REVIEWED_SHA=""
   }

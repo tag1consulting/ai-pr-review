@@ -60,9 +60,12 @@ BB_API="https://api.bitbucket.org/2.0"
 MARKER_PREFIX="<!-- ai-pr-review-summary"
 
 # ---------------------------------------------------------------------------
-# Temp file bookkeeping (keep in sync with post-review.sh:282).
-# Defined here (ahead of bb_api) so bb_api can use mktemp_tracked rather than
-# a RETURN trap that would not fire on SIGKILL or in some subshell contexts.
+# Temp file bookkeeping (keep in sync with post-review.sh:285).
+# Every bb_api call is invoked via $() command substitution (a subshell).
+# The subshell inherits a copy of TMPFILES and the trap cleanup EXIT. Any
+# files added to TMPFILES inside bb_api are cleaned up when the subshell
+# exits — cleanup runs correctly per-subshell even though the parent shell's
+# TMPFILES copy never sees the additions.
 # ---------------------------------------------------------------------------
 TMPFILES=()
 cleanup() {
@@ -80,9 +83,10 @@ mktemp_tracked() {
 
 # ---------------------------------------------------------------------------
 # bb_api — invoke the Bitbucket Cloud REST API with Basic auth.
-# Mirrors the gh_api_retry pattern: retries on transient failures (502/503/
-# 429/timeouts) with exponential backoff + jitter. Prints response body to
-# stdout on success; on failure, prints the body and returns non-zero.
+# Mirrors the gh_api_retry pattern: retries on transient failures (408, 429,
+# 500, 502, 503, 504, and curl-level failures indicated by code 000) with
+# exponential backoff + jitter. Prints response body to stdout on success;
+# on failure, prints the body and returns non-zero.
 #
 # Usage: bb_api <method> <path_after_/2.0> [curl_args...]
 #   e.g. bb_api GET "/repositories/ws/repo/pullrequests/1/comments"
@@ -96,6 +100,14 @@ bb_api() {
   : "${BITBUCKET_EMAIL:?BITBUCKET_EMAIL is required for Bitbucket Cloud auth}"
   : "${BITBUCKET_API_TOKEN:?BITBUCKET_API_TOKEN is required for Bitbucket Cloud auth}"
 
+  # Write credentials to a netrc file so they are not exposed in /proc/*/cmdline
+  # or ps output. The EXIT trap (cleanup) deletes all TMPFILES including this.
+  local netrc_file
+  netrc_file=$(mktemp_tracked /tmp/bb-netrc-XXXXXXXX)
+  chmod 600 "$netrc_file"
+  printf 'machine api.bitbucket.org login %s password %s\n' \
+    "${BITBUCKET_EMAIL}" "${BITBUCKET_API_TOKEN}" > "$netrc_file"
+
   local attempt=0 max_retries=3 http_code body_file curl_err_file
   body_file=$(mktemp_tracked /tmp/bb-api-body-XXXXXXXX)
   curl_err_file=$(mktemp_tracked /tmp/bb-api-err-XXXXXXXX)
@@ -104,8 +116,12 @@ bb_api() {
     # Capture curl stderr separately so diagnostic output (TLS errors, DNS
     # failures, connection timeouts) is preserved for the error log rather
     # than discarded. exit-code → 000 sentinel on curl failure.
+    # --connect-timeout 15: fail fast on unreachable host.
+    # --max-time 60: cap total transfer time to prevent indefinite hangs.
     http_code=$(curl -sS \
-      -u "${BITBUCKET_EMAIL}:${BITBUCKET_API_TOKEN}" \
+      --netrc-file "$netrc_file" \
+      --connect-timeout 15 \
+      --max-time 60 \
       -o "$body_file" \
       -w '%{http_code}' \
       -X "$method" \
@@ -169,7 +185,8 @@ if [[ "${1:-}" == "--get-last-sha" ]]; then
 
     # Advance to the next page, if any. Strip the base URL prefix so bb_api
     # can prepend BB_API again via the path argument.
-    next_url=$(echo "$comments_json" | jq -r '.next // empty' | sed "s|${BB_API}||")
+    raw_next=$(echo "$comments_json" | jq -r '.next // empty')
+    next_url="${raw_next#"${BB_API}"}"
   done
 
   if [[ -n "$comment_body" ]]; then
@@ -263,7 +280,7 @@ format_source_tag() {
     else
       (.source // "unknown")
     end
-  ' 2>/dev/null)
+  ')
 
   primary=$(echo "$sources" | head -1)
   [[ -z "$primary" ]] && { echo "[unknown]"; return; }
@@ -322,9 +339,9 @@ render_findings_markdown() {
 # ---------------------------------------------------------------------------
 # Classify overall risk from the findings JSON. Prints "<risk>|<event>" where
 # risk ∈ {None, Low, Medium, High, Critical, Unknown} and event ∈ {APPROVE,
-# REQUEST_CHANGES, COMMENT}. event is informational only on Bitbucket (we
-# don't call approve/request-changes endpoints in v0.2.0) but we reuse it
-# to pick the body heading.
+# REQUEST_CHANGES, COMMENT}. event drives the body heading selection in
+# build_comment_body; the approve/request-changes API endpoints are not
+# called in v0.2.0.
 # ---------------------------------------------------------------------------
 classify_risk() {
   local findings_json="$1"
@@ -470,7 +487,9 @@ find_existing_summary_id() {
 
     [[ -n "$found_id" ]] && { echo "$found_id"; return 0; }
 
-    next_url=$(echo "$comments_json" | jq -r '.next // empty' | sed "s|${BB_API}||")
+    local raw_next
+    raw_next=$(echo "$comments_json" | jq -r '.next // empty')
+    next_url="${raw_next#"${BB_API}"}"
   done
   # No matching comment found across all pages.
   echo ""
@@ -507,7 +526,7 @@ post_summary_with_findings() {
       -H 'Content-Type: application/json' \
       --data-binary "@${payload_file}"); then
       echo "Summary comment updated on PR #${PR_NUMBER}." >&2
-      _cleanup_duplicate_summary_comments "$existing_id"
+      _cleanup_duplicate_summary_comments "$existing_id" || true
       return 0
     fi
     echo "ERROR: Failed to update summary comment #${existing_id}." >&2
@@ -519,9 +538,9 @@ post_summary_with_findings() {
     "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments" \
     -H 'Content-Type: application/json' \
     --data-binary "@${payload_file}"); then
-    new_id=$(echo "$result" | jq -r '.id // empty')
+    new_id=$(echo "$result" | jq -r '.id // empty' || true)
     echo "Summary comment posted to PR #${PR_NUMBER} (id=${new_id:-unknown})." >&2
-    _cleanup_duplicate_summary_comments "${new_id:-}"
+    _cleanup_duplicate_summary_comments "${new_id:-}" || true
     return 0
   fi
   echo "ERROR: Failed to post summary comment to PR #${PR_NUMBER}. Review results were not delivered." >&2
@@ -534,32 +553,42 @@ _cleanup_duplicate_summary_comments() {
   local kept_id="$1"
   [[ -z "$kept_id" ]] && return 0
 
-  local next_url="/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22"
+  # sort=-updated_on matches find_existing_summary_id; the summary comment is
+  # always recently updated so it appears on page 1 in most cases.
+  local next_url="/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments?pagelen=100&q=content.raw%20~%20%22ai-pr-review-summary%22&sort=-updated_on"
   while [[ -n "$next_url" ]]; do
     local page_json
-    page_json=$(bb_api GET "$next_url" 2>/dev/null) || break
+    page_json=$(bb_api GET "$next_url") || break
 
     while IFS= read -r dup_id; do
       [[ -z "$dup_id" || "$dup_id" == "$kept_id" ]] && continue
       echo "Removing duplicate summary comment #${dup_id}..." >&2
       bb_api DELETE \
         "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments/${dup_id}" \
-        > /dev/null 2>&1 \
+        > /dev/null \
         || echo "WARNING: Could not delete duplicate summary comment #${dup_id}." >&2
     done < <(echo "$page_json" | jq -r --arg marker "$MARKER_PREFIX" \
       '.values // [] | map(select(.content.raw // "" | contains($marker))) | .[].id' 2>/dev/null)
 
-    next_url=$(echo "$page_json" | jq -r '.next // empty' | sed "s|${BB_API}||")
+    local raw_next
+    raw_next=$(echo "$page_json" | jq -r '.next // empty') || true
+    next_url="${raw_next#"${BB_API}"}"
   done
 }
 
 # ---------------------------------------------------------------------------
 # Advance the SHA watermark in the existing summary comment.
+# NOTE: Not called in v0.2.0 — build_comment_body embeds HEAD_SHA in the
+# POST/PUT payload directly. Preserved for v0.3.0 when inline comments may
+# require a separate SHA-only update step.
 # keep in sync with post-review.sh:1021
 # ---------------------------------------------------------------------------
 update_sha_marker() {
   local existing_id existing_body
-  existing_id=$(find_existing_summary_id || true)
+  if ! existing_id=$(find_existing_summary_id); then
+    echo "WARNING: update_sha_marker: could not query existing comments; SHA marker not updated." >&2
+    return 0
+  fi
   if [[ -z "$existing_id" ]]; then
     echo "No existing summary comment found; SHA marker not updated." >&2
     return 0
@@ -585,7 +614,10 @@ update_sha_marker() {
 
   local payload_file
   payload_file=$(mktemp_tracked /tmp/bb-sha-XXXXXXXX.json)
-  jq -n --arg raw "$updated_body" '{content: {raw: $raw}}' > "$payload_file"
+  if ! jq -n --arg raw "$updated_body" '{content: {raw: $raw}}' > "$payload_file"; then
+    echo "WARNING: update_sha_marker: failed to build payload; SHA marker not updated." >&2
+    return 0
+  fi
 
   if bb_api PUT \
     "/repositories/${WORKSPACE}/${REPO_SLUG}/pullrequests/${PR_NUMBER}/comments/${existing_id}" \

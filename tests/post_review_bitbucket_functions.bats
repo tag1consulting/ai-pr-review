@@ -179,7 +179,12 @@ setup() {
   done
 }
 
-@test "parity: truncate_body produces identical output in both scripts" {
+@test "parity: truncate_body short inputs pass through unchanged in both scripts" {
+  # This test only covers inputs well under both caps (GitHub=64000, Bitbucket=32000).
+  # The two scripts intentionally produce DIFFERENT outputs for inputs between
+  # 32001–64000 bytes (Bitbucket truncates; GitHub returns as-is) — so those
+  # inputs are NOT compared here. See the per-script truncate_body tests above
+  # for boundary coverage of each cap individually.
   local fixtures=(
     "hello world"
     ""
@@ -197,15 +202,67 @@ setup() {
   done
 }
 
+@test "parity: truncate_body mid-range input (33000 bytes): Bitbucket truncates, GitHub passes through" {
+  # Inputs between 32001–64000 bytes must produce DIFFERENT results: Bitbucket
+  # truncates (32000 cap), GitHub returns unchanged (64000 cap). This test
+  # asserts the structural difference explicitly rather than checking equality.
+  local mid_input
+  mid_input=$(printf 'x%.0s' {1..33000})
+
+  local gh_fn bb_fn
+  gh_fn=$(awk '/^MAX_BODY_SIZE=/{print} /^truncate_body\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
+  bb_fn=$(awk '/^MAX_BODY_SIZE=/{print} /^truncate_body\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
+
+  local gh_out bb_out
+  gh_out=$(bash -c "${gh_fn}"'; truncate_body "$1"' _ "$mid_input")
+  bb_out=$(bash -c "${bb_fn}"'; truncate_body "$1"' _ "$mid_input")
+
+  # GitHub: 33000-byte input is under its 64000 cap — returned unchanged.
+  [ "${#gh_out}" -eq 33000 ] || { echo "GitHub should return unchanged: got ${#gh_out} bytes" >&2; return 1; }
+  [[ "$gh_out" != *"truncated"* ]] || { echo "GitHub should not truncate a 33000-byte body" >&2; return 1; }
+
+  # Bitbucket: 33000-byte input exceeds its 32000 cap — truncated with notice.
+  [[ "$bb_out" == *"Review output truncated"* ]] || { echo "Bitbucket should truncate a 33000-byte body" >&2; return 1; }
+  local bb_bytes
+  bb_bytes=$(printf '%s' "$bb_out" | wc -c)
+  [ "$bb_bytes" -lt 32500 ] || { echo "Bitbucket truncated output too large: ${bb_bytes} bytes" >&2; return 1; }
+}
+
 @test "parity: mktemp_tracked registers files for cleanup in both scripts" {
   local gh_fn bb_fn
   gh_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
   bb_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  # Both should create a real temp file and echo its path.
+
+  # Verify the core contract: the created file is registered in TMPFILES so
+  # the EXIT trap can clean it up. A broken implementation that omits
+  # TMPFILES+=("$f") would still echo the path and pass a file-exists check.
+  #
+  # mktemp_tracked must be called directly (not in $()) so TMPFILES+=("$f")
+  # mutates the same shell's TMPFILES array — a $() subshell would get a copy
+  # and the parent would never see the registration.
+  local gh_result bb_result
+  gh_result=$(bash -c '
+    TMPFILES=()
+    '"${gh_fn}"'
+    mktemp_tracked /tmp/parity-gh-XXXXXXXX > /tmp/parity-gh-path.$$
+    f=$(cat /tmp/parity-gh-path.$$); rm -f /tmp/parity-gh-path.$$
+    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
+  ')
+  bb_result=$(bash -c '
+    TMPFILES=()
+    '"${bb_fn}"'
+    mktemp_tracked /tmp/parity-bb-XXXXXXXX > /tmp/parity-bb-path.$$
+    f=$(cat /tmp/parity-bb-path.$$); rm -f /tmp/parity-bb-path.$$
+    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
+  ')
+
+  [[ "$gh_result" == ok:* ]] || { echo "GitHub mktemp_tracked did not register in TMPFILES: ${gh_result}" >&2; return 1; }
+  [[ "$bb_result" == ok:* ]] || { echo "Bitbucket mktemp_tracked did not register in TMPFILES: ${bb_result}" >&2; return 1; }
+
+  # Clean up the temp files (EXIT trap fires in the subshell, but the paths
+  # are returned to us so we can double-check removal).
   local gh_path bb_path
-  gh_path=$(bash -c 'TMPFILES=(); '"${gh_fn}"'; mktemp_tracked /tmp/parity-gh-XXXXXXXX')
-  bb_path=$(bash -c 'TMPFILES=(); '"${bb_fn}"'; mktemp_tracked /tmp/parity-bb-XXXXXXXX')
-  [ -f "$gh_path" ] || { echo "GitHub mktemp_tracked did not create a file" >&2; return 1; }
-  [ -f "$bb_path" ] || { echo "Bitbucket mktemp_tracked did not create a file" >&2; return 1; }
+  gh_path="${gh_result#ok:}"
+  bb_path="${bb_result#ok:}"
   rm -f "$gh_path" "$bb_path"
 }
