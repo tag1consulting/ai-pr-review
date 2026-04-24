@@ -247,6 +247,9 @@ setup() {
   local gh_path_file bb_path_file
   gh_path_file=$(mktemp /tmp/parity-gh-pathfile-XXXXXXXX)
   bb_path_file=$(mktemp /tmp/parity-bb-pathfile-XXXXXXXX)
+  # Register for cleanup on any exit path (assertion failure, abort, etc.)
+  # shellcheck disable=SC2064  # intentional: expand vars now so the trap captures the paths
+  trap "rm -f '$gh_path_file' '$bb_path_file'" EXIT
 
   local gh_result bb_result
   gh_result=$(bash -c '
@@ -264,13 +267,11 @@ setup() {
     [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
   ' _ "$bb_path_file")
 
-  rm -f "$gh_path_file" "$bb_path_file"
-
   [[ "$gh_result" == ok:* ]] || { echo "GitHub mktemp_tracked did not register in TMPFILES: ${gh_result}" >&2; return 1; }
   [[ "$bb_result" == ok:* ]] || { echo "Bitbucket mktemp_tracked did not register in TMPFILES: ${bb_result}" >&2; return 1; }
 
-  # Clean up the temp files (EXIT trap fires in the subshell, but the paths
-  # are returned to us so we can double-check removal).
+  # Clean up the temp files created by the subshells (EXIT trap fires inside
+  # each bash -c, but the paths are returned here so we can verify removal).
   local gh_path bb_path
   gh_path="${gh_result#ok:}"
   bb_path="${bb_result#ok:}"
