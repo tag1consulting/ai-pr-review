@@ -235,6 +235,7 @@ jobs:
           thread_id=""
 
           while [[ "$has_next" == "true" && -z "$thread_id" ]]; do
+            api_err=$(mktemp)
             result=$(gh api graphql -f query='
               query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
                 repository(owner: $owner, name: $repo) {
@@ -244,7 +245,7 @@ jobs:
                       nodes {
                         id
                         isResolved
-                        comments(first: 10) {
+                        comments(first: 100) {
                           nodes { databaseId }
                         }
                       }
@@ -253,21 +254,23 @@ jobs:
                 }
               }' \
               -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-              ${cursor:+-f after="$cursor"} 2>/dev/null) || {
-              echo "::error::Could not fetch review threads."
+              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
+              echo "::error::Could not fetch review threads: $(cat "$api_err")"
+              rm -f "$api_err"
               exit 1
             }
+            rm -f "$api_err"
 
             thread_id=$(echo "$result" | jq -r \
               --argjson cid "$PARENT_COMMENT_ID" \
               '.data.repository.pullRequest.reviewThreads.nodes[]
                | select(.comments.nodes | map(.databaseId) | index($cid))
-               | .id' 2>/dev/null | head -1)
+               | .id' | head -1)
 
             has_next=$(echo "$result" | jq -r \
-              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' 2>/dev/null)
+              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
             cursor=$(echo "$result" | jq -r \
-              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' 2>/dev/null)
+              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
           done
 
           if [[ -z "$thread_id" ]]; then
@@ -278,16 +281,19 @@ jobs:
           echo "thread_id=${thread_id}" >> "$GITHUB_OUTPUT"
 
           # Resolve the thread
+          mut_err=$(mktemp)
           gh api graphql -f query='
             mutation($threadId: ID!) {
               resolveReviewThread(input: {threadId: $threadId}) {
                 thread { id isResolved }
               }
             }' \
-            -f threadId="$thread_id" >/dev/null 2>&1 || {
-            echo "::error::Failed to resolve review thread."
+            -f threadId="$thread_id" >/dev/null 2>"$mut_err" || {
+            echo "::error::Failed to resolve review thread: $(cat "$mut_err")"
+            rm -f "$mut_err"
             exit 1
           }
+          rm -f "$mut_err"
 
           echo "Thread ${thread_id} resolved." >&2
 
@@ -320,6 +326,7 @@ jobs:
           has_next=true
 
           while [[ "$has_next" == "true" ]]; do
+            api_err=$(mktemp)
             page=$(gh api graphql -f query='
               query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
                 repository(owner: $owner, name: $repo) {
@@ -337,12 +344,18 @@ jobs:
                 }
               }' \
               -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-              ${cursor:+-f after="$cursor"} 2>/dev/null) || {
-              echo "WARNING: Could not fetch threads for dismissal check." >&2
-              exit 0
+              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
+              echo "::error::Could not fetch threads for dismissal check: $(cat "$api_err")"
+              rm -f "$api_err"
+              exit 1
             }
+            rm -f "$api_err"
 
             page_nodes=$(echo "$page" | jq '.data.repository.pullRequest.reviewThreads.nodes')
+            if [[ "$page_nodes" == "null" || -z "$page_nodes" ]]; then
+              echo "::error::Malformed threads response (no nodes field)."
+              exit 1
+            fi
             all_threads=$(echo "$all_threads" "$page_nodes" | jq -s '.[0] + .[1]')
             has_next=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
             cursor=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
@@ -361,16 +374,19 @@ jobs:
           fi
 
           # All threads resolved — dismiss the review
+          dismiss_err=$(mktemp)
           if gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}/dismissals" \
             --method PUT \
             --field message="All findings resolved as false positives — dismissed by @${ACTOR}." \
-            >/dev/null 2>&1; then
+            >/dev/null 2>"$dismiss_err"; then
             echo "Dismissed review #${REVIEW_ID}." >&2
           else
-            echo "::error::Failed to dismiss review #${REVIEW_ID}."
+            echo "::error::Failed to dismiss review #${REVIEW_ID}: $(cat "$dismiss_err")"
+            rm -f "$dismiss_err"
             exit 1
           fi
+          rm -f "$dismiss_err"
 
       - name: React — done
         if: steps.validate.outputs.valid == 'true' && success()
