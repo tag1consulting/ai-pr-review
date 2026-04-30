@@ -11,7 +11,7 @@ The action runs on `ubuntu-latest` GitHub Actions runners and requires:
 - A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
 - An API key for one of the [supported LLM providers](#supported-llm-providers)
 
-The container action (recommended) additionally requires a GHCR token with `read:packages` scope — see [Installation](#installation).
+The container action (recommended) pulls a public image from GHCR — no additional authentication required.
 
 ## Supported VCS providers
 
@@ -85,15 +85,11 @@ The container action is the recommended installation method — it ships all ana
 
 ### Quickstart
 
-**Step 1: Create a GHCR token**
-
-The container image is hosted privately at `ghcr.io/tag1consulting/ai-pr-review`. Create a GitHub Personal Access Token with `read:packages` scope at **Settings → Developer settings → Personal access tokens (classic)**, then add it as a repository secret named `GHCR_TOKEN` under **Settings → Secrets and variables → Actions**.
-
-**Step 2: Add your LLM API key**
+**Step 1: Add your LLM API key**
 
 Add your provider's API key as a repository secret (e.g. `ANTHROPIC_API_KEY` for Anthropic).
 
-**Step 3: Copy the workflow**
+**Step 2: Copy the workflow**
 
 Copy [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) to `.github/workflows/` in your repository. That's it — reviews start firing on the next PR.
 
@@ -104,8 +100,7 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: 'latest'            # or pin to a release tag, e.g. 'v0.2.0'
-    registry-token: ${{ secrets.GHCR_TOKEN }}
+    image-tag: 'latest'            # or pin to a release tag, e.g. '0.3.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
@@ -123,7 +118,6 @@ See [examples/README.md](examples/README.md) for a complete setup walkthrough in
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `GHCR_TOKEN` | Secret | Yes | GitHub PAT with `read:packages` scope |
 | `AI_REVIEW_API_KEY` | Secret | Yes | API key for your LLM provider |
 | `AI_REVIEW_PROVIDER` | Variable | No | Provider name (default: `anthropic`) |
 | `AI_REVIEW_BASE_URL` | Variable | No | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
@@ -133,9 +127,6 @@ See [examples/README.md](examples/README.md) for a complete setup walkthrough in
 **Local development** — run reviews against any open PR without a CI runner:
 
 ```bash
-# One-time: authenticate to GHCR (PAT with read:packages scope)
-docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_GHCR_PAT
-
 # Dry run: prints findings to stdout, does not post to GitHub
 docker run --rm \
   -e AI_PROVIDER=anthropic \
@@ -155,7 +146,7 @@ See [docs/local-development.md](docs/local-development.md) for the full referenc
 
 ### Other installation methods
 
-- **[Direct action reference](docs/installation-direct-action.md)** — no GHCR token required; uses the root composite action directly. Installs shellcheck automatically; does not install semgrep, trufflehog, ruff, or golangci-lint.
+- **[Direct action reference](docs/installation-direct-action.md)** — uses the root composite action directly, without Docker. Installs shellcheck automatically; does not install semgrep, trufflehog, ruff, or golangci-lint.
 - **[Git submodule](docs/installation-submodule.md)** — explicit, auditable version pinning; commits the exact action source into your repository. Uses a 3-job pattern to isolate the PAT used for submodule checkout.
 
 ## Slash commands

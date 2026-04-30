@@ -43,31 +43,6 @@ Group related files into cohorts when there are more than 10 files. Example:
 | src/models/user.ts | Modified | Adds `last_login` field |
 ```
 
-## Step 4: Generate `## Sequence Diagram`
-
-If the PR introduces or modifies a meaningful control flow (API calls, multi-step
-orchestration, event handling, request/response pipelines), generate a Mermaid
-sequence diagram showing the primary flow.
-
-Rules:
-- Use `sequenceDiagram` type only
-- Maximum 10 participants and 15 interactions
-- Show the primary happy path, not every error branch
-- Use descriptive labels on arrows (not "calls" or "returns")
-- Omit this section entirely if the PR is purely config, docs, or simple value changes
-
-Example:
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as API Server
-    participant DB as Database
-    Client->>API: POST /users
-    API->>DB: INSERT user record
-    DB-->>API: user_id
-    API-->>Client: 201 Created
-```
-
 ## Empty State
 
 If no diff or changed files are provided, output a brief "No changes to summarize." statement and nothing else.
@@ -91,15 +66,4 @@ Produce these sections in order, with no preamble:
 <rows>
 ```
 
-If the PR introduces or modifies a meaningful control flow, also include:
-
-```markdown
-## Sequence Diagram
-
-```mermaid
-<diagram>
-```
-```
-
-Omit `## Sequence Diagram` for config-only, docs-only, or simple value-change PRs.
 Output only the sections above. No findings or review feedback.

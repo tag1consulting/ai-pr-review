@@ -10,7 +10,6 @@
 #   /ai-pr-review help         — post the command list as a reply
 #
 # Requirements:
-#   - GHCR_TOKEN secret: GitHub PAT with read:packages scope (for private image pull)
 #   - ANTHROPIC_API_KEY secret (or your provider's key)
 #   - Only users with write access to this repo can trigger reviews
 #
@@ -136,7 +135,6 @@ jobs:
         if: steps.cmd.outputs.command == 'rescan'
         uses: tag1consulting/ai-pr-review/container-action@main
         with:
-          registry-token: ${{ secrets.GHCR_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.issue.number }}
@@ -148,7 +146,6 @@ jobs:
         if: steps.cmd.outputs.command == 'review-full'
         uses: tag1consulting/ai-pr-review/container-action@main
         with:
-          registry-token: ${{ secrets.GHCR_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.issue.number }}

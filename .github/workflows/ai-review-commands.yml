@@ -108,9 +108,6 @@ jobs:
             repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=rocket
 
-      # Use the self-referential composite action (same as ai-review.yml).
-      # After the container image is published, switch to ./container-action
-      # and add registry-token: ${{ secrets.GHCR_TOKEN }}
       - name: Run review (rescan)
         if: steps.cmd.outputs.command == 'rescan'
         uses: ./

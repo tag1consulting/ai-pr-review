@@ -7,17 +7,6 @@ Run ai-pr-review locally against any open PR using the container image — no Gi
 - [Docker](https://docs.docker.com/get-started/get-docker/) installed and running
 - A GitHub token (`gh auth token` or a classic PAT with `repo` scope)
 - An API key for one of the [supported LLM providers](../README.md#supported-llm-providers)
-- A GitHub PAT with `read:packages` scope to pull the private image
-
-## One-time setup
-
-Authenticate to GHCR with a PAT that has `read:packages` scope:
-
-```bash
-docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_GHCR_PAT
-```
-
-This is stored in `~/.docker/config.json` and persists across sessions.
 
 ## Quick start: review a PR
 

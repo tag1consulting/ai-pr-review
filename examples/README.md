@@ -9,21 +9,15 @@ Copy these files into your repository's `.github/workflows/` directory to enable
 | `workflows/pr-review.yml` | Automatic review on PR open/sync |
 | `workflows/comment-triggers.yml` | Slash command support (`/ai-pr-review rescan`, etc.) |
 
-Both workflows use the container-action variant, which pulls a pinned image from GHCR with all analyzer binaries pre-installed.
+Both workflows use the container-action variant, which pulls a pinned public image from GHCR with all analyzer binaries pre-installed.
 
 ## Setup
 
-### 1. Create a GHCR token
-
-Create a GitHub Personal Access Token with `read:packages` scope at **Settings → Developer settings → Personal access tokens**.
-
-Add it as a repository secret named `GHCR_TOKEN` in your repo (**Settings → Secrets and variables → Actions**).
-
-### 2. Add your LLM API key
+### 1. Add your LLM API key
 
 Add your provider API key as a repository secret. The examples use `ANTHROPIC_API_KEY`. For other providers, substitute the appropriate secret name and update `api-key` + `provider` in the workflow.
 
-### 3. Copy the workflow files
+### 2. Copy the workflow files
 
 Download the files directly from GitHub into your repo:
 
@@ -88,7 +82,7 @@ Available tags: `latest`, `v<major>` (e.g. `v2`), `v<major.minor.patch>`.
 
 ## Using the non-container action
 
-If you don't want to manage GHCR authentication, use the root composite action instead. It installs shellcheck on the Actions runner but does not install the other analyzer binaries:
+To skip Docker entirely, use the root composite action instead. It installs shellcheck on the Actions runner but does not install the other analyzer binaries:
 
 ```yaml
 - uses: tag1consulting/ai-pr-review@main

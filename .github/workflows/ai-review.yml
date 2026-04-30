@@ -69,7 +69,6 @@ jobs:
       - uses: ./container-action
         with:
           image-tag: 'latest'
-          registry-token: ${{ secrets.GHCR_TOKEN }}
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}

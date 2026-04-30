@@ -378,13 +378,6 @@ build_comment_body() {
   fi
   summary=$(cat "$SUMMARY_FILE")
 
-  # Strip mermaid fenced blocks — Bitbucket PR comments do not render mermaid.
-  summary=$(printf '%s' "$summary" | awk '
-    /^```mermaid/ { skip=1; next }
-    skip && /^```/ { skip=0; next }
-    !skip { print }
-  ')
-
   findings_json="[]"
   if [[ -f "$FINDINGS_JSON_FILE" ]]; then
     findings_json=$(cat "$FINDINGS_JSON_FILE")
