@@ -546,15 +546,6 @@ post_summary() {
     return 0
   fi
 
-  # GitHub does not render Mermaid in PR/issue comments (only in .md files and
-  # the PR description body). Strip mermaid fenced blocks before posting so the
-  # comment doesn't show a raw code block where a diagram was expected.
-  summary=$(printf '%s' "$summary" | awk '
-    /^```mermaid/ { skip=1; next }
-    skip && /^```/ { skip=0; next }
-    !skip { print }
-  ')
-
   # Embed the HEAD_SHA in the marker so subsequent runs can find the last-reviewed SHA.
   # Truncate only the summary text — the sha_marker must always be present at the top
   # so get_last_reviewed_sha() can extract it even on very large summaries.

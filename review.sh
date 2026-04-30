@@ -727,7 +727,9 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
     TIER1_OUTPUTS+=("$SFH_FILE")
-    call_agent_bg "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
+    SFH_MODEL="$AI_MODEL_STANDARD"
+    [[ "$REVIEW_MODE" == "full" ]] && SFH_MODEL="$AI_MODEL_PREMIUM"
+    call_agent_bg "silent-failure-hunter" "$SFH_MODEL" \
       "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
@@ -994,7 +996,9 @@ else
   # Tier 1 conditional: run in both quick and full when triggered
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
-    call_agent "silent-failure-hunter" "$AI_MODEL_PREMIUM" \
+    SFH_MODEL="$AI_MODEL_STANDARD"
+    [[ "$REVIEW_MODE" == "full" ]] && SFH_MODEL="$AI_MODEL_PREMIUM"
+    call_agent "silent-failure-hunter" "$SFH_MODEL" \
       "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SFH_FILE")
   fi

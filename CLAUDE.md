@@ -139,7 +139,7 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 
 | Tier | Agents | When |
 |------|--------|------|
-| Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional) | Always |
+| Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional, standard model in quick / premium in full) | Always |
 | Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh`, `run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh`, `run-hadolint.sh`, `run-checkov.sh`, `run-phpcs.sh`, `run-eslint.sh`, `run-phpstan.sh`, `run-kube-linter.sh`, `run-tflint.sh` | Always (graceful no-op if binary absent) |
 | Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
 

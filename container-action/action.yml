@@ -1,7 +1,7 @@
 name: AI PR Review (container)
 description: >
   AI-powered pull request review using a pinned container image.
-  Authenticates to GHCR, pulls the image, and runs the review inside Docker.
+  Pulls the public image from GHCR and runs the review inside Docker.
   Use this variant instead of the root action.yml when you want version-pinned
   analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint).
 
@@ -16,9 +16,10 @@ inputs:
 
   registry-token:
     description: >
-      GitHub PAT with read:packages scope for pulling the private image.
-      Typically stored as a repository secret named GHCR_TOKEN.
-    required: true
+      GitHub PAT with read:packages scope. No longer required — the image is
+      public. Kept for backward compatibility; ignored when empty.
+    required: false
+    default: ''
 
   # --- All inputs below mirror root action.yml exactly ---
 
@@ -126,11 +127,12 @@ runs:
         _GH_TOKEN: ${{ inputs.github-token }}
         _REGISTRY_TOKEN: ${{ inputs.registry-token }}
       run: |
-        [[ -n "$_API_KEY" ]]       && echo "::add-mask::$_API_KEY"
-        [[ -n "$_GH_TOKEN" ]]      && echo "::add-mask::$_GH_TOKEN"
-        [[ -n "$_REGISTRY_TOKEN" ]] && echo "::add-mask::$_REGISTRY_TOKEN"
+        [[ -n "$_API_KEY" ]]       && echo "::add-mask::$_API_KEY" || true
+        [[ -n "$_GH_TOKEN" ]]      && echo "::add-mask::$_GH_TOKEN" || true
+        [[ -n "$_REGISTRY_TOKEN" ]] && echo "::add-mask::$_REGISTRY_TOKEN" || true
 
     - name: Log in to GHCR
+      if: inputs.registry-token != ''
       shell: bash
       env:
         REGISTRY_TOKEN: ${{ inputs.registry-token }}

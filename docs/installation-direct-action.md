@@ -1,7 +1,7 @@
 # Installation: Direct action reference
 
-Use this installation method if you cannot or do not want to pull a private
-container image from GHCR. The root composite action installs shellcheck on
+Use this installation method if you prefer to run without Docker. The root
+composite action installs shellcheck on
 the runner automatically but does **not** install semgrep, trufflehog, ruff,
 or golangci-lint. See [Static analyzers](../README.md#static-analyzers) in the
 main README if you need those.

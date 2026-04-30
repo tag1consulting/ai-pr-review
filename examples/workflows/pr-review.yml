@@ -4,11 +4,10 @@
 #
 # This variant pulls a pinned container image from GHCR, which provides
 # version-pinned analyzer binaries (shellcheck, semgrep, trufflehog, ruff,
-# golangci-lint). If you prefer to run on the Actions runner without a private
-# image, use the root action instead: tag1consulting/ai-pr-review@main
+# golangci-lint). If you prefer to run on the Actions runner without Docker,
+# use the root action instead: tag1consulting/ai-pr-review@main
 #
 # Requirements:
-#   - GHCR_TOKEN secret: GitHub PAT with read:packages scope
 #   - ANTHROPIC_API_KEY secret (or substitute your provider's key)
 #
 # Pair with examples/workflows/comment-triggers.yml to enable slash commands.
@@ -43,7 +42,6 @@ jobs:
         uses: tag1consulting/ai-pr-review/container-action@main
         with:
           image-tag: 'latest'
-          registry-token: ${{ secrets.GHCR_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
