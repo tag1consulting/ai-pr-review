@@ -282,6 +282,12 @@ jobs:
             }
             rm -f "$api_err"
 
+            # GraphQL can return HTTP 200 with partial data and an errors array
+            if echo "$result" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL returned errors: $(echo "$result" | jq -c '.errors')"
+              exit 1
+            fi
+
             thread_id=$(echo "$result" | jq -r \
               --argjson cid "$PARENT_COMMENT_ID" \
               '.data.repository.pullRequest.reviewThreads.nodes[]
@@ -302,18 +308,23 @@ jobs:
           echo "thread_id=${thread_id}" >> "$GITHUB_OUTPUT"
 
           mut_err=$(mktemp)
-          gh api graphql -f query='
+          mut_result=$(gh api graphql -f query='
             mutation($threadId: ID!) {
               resolveReviewThread(input: {threadId: $threadId}) {
                 thread { id isResolved }
               }
             }' \
-            -f threadId="$thread_id" >/dev/null 2>"$mut_err" || {
+            -f threadId="$thread_id" 2>"$mut_err") || {
             echo "::error::Failed to resolve review thread: $(cat "$mut_err")"
             rm -f "$mut_err"
             exit 1
           }
           rm -f "$mut_err"
+
+          if echo "$mut_result" | jq -e '.errors' >/dev/null 2>&1; then
+            echo "::error::GraphQL errors resolving thread: $(echo "$mut_result" | jq -c '.errors')"
+            exit 1
+          fi
 
           echo "Thread ${thread_id} resolved." >&2
 
@@ -369,6 +380,11 @@ jobs:
             }
             rm -f "$api_err"
 
+            if echo "$page" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL returned errors while fetching threads: $(echo "$page" | jq -c '.errors')"
+              exit 1
+            fi
+
             page_nodes=$(echo "$page" | jq '.data.repository.pullRequest.reviewThreads.nodes')
             if [[ "$page_nodes" == "null" || -z "$page_nodes" ]]; then
               echo "::error::Malformed threads response (no nodes field)."
@@ -391,11 +407,17 @@ jobs:
             exit 0
           fi
 
+          # Validate ACTOR against GitHub's login character set before shell interpolation.
+          if ! [[ "$ACTOR" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}(\[bot\])?$ ]]; then
+            echo "::error::Refusing to dismiss: unexpected actor login '${ACTOR}'."
+            exit 1
+          fi
+          dismiss_msg="All findings resolved as false positives — dismissed by @${ACTOR}."
           dismiss_err=$(mktemp)
           if gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}/dismissals" \
             --method PUT \
-            --field message="All findings resolved as false positives — dismissed by @${ACTOR}." \
+            --field "message=${dismiss_msg}" \
             >/dev/null 2>"$dismiss_err"; then
             echo "Dismissed review #${REVIEW_ID}." >&2
           else
