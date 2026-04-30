@@ -127,9 +127,9 @@ runs:
         _GH_TOKEN: ${{ inputs.github-token }}
         _REGISTRY_TOKEN: ${{ inputs.registry-token }}
       run: |
-        [[ -n "$_API_KEY" ]]       && echo "::add-mask::$_API_KEY"
-        [[ -n "$_GH_TOKEN" ]]      && echo "::add-mask::$_GH_TOKEN"
-        [[ -n "$_REGISTRY_TOKEN" ]] && echo "::add-mask::$_REGISTRY_TOKEN"
+        [[ -n "$_API_KEY" ]]       && echo "::add-mask::$_API_KEY" || true
+        [[ -n "$_GH_TOKEN" ]]      && echo "::add-mask::$_GH_TOKEN" || true
+        [[ -n "$_REGISTRY_TOKEN" ]] && echo "::add-mask::$_REGISTRY_TOKEN" || true
 
     - name: Log in to GHCR
       if: inputs.registry-token != ''
