@@ -100,7 +100,7 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: 'latest'            # or pin to a release tag, e.g. '0.3.0'
+    image-tag: 'latest'            # or pin to a release tag, e.g. '0.3.2'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
