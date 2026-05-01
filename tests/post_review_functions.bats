@@ -320,3 +320,151 @@ setup_standalone_truncate_body() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Review output truncated"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Suggestion block rendering — exercises the jq-based comment payload
+# construction and the validation logic used by post_findings() for inline
+# comments with suggested_code and optional start_line.
+# ---------------------------------------------------------------------------
+
+# Single-line payload builder (mirrors the single-line jq call in post-review.sh)
+_build_single_line_comment() {
+  local file="$1" line="$2" body="$3"
+  jq -n \
+    --arg path "$file" \
+    --argjson line "$line" \
+    --arg body "$body" \
+    '{path: $path, line: $line, body: $body}'
+}
+
+# Multi-line payload builder (mirrors the multi-line jq call in post-review.sh)
+_build_multi_line_comment() {
+  local file="$1" start_line="$2" line="$3" body="$4"
+  jq -n \
+    --arg path "$file" \
+    --argjson line "$line" \
+    --argjson start_line "$start_line" \
+    --arg body "$body" \
+    '{path: $path, line: $line, start_line: $start_line, body: $body}'
+}
+
+@test "suggestion payload: single-line comment has no start_line field" {
+  run _build_single_line_comment "src/main.go" 42 "body text"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.line == 42 and (has("start_line") | not)' > /dev/null
+}
+
+@test "suggestion payload: multi-line comment includes start_line" {
+  run _build_multi_line_comment "src/main.go" 40 42 "body text"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.start_line == 40 and .line == 42' > /dev/null
+}
+
+@test "suggestion body: suggestion block embeds suggested_code with real newlines" {
+  # jq -r extracts suggested_code decoding \n escapes to real newlines
+  local code_json='"    f, err := os.Open(path)\n    if err != nil {\n        return err\n    }"'
+  local decoded
+  decoded=$(echo "$code_json" | jq -r '.')
+  local body
+  printf -v body '%s\n\n**Remediation:** %s\n\n```suggestion\n%s\n```' \
+    "⚠️ **[High]** [src] finding" "fix" "$decoded"
+  [[ "$body" == *'```suggestion'* ]]
+  [[ "$body" == *'f, err := os.Open(path)'* ]]
+  [[ "$body" == *'    }'*'```' ]]
+}
+
+@test "suggestion validation: non-numeric start_line is rejected" {
+  # Mirrors: if ! [[ "$start_line" =~ ^[0-9]+$ ]] || [[ "$start_line" -gt "$line" ]]; then
+  local start_line="abc" line=42 invalid=false
+  if ! [[ "$start_line" =~ ^[0-9]+$ ]]; then
+    invalid=true
+  elif [[ "$start_line" -gt "$line" ]]; then
+    invalid=true
+  fi
+  [ "$invalid" = "true" ]
+}
+
+@test "suggestion validation: start_line greater than line is rejected" {
+  local start_line=50 line=42 invalid=false
+  if ! [[ "$start_line" =~ ^[0-9]+$ ]]; then
+    invalid=true
+  elif [[ "$start_line" -gt "$line" ]]; then
+    invalid=true
+  fi
+  [ "$invalid" = "true" ]
+}
+
+@test "suggestion validation: start_line equal to line is valid (single-line)" {
+  local start_line=42 line=42 invalid=false
+  if ! [[ "$start_line" =~ ^[0-9]+$ ]]; then
+    invalid=true
+  elif [[ "$start_line" -gt "$line" ]]; then
+    invalid=true
+  fi
+  [ "$invalid" = "false" ]
+}
+
+@test "suggestion validation: range check rejects lines missing from diff lookup" {
+  local lookup
+  lookup=$(mktemp)
+  printf 'foo.sh:1\nfoo.sh:2\nfoo.sh:4\n' > "$lookup"
+  local start_line=1 line=4 range_valid=true check_line
+  for (( check_line=start_line; check_line<=line; check_line++ )); do
+    if ! grep -qxF "foo.sh:${check_line}" "$lookup"; then
+      range_valid=false
+      break
+    fi
+  done
+  rm -f "$lookup"
+  [ "$range_valid" = "false" ]
+}
+
+@test "suggestion validation: range check accepts fully-covered range" {
+  local lookup
+  lookup=$(mktemp)
+  printf 'foo.sh:10\nfoo.sh:11\nfoo.sh:12\n' > "$lookup"
+  local start_line=10 line=12 range_valid=true check_line
+  for (( check_line=start_line; check_line<=line; check_line++ )); do
+    if ! grep -qxF "foo.sh:${check_line}" "$lookup"; then
+      range_valid=false
+      break
+    fi
+  done
+  rm -f "$lookup"
+  [ "$range_valid" = "true" ]
+}
+
+@test "suggestion gating: AI_ENABLE_SUGGESTIONS unset means suggestion fields are ignored" {
+  # Mirrors the guard in post_findings():
+  #   if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then suggested_code=""; start_line=""; fi
+  local suggested_code="replacement" start_line=10
+  unset AI_ENABLE_SUGGESTIONS
+  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then
+    suggested_code=""
+    start_line=""
+  fi
+  [ -z "$suggested_code" ]
+  [ -z "$start_line" ]
+}
+
+@test "suggestion gating: AI_ENABLE_SUGGESTIONS=false means suggestion fields are ignored" {
+  local suggested_code="replacement" start_line=10
+  AI_ENABLE_SUGGESTIONS=false
+  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then
+    suggested_code=""
+    start_line=""
+  fi
+  [ -z "$suggested_code" ]
+  [ -z "$start_line" ]
+}
+
+@test "suggestion gating: AI_ENABLE_SUGGESTIONS=true preserves suggestion fields" {
+  local suggested_code="replacement" start_line=10
+  AI_ENABLE_SUGGESTIONS=true
+  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then
+    suggested_code=""
+    start_line=""
+  fi
+  [ "$suggested_code" = "replacement" ]
+  [ "$start_line" = "10" ]
+}

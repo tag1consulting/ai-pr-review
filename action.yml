@@ -158,6 +158,16 @@ inputs:
     required: false
     default: '8192'
 
+  enable-suggestions:
+    description: >
+      Enable GitHub "Apply suggestion" buttons on inline review comments. When true,
+      eligible LLM agents (code-reviewer, edge-case-hunter, security-reviewer,
+      silent-failure-hunter, blind-hunter) are instructed to generate concrete code
+      replacement suggestions that PR authors can accept with one click.
+      Increases output token usage. GitHub-only — has no effect on Bitbucket.
+    required: false
+    default: 'false'
+
 runs:
   using: composite
   steps:
@@ -210,4 +220,5 @@ runs:
         AI_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
+        AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
       run: bash "${{ github.action_path }}/review.sh"

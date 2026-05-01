@@ -669,6 +669,23 @@ collect_parallel_results() {
   done
 }
 
+# --- Build effective prompt path (appends suggestion addendum when enabled) ---
+effective_prompt() {
+  local agent_name="$1" base_prompt="$2"
+  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" == "true" ]]; then
+    case "$agent_name" in
+      code-reviewer|edge-case-hunter|security-reviewer|silent-failure-hunter|blind-hunter)
+        local combined
+        combined=$(mktemp_tracked /tmp/ai-review-prompt-XXXXXXXX.md)
+        cat "$base_prompt" "${SCRIPT_DIR}/prompts/suggestion-addendum.md" > "$combined"
+        echo "$combined"
+        return
+        ;;
+    esac
+  fi
+  echo "$base_prompt"
+}
+
 # --- Detect conditional agent triggers ---
 HAS_ERROR_PATTERNS=0
 if grep -qE '(catch|if err|try \{|rescue|Result<|unwrap|except|\.catch\()' "$DIFF_FILE" 2>/dev/null; then
@@ -721,7 +738,7 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
 
   TIER1_OUTPUTS+=("$FINDINGS_FILE")
   call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+    "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
   TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
@@ -730,7 +747,7 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     SFH_MODEL="$AI_MODEL_STANDARD"
     [[ "$REVIEW_MODE" == "full" ]] && SFH_MODEL="$AI_MODEL_PREMIUM"
     call_agent_bg "silent-failure-hunter" "$SFH_MODEL" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt silent-failure-hunter "${SCRIPT_DIR}/prompts/silent-failure-hunter.md")" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
 
@@ -803,19 +820,19 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$SEC_FILE")
     call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
     call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt blind-hunter "${SCRIPT_DIR}/prompts/blind-hunter.md")" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$EDGE_FILE")
     call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
@@ -990,7 +1007,7 @@ else
   fi
 
   call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+    "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT"
   AGENT_OUTPUTS+=("$FINDINGS_FILE")
 
   # Tier 1 conditional: run in both quick and full when triggered
@@ -999,7 +1016,7 @@ else
     SFH_MODEL="$AI_MODEL_STANDARD"
     [[ "$REVIEW_MODE" == "full" ]] && SFH_MODEL="$AI_MODEL_PREMIUM"
     call_agent "silent-failure-hunter" "$SFH_MODEL" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt silent-failure-hunter "${SCRIPT_DIR}/prompts/silent-failure-hunter.md")" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SFH_FILE")
   fi
 
@@ -1012,17 +1029,17 @@ else
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt blind-hunter "${SCRIPT_DIR}/prompts/blind-hunter.md")" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)

@@ -6,6 +6,7 @@
 setup() {
   load test_helper
   load_function "${PROJECT_ROOT}/post-review.sh" parse_valid_lines
+  load_function "${PROJECT_ROOT}/post-review.sh" parse_diff_new_lines
   DIFF_FILE=$(mktemp)
 }
 
@@ -173,6 +174,134 @@ EOF
 @test "parse_valid_lines: empty diff produces no output" {
   echo "" > "$DIFF_FILE"
   run parse_valid_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# ---------------------------------------------------------------------------
+# parse_diff_new_lines — emits BOTH added and context lines (new-file side)
+# ---------------------------------------------------------------------------
+
+@test "parse_diff_new_lines: emits file:line for added lines" {
+  cat > "$DIFF_FILE" <<'EOF'
+diff --git a/foo.sh b/foo.sh
+--- a/foo.sh
++++ b/foo.sh
+@@ -1,2 +1,3 @@
+ unchanged
++added line
+ another unchanged
+EOF
+  run parse_diff_new_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "foo.sh:2"
+}
+
+@test "parse_diff_new_lines: emits file:line for context lines too" {
+  cat > "$DIFF_FILE" <<'EOF'
+diff --git a/foo.sh b/foo.sh
+--- a/foo.sh
++++ b/foo.sh
+@@ -1,3 +1,3 @@
+ context one
++new middle
+ context three
+EOF
+  run parse_diff_new_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  # Added line at new-file line 2, plus both context lines (1 and 3)
+  echo "$output" | grep -qF "foo.sh:1"
+  echo "$output" | grep -qF "foo.sh:2"
+  echo "$output" | grep -qF "foo.sh:3"
+}
+
+@test "parse_diff_new_lines: does NOT emit deleted lines" {
+  cat > "$DIFF_FILE" <<'EOF'
+diff --git a/foo.sh b/foo.sh
+--- a/foo.sh
++++ b/foo.sh
+@@ -1,3 +1,2 @@
+ context
+-removed
+ context after
+EOF
+  run parse_diff_new_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  # Two context lines in the new file: lines 1 and 2 (the removed line is gone)
+  echo "$output" | grep -qF "foo.sh:1"
+  echo "$output" | grep -qF "foo.sh:2"
+  # No third line — context line after the deletion is at new-file line 2, not 3
+  ! echo "$output" | grep -qF "foo.sh:3"
+}
+
+@test "parse_diff_new_lines: mixed add/delete/context tracks new-file numbering" {
+  cat > "$DIFF_FILE" <<'EOF'
+diff --git a/foo.sh b/foo.sh
+--- a/foo.sh
++++ b/foo.sh
+@@ -1,4 +1,4 @@
+ line_one
+-old_two
++new_two
+ line_three
+ line_four
+EOF
+  run parse_diff_new_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  # Expected: 1 (context), 2 (added), 3 (context), 4 (context)
+  echo "$output" | grep -qF "foo.sh:1"
+  echo "$output" | grep -qF "foo.sh:2"
+  echo "$output" | grep -qF "foo.sh:3"
+  echo "$output" | grep -qF "foo.sh:4"
+}
+
+@test "parse_diff_new_lines: ignores no-newline marker" {
+  cat > "$DIFF_FILE" <<'EOF'
+diff --git a/foo.sh b/foo.sh
+--- a/foo.sh
++++ b/foo.sh
+@@ -1,1 +1,2 @@
+ context
++added
+\ No newline at end of file
+EOF
+  run parse_diff_new_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "foo.sh:1"
+  echo "$output" | grep -qF "foo.sh:2"
+  # Backslash marker does not produce a third file:line entry
+  lines=$(echo "$output" | wc -l | tr -d ' ')
+  [ "$lines" -eq 2 ]
+}
+
+@test "parse_diff_new_lines: handles multiple hunks and files" {
+  cat > "$DIFF_FILE" <<'EOF'
+diff --git a/a.sh b/a.sh
+--- a/a.sh
++++ b/a.sh
+@@ -1,1 +1,2 @@
+ a_ctx
++a_added
+diff --git a/b.sh b/b.sh
+--- a/b.sh
++++ b/b.sh
+@@ -5,2 +5,3 @@
+ b_ctx_5
++b_added_6
+ b_ctx_7
+EOF
+  run parse_diff_new_lines "$DIFF_FILE"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "a.sh:1"
+  echo "$output" | grep -qF "a.sh:2"
+  echo "$output" | grep -qF "b.sh:5"
+  echo "$output" | grep -qF "b.sh:6"
+  echo "$output" | grep -qF "b.sh:7"
+}
+
+@test "parse_diff_new_lines: empty diff produces no output" {
+  echo "" > "$DIFF_FILE"
+  run parse_diff_new_lines "$DIFF_FILE"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }

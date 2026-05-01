@@ -94,13 +94,17 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
     "confidence": 0-100,
     "file": "path/to/file.ext",
     "line": 42,
+    "start_line": 40,
     "finding": "Description of the issue",
-    "remediation": "How to fix it"
+    "remediation": "How to fix it",
+    "suggested_code": "replacement code"
   }
 ]
 ```
 
 The `source` field is optional in agent output — `extract_findings()` stamps the agent name automatically if the field is absent. Static analyzers (`run-shellcheck.sh`, `run-cve-check.sh`) hard-code their source values (`"shellcheck"`, `"osv"`) in their jq projection.
+
+`suggested_code` and `start_line` are optional fields emitted only when the `enable-suggestions` action input is `true`. See [Code suggestions](#code-suggestions) below.
 
 `review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding. The dedup step carries a `sources` array on the surviving finding, unioning all sources from the cluster. When multiple sources are present, `post-review.sh` renders `[first-source] *(also flagged by: other)*` attribution (sources are sorted alphabetically; the first is not necessarily the "winning" agent).
 
@@ -246,6 +250,49 @@ All four analyzer scripts follow the same pattern as `run-shellcheck.sh`: accept
 
 Do not set mock vars in production.
 
+## Code suggestions
+
+When the `enable-suggestions` action input is `true` (default `false`), eligible
+LLM agents are instructed to emit an optional `suggested_code` field (and
+optional `start_line` field for multi-line replacements) alongside each finding.
+`post-review.sh` wraps `suggested_code` in a GitHub ```` ```suggestion ```` fence
+inside the inline comment body, which GitHub renders as an "Apply suggestion"
+button that the PR author can accept with one click.
+
+**Eligible agents** (system prompt is augmented with `prompts/suggestion-addendum.md`):
+`code-reviewer`, `edge-case-hunter`, `security-reviewer`, `silent-failure-hunter`, `blind-hunter`.
+
+Not eligible (too design-level / holistic for concrete line-edits):
+`architecture-reviewer`, `adversarial-general`, `pr-summarizer`. Static analyzers
+(shellcheck, semgrep, ruff, etc.) never emit suggestions.
+
+**Prompt injection.** `effective_prompt()` in `review.sh` appends
+`prompts/suggestion-addendum.md` to the base prompt for eligible agents at
+runtime, into a temp file registered with `mktemp_tracked`. Non-eligible agents
+and disabled runs use the base prompt path unchanged — no prompt change ships
+when the feature is off.
+
+**Validation in `post-review.sh`.** The suggestion rendering is gated on
+`AI_ENABLE_SUGGESTIONS=true` even when agents emit the fields. Additional
+guards:
+- `start_line` must be a positive integer and ≤ `line`. Invalid values drop
+  the suggestion (finding still posts with natural-language remediation).
+- For multi-line suggestions, every line in `start_line..line` must appear
+  in the diff's new-file side. `parse_diff_new_lines()` emits both added
+  and context lines for range validation (whereas `parse_valid_lines()`
+  emits only `+` lines for anchor validation).
+- If the range check fails, the suggestion is dropped with a WARNING.
+
+**Bitbucket.** The feature is GitHub-only. The Bitbucket path
+(`post-review-bitbucket.sh`) does not render suggestion fences — findings post
+as markdown bullets in the summary comment. `AI_ENABLE_SUGGESTIONS` is read
+only in `post-review.sh`.
+
+**Cost.** Enabling suggestions adds ~400 tokens to the system prompt of each
+eligible agent and increases output token usage proportional to the number of
+actionable findings. Keep `max-tokens-per-agent` (default 8192) in mind; raise
+it if you see truncation warnings on large diffs with suggestions enabled.
+
 ## Suppressions
 
 `suppressions.json` is a JSON array of suppression rules evaluated against merged findings. All `match` fields are optional and ANDed:
@@ -290,7 +337,7 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | `LLM_RETRY_COUNT` | `3` | Number of retry attempts (set to 0 to disable) |
 | `LLM_RETRY_BASE_DELAY` | `2` | Base delay in seconds (doubles each retry) |
 
-The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`. The `parallel` input maps to `AI_PARALLEL`. The `confidence-threshold` input maps to `AI_CONFIDENCE_THRESHOLD`. The `max-inline` input maps to `AI_MAX_INLINE`. The `max-tokens-per-agent` input maps to `AI_MAX_TOKENS_PER_AGENT`.
+The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`. The `parallel` input maps to `AI_PARALLEL`. The `confidence-threshold` input maps to `AI_CONFIDENCE_THRESHOLD`. The `max-inline` input maps to `AI_MAX_INLINE`. The `max-tokens-per-agent` input maps to `AI_MAX_TOKENS_PER_AGENT`. The `enable-suggestions` input maps to `AI_ENABLE_SUGGESTIONS`.
 
 Additional env vars consumed by the scripts (not exposed as action inputs):
 
@@ -302,6 +349,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings to be included (mapped from `confidence-threshold` action input) |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
+| `AI_ENABLE_SUGGESTIONS` | `false` | Enable GitHub "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). GitHub-only. |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud). |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |

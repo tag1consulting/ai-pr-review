@@ -7,6 +7,7 @@ setup() {
   load test_helper
   load_function "${PROJECT_ROOT}/review.sh" call_agent
   load_function "${PROJECT_ROOT}/review.sh" mktemp_tracked
+  load_function "${PROJECT_ROOT}/review.sh" effective_prompt
 
   MOCK_DIR=$(mktemp -d)
   SCRIPT_DIR="$MOCK_DIR"
@@ -176,4 +177,63 @@ EOF
   [ "${#TOKEN_LOG[@]}" -eq 2 ]
   [ "${TOKEN_LOG[0]}" = "agent-one: input=10 output=20 model=m" ]
   [ "${TOKEN_LOG[1]}" = "agent-two: input=10 output=20 model=m" ]
+}
+
+# ---------------------------------------------------------------------------
+# effective_prompt — conditionally appends the suggestion addendum to the
+# system prompt for agents that support code suggestions.
+# ---------------------------------------------------------------------------
+
+@test "effective_prompt: returns base prompt unchanged when suggestions disabled" {
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "base prompt content" > "$base"
+
+  unset AI_ENABLE_SUGGESTIONS
+  run effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+}
+
+@test "effective_prompt: returns base prompt unchanged when AI_ENABLE_SUGGESTIONS=false" {
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "base prompt content" > "$base"
+
+  AI_ENABLE_SUGGESTIONS=false run effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+}
+
+@test "effective_prompt: returns base prompt for agents that do NOT support suggestions" {
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "base prompt content" > "$base"
+
+  for agent in pr-summarizer architecture-reviewer adversarial-general; do
+    AI_ENABLE_SUGGESTIONS=true run effective_prompt "$agent" "$base"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$base" ]
+  done
+}
+
+@test "effective_prompt: appends addendum for eligible agents when enabled" {
+  # Set up a fake SCRIPT_DIR with a prompts/ subdir containing the addendum
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "ADDENDUM CONTENT" > "${MOCK_DIR}/prompts/suggestion-addendum.md"
+
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  for agent in code-reviewer edge-case-hunter security-reviewer silent-failure-hunter blind-hunter; do
+    AI_ENABLE_SUGGESTIONS=true run effective_prompt "$agent" "$base"
+    [ "$status" -eq 0 ]
+    # Output is a path to a new file combining base + addendum
+    [ "$output" != "$base" ]
+    [ -f "$output" ]
+    TMPFILES+=("$output")
+    grep -q "BASE CONTENT" "$output"
+    grep -q "ADDENDUM CONTENT" "$output"
+  done
 }

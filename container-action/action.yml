@@ -112,6 +112,11 @@ inputs:
     required: false
     default: '8192'
 
+  enable-suggestions:
+    description: 'Enable GitHub "Apply suggestion" buttons on inline review comments (GitHub-only; increases token usage)'
+    required: false
+    default: 'false'
+
   standalone-depth:
     description: 'Git fetch depth for standalone mode'
     required: false
@@ -167,6 +172,7 @@ runs:
         AI_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
+        AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
       run: |
         docker pull "$IMAGE"
         # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
@@ -200,6 +206,7 @@ runs:
           -e AI_CONFIDENCE_THRESHOLD \
           -e AI_MAX_INLINE \
           -e AI_MAX_TOKENS_PER_AGENT \
+          -e AI_ENABLE_SUGGESTIONS \
           -e GITHUB_WORKSPACE=/workspace \
           -v "$GITHUB_WORKSPACE:/workspace" \
           "${SUMMARY_MOUNT[@]}" \

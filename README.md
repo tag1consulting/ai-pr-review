@@ -185,6 +185,7 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
+| `enable-suggestions` | No | `false` | Add GitHub "Apply suggestion" buttons to inline review comments (GitHub-only). See [Code suggestions](#code-suggestions) |
 
 ## Review modes
 
@@ -194,6 +195,26 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`
+
+## Code suggestions
+
+When `enable-suggestions: true` is set (default `false`), the review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a GitHub ```` ```suggestion ```` block inside the inline review comment, which GitHub displays as an "Apply suggestion" button — the PR author can accept the fix with one click.
+
+```yaml
+- uses: tag1consulting/ai-pr-review/container-action@v0.3.2
+  with:
+    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    base-ref: ${{ github.event.pull_request.base.ref }}
+    head-sha: ${{ github.event.pull_request.head.sha }}
+    enable-suggestions: true
+```
+
+**Eligible agents** (those most likely to produce concrete line-level fixes): `code-reviewer`, `edge-case-hunter`, `security-reviewer`, `silent-failure-hunter`, `blind-hunter`. Design-level agents (`architecture-reviewer`, `adversarial-general`) and static analyzers (shellcheck, semgrep, ruff, etc.) never emit suggestions.
+
+**How it works.** Eligible agents have a short prompt addendum appended to their system prompt instructing them to include a `suggested_code` field (and optional `start_line` for multi-line replacements) only when the fix is concrete and complete. The post-review script constructs the ```` ```suggestion ```` fence itself — agents are not trusted to emit the markdown directly. Multi-line suggestions are validated against the diff: every line in the replacement range must appear on the new-file side of a diff hunk, or the suggestion is dropped while keeping the natural-language remediation.
+
+**Caveats.** Suggestions increase output token usage. The feature is GitHub-only — Bitbucket reviews ignore it. When the range check or start_line validation fails, the suggestion is dropped but the finding still posts with the remediation text.
 
 ## Incremental reviews
 
