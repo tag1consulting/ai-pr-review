@@ -857,18 +857,30 @@ post_findings() {
 
     # Validate multi-line suggestion range: every line in start_line..line must
     # appear in the diff's new-file side (added OR context lines, not deleted).
+    # Defense-in-depth: the range-check block is only reachable when
+    # AI_ENABLE_SUGGESTIONS=true (earlier gate clears suggested_code otherwise),
+    # and diff_lines_file is always populated under that same condition. But if
+    # the two gates ever drift, an empty "$diff_lines_file" would cause grep to
+    # read from stdin and hang. If diff_lines_file is empty, drop the suggestion
+    # rather than skip validation.
     if [[ -n "$suggested_code" && -n "$start_line" && "$start_line" != "$line" ]]; then
-      local range_valid=true check_line
-      for (( check_line=start_line; check_line<=line; check_line++ )); do
-        if ! grep -qxF "${file}:${check_line}" "$diff_lines_file"; then
-          range_valid=false
-          break
-        fi
-      done
-      if [[ "$range_valid" != "true" ]]; then
-        echo "WARNING: Suggestion range ${file}:${start_line}-${line} not fully in diff; dropping suggestion." >&2
+      if [[ -z "$diff_lines_file" ]]; then
+        echo "WARNING: diff_lines_file unset for ${file}:${line} multi-line suggestion (AI_ENABLE_SUGGESTIONS drift?); dropping suggestion." >&2
         suggested_code=""
         start_line=""
+      else
+        local range_valid=true check_line
+        for (( check_line=start_line; check_line<=line; check_line++ )); do
+          if ! grep -qxF "${file}:${check_line}" "$diff_lines_file"; then
+            range_valid=false
+            break
+          fi
+        done
+        if [[ "$range_valid" != "true" ]]; then
+          echo "WARNING: Suggestion range ${file}:${start_line}-${line} not fully in diff; dropping suggestion." >&2
+          suggested_code=""
+          start_line=""
+        fi
       fi
     fi
 

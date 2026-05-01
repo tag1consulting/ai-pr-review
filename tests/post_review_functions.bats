@@ -374,9 +374,9 @@ _build_multi_line_comment() {
 }
 
 @test "suggestion validation: non-numeric start_line is rejected" {
-  # Mirrors: if ! [[ "$start_line" =~ ^[0-9]+$ ]] || [[ "$start_line" -gt "$line" ]]; then
+  # Mirrors production: if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]] || [[ "$start_line" -gt "$line" ]]; then
   local start_line="abc" line=42 invalid=false
-  if ! [[ "$start_line" =~ ^[0-9]+$ ]]; then
+  if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]]; then
     invalid=true
   elif [[ "$start_line" -gt "$line" ]]; then
     invalid=true
@@ -386,7 +386,7 @@ _build_multi_line_comment() {
 
 @test "suggestion validation: start_line greater than line is rejected" {
   local start_line=50 line=42 invalid=false
-  if ! [[ "$start_line" =~ ^[0-9]+$ ]]; then
+  if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]]; then
     invalid=true
   elif [[ "$start_line" -gt "$line" ]]; then
     invalid=true
@@ -396,7 +396,7 @@ _build_multi_line_comment() {
 
 @test "suggestion validation: start_line equal to line is valid (single-line)" {
   local start_line=42 line=42 invalid=false
-  if ! [[ "$start_line" =~ ^[0-9]+$ ]]; then
+  if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]]; then
     invalid=true
   elif [[ "$start_line" -gt "$line" ]]; then
     invalid=true

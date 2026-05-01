@@ -684,6 +684,15 @@ collect_parallel_results() {
 # we rely on the shared /tmp cleanup. On missing addendum, missing base prompt,
 # or cat failure, this function falls back to the base prompt with a WARNING
 # rather than silently passing a truncated prompt to the LLM.
+#
+# Fallback behavior for a missing base prompt: the function echoes the missing
+# path back verbatim (not a sentinel or empty string). This is intentional — the
+# pre-existing flow without this helper passes the base prompt path directly to
+# call_agent → llm-call.sh, which already handles "file does not exist" via its
+# own exit-1 path. Emitting the missing path here preserves that behavior and
+# avoids a second failure mode for callers to handle. Operators see two signals:
+# a WARNING from this function plus the downstream "file not found" error from
+# the agent invocation.
 effective_prompt() {
   local agent_name="$1" base_prompt="$2"
   # Case-insensitive gate so TRUE/True/true all work consistently with post-review.sh.
