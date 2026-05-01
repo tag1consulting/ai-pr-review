@@ -214,7 +214,7 @@ When `enable-suggestions: true` is set (default `false`), the review tool asks e
 
 **How it works.** Eligible agents have a short prompt addendum appended to their system prompt instructing them to include a `suggested_code` field (and optional `start_line` for multi-line replacements) only when the fix is concrete and complete. The post-review script constructs the ```` ```suggestion ```` fence itself — agents are not trusted to emit the markdown directly. Multi-line suggestions are validated against the diff: every line in the replacement range must appear on the new-file side of a diff hunk, or the suggestion is dropped while keeping the natural-language remediation.
 
-**Caveats.** Suggestions increase output token usage. The feature is GitHub-only — Bitbucket reviews ignore it. When the range check or start_line validation fails, the suggestion is dropped but the finding still posts with the remediation text.
+**Caveats.** Suggestions increase output token usage. The feature is GitHub-only — Bitbucket reviews ignore it. Suggestions are validated defensively: `start_line` must be a positive integer ≤ `line` with no leading zeros, multi-line ranges are capped at 100 lines, and `suggested_code` containing triple backticks (which would break the suggestion fence) is rejected. When any validation fails, the suggestion is dropped with a WARNING logged to the Actions run and the finding still posts with its natural-language remediation. On incremental reviews (SHA watermark active), suggestions only render when the finding's line range is still in the current incremental diff — add the `ai-review-rescan` label to force a full re-review.
 
 ## Incremental reviews
 

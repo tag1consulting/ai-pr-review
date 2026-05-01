@@ -2,6 +2,7 @@
 # Tests for the sequential call_agent function in review.sh.
 # A mock llm-call.sh is written into a temp SCRIPT_DIR to control
 # provider behavior without real API calls.
+bats_require_minimum_version 1.5.0
 
 setup() {
   load test_helper
@@ -11,6 +12,9 @@ setup() {
 
   MOCK_DIR=$(mktemp -d)
   SCRIPT_DIR="$MOCK_DIR"
+  # effective_prompt() uses this prefix for combined-prompt temp files; the
+  # parent review.sh sets it at script top and cleans matching files on exit.
+  EFFECTIVE_PROMPT_PREFIX="${MOCK_DIR}/ai-review-prompt-$$"
   TMPFILES=()
   FAILED_AGENTS=()
   TOKEN_LOG=()
@@ -234,6 +238,46 @@ EOF
     [ -f "$output" ]
     TMPFILES+=("$output")
     grep -q "BASE CONTENT" "$output"
+    grep -q "ADDENDUM CONTENT" "$output"
+  done
+}
+
+@test "effective_prompt: falls back to base when addendum file is missing" {
+  # No prompts/ subdir created — addendum does not exist
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  AI_ENABLE_SUGGESTIONS=true run --separate-stderr effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+  [[ "$stderr" == *"Suggestion addendum missing"* ]]
+}
+
+@test "effective_prompt: falls back to base when base prompt is missing" {
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "ADDENDUM CONTENT" > "${MOCK_DIR}/prompts/suggestion-addendum.md"
+
+  AI_ENABLE_SUGGESTIONS=true run --separate-stderr effective_prompt "code-reviewer" "/nonexistent/prompt.md"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/nonexistent/prompt.md" ]
+  [[ "$stderr" == *"Base prompt missing"* ]]
+}
+
+@test "effective_prompt: accepts TRUE and True as enabled (case-insensitive)" {
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "ADDENDUM CONTENT" > "${MOCK_DIR}/prompts/suggestion-addendum.md"
+
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  for val in TRUE True tRuE; do
+    AI_ENABLE_SUGGESTIONS="$val" run effective_prompt "code-reviewer" "$base"
+    [ "$status" -eq 0 ]
+    [ "$output" != "$base" ]
+    [ -f "$output" ]
+    TMPFILES+=("$output")
     grep -q "ADDENDUM CONTENT" "$output"
   done
 }

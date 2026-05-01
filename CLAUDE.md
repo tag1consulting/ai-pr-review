@@ -273,15 +273,33 @@ and disabled runs use the base prompt path unchanged — no prompt change ships
 when the feature is off.
 
 **Validation in `post-review.sh`.** The suggestion rendering is gated on
-`AI_ENABLE_SUGGESTIONS=true` even when agents emit the fields. Additional
-guards:
-- `start_line` must be a positive integer and ≤ `line`. Invalid values drop
-  the suggestion (finding still posts with natural-language remediation).
-- For multi-line suggestions, every line in `start_line..line` must appear
-  in the diff's new-file side. `parse_diff_new_lines()` emits both added
-  and context lines for range validation (whereas `parse_valid_lines()`
-  emits only `+` lines for anchor validation).
-- If the range check fails, the suggestion is dropped with a WARNING.
+`AI_ENABLE_SUGGESTIONS=true` (case-insensitive — `TRUE`/`True`/`true` all work).
+Additional guards applied in order inside `post_findings()`:
+1. `start_line` must match `^[1-9][0-9]*$` (positive integer, no leading zeros
+   or 0) and be ≤ `line`. Leading zeros would trigger bash octal interpretation.
+2. Multi-line ranges are capped at `MAX_SUGGESTION_RANGE=100` lines to prevent
+   unbounded grep loops when an LLM emits an absurdly large `line` value.
+3. `suggested_code` containing triple backticks is rejected — the embedded
+   ``` would close the ```suggestion fence early and let an attacker
+   (via prompt injection) inject arbitrary markdown into the review comment.
+4. For multi-line suggestions, every line in `start_line..line` must appear
+   in the diff's new-file side. `parse_diff_new_lines()` emits both added
+   and context lines for range validation (whereas `parse_valid_lines()`
+   emits only `+` lines for anchor validation).
+5. When any guard fails the suggestion is dropped with a WARNING; the finding
+   still posts with the natural-language remediation.
+
+**Observability.** When a finding that carried `suggested_code` is routed to
+the review body (either the `line` is not in the diff or the `max_inline` cap
+was reached), `post_findings()` emits a WARNING identifying the specific
+reason so operators can distinguish "agent hallucinated a line" from
+"capacity limit".
+
+**Incremental reviews and suggestions.** The SHA watermark diffs only new
+commits. A finding whose line range was in an earlier commit (and is no longer
+in the incremental diff) will have its suggestion dropped during range
+validation, but the finding itself still posts. To force a full-PR re-review,
+add the `ai-review-rescan` label to the PR.
 
 **Bitbucket.** The feature is GitHub-only. The Bitbucket path
 (`post-review-bitbucket.sh`) does not render suggestion fences — findings post

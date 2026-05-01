@@ -468,3 +468,75 @@ _build_multi_line_comment() {
   [ "$suggested_code" = "replacement" ]
   [ "$start_line" = "10" ]
 }
+
+@test "suggestion gating: TRUE and True are treated as enabled (case-insensitive)" {
+  # Mirrors the normalization in post-review.sh:
+  #   local lc="${AI_ENABLE_SUGGESTIONS:-false}"; lc="${lc,,}"
+  #   if [[ "$lc" != "true" ]]; then clear fields; fi
+  for val in TRUE True tRuE true; do
+    local suggested_code="replacement" start_line=10
+    AI_ENABLE_SUGGESTIONS="$val"
+    local lc="${AI_ENABLE_SUGGESTIONS:-false}"; lc="${lc,,}"
+    if [[ "$lc" != "true" ]]; then
+      suggested_code=""; start_line=""
+    fi
+    [ "$suggested_code" = "replacement" ] || { echo "failed for val=$val"; false; }
+  done
+}
+
+@test "suggestion validation: leading-zero start_line is rejected" {
+  # Mirrors the tightened regex ^[1-9][0-9]*$ which prohibits leading zeros
+  # and 0 itself (would otherwise trigger bash octal in arithmetic).
+  local start_line="042" line=100 invalid=false
+  if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]]; then invalid=true; fi
+  [ "$invalid" = "true" ]
+}
+
+@test "suggestion validation: start_line=0 is rejected" {
+  local start_line="0" line=100 invalid=false
+  if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]]; then invalid=true; fi
+  [ "$invalid" = "true" ]
+}
+
+@test "suggestion validation: start_line=1 is accepted" {
+  local start_line="1" line=100 invalid=false
+  if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]]; then invalid=true; fi
+  [ "$invalid" = "false" ]
+}
+
+@test "suggestion range cap: oversized range is rejected" {
+  # Mirrors the MAX_SUGGESTION_RANGE=100 cap which prevents unbounded grep loops
+  # when an LLM emits an absurdly large line number.
+  local MAX_SUGGESTION_RANGE=100
+  local start_line=10 line=99999999 dropped=false
+  if (( line - start_line + 1 > MAX_SUGGESTION_RANGE )); then dropped=true; fi
+  [ "$dropped" = "true" ]
+}
+
+@test "suggestion range cap: exactly 100-line range is accepted" {
+  local MAX_SUGGESTION_RANGE=100
+  local start_line=1 line=100 dropped=false
+  if (( line - start_line + 1 > MAX_SUGGESTION_RANGE )); then dropped=true; fi
+  [ "$dropped" = "false" ]
+}
+
+@test "suggestion range cap: 101-line range is rejected" {
+  local MAX_SUGGESTION_RANGE=100
+  local start_line=1 line=101 dropped=false
+  if (( line - start_line + 1 > MAX_SUGGESTION_RANGE )); then dropped=true; fi
+  [ "$dropped" = "true" ]
+}
+
+@test "suggestion sanitization: triple-backtick suggested_code is rejected" {
+  # Mirrors the fence-escape guard: ```suggestion would be closed early if the
+  # replacement contains ``` anywhere.
+  local suggested_code='echo "```example```"' dropped=false
+  if [[ "$suggested_code" == *'```'* ]]; then dropped=true; fi
+  [ "$dropped" = "true" ]
+}
+
+@test "suggestion sanitization: backticks without triple sequence are accepted" {
+  local suggested_code='echo "`single`"' dropped=false
+  if [[ "$suggested_code" == *'```'* ]]; then dropped=true; fi
+  [ "$dropped" = "false" ]
+}

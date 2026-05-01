@@ -32,7 +32,13 @@ the fix with one click.
    a single string. Multi-line replacement code is encoded with literal `\n` characters
    between lines.
 
-7. **If you are not confident in a concrete code fix, omit `suggested_code` entirely**
+7. **Do not include triple backticks (```) anywhere inside `suggested_code`.** The
+   post-review layer wraps your code in a GitHub ```suggestion fence, and an
+   embedded triple backtick would close the fence early. If the code you want to
+   suggest legitimately contains triple backticks (rare — e.g., a README edit
+   or a heredoc), omit `suggested_code` entirely and describe the fix in prose.
+
+8. **If you are not confident in a concrete code fix, omit `suggested_code` entirely**
    and provide only the natural-language `remediation` field. A missing suggestion is
    always better than a wrong one.
 

@@ -763,8 +763,11 @@ post_findings() {
 
   # When suggestions are enabled, also build a lookup of all new-file lines
   # (added + context) to validate multi-line suggestion ranges.
+  # Case-insensitive comparison so TRUE/True/true all work consistently.
   local diff_lines_file=""
-  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" == "true" ]]; then
+  local _enable_for_lookup="${AI_ENABLE_SUGGESTIONS:-false}"
+  _enable_for_lookup="${_enable_for_lookup,,}"
+  if [[ "$_enable_for_lookup" == "true" ]]; then
     diff_lines_file=$(mktemp_tracked /tmp/diff-new-lines-XXXXXXXX.txt)
     parse_diff_new_lines "$DIFF_FILE" > "$diff_lines_file"
   fi
@@ -811,21 +814,45 @@ post_findings() {
       continue
     fi
 
-    # Suggestion handling — gated on AI_ENABLE_SUGGESTIONS. When disabled,
-    # suggested_code and start_line are ignored even if agents emit them.
-    if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then
+    # Suggestion handling — gated on AI_ENABLE_SUGGESTIONS (case-insensitive).
+    # When disabled, suggested_code and start_line are ignored even if agents emit them.
+    local _enable_suggestions_lc="${AI_ENABLE_SUGGESTIONS:-false}"
+    _enable_suggestions_lc="${_enable_suggestions_lc,,}"
+    if [[ "$_enable_suggestions_lc" != "true" ]]; then
       suggested_code=""
       start_line=""
     fi
 
-    # Validate start_line: must be a positive integer <= line. Drop suggestion
-    # on failure; the finding itself still posts with natural-language remediation.
+    # Validate start_line: must be a positive integer (no leading zeros, no 0) and <= line.
+    # Leading zeros would trigger bash octal interpretation in arithmetic contexts.
+    # Drop suggestion on failure; the finding itself still posts with natural-language remediation.
     if [[ -n "$start_line" ]]; then
-      if ! [[ "$start_line" =~ ^[0-9]+$ ]] || [[ "$start_line" -gt "$line" ]]; then
+      if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]] || [[ "$start_line" -gt "$line" ]]; then
         echo "WARNING: Invalid start_line='${start_line}' for ${file}:${line}; dropping suggestion." >&2
         start_line=""
         suggested_code=""
       fi
+    fi
+
+    # Bound multi-line suggestion ranges to prevent malformed LLM output (e.g., line=99999999)
+    # from hanging the workflow in a grep-per-iteration loop. 100 lines is generous for a
+    # single suggestion — anything larger is almost certainly a hallucinated line number.
+    local MAX_SUGGESTION_RANGE=100
+    if [[ -n "$suggested_code" && -n "$start_line" && "$start_line" != "$line" ]]; then
+      if (( line - start_line + 1 > MAX_SUGGESTION_RANGE )); then
+        echo "WARNING: Suggestion range ${file}:${start_line}-${line} exceeds max ${MAX_SUGGESTION_RANGE} lines; dropping suggestion." >&2
+        suggested_code=""
+        start_line=""
+      fi
+    fi
+
+    # Reject suggested_code containing triple-backticks. An LLM-emitted ``` would
+    # close the ```suggestion fence early and let an attacker (via prompt injection
+    # in PR content) inject arbitrary markdown into the review comment.
+    if [[ -n "$suggested_code" && "$suggested_code" == *'```'* ]]; then
+      echo "WARNING: suggested_code for ${file}:${line} contains triple-backticks; dropping suggestion to prevent fence escape." >&2
+      suggested_code=""
+      start_line=""
     fi
 
     # Validate multi-line suggestion range: every line in start_line..line must
@@ -882,8 +909,17 @@ ${suggested_code}
       # inline cap being hit), add a note so reviewers know the location may be
       # approximate (LLMs sometimes report lines from the full file context).
       local loc_note=""
+      local drop_reason=""
       if ! grep -qxF "${file}:${line}" "$valid_lines_file"; then
         loc_note=" *(line not in diff)*"
+        drop_reason="line not in diff"
+      else
+        drop_reason="inline cap of ${max_inline} reached"
+      fi
+      # When a suggestion was attached to this finding, log why it did not render
+      # inline so operators can triage "hallucinated line" vs "capacity limit".
+      if [[ -n "$suggested_code" ]]; then
+        echo "WARNING: Suggestion for ${file}:${line} not rendered (${drop_reason}); finding posted in review body instead." >&2
       fi
       body_findings="${body_findings}
 - $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${file}:${line}\`${loc_note}"

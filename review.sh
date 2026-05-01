@@ -122,8 +122,15 @@ esac
 
 # Temp files — cleaned up on exit
 TMPFILES=()
+# Prefix used by effective_prompt() for its combined-prompt files. These are
+# created in $(...) subshells where TMPFILES+= cannot mutate the parent, so we
+# clean them up by glob match instead of array entry. The $$ suffix scopes the
+# pattern to this run so parallel reviews don't delete each other's files.
+EFFECTIVE_PROMPT_PREFIX="/tmp/ai-review-prompt-$$"
 cleanup() {
   rm -f "${TMPFILES[@]}" 2>/dev/null || true
+  # shellcheck disable=SC2086 # intentional glob expansion
+  rm -f ${EFFECTIVE_PROMPT_PREFIX}-*.md 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -670,14 +677,46 @@ collect_parallel_results() {
 }
 
 # --- Build effective prompt path (appends suggestion addendum when enabled) ---
+# Called from 10 agent dispatch sites via $(effective_prompt <agent> <base_prompt>).
+# Note: the returned path must be registered with TMPFILES in the caller's shell,
+# not inside the command substitution — mktemp_tracked's TMPFILES+= mutation is
+# lost when it runs in a $(...) subshell. The caller captures the echoed path and
+# we rely on the shared /tmp cleanup. On missing addendum, missing base prompt,
+# or cat failure, this function falls back to the base prompt with a WARNING
+# rather than silently passing a truncated prompt to the LLM.
 effective_prompt() {
   local agent_name="$1" base_prompt="$2"
-  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" == "true" ]]; then
+  # Case-insensitive gate so TRUE/True/true all work consistently with post-review.sh.
+  local _enable="${AI_ENABLE_SUGGESTIONS:-false}"
+  _enable="${_enable,,}"
+  if [[ "$_enable" == "true" ]]; then
     case "$agent_name" in
       code-reviewer|edge-case-hunter|security-reviewer|silent-failure-hunter|blind-hunter)
+        local addendum="${SCRIPT_DIR}/prompts/suggestion-addendum.md"
+        if [[ ! -f "$addendum" ]]; then
+          echo "WARNING: Suggestion addendum missing at ${addendum}; using base prompt for ${agent_name}." >&2
+          echo "$base_prompt"
+          return
+        fi
+        if [[ ! -f "$base_prompt" ]]; then
+          echo "WARNING: Base prompt missing at ${base_prompt}; cannot build effective prompt for ${agent_name}." >&2
+          echo "$base_prompt"
+          return
+        fi
+        # Cleaned up in the parent trap via a glob match on EFFECTIVE_PROMPT_PREFIX,
+        # since TMPFILES+= would not propagate back through the $(...) call site.
         local combined
-        combined=$(mktemp_tracked /tmp/ai-review-prompt-XXXXXXXX.md)
-        cat "$base_prompt" "${SCRIPT_DIR}/prompts/suggestion-addendum.md" > "$combined"
+        combined=$(mktemp "${EFFECTIVE_PROMPT_PREFIX}-XXXXXXXX.md" 2>/dev/null) || {
+          echo "WARNING: Failed to create temp file for ${agent_name} effective prompt; using base prompt." >&2
+          echo "$base_prompt"
+          return
+        }
+        if ! cat "$base_prompt" "$addendum" > "$combined" 2>/dev/null; then
+          echo "WARNING: Failed to assemble effective prompt for ${agent_name}; using base prompt." >&2
+          rm -f "$combined"
+          echo "$base_prompt"
+          return
+        fi
         echo "$combined"
         return
         ;;
@@ -1210,6 +1249,13 @@ fi
 # Log token usage summary
 if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
   echo "--- Token usage ---" >&2
+  # Flag suggestion-enabled runs so operators can attribute token spend to
+  # this feature in Actions logs (each eligible agent carries ~400 extra
+  # input tokens for the suggestion addendum, plus variable output tokens).
+  _enable_flag="${AI_ENABLE_SUGGESTIONS:-false}"
+  if [[ "${_enable_flag,,}" == "true" ]]; then
+    echo "  Suggestions: enabled" >&2
+  fi
   TOTAL_INPUT=0
   TOTAL_OUTPUT=0
   for entry in "${TOKEN_LOG[@]}"; do
