@@ -388,3 +388,48 @@ EOF
   echo "$output" | jq -e '[.[0].sources[] | select(. == "code-reviewer")] | length == 1' > /dev/null
   echo "$output" | jq -e '[.[0].sources[] | select(. == "shellcheck")] | length == 1' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# Suggestion fields survive dedup — winning finding's suggested_code and
+# start_line are carried through; losing finding's fields do not contaminate.
+# ---------------------------------------------------------------------------
+
+@test "dedup: winner retains its suggested_code" {
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Low","confidence":80,"source":"a","file":"a.sh","line":10,"finding":"minor","remediation":"y"},
+  {"severity":"High","confidence":90,"source":"b","file":"a.sh","line":12,"finding":"serious","remediation":"y","suggested_code":"fixed_line"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].severity == "High"' > /dev/null
+  echo "$output" | jq -e '.[0].suggested_code == "fixed_line"' > /dev/null
+}
+
+@test "dedup: winner retains its start_line" {
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Low","confidence":80,"source":"a","file":"a.sh","line":10,"finding":"minor","remediation":"y"},
+  {"severity":"High","confidence":90,"source":"b","file":"a.sh","line":12,"start_line":11,"finding":"serious","remediation":"y","suggested_code":"replacement"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].start_line == 11' > /dev/null
+}
+
+@test "dedup: loser's suggested_code does not contaminate winner" {
+  # Winner is the High finding with no suggestion; loser's suggestion must not leak.
+  cat > "$FINDINGS_JSON_FILE" <<'EOF'
+[
+  {"severity":"Low","confidence":80,"source":"a","file":"a.sh","line":10,"finding":"minor","remediation":"y","suggested_code":"should_not_survive"},
+  {"severity":"High","confidence":90,"source":"b","file":"a.sh","line":12,"finding":"serious","remediation":"y"}
+]
+EOF
+  run _run_dedup
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].severity == "High"' > /dev/null
+  # Winner did not have suggested_code — it must not now have one from the loser
+  echo "$output" | jq -e '.[0] | has("suggested_code") | not' > /dev/null
+}

@@ -122,8 +122,15 @@ esac
 
 # Temp files — cleaned up on exit
 TMPFILES=()
+# Prefix used by effective_prompt() for its combined-prompt files. These are
+# created in $(...) subshells where TMPFILES+= cannot mutate the parent, so we
+# clean them up by glob match instead of array entry. The $$ suffix scopes the
+# pattern to this run so parallel reviews don't delete each other's files.
+EFFECTIVE_PROMPT_PREFIX="/tmp/ai-review-prompt-$$"
 cleanup() {
   rm -f "${TMPFILES[@]}" 2>/dev/null || true
+  # shellcheck disable=SC2086 # intentional glob expansion
+  rm -f ${EFFECTIVE_PROMPT_PREFIX}-*.md 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -669,6 +676,64 @@ collect_parallel_results() {
   done
 }
 
+# --- Build effective prompt path (appends suggestion addendum when enabled) ---
+# Called from 10 agent dispatch sites via $(effective_prompt <agent> <base_prompt>).
+# Note: the returned path must be registered with TMPFILES in the caller's shell,
+# not inside the command substitution — mktemp_tracked's TMPFILES+= mutation is
+# lost when it runs in a $(...) subshell. The caller captures the echoed path and
+# we rely on the shared /tmp cleanup. On missing addendum, missing base prompt,
+# or cat failure, this function falls back to the base prompt with a WARNING
+# rather than silently passing a truncated prompt to the LLM.
+#
+# Fallback behavior for a missing base prompt: the function echoes the missing
+# path back verbatim (not a sentinel or empty string). This is intentional — the
+# pre-existing flow without this helper passes the base prompt path directly to
+# call_agent → llm-call.sh, which already handles "file does not exist" via its
+# own exit-1 path. Emitting the missing path here preserves that behavior and
+# avoids a second failure mode for callers to handle. Operators see two signals:
+# a WARNING from this function plus the downstream "file not found" error from
+# the agent invocation.
+effective_prompt() {
+  local agent_name="$1" base_prompt="$2"
+  # Case-insensitive gate so TRUE/True/true all work consistently with post-review.sh.
+  local _enable="${AI_ENABLE_SUGGESTIONS:-false}"
+  _enable="${_enable,,}"
+  if [[ "$_enable" == "true" ]]; then
+    case "$agent_name" in
+      code-reviewer|edge-case-hunter|security-reviewer|silent-failure-hunter|blind-hunter)
+        local addendum="${SCRIPT_DIR}/prompts/suggestion-addendum.md"
+        if [[ ! -f "$addendum" ]]; then
+          echo "WARNING: Suggestion addendum missing at ${addendum}; using base prompt for ${agent_name}." >&2
+          echo "$base_prompt"
+          return
+        fi
+        if [[ ! -f "$base_prompt" ]]; then
+          echo "WARNING: Base prompt missing at ${base_prompt}; cannot build effective prompt for ${agent_name}." >&2
+          echo "$base_prompt"
+          return
+        fi
+        # Cleaned up in the parent trap via a glob match on EFFECTIVE_PROMPT_PREFIX,
+        # since TMPFILES+= would not propagate back through the $(...) call site.
+        local combined
+        combined=$(mktemp "${EFFECTIVE_PROMPT_PREFIX}-XXXXXXXX.md" 2>/dev/null) || {
+          echo "WARNING: Failed to create temp file for ${agent_name} effective prompt; using base prompt." >&2
+          echo "$base_prompt"
+          return
+        }
+        if ! cat "$base_prompt" "$addendum" > "$combined" 2>/dev/null; then
+          echo "WARNING: Failed to assemble effective prompt for ${agent_name}; using base prompt." >&2
+          rm -f "$combined"
+          echo "$base_prompt"
+          return
+        fi
+        echo "$combined"
+        return
+        ;;
+    esac
+  fi
+  echo "$base_prompt"
+}
+
 # --- Detect conditional agent triggers ---
 HAS_ERROR_PATTERNS=0
 if grep -qE '(catch|if err|try \{|rescue|Result<|unwrap|except|\.catch\()' "$DIFF_FILE" 2>/dev/null; then
@@ -721,7 +786,7 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
 
   TIER1_OUTPUTS+=("$FINDINGS_FILE")
   call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+    "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
   TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
@@ -730,7 +795,7 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     SFH_MODEL="$AI_MODEL_STANDARD"
     [[ "$REVIEW_MODE" == "full" ]] && SFH_MODEL="$AI_MODEL_PREMIUM"
     call_agent_bg "silent-failure-hunter" "$SFH_MODEL" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt silent-failure-hunter "${SCRIPT_DIR}/prompts/silent-failure-hunter.md")" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER1_WAIT_ARGS+=($! "$SFH_FILE")
   fi
 
@@ -803,19 +868,19 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$SEC_FILE")
     call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
     call_agent_bg "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt blind-hunter "${SCRIPT_DIR}/prompts/blind-hunter.md")" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$EDGE_FILE")
     call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
@@ -990,7 +1055,7 @@ else
   fi
 
   call_agent "code-reviewer" "$AI_MODEL_STANDARD" \
-    "${SCRIPT_DIR}/prompts/code-reviewer.md" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+    "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT"
   AGENT_OUTPUTS+=("$FINDINGS_FILE")
 
   # Tier 1 conditional: run in both quick and full when triggered
@@ -999,7 +1064,7 @@ else
     SFH_MODEL="$AI_MODEL_STANDARD"
     [[ "$REVIEW_MODE" == "full" ]] && SFH_MODEL="$AI_MODEL_PREMIUM"
     call_agent "silent-failure-hunter" "$SFH_MODEL" \
-      "${SCRIPT_DIR}/prompts/silent-failure-hunter.md" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt silent-failure-hunter "${SCRIPT_DIR}/prompts/silent-failure-hunter.md")" "$CODE_CONTEXT_MSG" "$SFH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SFH_FILE")
   fi
 
@@ -1012,17 +1077,17 @@ else
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
     call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/security-reviewer.md" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$SEC_FILE")
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/blind-hunter.md" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt blind-hunter "${SCRIPT_DIR}/prompts/blind-hunter.md")" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$BLIND_FILE")
 
     EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
     call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/edge-case-hunter.md" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$EDGE_FILE")
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
@@ -1193,6 +1258,13 @@ fi
 # Log token usage summary
 if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
   echo "--- Token usage ---" >&2
+  # Flag suggestion-enabled runs so operators can attribute token spend to
+  # this feature in Actions logs (each eligible agent carries ~400 extra
+  # input tokens for the suggestion addendum, plus variable output tokens).
+  _enable_flag="${AI_ENABLE_SUGGESTIONS:-false}"
+  if [[ "${_enable_flag,,}" == "true" ]]; then
+    echo "  Suggestions: enabled" >&2
+  fi
   TOTAL_INPUT=0
   TOTAL_OUTPUT=0
   for entry in "${TOKEN_LOG[@]}"; do

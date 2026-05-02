@@ -657,6 +657,42 @@ parse_valid_lines() {
 }
 
 # ---------------------------------------------------------------------------
+# Emit file:line for every line visible on the new-file side of the diff
+# (added lines AND context lines, NOT deleted lines). Used to validate
+# multi-line suggestion ranges where start_line may reference a context
+# line that is not a '+' line but IS visible inside a diff hunk.
+# ---------------------------------------------------------------------------
+parse_diff_new_lines() {
+  local diff_file="$1"
+  local current_file=""
+  local new_line=0
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^diff\ --git\ a/(.+)\ b/(.+) ]]; then
+      current_file="${BASH_REMATCH[2]}"
+      new_line=0
+    elif [[ "$line" =~ ^\+\+\+\  || "$line" =~ ^---\  ]]; then
+      continue
+    elif [[ "$line" =~ ^@@\ -[0-9]+(,[0-9]+)?\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
+      new_line="${BASH_REMATCH[2]}"
+    elif [[ -n "$current_file" && "$new_line" -gt 0 ]]; then
+      if [[ "$line" =~ ^\+ ]]; then
+        echo "${current_file}:${new_line}"
+        new_line=$((new_line + 1))
+      elif [[ "$line" =~ ^- ]]; then
+        : # deleted line — not in new file
+      elif [[ "$line" =~ ^\\ ]]; then
+        : # "\ No newline at end of file" marker
+      else
+        # Context line — present in new file at new_line
+        echo "${current_file}:${new_line}"
+        new_line=$((new_line + 1))
+      fi
+    fi
+  done < "$diff_file"
+}
+
+# ---------------------------------------------------------------------------
 # Map severity level to a color-coded icon for visual scanning.
 # Uses distinct shapes in addition to color for accessibility.
 # ---------------------------------------------------------------------------
@@ -725,6 +761,17 @@ post_findings() {
   valid_lines_file=$(mktemp_tracked /tmp/valid-lines-XXXXXXXX.txt)
   parse_valid_lines "$DIFF_FILE" > "$valid_lines_file"
 
+  # When suggestions are enabled, also build a lookup of all new-file lines
+  # (added + context) to validate multi-line suggestion ranges.
+  # Case-insensitive comparison so TRUE/True/true all work consistently.
+  local diff_lines_file=""
+  local _enable_for_lookup="${AI_ENABLE_SUGGESTIONS:-false}"
+  _enable_for_lookup="${_enable_for_lookup,,}"
+  if [[ "$_enable_for_lookup" == "true" ]]; then
+    diff_lines_file=$(mktemp_tracked /tmp/diff-new-lines-XXXXXXXX.txt)
+    parse_diff_new_lines "$DIFF_FILE" > "$diff_lines_file"
+  fi
+
   # Partition findings into inline (valid diff line) and body (everything else)
   local inline_comments="[]"
   local body_findings=""
@@ -745,12 +792,14 @@ post_findings() {
 
   while IFS= read -r finding_obj; do
     [[ -z "$finding_obj" ]] && continue
-    local file line severity finding remediation source_tag
+    local file line severity finding remediation source_tag suggested_code start_line
     file=$(echo "$finding_obj" | jq -r '.file // empty')
     line=$(echo "$finding_obj" | jq -r '.line // empty')
     severity=$(echo "$finding_obj" | jq -r '.severity // "Medium"')
     finding=$(echo "$finding_obj" | jq -r '.finding // empty')
     remediation=$(echo "$finding_obj" | jq -r '.remediation // empty')
+    suggested_code=$(echo "$finding_obj" | jq -r '.suggested_code // empty')
+    start_line=$(echo "$finding_obj" | jq -r '.start_line // empty')
     source_tag=$(format_source_tag "$finding_obj")
 
     if [[ -z "$file" || -z "$line" || -z "$finding" ]]; then
@@ -765,6 +814,76 @@ post_findings() {
       continue
     fi
 
+    # Suggestion handling — gated on AI_ENABLE_SUGGESTIONS (case-insensitive).
+    # When disabled, suggested_code and start_line are ignored even if agents emit them.
+    local _enable_suggestions_lc="${AI_ENABLE_SUGGESTIONS:-false}"
+    _enable_suggestions_lc="${_enable_suggestions_lc,,}"
+    if [[ "$_enable_suggestions_lc" != "true" ]]; then
+      suggested_code=""
+      start_line=""
+    fi
+
+    # Validate start_line: must be a positive integer (no leading zeros, no 0) and <= line.
+    # Leading zeros would trigger bash octal interpretation in arithmetic contexts.
+    # Drop suggestion on failure; the finding itself still posts with natural-language remediation.
+    if [[ -n "$start_line" ]]; then
+      if ! [[ "$start_line" =~ ^[1-9][0-9]*$ ]] || [[ "$start_line" -gt "$line" ]]; then
+        echo "WARNING: Invalid start_line='${start_line}' for ${file}:${line}; dropping suggestion." >&2
+        start_line=""
+        suggested_code=""
+      fi
+    fi
+
+    # Bound multi-line suggestion ranges to prevent malformed LLM output (e.g., line=99999999)
+    # from hanging the workflow in a grep-per-iteration loop. 100 lines is generous for a
+    # single suggestion — anything larger is almost certainly a hallucinated line number.
+    local MAX_SUGGESTION_RANGE=100
+    if [[ -n "$suggested_code" && -n "$start_line" && "$start_line" != "$line" ]]; then
+      if (( line - start_line + 1 > MAX_SUGGESTION_RANGE )); then
+        echo "WARNING: Suggestion range ${file}:${start_line}-${line} exceeds max ${MAX_SUGGESTION_RANGE} lines; dropping suggestion." >&2
+        suggested_code=""
+        start_line=""
+      fi
+    fi
+
+    # Reject suggested_code containing triple-backticks. An LLM-emitted ``` would
+    # close the ```suggestion fence early and let an attacker (via prompt injection
+    # in PR content) inject arbitrary markdown into the review comment.
+    if [[ -n "$suggested_code" && "$suggested_code" == *'```'* ]]; then
+      echo "WARNING: suggested_code for ${file}:${line} contains triple-backticks; dropping suggestion to prevent fence escape." >&2
+      suggested_code=""
+      start_line=""
+    fi
+
+    # Validate multi-line suggestion range: every line in start_line..line must
+    # appear in the diff's new-file side (added OR context lines, not deleted).
+    # Defense-in-depth: the range-check block is only reachable when
+    # AI_ENABLE_SUGGESTIONS=true (earlier gate clears suggested_code otherwise),
+    # and diff_lines_file is always populated under that same condition. But if
+    # the two gates ever drift, an empty "$diff_lines_file" would cause grep to
+    # read from stdin and hang. If diff_lines_file is empty, drop the suggestion
+    # rather than skip validation.
+    if [[ -n "$suggested_code" && -n "$start_line" && "$start_line" != "$line" ]]; then
+      if [[ -z "$diff_lines_file" ]]; then
+        echo "WARNING: diff_lines_file unset for ${file}:${line} multi-line suggestion (AI_ENABLE_SUGGESTIONS drift?); dropping suggestion." >&2
+        suggested_code=""
+        start_line=""
+      else
+        local range_valid=true check_line
+        for (( check_line=start_line; check_line<=line; check_line++ )); do
+          if ! grep -qxF "${file}:${check_line}" "$diff_lines_file"; then
+            range_valid=false
+            break
+          fi
+        done
+        if [[ "$range_valid" != "true" ]]; then
+          echo "WARNING: Suggestion range ${file}:${start_line}-${line} not fully in diff; dropping suggestion." >&2
+          suggested_code=""
+          start_line=""
+        fi
+      fi
+    fi
+
     # Check if this line is a valid inline comment target (whole-line match)
     if grep -qxF "${file}:${line}" "$valid_lines_file" && [[ "$inline_count" -lt "$max_inline" ]]; then
       local comment_body
@@ -774,20 +893,45 @@ post_findings() {
 
 **Remediation:** ${remediation}"
       fi
+      if [[ -n "$suggested_code" ]]; then
+        comment_body="${comment_body}
 
-      inline_comments=$(echo "$inline_comments" | jq \
-        --arg path "$file" \
-        --argjson line "$line" \
-        --arg body "$comment_body" \
-        '. + [{"path": $path, "line": $line, "body": $body}]')
+\`\`\`suggestion
+${suggested_code}
+\`\`\`"
+      fi
+
+      if [[ -n "$start_line" && "$start_line" != "$line" ]]; then
+        inline_comments=$(echo "$inline_comments" | jq \
+          --arg path "$file" \
+          --argjson line "$line" \
+          --argjson start_line "$start_line" \
+          --arg body "$comment_body" \
+          '. + [{"path": $path, "line": $line, "start_line": $start_line, "body": $body}]')
+      else
+        inline_comments=$(echo "$inline_comments" | jq \
+          --arg path "$file" \
+          --argjson line "$line" \
+          --arg body "$comment_body" \
+          '. + [{"path": $path, "line": $line, "body": $body}]')
+      fi
       inline_count=$((inline_count + 1))
     else
       # Append to review body. If the line isn't in the diff (as opposed to the
       # inline cap being hit), add a note so reviewers know the location may be
       # approximate (LLMs sometimes report lines from the full file context).
       local loc_note=""
+      local drop_reason=""
       if ! grep -qxF "${file}:${line}" "$valid_lines_file"; then
         loc_note=" *(line not in diff)*"
+        drop_reason="line not in diff"
+      else
+        drop_reason="inline cap of ${max_inline} reached"
+      fi
+      # When a suggestion was attached to this finding, log why it did not render
+      # inline so operators can triage "hallucinated line" vs "capacity limit".
+      if [[ -n "$suggested_code" ]]; then
+        echo "WARNING: Suggestion for ${file}:${line} not rendered (${drop_reason}); finding posted in review body instead." >&2
       fi
       body_findings="${body_findings}
 - $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${file}:${line}\`${loc_note}"

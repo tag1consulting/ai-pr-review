@@ -147,3 +147,32 @@ EOF
   [ "$status" -eq 0 ]
   echo "$output" | jq -e 'all(.[]; .source == "security-reviewer")' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# suggestion fields (suggested_code, start_line)
+# ---------------------------------------------------------------------------
+
+@test "extract_findings: preserves suggested_code field" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/sample-findings-with-suggestions.md"
+  run extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].suggested_code | test("os.Open")' > /dev/null
+  echo "$output" | jq -e '.[1].suggested_code | test("defer f.Close")' > /dev/null
+}
+
+@test "extract_findings: preserves start_line field when present" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/sample-findings-with-suggestions.md"
+  run extract_findings "$fixture"
+  [ "$status" -eq 0 ]
+  # Second finding has start_line=15; first finding does not have start_line
+  echo "$output" | jq -e '.[1].start_line == 15' > /dev/null
+  echo "$output" | jq -e '.[0] | has("start_line") | not' > /dev/null
+}
+
+@test "extract_findings: suggestion fields coexist with source stamping" {
+  local fixture="${PROJECT_ROOT}/tests/fixtures/sample-findings-with-suggestions.md"
+  run extract_findings "$fixture" "code-reviewer"
+  [ "$status" -eq 0 ]
+  # All fields (old and new) must survive the source stamping merge
+  echo "$output" | jq -e 'all(.[]; .source == "code-reviewer" and has("suggested_code"))' > /dev/null
+}
