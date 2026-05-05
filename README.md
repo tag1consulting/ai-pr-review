@@ -35,21 +35,6 @@ jobs:
 
 That's it — reviews start firing on the next PR. **Want slash commands?** (`/ai-pr-review rescan`, `review-full`, etc.) — see [Slash commands](#slash-commands) for the additional workflow file. See [Installation](#installation) for full-mode agents, provider configuration, and other options.
 
-## Requirements
-
-**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
-
-If you prefer to run without Docker (e.g., on self-hosted runners without container support), the [direct action reference](docs/installation-direct-action.md) and [git submodule](docs/installation-submodule.md) methods work as standard GitHub Actions composite actions. These require:
-
-- **Bash 4+**, **curl**, **jq**, **git**, **gh** — all pre-installed on standard GitHub-hosted runners
-- **shellcheck** — installed automatically by the action if not already present
-- Static analyzer binaries installed separately if desired (see [runtime dependencies](docs/installation-direct-action.md#runtime-dependencies))
-
-Both methods require:
-
-- A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
-- An API key for one of the [supported LLM providers](#supported-llm-providers)
-
 ## Supported VCS providers
 
 The same container image drives PR reviews on both GitHub and Bitbucket Cloud.
@@ -115,6 +100,21 @@ Findings use shape-distinct icons for accessibility:
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
 | Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7` |
+
+## Requirements
+
+**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
+
+If you prefer to run without Docker (e.g., on self-hosted runners without container support), the [direct action reference](docs/installation-direct-action.md) and [git submodule](docs/installation-submodule.md) methods work as standard GitHub Actions composite actions. These require:
+
+- **Bash 4+**, **curl**, **jq**, **git**, **gh** — all pre-installed on standard GitHub-hosted runners
+- **shellcheck** — installed automatically by the action if not already present
+- Static analyzer binaries installed separately if desired (see [runtime dependencies](docs/installation-direct-action.md#runtime-dependencies))
+
+Both methods require:
+
+- A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
+- An API key for one of the [supported LLM providers](#supported-llm-providers)
 
 ## Installation
 
@@ -222,6 +222,42 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`
+- Auto-detecting release PRs (see below)
+
+### Auto-detecting release PRs
+
+Full mode can be triggered automatically based on branch name, PR title, or other PR metadata by extending the `review-mode` expression in your workflow file. This keeps release PRs from getting only a quick review without requiring someone to remember to add a label.
+
+The [example workflow](examples/workflows/pr-review.yml) demonstrates auto-detecting `release/*` branches:
+
+```yaml
+review-mode: >-
+  ${{
+    contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' ||
+    startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
+    'quick'
+  }}
+```
+
+Customize the `startsWith()` pattern for your repo's branch convention. Common patterns:
+
+| Convention | Expression |
+|---|---|
+| Branch prefix `release/` | `startsWith(github.event.pull_request.head.ref, 'release/')` |
+| Branch prefix `hotfix/` | `startsWith(github.event.pull_request.head.ref, 'hotfix/')` |
+| PR title starts with "Release" | `startsWith(github.event.pull_request.title, 'Release ')` |
+| Merges to `main` from `release/*` | `github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'release/')` |
+| Multiple patterns | Chain with `\|\|` — each clause evaluates to `'full'` or falls through |
+
+Branch matching is case-sensitive — `release/v1.0` matches but `Release/v1.0` does not.
+
+**Bitbucket Pipelines** — use a shell conditional instead of GitHub Actions expressions:
+
+```bash
+if [[ "$BITBUCKET_PR_SOURCE_BRANCH" == release/* ]]; then
+  export AI_REVIEW_MODE=full
+fi
+```
 
 ## Code suggestions
 

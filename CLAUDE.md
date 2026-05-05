@@ -149,6 +149,8 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 
 Tier 1 and Tier 2 are separated by a `wait` barrier so Tier 2 never starts until all Tier 1 agents complete.
 
+**Auto-full for releases:** Mode selection is a workflow-level concern — `review.sh` only sees `AI_REVIEW_MODE=quick|full`. The consumer's workflow expression can auto-select `full` based on branch name, PR title, or labels. See the README's "Auto-detecting release PRs" section for patterns. The internal `.github/workflows/ai-review.yml` auto-promotes `release/*` branches to full mode.
+
 ### IPC mechanism
 
 Backgrounded agents (via `call_agent_bg`) cannot mutate parent arrays. State is passed via sidecar files:

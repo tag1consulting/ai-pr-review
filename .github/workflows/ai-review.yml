@@ -79,6 +79,7 @@ jobs:
             ${{
               inputs.review_mode ||
               (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
+              (startsWith(github.event.pull_request.head.ref, 'release/') && 'full') ||
               'quick'
             }}
           force-full-diff: >-

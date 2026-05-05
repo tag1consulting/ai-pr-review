@@ -43,6 +43,10 @@ cp /path/to/ai-pr-review/examples/workflows/comment-triggers.yml .github/workflo
 
 Commit and push. The review runs automatically on the next opened or updated PR.
 
+## Auto-full for release PRs
+
+The example workflow auto-selects full review mode when the source branch starts with `release/`. Customize the `startsWith()` pattern in the `review-mode` expression for your repo's branch convention. See [README > Auto-detecting release PRs](../README.md#auto-detecting-release-prs) for common patterns.
+
 ## Slash commands
 
 Once `comment-triggers.yml` is merged to your default branch, post these commands in any PR comment:
