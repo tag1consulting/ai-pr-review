@@ -33,6 +33,9 @@ ARG PHPSTAN_DRUPAL_VERSION=2.0.15
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# hadolint ignore=DL3008
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       bash \
