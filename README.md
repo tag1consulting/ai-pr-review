@@ -33,7 +33,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-That's it — reviews start firing on the next PR. See [Installation](#installation) for additional options like full-mode agents, slash commands, and provider configuration.
+That's it — reviews start firing on the next PR. **Want slash commands?** (`/ai-pr-review rescan`, `review-full`, etc.) — see [Slash commands](#slash-commands) for the additional workflow file. See [Installation](#installation) for full-mode agents, provider configuration, and other options.
 
 ## Requirements
 
