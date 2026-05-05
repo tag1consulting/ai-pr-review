@@ -303,7 +303,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 ## Suppression system
 
-Known false positives can be suppressed via `suppressions.json`. Each entry matches findings by file, line, code prefix, or regex pattern:
+Known false positives can be suppressed via `config/suppressions.json`. Each entry matches findings by file, line, code prefix, or regex pattern:
 
 ```json
 [
