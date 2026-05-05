@@ -197,7 +197,10 @@ $(echo "$findings_json" | jq -r '
       "[" + (.sources[0] // .source // "unknown") + "]"
     end
   ) as $stag |
-  "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n"
+  "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n" +
+  if (.suggested_code // "" | length) > 0 and (.suggested_code | contains("```") | not) then
+    "  <details>\n  <summary>Suggested fix</summary>\n\n  ```\n  \(.suggested_code)\n  ```\n\n  </details>\n"
+  else "" end
 ')"
     else
       issue_body="${issue_body}
