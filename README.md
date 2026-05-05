@@ -2,6 +2,39 @@
 
 AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline review findings directly on the PR.
 
+## Quickstart
+
+Get AI reviews on your PRs in two steps:
+
+**1. Add your LLM API key** as a repository secret named `ANTHROPIC_API_KEY` (or the equivalent for your [provider](#supported-llm-providers)).
+
+**2. Create `.github/workflows/ai-review.yml`** with this minimal workflow:
+
+```yaml
+name: AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tag1consulting/ai-pr-review/container-action@main
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          pr-number: ${{ github.event.pull_request.number }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+That's it — reviews start firing on the next PR. See [Installation](#installation) for additional options like full-mode agents, slash commands, and provider configuration.
+
 ## Requirements
 
 **The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
@@ -85,17 +118,7 @@ Findings use shape-distinct icons for accessibility:
 
 ## Installation
 
-The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint) pre-installed at pinned, verified versions. No toolchain setup on your runner.
-
-### Quickstart
-
-**Step 1: Add your LLM API key**
-
-Add your provider's API key as a repository secret (e.g. `ANTHROPIC_API_KEY` for Anthropic).
-
-**Step 2: Copy the workflow**
-
-Copy [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) to `.github/workflows/` in your repository. That's it — reviews start firing on the next PR.
+The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint) pre-installed at pinned, verified versions. No toolchain setup on your runner. See [Quickstart](#quickstart) for the minimal two-step setup.
 
 ### Full setup
 
