@@ -818,31 +818,31 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   PHPSTAN_PID="" KUBELINTER_PID="" TFLINT_PID=""
 
   if [[ -n "$CHANGED_FILES" ]]; then
-    ( "${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-shellcheck.sh" "$CHANGED_FILES" > "$SHELLCHECK_TMPFILE" ) &
     SC_PID=$!
-    ( "${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES" > "$CVE_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-cve-check.sh" "$CHANGED_FILES" > "$CVE_TMPFILE" ) &
     CVE_PID=$!
-    ( "${SCRIPT_DIR}/run-semgrep.sh" "$CHANGED_FILES" > "$SEMGREP_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-semgrep.sh" "$CHANGED_FILES" > "$SEMGREP_TMPFILE" ) &
     SEMGREP_PID=$!
-    ( "${SCRIPT_DIR}/run-trufflehog.sh" "$CHANGED_FILES" > "$TRUFFLEHOG_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-trufflehog.sh" "$CHANGED_FILES" > "$TRUFFLEHOG_TMPFILE" ) &
     TRUFFLEHOG_PID=$!
-    ( "${SCRIPT_DIR}/run-ruff.sh" "$CHANGED_FILES" > "$RUFF_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-ruff.sh" "$CHANGED_FILES" > "$RUFF_TMPFILE" ) &
     RUFF_PID=$!
-    ( "${SCRIPT_DIR}/run-golangci-lint.sh" "$CHANGED_FILES" > "$GOLANGCI_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-golangci-lint.sh" "$CHANGED_FILES" > "$GOLANGCI_TMPFILE" ) &
     GOLANGCI_PID=$!
-    ( "${SCRIPT_DIR}/run-hadolint.sh" "$CHANGED_FILES" > "$HADOLINT_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-hadolint.sh" "$CHANGED_FILES" > "$HADOLINT_TMPFILE" ) &
     HADOLINT_PID=$!
-    ( "${SCRIPT_DIR}/run-checkov.sh" "$CHANGED_FILES" > "$CHECKOV_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-checkov.sh" "$CHANGED_FILES" > "$CHECKOV_TMPFILE" ) &
     CHECKOV_PID=$!
-    ( "${SCRIPT_DIR}/run-phpcs.sh" "$CHANGED_FILES" > "$PHPCS_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-phpcs.sh" "$CHANGED_FILES" > "$PHPCS_TMPFILE" ) &
     PHPCS_PID=$!
-    ( "${SCRIPT_DIR}/run-eslint.sh" "$CHANGED_FILES" > "$ESLINT_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-eslint.sh" "$CHANGED_FILES" > "$ESLINT_TMPFILE" ) &
     ESLINT_PID=$!
-    ( "${SCRIPT_DIR}/run-phpstan.sh" "$CHANGED_FILES" > "$PHPSTAN_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-phpstan.sh" "$CHANGED_FILES" > "$PHPSTAN_TMPFILE" ) &
     PHPSTAN_PID=$!
-    ( "${SCRIPT_DIR}/run-kube-linter.sh" "$CHANGED_FILES" > "$KUBELINTER_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-kube-linter.sh" "$CHANGED_FILES" > "$KUBELINTER_TMPFILE" ) &
     KUBELINTER_PID=$!
-    ( "${SCRIPT_DIR}/run-tflint.sh" "$CHANGED_FILES" > "$TFLINT_TMPFILE" ) &
+    ( "${SCRIPT_DIR}/analyzers/run-tflint.sh" "$CHANGED_FILES" > "$TFLINT_TMPFILE" ) &
     TFLINT_PID=$!
   fi
 
@@ -1099,7 +1099,7 @@ else
   # --- Run shellcheck if shell files changed ---
   SHELLCHECK_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    SHELLCHECK_JSON=$("${SCRIPT_DIR}/run-shellcheck.sh" "$CHANGED_FILES") || {
+    SHELLCHECK_JSON=$("${SCRIPT_DIR}/analyzers/run-shellcheck.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-shellcheck.sh failed; shellcheck findings will be skipped." >&2
       SHELLCHECK_JSON="[]"
     }
@@ -1112,7 +1112,7 @@ else
   # --- Run CVE check if dependency manifests changed ---
   CVE_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    CVE_JSON=$("${SCRIPT_DIR}/run-cve-check.sh" "$CHANGED_FILES") || {
+    CVE_JSON=$("${SCRIPT_DIR}/analyzers/run-cve-check.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-cve-check.sh failed; CVE findings will be skipped." >&2
       CVE_JSON="[]"
     }
@@ -1123,7 +1123,7 @@ else
   # --- Run semgrep ---
   SEMGREP_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    SEMGREP_JSON=$("${SCRIPT_DIR}/run-semgrep.sh" "$CHANGED_FILES") || {
+    SEMGREP_JSON=$("${SCRIPT_DIR}/analyzers/run-semgrep.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-semgrep.sh failed; semgrep findings will be skipped." >&2
       SEMGREP_JSON="[]"
     }
@@ -1134,7 +1134,7 @@ else
   # --- Run trufflehog ---
   TRUFFLEHOG_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    TRUFFLEHOG_JSON=$("${SCRIPT_DIR}/run-trufflehog.sh" "$CHANGED_FILES") || {
+    TRUFFLEHOG_JSON=$("${SCRIPT_DIR}/analyzers/run-trufflehog.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-trufflehog.sh failed; trufflehog findings will be skipped." >&2
       TRUFFLEHOG_JSON="[]"
     }
@@ -1145,7 +1145,7 @@ else
   # --- Run ruff (Python files only) ---
   RUFF_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    RUFF_JSON=$("${SCRIPT_DIR}/run-ruff.sh" "$CHANGED_FILES") || {
+    RUFF_JSON=$("${SCRIPT_DIR}/analyzers/run-ruff.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-ruff.sh failed; ruff findings will be skipped." >&2
       RUFF_JSON="[]"
     }
@@ -1156,7 +1156,7 @@ else
   # --- Run golangci-lint (Go files only) ---
   GOLANGCI_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    GOLANGCI_JSON=$("${SCRIPT_DIR}/run-golangci-lint.sh" "$CHANGED_FILES") || {
+    GOLANGCI_JSON=$("${SCRIPT_DIR}/analyzers/run-golangci-lint.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-golangci-lint.sh failed; golangci-lint findings will be skipped." >&2
       GOLANGCI_JSON="[]"
     }
@@ -1167,7 +1167,7 @@ else
   # --- Run hadolint (Dockerfiles only) ---
   HADOLINT_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    HADOLINT_JSON=$("${SCRIPT_DIR}/run-hadolint.sh" "$CHANGED_FILES") || {
+    HADOLINT_JSON=$("${SCRIPT_DIR}/analyzers/run-hadolint.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-hadolint.sh failed; hadolint findings will be skipped." >&2
       HADOLINT_JSON="[]"
     }
@@ -1178,7 +1178,7 @@ else
   # --- Run checkov (Terraform, K8s YAML, Dockerfiles, JSON) ---
   CHECKOV_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    CHECKOV_JSON=$("${SCRIPT_DIR}/run-checkov.sh" "$CHANGED_FILES") || {
+    CHECKOV_JSON=$("${SCRIPT_DIR}/analyzers/run-checkov.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-checkov.sh failed; checkov findings will be skipped." >&2
       CHECKOV_JSON="[]"
     }
@@ -1189,7 +1189,7 @@ else
   # --- Run phpcs (PHP files only) ---
   PHPCS_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    PHPCS_JSON=$("${SCRIPT_DIR}/run-phpcs.sh" "$CHANGED_FILES") || {
+    PHPCS_JSON=$("${SCRIPT_DIR}/analyzers/run-phpcs.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-phpcs.sh failed; phpcs findings will be skipped." >&2
       PHPCS_JSON="[]"
     }
@@ -1200,7 +1200,7 @@ else
   # --- Run eslint (JS/TS files only, requires consumer config) ---
   ESLINT_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    ESLINT_JSON=$("${SCRIPT_DIR}/run-eslint.sh" "$CHANGED_FILES") || {
+    ESLINT_JSON=$("${SCRIPT_DIR}/analyzers/run-eslint.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-eslint.sh failed; eslint findings will be skipped." >&2
       ESLINT_JSON="[]"
     }
@@ -1211,7 +1211,7 @@ else
   # --- Run phpstan (PHP files only) ---
   PHPSTAN_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    PHPSTAN_JSON=$("${SCRIPT_DIR}/run-phpstan.sh" "$CHANGED_FILES") || {
+    PHPSTAN_JSON=$("${SCRIPT_DIR}/analyzers/run-phpstan.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-phpstan.sh failed; phpstan findings will be skipped." >&2
       PHPSTAN_JSON="[]"
     }
@@ -1222,7 +1222,7 @@ else
   # --- Run kube-linter (Kubernetes YAML/JSON manifests only) ---
   KUBELINTER_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    KUBELINTER_JSON=$("${SCRIPT_DIR}/run-kube-linter.sh" "$CHANGED_FILES") || {
+    KUBELINTER_JSON=$("${SCRIPT_DIR}/analyzers/run-kube-linter.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-kube-linter.sh failed; kube-linter findings will be skipped." >&2
       KUBELINTER_JSON="[]"
     }
@@ -1233,7 +1233,7 @@ else
   # --- Run tflint (Terraform files only) ---
   TFLINT_JSON="[]"
   if [[ -n "$CHANGED_FILES" ]]; then
-    TFLINT_JSON=$("${SCRIPT_DIR}/run-tflint.sh" "$CHANGED_FILES") || {
+    TFLINT_JSON=$("${SCRIPT_DIR}/analyzers/run-tflint.sh" "$CHANGED_FILES") || {
       echo "WARNING: run-tflint.sh failed; tflint findings will be skipped." >&2
       TFLINT_JSON="[]"
     }
@@ -1388,7 +1388,7 @@ merge_findings() {
 # Local suppressions in ${GITHUB_WORKSPACE}/.github/ai-pr-review/suppressions.json
 # are merged with the global rules (local rules take precedence in log output).
 apply_suppressions() {
-  local suppressions_file="${SCRIPT_DIR}/suppressions.json"
+  local suppressions_file="${SCRIPT_DIR}/config/suppressions.json"
   local local_suppressions_file="${GITHUB_WORKSPACE:-}/.github/ai-pr-review/suppressions.json"
   local combined_rules_file
   combined_rules_file=$(mktemp /tmp/ai-review-suppressions-XXXXXXXX.json)
@@ -1836,7 +1836,7 @@ fi
 # ---------------------------------------------------------------------------
 # Returns two integers: IN_RATE OUT_RATE (microdollars per million tokens).
 # Callers compute: cost_microdollars = tokens * rate / 1_000_000
-MODEL_PRICING_FILE="${SCRIPT_DIR}/model-pricing.json"
+MODEL_PRICING_FILE="${SCRIPT_DIR}/config/model-pricing.json"
 model_pricing() {
   local model="$1"
   local m result

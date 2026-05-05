@@ -22,8 +22,8 @@ jobs:
             review.sh \
             llm-call.sh \
             post-review.sh \
-            run-shellcheck.sh \
-            run-cve-check.sh
+            analyzers/run-shellcheck.sh \
+            analyzers/run-cve-check.sh
 
   test:
     runs-on: ubuntu-latest

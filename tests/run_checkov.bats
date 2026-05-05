@@ -6,7 +6,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   command -v jq >/dev/null 2>&1 || skip "jq not available"
   load test_helper
-  SCRIPT="${PROJECT_ROOT}/run-checkov.sh"
+  SCRIPT="${PROJECT_ROOT}/analyzers/run-checkov.sh"
   FIXTURES="${PROJECT_ROOT}/tests/fixtures/checkov"
   WORK=$(mktemp -d)
 }

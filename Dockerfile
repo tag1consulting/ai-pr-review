@@ -126,21 +126,18 @@ RUN curl -fsSL -o /usr/local/bin/composer \
     ln -s /opt/composer/vendor/bin/phpcs /usr/local/bin/phpcs && \
     ln -s /opt/composer/vendor/bin/phpstan /usr/local/bin/phpstan
 
-# Copy action scripts and supporting files. Uses a glob for post-review*.sh
-# so sibling provider scripts (post-review-bitbucket.sh, future providers)
-# are picked up automatically without per-release Dockerfile churn.
+# Copy core scripts. Uses a glob for post-review*.sh so sibling provider
+# scripts (post-review-bitbucket.sh, future providers) are picked up
+# automatically without per-release Dockerfile churn.
 COPY review.sh post-review*.sh llm-call.sh \
-     run-shellcheck.sh run-cve-check.sh run-semgrep.sh \
-     run-trufflehog.sh run-ruff.sh run-golangci-lint.sh \
-     run-hadolint.sh run-checkov.sh run-phpcs.sh run-eslint.sh \
-     run-phpstan.sh run-kube-linter.sh run-tflint.sh \
      /opt/ai-pr-review/
 
+COPY analyzers/         /opt/ai-pr-review/analyzers/
+COPY config/            /opt/ai-pr-review/config/
 COPY prompts/           /opt/ai-pr-review/prompts/
 COPY language-profiles/ /opt/ai-pr-review/language-profiles/
-COPY suppressions.json model-pricing.json /opt/ai-pr-review/
 
-RUN chmod +x /opt/ai-pr-review/*.sh
+RUN chmod +x /opt/ai-pr-review/*.sh /opt/ai-pr-review/analyzers/*.sh
 
 # Run as non-root
 RUN groupadd -r app --gid 1001 && \

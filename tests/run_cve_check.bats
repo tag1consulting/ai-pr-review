@@ -7,7 +7,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   command -v jq >/dev/null 2>&1 || skip "jq not available"
   load test_helper
-  SCRIPT="${PROJECT_ROOT}/run-cve-check.sh"
+  SCRIPT="${PROJECT_ROOT}/analyzers/run-cve-check.sh"
   FIXTURES="${PROJECT_ROOT}/tests/fixtures/cve"
   WORK=$(mktemp -d)
 }
