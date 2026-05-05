@@ -1,0 +1,150 @@
+// Tag1 brand overrides for just-the-docs
+
+// Heading font
+h1, h2, h3, h4, h5, h6,
+.site-title {
+  font-family: "Styrene A", Futura, "Trebuchet MS", Arial, sans-serif;
+}
+
+// Hero section (home page)
+.hero {
+  background: linear-gradient(135deg, #061e32 0%, #0a2d4a 100%);
+  color: #ffffff;
+  padding: 4rem 2rem;
+  text-align: center;
+  border-bottom: 4px solid #e65c00;
+  margin: -1.5rem -1.5rem 2rem -1.5rem;
+
+  h1 {
+    color: #ffffff;
+    font-size: 2.75rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+  }
+
+  .tagline {
+    color: #d1eaf1;
+    font-size: 1.25rem;
+    margin-bottom: 2rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-hero {
+    display: inline-block;
+    background: #e65c00;
+    color: #ffffff;
+    padding: 0.75rem 2rem;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1.1rem;
+    transition: background 0.2s;
+
+    &:hover {
+      background: darken(#e65c00, 8%);
+      color: #ffffff;
+      text-decoration: none;
+    }
+  }
+
+  .btn-hero-secondary {
+    @extend .btn-hero;
+    background: transparent;
+    border: 2px solid #d1eaf1;
+    color: #d1eaf1;
+
+    &:hover {
+      background: rgba(209, 234, 241, 0.15);
+      color: #ffffff;
+    }
+  }
+}
+
+// Feature cards
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.feature {
+  background: #d1eaf1;
+  border-radius: 8px;
+  padding: 1.5rem;
+  border-left: 4px solid #e65c00;
+
+  h3 {
+    color: #061e32;
+    margin-top: 0;
+    font-size: 1.15rem;
+  }
+
+  p {
+    color: #061e32;
+    margin-bottom: 0;
+    font-size: 0.95rem;
+  }
+}
+
+// Sidebar active link
+.nav-list-link.active {
+  border-left-color: #e65c00;
+  font-weight: 600;
+}
+
+// Code block accent
+.highlight {
+  border-left: 3px solid #15787c;
+  border-radius: 4px;
+}
+
+// Table styling
+table {
+  th {
+    background-color: #061e32;
+    color: #ffffff;
+  }
+}
+
+// Footer branding
+.tag1-footer {
+  border-top: 1px solid #d0d7de;
+  padding-top: 1rem;
+  margin-top: 2rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #707070;
+
+  a {
+    color: #e65c00;
+  }
+}
+
+// Responsive hero adjustments
+@media (max-width: 768px) {
+  .hero {
+    padding: 2.5rem 1rem;
+
+    h1 {
+      font-size: 2rem;
+    }
+
+    .tagline {
+      font-size: 1.1rem;
+    }
+  }
+
+  .features {
+    grid-template-columns: 1fr;
+  }
+}
