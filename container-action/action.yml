@@ -115,7 +115,7 @@ inputs:
   enable-suggestions:
     description: 'Enable GitHub "Apply suggestion" buttons on inline review comments (GitHub-only; increases token usage)'
     required: false
-    default: 'false'
+    default: 'true'
 
   standalone-depth:
     description: 'Git fetch depth for standalone mode'

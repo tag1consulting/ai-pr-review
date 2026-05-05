@@ -166,7 +166,7 @@ inputs:
       replacement suggestions that PR authors can accept with one click.
       Increases output token usage. GitHub-only — has no effect on Bitbucket.
     required: false
-    default: 'false'
+    default: 'true'
 
 runs:
   using: composite

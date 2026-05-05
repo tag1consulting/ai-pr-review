@@ -696,7 +696,7 @@ collect_parallel_results() {
 effective_prompt() {
   local agent_name="$1" base_prompt="$2"
   # Case-insensitive gate so TRUE/True/true all work consistently with post-review.sh.
-  local _enable="${AI_ENABLE_SUGGESTIONS:-false}"
+  local _enable="${AI_ENABLE_SUGGESTIONS:-true}"
   _enable="${_enable,,}"
   if [[ "$_enable" == "true" ]]; then
     case "$agent_name" in
@@ -1261,7 +1261,7 @@ if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
   # Flag suggestion-enabled runs so operators can attribute token spend to
   # this feature in Actions logs (each eligible agent carries ~400 extra
   # input tokens for the suggestion addendum, plus variable output tokens).
-  _enable_flag="${AI_ENABLE_SUGGESTIONS:-false}"
+  _enable_flag="${AI_ENABLE_SUGGESTIONS:-true}"
   if [[ "${_enable_flag,,}" == "true" ]]; then
     echo "  Suggestions: enabled" >&2
   fi

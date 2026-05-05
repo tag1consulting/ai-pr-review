@@ -434,17 +434,17 @@ _build_multi_line_comment() {
   [ "$range_valid" = "true" ]
 }
 
-@test "suggestion gating: AI_ENABLE_SUGGESTIONS unset means suggestion fields are ignored" {
+@test "suggestion gating: AI_ENABLE_SUGGESTIONS unset means suggestions are enabled (default true)" {
   # Mirrors the guard in post_findings():
-  #   if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then suggested_code=""; start_line=""; fi
+  #   if [[ "${AI_ENABLE_SUGGESTIONS:-true}" != "true" ]]; then suggested_code=""; start_line=""; fi
   local suggested_code="replacement" start_line=10
   unset AI_ENABLE_SUGGESTIONS
-  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then
+  if [[ "${AI_ENABLE_SUGGESTIONS:-true}" != "true" ]]; then
     suggested_code=""
     start_line=""
   fi
-  [ -z "$suggested_code" ]
-  [ -z "$start_line" ]
+  [ "$suggested_code" = "replacement" ]
+  [ "$start_line" = "10" ]
 }
 
 @test "suggestion gating: AI_ENABLE_SUGGESTIONS=false means suggestion fields are ignored" {

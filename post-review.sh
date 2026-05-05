@@ -183,7 +183,7 @@ ${summary}
       issue_body="${issue_body}
 ### Findings
 
-$(  _enable_lc="${AI_ENABLE_SUGGESTIONS:-false}"
+$(  _enable_lc="${AI_ENABLE_SUGGESTIONS:-true}"
     _enable_lc="${_enable_lc,,}"
     if [[ "$_enable_lc" == "true" ]]; then _jq_enable=true; else _jq_enable=false; fi
     echo "$findings_json" | jq -r --argjson enable_suggestions "$_jq_enable" '
@@ -867,7 +867,7 @@ post_findings() {
   # (added + context) to validate multi-line suggestion ranges.
   # Case-insensitive comparison so TRUE/True/true all work consistently.
   local diff_lines_file=""
-  local _enable_for_lookup="${AI_ENABLE_SUGGESTIONS:-false}"
+  local _enable_for_lookup="${AI_ENABLE_SUGGESTIONS:-true}"
   _enable_for_lookup="${_enable_for_lookup,,}"
   if [[ "$_enable_for_lookup" == "true" ]]; then
     diff_lines_file=$(mktemp_tracked /tmp/diff-new-lines-XXXXXXXX.txt)
@@ -918,7 +918,7 @@ $(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "" 
 
     # Suggestion handling — gated on AI_ENABLE_SUGGESTIONS (case-insensitive).
     # When disabled, suggested_code and start_line are ignored even if agents emit them.
-    local _enable_suggestions_lc="${AI_ENABLE_SUGGESTIONS:-false}"
+    local _enable_suggestions_lc="${AI_ENABLE_SUGGESTIONS:-true}"
     _enable_suggestions_lc="${_enable_suggestions_lc,,}"
     if [[ "$_enable_suggestions_lc" != "true" ]]; then
       suggested_code=""
