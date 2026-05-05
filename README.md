@@ -4,14 +4,18 @@ AI-powered pull request review using multiple LLM agents. Posts a summary commen
 
 ## Requirements
 
-The action runs on `ubuntu-latest` GitHub Actions runners and requires:
+**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
+
+If you prefer to run without Docker (e.g., on self-hosted runners without container support), the [direct action reference](docs/installation-direct-action.md) and [git submodule](docs/installation-submodule.md) methods work as standard GitHub Actions composite actions. These require:
 
 - **Bash 4+**, **curl**, **jq**, **git**, **gh** — all pre-installed on standard GitHub-hosted runners
 - **shellcheck** — installed automatically by the action if not already present
+- Static analyzer binaries installed separately if desired (see [runtime dependencies](docs/installation-direct-action.md#runtime-dependencies))
+
+Both methods require:
+
 - A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
 - An API key for one of the [supported LLM providers](#supported-llm-providers)
-
-The container action (recommended) pulls a public image from GHCR — no additional authentication required.
 
 ## Supported VCS providers
 
