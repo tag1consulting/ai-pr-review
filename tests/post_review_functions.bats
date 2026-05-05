@@ -644,8 +644,8 @@ setup_build_agent_prompt() {
   [[ "$output" == *'Prompt for AI agents'* ]]
   [[ "$output" == *'In `main.go`:'* ]]
   [[ "$output" == *'In `app.py`:'* ]]
-  [[ "$output" == *'Around line 42: Missing nil check Add guard'* ]]
-  [[ "$output" == *'Around line 10: SQL injection Use parameterized queries'* ]]
+  [[ "$output" == *'Around line 42: Missing nil check. Add guard'* ]]
+  [[ "$output" == *'Around line 10: SQL injection. Use parameterized queries'* ]]
   [[ "$output" == *'Verify each finding'* ]]
 }
 

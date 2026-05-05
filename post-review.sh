@@ -231,7 +231,7 @@ $(cat "$_TOKEN_TABLE_FILE")"
           [$header] + [
             .[] |
             "- Around line \(.line // "?"): \(.finding)" +
-              if (.remediation // "") != "" then " " + .remediation else "" end
+              if (.remediation // "") != "" then ". " + .remediation else "" end
           ] | join("\n")
         ) | join("\n\n")
       ' 2>/dev/null)
@@ -821,7 +821,7 @@ build_agent_prompt() {
     [$header] + [
       .[] |
       "- Around line \(.line // "?"): \(.finding)" +
-        if (.remediation // "") != "" then " " + .remediation else "" end
+        if (.remediation // "") != "" then ". " + .remediation else "" end
     ] | join("\n")
   ' 2>/dev/null)
 
