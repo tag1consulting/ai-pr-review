@@ -8,7 +8,7 @@ setup() {
   command -v jq >/dev/null 2>&1 || skip "jq not available"
   command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not available"
   load test_helper
-  SCRIPT="${PROJECT_ROOT}/run-shellcheck.sh"
+  SCRIPT="${PROJECT_ROOT}/analyzers/run-shellcheck.sh"
   WORK=$(mktemp -d)
 }
 

@@ -14,19 +14,19 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Sibling-script pattern](#sibling-script-pattern)) |
-| `run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
-| `run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
-| `run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"` |
-| `run-trufflehog.sh` | Wraps trufflehog secret scanning for any changed file; verified→Critical/95, unverified→High/85; source `"trufflehog"` |
-| `run-ruff.sh` | Wraps ruff for changed `.py` files; `F`/`E` prefix→High, `W`/`C`→Medium, else→Low; confidence 90; source `"ruff"` |
-| `run-golangci-lint.sh` | Wraps golangci-lint for changed `.go` files; `errcheck`/`govet`/`staticcheck`→High, others→Medium; confidence 90; source `"golangci-lint"` |
-| `run-hadolint.sh` | Wraps hadolint for changed Dockerfiles (`Dockerfile*`, `*.dockerfile`); `error`→High, `warning`→Medium, else→Low; confidence 90; source `"hadolint"` |
-| `run-checkov.sh` | Wraps checkov for changed IaC files (`.tf`, `.tfvars`, `.yaml`/`.yml`, `Dockerfile*`, `.json`); all findings→Medium (no per-check severity from checkov); confidence 80; source `"checkov"` |
-| `run-phpcs.sh` | Wraps phpcs for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); `ERROR`→High, `WARNING`→Medium; confidence 90; source `"phpcs"`. Uses Drupal,DrupalPractice standard when drupal/coder is installed, else PSR12. |
-| `run-eslint.sh` | Wraps ESLint for changed JS/TS files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`); requires consumer's `eslint.config.*` or `.eslintrc.*` — no-op if absent; severity 2→High, 1→Medium; confidence 90; source `"eslint"` |
-| `run-phpstan.sh` | Wraps phpstan for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); all findings→High; confidence 85; source `"phpstan"`. Runs at `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist`. |
-| `run-kube-linter.sh` | Wraps kube-linter for changed YAML/JSON files containing `apiVersion:` + `kind:` headers (K8s manifests); all findings→Medium; confidence 85; source `"kube-linter"` |
-| `run-tflint.sh` | Wraps tflint for changed `.tf`/`.tfvars` files; runs per Terraform module directory; `error`→High, `warning`→Medium, `notice`→Low; confidence 90; source `"tflint"` |
+| `analyzers/run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
+| `analyzers/run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
+| `analyzers/run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"` |
+| `analyzers/run-trufflehog.sh` | Wraps trufflehog secret scanning for any changed file; verified→Critical/95, unverified→High/85; source `"trufflehog"` |
+| `analyzers/run-ruff.sh` | Wraps ruff for changed `.py` files; `F`/`E` prefix→High, `W`/`C`→Medium, else→Low; confidence 90; source `"ruff"` |
+| `analyzers/run-golangci-lint.sh` | Wraps golangci-lint for changed `.go` files; `errcheck`/`govet`/`staticcheck`→High, others→Medium; confidence 90; source `"golangci-lint"` |
+| `analyzers/run-hadolint.sh` | Wraps hadolint for changed Dockerfiles (`Dockerfile*`, `*.dockerfile`); `error`→High, `warning`→Medium, else→Low; confidence 90; source `"hadolint"` |
+| `analyzers/run-checkov.sh` | Wraps checkov for changed IaC files (`.tf`, `.tfvars`, `.yaml`/`.yml`, `Dockerfile*`, `.json`); all findings→Medium (no per-check severity from checkov); confidence 80; source `"checkov"` |
+| `analyzers/run-phpcs.sh` | Wraps phpcs for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); `ERROR`→High, `WARNING`→Medium; confidence 90; source `"phpcs"`. Uses Drupal,DrupalPractice standard when drupal/coder is installed, else PSR12. |
+| `analyzers/run-eslint.sh` | Wraps ESLint for changed JS/TS files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`); requires consumer's `eslint.config.*` or `.eslintrc.*` — no-op if absent; severity 2→High, 1→Medium; confidence 90; source `"eslint"` |
+| `analyzers/run-phpstan.sh` | Wraps phpstan for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); all findings→High; confidence 85; source `"phpstan"`. Runs at `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist`. |
+| `analyzers/run-kube-linter.sh` | Wraps kube-linter for changed YAML/JSON files containing `apiVersion:` + `kind:` headers (K8s manifests); all findings→Medium; confidence 85; source `"kube-linter"` |
+| `analyzers/run-tflint.sh` | Wraps tflint for changed `.tf`/`.tfvars` files; runs per Terraform module directory; `error`→High, `warning`→Medium, `notice`→Low; confidence 90; source `"tflint"` |
 | `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
 
 ## Multi-provider support (GitHub / Bitbucket Cloud)
@@ -102,7 +102,7 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 ]
 ```
 
-The `source` field is optional in agent output — `extract_findings()` stamps the agent name automatically if the field is absent. Static analyzers (`run-shellcheck.sh`, `run-cve-check.sh`) hard-code their source values (`"shellcheck"`, `"osv"`) in their jq projection.
+The `source` field is optional in agent output — `extract_findings()` stamps the agent name automatically if the field is absent. Static analyzers (`analyzers/run-shellcheck.sh`, `analyzers/run-cve-check.sh`) hard-code their source values (`"shellcheck"`, `"osv"`) in their jq projection.
 
 `suggested_code` and `start_line` are optional fields emitted when the `enable-suggestions` action input is `true` (the default). See [Code suggestions](#code-suggestions) below.
 
@@ -112,7 +112,7 @@ The `source` field is optional in agent output — `extract_findings()` stamps t
 
 1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
 2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()` (sequential, default) or `call_agent_bg()` (parallel, opt-in). See [Parallel agent execution](#parallel-agent-execution) below.
-3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Filter by confidence ≥ 75. Apply `suppressions.json`. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
+3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Filter by confidence ≥ 75. Apply `config/suppressions.json`. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
 4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub. Findings whose line is in the diff go inline (up to `AI_MAX_INLINE`); the rest go into the review body via `format_body_finding()`, which wraps remediation in a collapsible `<details>` accordion so the review stays scannable while preserving actionable detail.
 
 ## Incremental review / SHA watermark
@@ -144,7 +144,7 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 | Tier | Agents | When |
 |------|--------|------|
 | Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional, standard model in quick / premium in full) | Always |
-| Tier 1 (static analyzers, concurrent with Tier 1) | `run-shellcheck.sh`, `run-cve-check.sh`, `run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh`, `run-hadolint.sh`, `run-checkov.sh`, `run-phpcs.sh`, `run-eslint.sh`, `run-phpstan.sh`, `run-kube-linter.sh`, `run-tflint.sh` | Always (graceful no-op if binary absent) |
+| Tier 1 (static analyzers, concurrent with Tier 1) | `analyzers/run-shellcheck.sh`, `analyzers/run-cve-check.sh`, `analyzers/run-semgrep.sh`, `analyzers/run-trufflehog.sh`, `analyzers/run-ruff.sh`, `analyzers/run-golangci-lint.sh`, `analyzers/run-hadolint.sh`, `analyzers/run-checkov.sh`, `analyzers/run-phpcs.sh`, `analyzers/run-eslint.sh`, `analyzers/run-phpstan.sh`, `analyzers/run-kube-linter.sh`, `analyzers/run-tflint.sh` | Always (graceful no-op if binary absent) |
 | Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
 
 Tier 1 and Tier 2 are separated by a `wait` barrier so Tier 2 never starts until all Tier 1 agents complete.
@@ -214,9 +214,9 @@ Known gap: Rust `#[cfg(test)]` modules share their source file's name — there 
 
 ## CVE check
 
-`run-cve-check.sh` inspects changed dependency manifests and queries OSV.dev for known vulnerabilities affecting the declared versions. Currently supports `go.mod`, `package.json`, `requirements.txt`, and `composer.json`.
+`analyzers/run-cve-check.sh` inspects changed dependency manifests and queries OSV.dev for known vulnerabilities affecting the declared versions. Currently supports `go.mod`, `package.json`, `requirements.txt`, and `composer.json`.
 
-The script follows the same external-tool pattern as `run-shellcheck.sh`: `review.sh` invokes it in Phase 1, captures a JSON findings array on stdout, and merges it through the standard pipeline (suppressions, confidence filter, dedup). Critical/High findings route to REQUEST_CHANGES through the existing severity ladder.
+The script follows the same external-tool pattern as `analyzers/run-shellcheck.sh`: `review.sh` invokes it in Phase 1, captures a JSON findings array on stdout, and merges it through the standard pipeline (suppressions, confidence filter, dedup). Critical/High findings route to REQUEST_CHANGES through the existing severity ladder.
 
 CVSS severity mapping:
 - CVSS ≥ 9.0 → `Critical`, confidence 95
@@ -230,7 +230,7 @@ Suppressions work the same as for LLM findings — match on `pattern` against th
 
 ## Static analyzers (semgrep / trufflehog / ruff / golangci-lint)
 
-All four analyzer scripts follow the same pattern as `run-shellcheck.sh`: accept a newline-separated `$CHANGED_FILES` argument, emit a JSON findings array on stdout, emit warnings on stderr, and return `[]` if the binary is missing or no files match their language gate. They run concurrently with shellcheck and cve-check in the parallel path.
+All analyzer scripts in `analyzers/` follow the same pattern as `analyzers/run-shellcheck.sh`: accept a newline-separated `$CHANGED_FILES` argument, emit a JSON findings array on stdout, emit warnings on stderr, and return `[]` if the binary is missing or no files match their language gate. They run concurrently with shellcheck and cve-check in the parallel path.
 
 **Binary installation** — consumers must install the binaries in their workflow. The action does not install them. If a binary is absent, the script emits `WARNING: <tool> not found` to stderr and returns `[]`; the review continues normally.
 
@@ -238,17 +238,17 @@ All four analyzer scripts follow the same pattern as `run-shellcheck.sh`: accept
 
 | Script | Mock env var | Fixture directory |
 |--------|-------------|-------------------|
-| `run-semgrep.sh` | `SEMGREP_MOCK_FILE` | `tests/fixtures/semgrep/` |
-| `run-trufflehog.sh` | `TRUFFLEHOG_MOCK_FILE` | `tests/fixtures/trufflehog/` |
-| `run-ruff.sh` | `RUFF_MOCK_FILE` | `tests/fixtures/ruff/` |
-| `run-golangci-lint.sh` | `GOLANGCI_MOCK_FILE` | `tests/fixtures/golangci/` |
-| `run-hadolint.sh` | `HADOLINT_MOCK_FILE` | `tests/fixtures/hadolint/` |
-| `run-checkov.sh` | `CHECKOV_MOCK_FILE` | `tests/fixtures/checkov/` |
-| `run-phpcs.sh` | `PHPCS_MOCK_FILE` | `tests/fixtures/phpcs/` |
-| `run-eslint.sh` | `ESLINT_MOCK_FILE` | `tests/fixtures/eslint/` |
-| `run-phpstan.sh` | `PHPSTAN_MOCK_FILE` | `tests/fixtures/phpstan/` |
-| `run-kube-linter.sh` | `KUBELINTER_MOCK_FILE` | `tests/fixtures/kubelinter/` |
-| `run-tflint.sh` | `TFLINT_MOCK_FILE` | `tests/fixtures/tflint/` |
+| `analyzers/run-semgrep.sh` | `SEMGREP_MOCK_FILE` | `tests/fixtures/semgrep/` |
+| `analyzers/run-trufflehog.sh` | `TRUFFLEHOG_MOCK_FILE` | `tests/fixtures/trufflehog/` |
+| `analyzers/run-ruff.sh` | `RUFF_MOCK_FILE` | `tests/fixtures/ruff/` |
+| `analyzers/run-golangci-lint.sh` | `GOLANGCI_MOCK_FILE` | `tests/fixtures/golangci/` |
+| `analyzers/run-hadolint.sh` | `HADOLINT_MOCK_FILE` | `tests/fixtures/hadolint/` |
+| `analyzers/run-checkov.sh` | `CHECKOV_MOCK_FILE` | `tests/fixtures/checkov/` |
+| `analyzers/run-phpcs.sh` | `PHPCS_MOCK_FILE` | `tests/fixtures/phpcs/` |
+| `analyzers/run-eslint.sh` | `ESLINT_MOCK_FILE` | `tests/fixtures/eslint/` |
+| `analyzers/run-phpstan.sh` | `PHPSTAN_MOCK_FILE` | `tests/fixtures/phpstan/` |
+| `analyzers/run-kube-linter.sh` | `KUBELINTER_MOCK_FILE` | `tests/fixtures/kubelinter/` |
+| `analyzers/run-tflint.sh` | `TFLINT_MOCK_FILE` | `tests/fixtures/tflint/` |
 
 Do not set mock vars in production.
 
@@ -328,7 +328,7 @@ it if you see truncation warnings on large diffs with suggestions enabled.
 
 ## Suppressions
 
-`suppressions.json` is a JSON array of suppression rules evaluated against merged findings. All `match` fields are optional and ANDed:
+`config/suppressions.json` is a JSON array of suppression rules evaluated against merged findings. All `match` fields are optional and ANDed:
 
 - `file` — substring match on finding's `file`
 - `line` — exact integer match
@@ -412,7 +412,7 @@ After all agents complete:
 
 `TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr.
 
-`model-pricing.json` maps model ID patterns to display names and per-token rates (cost per 1M tokens). The `model_pricing()`, `model_display_name()`, and `format_cost()` functions in `review.sh` use this data; `emit_token_table_rows()` generates the markdown table rows for the review comment and the Actions step summary.
+`config/model-pricing.json` maps model ID patterns to display names and per-token rates (cost per 1M tokens). The `model_pricing()`, `model_display_name()`, and `format_cost()` functions in `review.sh` use this data; `emit_token_table_rows()` generates the markdown table rows for the review comment and the Actions step summary.
 
 ## Testing locally
 
@@ -421,7 +421,7 @@ After all agents complete:
 bats tests/*.bats
 
 # Lint all shell scripts
-shellcheck review.sh llm-call.sh post-review.sh run-shellcheck.sh run-cve-check.sh
+shellcheck review.sh llm-call.sh post-review.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
 
 # Smoke-test llm-call.sh against a provider
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key>
@@ -478,7 +478,7 @@ Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-cor
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
 
-Static analyzer scripts (`run-semgrep.sh`, `run-trufflehog.sh`, `run-ruff.sh`, `run-golangci-lint.sh`) are tested via their own `.bats` files using the mock env var pattern — the test sets `<TOOL>_MOCK_FILE` to a fixture file path and the script reads that instead of invoking the binary. This avoids the `load_function` awk pattern entirely since the scripts are simple enough to be invoked directly.
+Static analyzer scripts in `analyzers/` are tested via their own `.bats` files using the mock env var pattern — the test sets `<TOOL>_MOCK_FILE` to a fixture file path and the script reads that instead of invoking the binary. This avoids the `load_function` awk pattern entirely since the scripts are simple enough to be invoked directly.
 
 ## Release process
 

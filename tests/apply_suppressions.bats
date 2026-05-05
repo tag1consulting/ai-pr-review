@@ -43,7 +43,8 @@ teardown() {
 
 # Write suppressions.json for this test
 _write_suppressions() {
-  printf '%s\n' "$1" > "${SUPPRESSION_DIR}/suppressions.json"
+  mkdir -p "${SUPPRESSION_DIR}/config"
+  printf '%s\n' "$1" > "${SUPPRESSION_DIR}/config/suppressions.json"
 }
 
 # ---------------------------------------------------------------------------

@@ -303,7 +303,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 ## Suppression system
 
-Known false positives can be suppressed via `suppressions.json`. Each entry matches findings by file, line, code prefix, or regex pattern:
+Known false positives can be suppressed via `config/suppressions.json`. Each entry matches findings by file, line, code prefix, or regex pattern:
 
 ```json
 [
@@ -433,21 +433,23 @@ ai-pr-review/
 ├── review.sh               # Main orchestrator: diff, manifest, agent calls, assembly
 ├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
 ├── post-review.sh          # GitHub API posting: summary, review, thread management
-├── run-shellcheck.sh       # Shellcheck wrapper for shell script findings
-├── run-cve-check.sh        # OSV.dev vulnerability lookup for dependency manifests
-├── run-semgrep.sh          # Semgrep SAST wrapper (optional binary)
-├── run-trufflehog.sh       # Trufflehog secret scanning wrapper (optional binary)
-├── run-ruff.sh             # Ruff Python linter wrapper (optional binary)
-├── run-golangci-lint.sh    # golangci-lint Go linter wrapper (optional binary)
-├── run-hadolint.sh         # Hadolint Dockerfile linter wrapper (optional binary)
-├── run-checkov.sh          # Checkov IaC scanner wrapper (optional binary)
-├── run-phpcs.sh            # PHP_CodeSniffer wrapper, Drupal+DrupalPractice standard (optional binary)
-├── run-eslint.sh           # ESLint JS/TS wrapper — uses consumer config, no-op if absent
-├── run-phpstan.sh          # PHPStan static analysis wrapper (optional binary)
-├── run-kube-linter.sh      # kube-linter Kubernetes manifest wrapper (optional binary)
-├── run-tflint.sh           # tflint Terraform linter wrapper (optional binary)
-├── model-pricing.json      # Per-model token pricing for cost estimation
-├── suppressions.json       # Declarative false-positive suppression rules
+├── analyzers/              # Static analyzer wrapper scripts
+│   ├── run-shellcheck.sh   # Shellcheck wrapper for shell script findings
+│   ├── run-cve-check.sh    # OSV.dev vulnerability lookup for dependency manifests
+│   ├── run-semgrep.sh      # Semgrep SAST wrapper (optional binary)
+│   ├── run-trufflehog.sh   # Trufflehog secret scanning wrapper (optional binary)
+│   ├── run-ruff.sh         # Ruff Python linter wrapper (optional binary)
+│   ├── run-golangci-lint.sh # golangci-lint Go linter wrapper (optional binary)
+│   ├── run-hadolint.sh     # Hadolint Dockerfile linter wrapper (optional binary)
+│   ├── run-checkov.sh      # Checkov IaC scanner wrapper (optional binary)
+│   ├── run-phpcs.sh        # PHP_CodeSniffer wrapper, Drupal+DrupalPractice standard
+│   ├── run-eslint.sh       # ESLint JS/TS wrapper — uses consumer config, no-op if absent
+│   ├── run-phpstan.sh      # PHPStan static analysis wrapper (optional binary)
+│   ├── run-kube-linter.sh  # kube-linter Kubernetes manifest wrapper (optional binary)
+│   └── run-tflint.sh       # tflint Terraform linter wrapper (optional binary)
+├── config/                 # Configuration and data files
+│   ├── model-pricing.json  # Per-model token pricing for cost estimation
+│   └── suppressions.json   # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
 │   ├── pr-summarizer.md
 │   ├── code-reviewer.md
