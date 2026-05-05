@@ -69,7 +69,7 @@ Both methods require:
 
 ## Installation
 
-The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint) pre-installed at pinned, verified versions. No toolchain setup on your runner.
+The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) pre-installed at pinned, verified versions. No toolchain setup on your runner.
 
 ### Full setup
 

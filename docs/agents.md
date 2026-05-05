@@ -41,10 +41,10 @@ Findings use shape-distinct icons for accessibility:
 
 | Icon | Severity | Review action |
 |------|----------|---------------|
-| (X) | Critical | REQUEST_CHANGES |
-| (!) | High | REQUEST_CHANGES |
-| (~) | Medium | APPROVE (informational) |
-| (i) | Low | APPROVE (informational) |
+| ❌ | Critical | REQUEST_CHANGES |
+| 🚨 | High | REQUEST_CHANGES |
+| 🔶 | Medium | APPROVE (informational) |
+| 💬 | Low | APPROVE (informational) |
 
 ## Review modes
 

@@ -7,8 +7,8 @@ baseurl: "/ai-pr-review"
 
 color_scheme: tag1
 
-logo: "/ai-pr-review/assets/images/tag1-logo.svg"
-favicon_ico: "/ai-pr-review/assets/images/favicon.ico"
+logo: "/assets/images/tag1-logo.svg"
+favicon_ico: "/assets/images/favicon.ico"
 
 search_enabled: true
 search:
