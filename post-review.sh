@@ -183,7 +183,10 @@ ${summary}
       issue_body="${issue_body}
 ### Findings
 
-$(echo "$findings_json" | jq -r '
+$(  _enable_lc="${AI_ENABLE_SUGGESTIONS:-false}"
+    _enable_lc="${_enable_lc,,}"
+    if [[ "$_enable_lc" == "true" ]]; then _jq_enable=true; else _jq_enable=false; fi
+    echo "$findings_json" | jq -r --argjson enable_suggestions "$_jq_enable" '
   sort_by(
     if (.severity | ascii_downcase) == "critical" then 0
     elif (.severity | ascii_downcase) == "high" then 1
@@ -198,7 +201,7 @@ $(echo "$findings_json" | jq -r '
     end
   ) as $stag |
   "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n" +
-  if (.suggested_code // "" | length) > 0 and (.suggested_code | contains("```") | not) then
+  if $enable_suggestions and ((.suggested_code // "") | length) > 0 and (.suggested_code | contains("```") | not) then
     "  <details>\n  <summary>Suggested fix</summary>\n\n  ```\n  \(.suggested_code)\n  ```\n\n  </details>\n"
   else "" end
 ')"
