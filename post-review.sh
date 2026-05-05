@@ -202,7 +202,9 @@ $(  _enable_lc="${AI_ENABLE_SUGGESTIONS:-false}"
   ) as $stag |
   "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n" +
   if $enable_suggestions and ((.suggested_code // "") | length) > 0 and (.suggested_code | contains("```") | not) then
-    "  <details>\n  <summary>Suggested fix</summary>\n\n  ```\n  \(.suggested_code)\n  ```\n\n  </details>\n"
+    "  <details>\n  <summary>Suggested fix</summary>\n\n  ```\n" +
+    (.suggested_code | split("\n") | map("  " + .) | join("\n")) +
+    "\n  ```\n\n  </details>\n"
   else "" end
 ')"
     else
@@ -785,6 +787,8 @@ format_body_finding() {
       details="**Remediation:** ${remediation}"
     fi
     if [[ -n "$suggested_code" && "$suggested_code" != *'```'* ]]; then
+      local indented_code
+      indented_code=$(printf '%s' "$suggested_code" | sed 's/^/  /')
       if [[ -n "$details" ]]; then
         details="${details}
 
@@ -792,7 +796,7 @@ format_body_finding() {
       fi
       details="${details}**Suggested fix:**
   \`\`\`
-  ${suggested_code}
+${indented_code}
   \`\`\`"
     fi
     printf '%s\n  <details>\n  <summary>Details</summary>\n\n  %s\n\n  </details>' "$bullet" "$details"
@@ -816,13 +820,14 @@ build_agent_prompt() {
 
   local prompt_body
   prompt_body=$(echo "$findings_json" | jq -r '
-    group_by(.file) | .[] |
-    "In `\(.[0].file)`:" as $header |
-    [$header] + [
-      .[] |
-      "- Around line \(.line // "?"): \(.finding)" +
-        if (.remediation // "") != "" then ". " + .remediation else "" end
-    ] | join("\n")
+    group_by(.file) | map(
+      "In `\(.[0].file)`:" as $header |
+      [$header] + [
+        .[] |
+        "- Around line \(.line // "?"): \(.finding)" +
+          if (.remediation // "") != "" then ". " + .remediation else "" end
+      ] | join("\n")
+    ) | join("\n\n")
   ' 2>/dev/null)
 
   [[ -z "$prompt_body" ]] && return
@@ -834,7 +839,7 @@ build_agent_prompt() {
 # Post Block B: Findings as a pull request review with inline comments
 # ---------------------------------------------------------------------------
 post_findings() {
-  local findings
+  local findings agent_prompt=""
   findings=$(cat "$FINDINGS_FILE")
 
   if [[ -z "$findings" || "$findings" == "NONE" ]]; then
@@ -1155,7 +1160,6 @@ ${token_table}"
   # Placed after the footer so it doesn't break the review body layout;
   # the collapsible block is a utility section for copy-pasting into AI tools.
   if [[ "$finding_total" -gt 0 ]]; then
-    local agent_prompt
     agent_prompt=$(build_agent_prompt "$findings_json")
     if [[ -n "$agent_prompt" ]]; then
       review_body="${review_body}
