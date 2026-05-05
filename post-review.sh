@@ -735,15 +735,33 @@ format_source_tag() {
 
 # ---------------------------------------------------------------------------
 # Format a single finding for the review body (non-inline).
-# Includes remediation in a collapsible <details> block when present.
-# Args: severity source_tag finding location loc_note remediation
+# Includes remediation and suggested_code in a collapsible <details> block
+# when present. suggested_code renders as a plain code fence (not a GitHub
+# ```suggestion fence, which only works in inline review comments).
+# Args: severity source_tag finding location loc_note remediation [suggested_code]
 # ---------------------------------------------------------------------------
 format_body_finding() {
   local severity="$1" source_tag="$2" finding="$3" location="$4" loc_note="$5" remediation="$6"
+  local suggested_code="${7:-}"
   local bullet
   bullet="- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${location}\`${loc_note}"
-  if [[ -n "$remediation" ]]; then
-    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  **Remediation:** %s\n\n  </details>' "$bullet" "$remediation"
+  if [[ -n "$remediation" || -n "$suggested_code" ]]; then
+    local details=""
+    if [[ -n "$remediation" ]]; then
+      details="**Remediation:** ${remediation}"
+    fi
+    if [[ -n "$suggested_code" && "$suggested_code" != *'```'* ]]; then
+      if [[ -n "$details" ]]; then
+        details="${details}
+
+  "
+      fi
+      details="${details}**Suggested fix:**
+  \`\`\`
+  ${suggested_code}
+  \`\`\`"
+    fi
+    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  %s\n\n  </details>' "$bullet" "$details"
   else
     printf '%s' "$bullet"
   fi
@@ -947,10 +965,10 @@ ${suggested_code}
       # When a suggestion was attached to this finding, log why it did not render
       # inline so operators can triage "hallucinated line" vs "capacity limit".
       if [[ -n "$suggested_code" ]]; then
-        echo "WARNING: Suggestion for ${file}:${line} not rendered (${drop_reason}); finding posted in review body instead." >&2
+        echo "WARNING: Suggestion for ${file}:${line} not rendered inline (${drop_reason}); rendering as code fence in review body instead." >&2
       fi
       body_findings="${body_findings}
-$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$loc_note" "$remediation")"
+$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$loc_note" "$remediation" "$suggested_code")"
     fi
   done <<< "$findings_ndjson"
 

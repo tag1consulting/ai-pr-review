@@ -588,3 +588,41 @@ setup_format_body_finding() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"❌"* ]]
 }
+
+@test "format_body_finding: suggested_code renders as plain code fence" {
+  setup_format_body_finding
+  run format_body_finding "High" "[code-reviewer]" "Missing nil check" "main.go:42" "" "Add a nil guard." 'if val == nil { return }'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Remediation:** Add a nil guard.'* ]]
+  [[ "$output" == *'**Suggested fix:**'* ]]
+  [[ "$output" == *'if val == nil { return }'* ]]
+}
+
+@test "format_body_finding: suggested_code without remediation still opens details" {
+  setup_format_body_finding
+  run format_body_finding "Medium" "[edge-case-hunter]" "Unguarded input" "parse.py:10" "" "" 'if not data: return None'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Suggested fix:**'* ]]
+  [[ "$output" == *'if not data: return None'* ]]
+  [[ "$output" != *'Remediation'* ]]
+}
+
+@test "format_body_finding: suggested_code with triple backticks is rejected" {
+  setup_format_body_finding
+  run format_body_finding "High" "[code-reviewer]" "Issue" "main.go:5" "" "Fix it." 'echo "```example```"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Remediation:** Fix it.'* ]]
+  [[ "$output" != *'Suggested fix'* ]]
+}
+
+@test "format_body_finding: no details when remediation and suggested_code both empty" {
+  setup_format_body_finding
+  run format_body_finding "Low" "[blind-hunter]" "Cosmetic issue" "style.css:1" "" "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'<details>'* ]]
+  [[ "$output" != *'Suggested fix'* ]]
+  [[ "$output" != *'Remediation'* ]]
+}

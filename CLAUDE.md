@@ -289,11 +289,16 @@ Additional guards applied in order inside `post_findings()`:
 5. When any guard fails the suggestion is dropped with a WARNING; the finding
    still posts with the natural-language remediation.
 
-**Observability.** When a finding that carried `suggested_code` is routed to
-the review body (either the `line` is not in the diff or the `max_inline` cap
-was reached), `post_findings()` emits a WARNING identifying the specific
-reason so operators can distinguish "agent hallucinated a line" from
-"capacity limit".
+**Body finding rendering.** When a finding that carried `suggested_code` is
+routed to the review body (either the `line` is not in the diff or the
+`max_inline` cap was reached), `format_body_finding()` renders the suggestion
+as a plain `` ``` `` code fence (not a `suggestion` fence, which only works
+in inline review comments) inside the collapsible `<details>` accordion
+alongside the remediation text. `post_findings()` emits a WARNING identifying
+the specific reason for the overflow so operators can distinguish "agent
+hallucinated a line" from "capacity limit". The triple-backtick sanitization
+guard applies to body suggestions as well — `suggested_code` containing
+`` ``` `` is silently dropped to prevent fence escape.
 
 **Incremental reviews and suggestions.** The SHA watermark diffs only new
 commits. A finding whose line range was in an earlier commit (and is no longer
