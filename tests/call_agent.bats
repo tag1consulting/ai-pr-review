@@ -193,10 +193,22 @@ EOF
   base=$(mktemp); TMPFILES+=("$base")
   echo "base prompt content" > "$base"
 
+  AI_ENABLE_SUGGESTIONS=false run effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+}
+
+@test "effective_prompt: default (unset) enables suggestions for eligible agents" {
+  local base addendum
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "base prompt content" > "$base"
+  addendum="${PROJECT_ROOT}/prompts/suggestion-addendum.md"
+  [[ -f "$addendum" ]] || skip "suggestion-addendum.md not found"
+
   unset AI_ENABLE_SUGGESTIONS
   run effective_prompt "code-reviewer" "$base"
   [ "$status" -eq 0 ]
-  [ "$output" = "$base" ]
+  [ "$output" != "$base" ]
 }
 
 @test "effective_prompt: returns base prompt unchanged when AI_ENABLE_SUGGESTIONS=false" {

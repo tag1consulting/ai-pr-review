@@ -183,7 +183,10 @@ ${summary}
       issue_body="${issue_body}
 ### Findings
 
-$(echo "$findings_json" | jq -r '
+$(  _enable_lc="${AI_ENABLE_SUGGESTIONS:-true}"
+    _enable_lc="${_enable_lc,,}"
+    if [[ "$_enable_lc" == "true" ]]; then _jq_enable=true; else _jq_enable=false; fi
+    echo "$findings_json" | jq -r --argjson enable_suggestions "$_jq_enable" '
   sort_by(
     if (.severity | ascii_downcase) == "critical" then 0
     elif (.severity | ascii_downcase) == "high" then 1
@@ -197,7 +200,12 @@ $(echo "$findings_json" | jq -r '
       "[" + (.sources[0] // .source // "unknown") + "]"
     end
   ) as $stag |
-  "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n"
+  "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n" +
+  if $enable_suggestions and ((.suggested_code // "") | length) > 0 and (.suggested_code | contains("```") | not) then
+    "  <details>\n  <summary>Suggested fix</summary>\n\n  ```\n" +
+    (.suggested_code | split("\n") | map("  " + .) | join("\n")) +
+    "\n  ```\n\n  </details>\n"
+  else "" end
 ')"
     else
       issue_body="${issue_body}
@@ -215,6 +223,34 @@ $(cat "$_TOKEN_TABLE_FILE")"
       issue_body="${issue_body}
 
 > **Warning:** The following agents failed and the review may be incomplete: ${failed_agents_env//:/, }"
+    fi
+
+    if [[ "$finding_total" -gt 0 ]]; then
+      local _agent_prompt
+      _agent_prompt=$(echo "$findings_json" | jq -r '
+        group_by(.file) | map(
+          "In `\(.[0].file)`:" as $header |
+          [$header] + [
+            .[] |
+            "- Around line \(.line // "?"): \(.finding)" +
+              if (.remediation // "") != "" then ". " + .remediation else "" end
+          ] | join("\n")
+        ) | join("\n\n")
+      ' 2>/dev/null)
+      if [[ -n "$_agent_prompt" ]]; then
+        issue_body="${issue_body}
+
+<details>
+<summary>🤖 Prompt for AI agents</summary>
+
+\`\`\`
+Verify each finding against the current code and only fix it if needed.
+
+${_agent_prompt}
+\`\`\`
+
+</details>"
+      fi
     fi
 
     issue_body="${issue_body}
@@ -735,25 +771,75 @@ format_source_tag() {
 
 # ---------------------------------------------------------------------------
 # Format a single finding for the review body (non-inline).
-# Includes remediation in a collapsible <details> block when present.
-# Args: severity source_tag finding location loc_note remediation
+# Includes remediation and suggested_code in a collapsible <details> block
+# when present. suggested_code renders as a plain code fence (not a GitHub
+# ```suggestion fence, which only works in inline review comments).
+# Args: severity source_tag finding location loc_note remediation [suggested_code]
 # ---------------------------------------------------------------------------
 format_body_finding() {
   local severity="$1" source_tag="$2" finding="$3" location="$4" loc_note="$5" remediation="$6"
+  local suggested_code="${7:-}"
   local bullet
   bullet="- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${location}\`${loc_note}"
-  if [[ -n "$remediation" ]]; then
-    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  **Remediation:** %s\n\n  </details>' "$bullet" "$remediation"
+  if [[ -n "$remediation" || -n "$suggested_code" ]]; then
+    local details=""
+    if [[ -n "$remediation" ]]; then
+      details="**Remediation:** ${remediation}"
+    fi
+    if [[ -n "$suggested_code" && "$suggested_code" != *'```'* ]]; then
+      local indented_code
+      indented_code=$(printf '%s' "$suggested_code" | sed 's/^/  /')
+      if [[ -n "$details" ]]; then
+        details="${details}
+
+  "
+      fi
+      details="${details}**Suggested fix:**
+  \`\`\`
+${indented_code}
+  \`\`\`"
+    fi
+    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  %s\n\n  </details>' "$bullet" "$details"
   else
     printf '%s' "$bullet"
   fi
 }
 
 # ---------------------------------------------------------------------------
+# Build a collapsible "Prompt for AI agents" block from the findings JSON.
+# Groups findings by file and formats them as actionable instructions that
+# can be copy-pasted into an AI coding assistant. Returns empty string when
+# there are no findings.
+# Args: findings_json
+# ---------------------------------------------------------------------------
+build_agent_prompt() {
+  local findings_json="$1"
+  local count
+  count=$(echo "$findings_json" | jq 'length' 2>/dev/null || echo 0)
+  [[ "$count" -eq 0 ]] && return
+
+  local prompt_body
+  prompt_body=$(echo "$findings_json" | jq -r '
+    group_by(.file) | map(
+      "In `\(.[0].file)`:" as $header |
+      [$header] + [
+        .[] |
+        "- Around line \(.line // "?"): \(.finding)" +
+          if (.remediation // "") != "" then ". " + .remediation else "" end
+      ] | join("\n")
+    ) | join("\n\n")
+  ' 2>/dev/null)
+
+  [[ -z "$prompt_body" ]] && return
+
+  printf '<details>\n<summary>🤖 Prompt for AI agents</summary>\n\n```\nVerify each finding against the current code and only fix it if needed.\n\n%s\n```\n\n</details>' "$prompt_body"
+}
+
+# ---------------------------------------------------------------------------
 # Post Block B: Findings as a pull request review with inline comments
 # ---------------------------------------------------------------------------
 post_findings() {
-  local findings
+  local findings agent_prompt=""
   findings=$(cat "$FINDINGS_FILE")
 
   if [[ -z "$findings" || "$findings" == "NONE" ]]; then
@@ -781,7 +867,7 @@ post_findings() {
   # (added + context) to validate multi-line suggestion ranges.
   # Case-insensitive comparison so TRUE/True/true all work consistently.
   local diff_lines_file=""
-  local _enable_for_lookup="${AI_ENABLE_SUGGESTIONS:-false}"
+  local _enable_for_lookup="${AI_ENABLE_SUGGESTIONS:-true}"
   _enable_for_lookup="${_enable_for_lookup,,}"
   if [[ "$_enable_for_lookup" == "true" ]]; then
     diff_lines_file=$(mktemp_tracked /tmp/diff-new-lines-XXXXXXXX.txt)
@@ -832,7 +918,7 @@ $(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "" 
 
     # Suggestion handling — gated on AI_ENABLE_SUGGESTIONS (case-insensitive).
     # When disabled, suggested_code and start_line are ignored even if agents emit them.
-    local _enable_suggestions_lc="${AI_ENABLE_SUGGESTIONS:-false}"
+    local _enable_suggestions_lc="${AI_ENABLE_SUGGESTIONS:-true}"
     _enable_suggestions_lc="${_enable_suggestions_lc,,}"
     if [[ "$_enable_suggestions_lc" != "true" ]]; then
       suggested_code=""
@@ -947,10 +1033,10 @@ ${suggested_code}
       # When a suggestion was attached to this finding, log why it did not render
       # inline so operators can triage "hallucinated line" vs "capacity limit".
       if [[ -n "$suggested_code" ]]; then
-        echo "WARNING: Suggestion for ${file}:${line} not rendered (${drop_reason}); finding posted in review body instead." >&2
+        echo "WARNING: Suggestion for ${file}:${line} not rendered inline (${drop_reason}); rendering as code fence in review body instead." >&2
       fi
       body_findings="${body_findings}
-$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$loc_note" "$remediation")"
+$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$loc_note" "$remediation" "$suggested_code")"
     fi
   done <<< "$findings_ndjson"
 
@@ -1070,6 +1156,18 @@ ${token_table}"
 *AI Review — generated by [ai-pr-review](https://github.com/tag1consulting/ai-pr-review)*"
   fi
 
+  # Append the "Prompt for AI agents" block when findings exist.
+  # Placed after the footer so it doesn't break the review body layout;
+  # the collapsible block is a utility section for copy-pasting into AI tools.
+  if [[ "$finding_total" -gt 0 ]]; then
+    agent_prompt=$(build_agent_prompt "$findings_json")
+    if [[ -n "$agent_prompt" ]]; then
+      review_body="${review_body}
+
+${agent_prompt}"
+    fi
+  fi
+
   # Truncate review body to stay within GitHub's 65,536 char API limit
   review_body=$(truncate_body "$review_body")
 
@@ -1084,6 +1182,11 @@ ${token_table}"
 
 ### Findings (informational)
 ${body_findings}"
+    fi
+    if [[ -n "$agent_prompt" ]]; then
+      comment_body="${comment_body}
+
+${agent_prompt}"
     fi
     findings_json_for_comment=$(jq -n \
       --arg body "$comment_body" \

@@ -104,7 +104,7 @@ Every agent prompt expects a `json-findings` fenced code block in the response:
 
 The `source` field is optional in agent output — `extract_findings()` stamps the agent name automatically if the field is absent. Static analyzers (`run-shellcheck.sh`, `run-cve-check.sh`) hard-code their source values (`"shellcheck"`, `"osv"`) in their jq projection.
 
-`suggested_code` and `start_line` are optional fields emitted only when the `enable-suggestions` action input is `true`. See [Code suggestions](#code-suggestions) below.
+`suggested_code` and `start_line` are optional fields emitted when the `enable-suggestions` action input is `true` (the default). See [Code suggestions](#code-suggestions) below.
 
 `review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding. The dedup step carries a `sources` array on the surviving finding, unioning all sources from the cluster. When multiple sources are present, `post-review.sh` renders `[first-source] *(also flagged by: other)*` attribution (sources are sorted alphabetically; the first is not necessarily the "winning" agent).
 
@@ -252,7 +252,7 @@ Do not set mock vars in production.
 
 ## Code suggestions
 
-When the `enable-suggestions` action input is `true` (default `false`), eligible
+When the `enable-suggestions` action input is `true` (the default), eligible
 LLM agents are instructed to emit an optional `suggested_code` field (and
 optional `start_line` field for multi-line replacements) alongside each finding.
 `post-review.sh` wraps `suggested_code` in a GitHub ```` ```suggestion ```` fence
@@ -289,17 +289,30 @@ Additional guards applied in order inside `post_findings()`:
 5. When any guard fails the suggestion is dropped with a WARNING; the finding
    still posts with the natural-language remediation.
 
-**Observability.** When a finding that carried `suggested_code` is routed to
-the review body (either the `line` is not in the diff or the `max_inline` cap
-was reached), `post_findings()` emits a WARNING identifying the specific
-reason so operators can distinguish "agent hallucinated a line" from
-"capacity limit".
+**Body finding rendering.** When a finding that carried `suggested_code` is
+routed to the review body (either the `line` is not in the diff or the
+`max_inline` cap was reached), `format_body_finding()` renders the suggestion
+as a plain `` ``` `` code fence (not a `suggestion` fence, which only works
+in inline review comments) inside the collapsible `<details>` accordion
+alongside the remediation text. `post_findings()` emits a WARNING identifying
+the specific reason for the overflow so operators can distinguish "agent
+hallucinated a line" from "capacity limit". The triple-backtick sanitization
+guard applies to body suggestions as well — `suggested_code` containing
+`` ``` `` is silently dropped to prevent fence escape.
 
 **Incremental reviews and suggestions.** The SHA watermark diffs only new
 commits. A finding whose line range was in an earlier commit (and is no longer
 in the incremental diff) will have its suggestion dropped during range
 validation, but the finding itself still posts. To force a full-PR re-review,
 add the `ai-review-rescan` label to the PR.
+
+**Prompt for AI agents.** When findings are present, `build_agent_prompt()`
+appends a collapsible "Prompt for AI agents" block to the review body. The
+block contains a plain-text summary of all findings grouped by file, formatted
+as instructions that can be copy-pasted into an AI coding assistant (e.g.,
+Claude Code, Cursor, Copilot). The standalone review mode (GitHub Issues)
+includes the same block via an inline jq equivalent. The Bitbucket path does
+not include the prompt block (Bitbucket Cloud does not render `<details>` HTML).
 
 **Bitbucket.** The feature is GitHub-only. The Bitbucket path
 (`post-review-bitbucket.sh`) does not render suggestion fences — findings post
@@ -367,7 +380,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings to be included (mapped from `confidence-threshold` action input) |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
-| `AI_ENABLE_SUGGESTIONS` | `false` | Enable GitHub "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). GitHub-only. |
+| `AI_ENABLE_SUGGESTIONS` | `true` | Enable GitHub "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). GitHub-only. |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud). |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |
@@ -458,7 +471,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`, `build_agent_prompt`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.

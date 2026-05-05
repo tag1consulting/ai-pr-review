@@ -2,16 +2,53 @@
 
 AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline review findings directly on the PR.
 
+## Quickstart
+
+Get AI reviews on your PRs in two steps:
+
+**1. Add your LLM API key** as a repository secret named `ANTHROPIC_API_KEY` (or the equivalent for your [provider](#supported-llm-providers)).
+
+**2. Create `.github/workflows/ai-review.yml`** with this minimal workflow:
+
+```yaml
+name: AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tag1consulting/ai-pr-review/container-action@main
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          pr-number: ${{ github.event.pull_request.number }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+That's it — reviews start firing on the next PR. See [Installation](#installation) for additional options like full-mode agents, slash commands, and provider configuration.
+
 ## Requirements
 
-The action runs on `ubuntu-latest` GitHub Actions runners and requires:
+**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
+
+If you prefer to run without Docker (e.g., on self-hosted runners without container support), the [direct action reference](docs/installation-direct-action.md) and [git submodule](docs/installation-submodule.md) methods work as standard GitHub Actions composite actions. These require:
 
 - **Bash 4+**, **curl**, **jq**, **git**, **gh** — all pre-installed on standard GitHub-hosted runners
 - **shellcheck** — installed automatically by the action if not already present
+- Static analyzer binaries installed separately if desired (see [runtime dependencies](docs/installation-direct-action.md#runtime-dependencies))
+
+Both methods require:
+
 - A GitHub token with `pull-requests: write` permission (the default `GITHUB_TOKEN` works for most repos; see [installation notes](#installation) for exceptions)
 - An API key for one of the [supported LLM providers](#supported-llm-providers)
-
-The container action (recommended) pulls a public image from GHCR — no additional authentication required.
 
 ## Supported VCS providers
 
@@ -81,17 +118,7 @@ Findings use shape-distinct icons for accessibility:
 
 ## Installation
 
-The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint) pre-installed at pinned, verified versions. No toolchain setup on your runner.
-
-### Quickstart
-
-**Step 1: Add your LLM API key**
-
-Add your provider's API key as a repository secret (e.g. `ANTHROPIC_API_KEY` for Anthropic).
-
-**Step 2: Copy the workflow**
-
-Copy [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) to `.github/workflows/` in your repository. That's it — reviews start firing on the next PR.
+The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint) pre-installed at pinned, verified versions. No toolchain setup on your runner. See [Quickstart](#quickstart) for the minimal two-step setup.
 
 ### Full setup
 
@@ -185,7 +212,7 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
-| `enable-suggestions` | No | `false` | Add GitHub "Apply suggestion" buttons to inline review comments (GitHub-only). See [Code suggestions](#code-suggestions) |
+| `enable-suggestions` | No | `true` | Add GitHub "Apply suggestion" buttons to inline review comments (GitHub-only). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
 
 ## Review modes
 
@@ -198,7 +225,9 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 
 ## Code suggestions
 
-When `enable-suggestions: true` is set (default `false`), the review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a GitHub ```` ```suggestion ```` block inside the inline review comment, which GitHub displays as an "Apply suggestion" button — the PR author can accept the fix with one click.
+Code suggestions are enabled by default. The review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a GitHub ```` ```suggestion ```` block inside the inline review comment, which GitHub displays as an "Apply suggestion" button — the PR author can accept the fix with one click.
+
+To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@v0.4.0
@@ -207,7 +236,7 @@ When `enable-suggestions: true` is set (default `false`), the review tool asks e
     github-token: ${{ secrets.GITHUB_TOKEN }}
     base-ref: ${{ github.event.pull_request.base.ref }}
     head-sha: ${{ github.event.pull_request.head.sha }}
-    enable-suggestions: true
+    enable-suggestions: false
 ```
 
 **Eligible agents** (those most likely to produce concrete line-level fixes): `code-reviewer`, `edge-case-hunter`, `security-reviewer`, `silent-failure-hunter`, `blind-hunter`. Design-level agents (`architecture-reviewer`, `adversarial-general`) and static analyzers (shellcheck, semgrep, ruff, etc.) never emit suggestions.

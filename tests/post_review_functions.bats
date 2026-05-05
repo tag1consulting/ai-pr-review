@@ -434,17 +434,17 @@ _build_multi_line_comment() {
   [ "$range_valid" = "true" ]
 }
 
-@test "suggestion gating: AI_ENABLE_SUGGESTIONS unset means suggestion fields are ignored" {
+@test "suggestion gating: AI_ENABLE_SUGGESTIONS unset means suggestions are enabled (default true)" {
   # Mirrors the guard in post_findings():
-  #   if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then suggested_code=""; start_line=""; fi
+  #   if [[ "${AI_ENABLE_SUGGESTIONS:-true}" != "true" ]]; then suggested_code=""; start_line=""; fi
   local suggested_code="replacement" start_line=10
   unset AI_ENABLE_SUGGESTIONS
-  if [[ "${AI_ENABLE_SUGGESTIONS:-false}" != "true" ]]; then
+  if [[ "${AI_ENABLE_SUGGESTIONS:-true}" != "true" ]]; then
     suggested_code=""
     start_line=""
   fi
-  [ -z "$suggested_code" ]
-  [ -z "$start_line" ]
+  [ "$suggested_code" = "replacement" ]
+  [ "$start_line" = "10" ]
 }
 
 @test "suggestion gating: AI_ENABLE_SUGGESTIONS=false means suggestion fields are ignored" {
@@ -587,4 +587,80 @@ setup_format_body_finding() {
   run format_body_finding "Critical" "[security-reviewer]" "SQL injection" "db.py:5" "" "Use parameterized queries."
   [ "$status" -eq 0 ]
   [[ "$output" == *"❌"* ]]
+}
+
+@test "format_body_finding: suggested_code renders as plain code fence" {
+  setup_format_body_finding
+  run format_body_finding "High" "[code-reviewer]" "Missing nil check" "main.go:42" "" "Add a nil guard." 'if val == nil { return }'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Remediation:** Add a nil guard.'* ]]
+  [[ "$output" == *'**Suggested fix:**'* ]]
+  [[ "$output" == *'if val == nil { return }'* ]]
+}
+
+@test "format_body_finding: suggested_code without remediation still opens details" {
+  setup_format_body_finding
+  run format_body_finding "Medium" "[edge-case-hunter]" "Unguarded input" "parse.py:10" "" "" 'if not data: return None'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Suggested fix:**'* ]]
+  [[ "$output" == *'if not data: return None'* ]]
+  [[ "$output" != *'Remediation'* ]]
+}
+
+@test "format_body_finding: suggested_code with triple backticks is rejected" {
+  setup_format_body_finding
+  run format_body_finding "High" "[code-reviewer]" "Issue" "main.go:5" "" "Fix it." 'echo "```example```"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Remediation:** Fix it.'* ]]
+  [[ "$output" != *'Suggested fix'* ]]
+}
+
+@test "format_body_finding: no details when remediation and suggested_code both empty" {
+  setup_format_body_finding
+  run format_body_finding "Low" "[blind-hunter]" "Cosmetic issue" "style.css:1" "" "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'<details>'* ]]
+  [[ "$output" != *'Suggested fix'* ]]
+  [[ "$output" != *'Remediation'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# build_agent_prompt
+# ---------------------------------------------------------------------------
+
+setup_build_agent_prompt() {
+  load test_helper
+  load_function "${PROJECT_ROOT}/post-review.sh" build_agent_prompt
+}
+
+@test "build_agent_prompt: groups findings by file with remediation" {
+  setup_build_agent_prompt
+  local json='[{"file":"main.go","line":42,"finding":"Missing nil check","remediation":"Add guard"},{"file":"main.go","line":50,"finding":"Unused var","remediation":"Remove it"},{"file":"app.py","line":10,"finding":"SQL injection","remediation":"Use parameterized queries"}]'
+  run build_agent_prompt "$json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Prompt for AI agents'* ]]
+  [[ "$output" == *'In `main.go`:'* ]]
+  [[ "$output" == *'In `app.py`:'* ]]
+  [[ "$output" == *'Around line 42: Missing nil check. Add guard'* ]]
+  [[ "$output" == *'Around line 10: SQL injection. Use parameterized queries'* ]]
+  [[ "$output" == *'Verify each finding'* ]]
+}
+
+@test "build_agent_prompt: returns empty for no findings" {
+  setup_build_agent_prompt
+  run build_agent_prompt "[]"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "build_agent_prompt: handles findings without remediation" {
+  setup_build_agent_prompt
+  local json='[{"file":"x.go","line":5,"finding":"Issue found"}]'
+  run build_agent_prompt "$json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Around line 5: Issue found'* ]]
+  [[ "$output" != *'null'* ]]
 }
