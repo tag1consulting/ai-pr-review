@@ -69,9 +69,8 @@ jobs:
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           echo "base_ref=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
 
-      - uses: ./container-action
+      - uses: ./
         with:
-          image-tag: 'latest'
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
