@@ -540,3 +540,51 @@ _build_multi_line_comment() {
   if [[ "$suggested_code" == *'```'* ]]; then dropped=true; fi
   [ "$dropped" = "false" ]
 }
+
+# ---------------------------------------------------------------------------
+# format_body_finding
+# ---------------------------------------------------------------------------
+
+setup_format_body_finding() {
+  load test_helper
+  load_function "${PROJECT_ROOT}/post-review.sh" severity_icon
+  load_function "${PROJECT_ROOT}/post-review.sh" format_body_finding
+}
+
+@test "format_body_finding: includes remediation in details block" {
+  setup_format_body_finding
+  run format_body_finding "Medium" "[checkov]" "CKV_GHA_7: on(AI PR Review)" ".github/workflows/ai-review.yml:8" " *(line not in diff)*" "Pin the workflow trigger to a specific SHA."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"**[Medium]** [checkov] CKV_GHA_7: on(AI PR Review)"* ]]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'<summary>Details</summary>'* ]]
+  [[ "$output" == *'**Remediation:** Pin the workflow trigger to a specific SHA.'* ]]
+  [[ "$output" == *'</details>'* ]]
+  [[ "$output" == *'*(line not in diff)*'* ]]
+}
+
+@test "format_body_finding: no details block when remediation is empty" {
+  setup_format_body_finding
+  run format_body_finding "High" "[code-reviewer]" "Potential injection risk" "main.go:42" "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"**[High]** [code-reviewer] Potential injection risk"* ]]
+  [[ "$output" != *'<details>'* ]]
+  [[ "$output" != *'Remediation'* ]]
+}
+
+@test "format_body_finding: no loc_note when empty" {
+  setup_format_body_finding
+  run format_body_finding "Low" "[blind-hunter]" "Minor style issue" "app.py:10" "" "Use consistent formatting."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'`app.py:10`'* ]]
+  [[ "$output" != *'line not in diff'* ]]
+  [[ "$output" == *'<details>'* ]]
+  [[ "$output" == *'**Remediation:** Use consistent formatting.'* ]]
+}
+
+@test "format_body_finding: severity icon is rendered" {
+  setup_format_body_finding
+  run format_body_finding "Critical" "[security-reviewer]" "SQL injection" "db.py:5" "" "Use parameterized queries."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"❌"* ]]
+}

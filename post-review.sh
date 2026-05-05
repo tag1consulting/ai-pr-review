@@ -734,6 +734,22 @@ format_source_tag() {
 }
 
 # ---------------------------------------------------------------------------
+# Format a single finding for the review body (non-inline).
+# Includes remediation in a collapsible <details> block when present.
+# Args: severity source_tag finding location loc_note remediation
+# ---------------------------------------------------------------------------
+format_body_finding() {
+  local severity="$1" source_tag="$2" finding="$3" location="$4" loc_note="$5" remediation="$6"
+  local bullet
+  bullet="- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${location}\`${loc_note}"
+  if [[ -n "$remediation" ]]; then
+    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  **Remediation:** %s\n\n  </details>' "$bullet" "$remediation"
+  else
+    printf '%s' "$bullet"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Post Block B: Findings as a pull request review with inline comments
 # ---------------------------------------------------------------------------
 post_findings() {
@@ -810,7 +826,7 @@ post_findings() {
     if ! [[ "$line" =~ ^[0-9]+$ ]]; then
       echo "WARNING: Skipping finding with non-numeric line: ${file}:${line}" >&2
       body_findings="${body_findings}
-- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${file}:${line}\`"
+$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "" "$remediation")"
       continue
     fi
 
@@ -934,7 +950,7 @@ ${suggested_code}
         echo "WARNING: Suggestion for ${file}:${line} not rendered (${drop_reason}); finding posted in review body instead." >&2
       fi
       body_findings="${body_findings}
-- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${file}:${line}\`${loc_note}"
+$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$loc_note" "$remediation")"
     fi
   done <<< "$findings_ndjson"
 
