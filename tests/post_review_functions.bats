@@ -626,3 +626,41 @@ setup_format_body_finding() {
   [[ "$output" != *'Suggested fix'* ]]
   [[ "$output" != *'Remediation'* ]]
 }
+
+# ---------------------------------------------------------------------------
+# build_agent_prompt
+# ---------------------------------------------------------------------------
+
+setup_build_agent_prompt() {
+  load test_helper
+  load_function "${PROJECT_ROOT}/post-review.sh" build_agent_prompt
+}
+
+@test "build_agent_prompt: groups findings by file with remediation" {
+  setup_build_agent_prompt
+  local json='[{"file":"main.go","line":42,"finding":"Missing nil check","remediation":"Add guard"},{"file":"main.go","line":50,"finding":"Unused var","remediation":"Remove it"},{"file":"app.py","line":10,"finding":"SQL injection","remediation":"Use parameterized queries"}]'
+  run build_agent_prompt "$json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Prompt for AI agents'* ]]
+  [[ "$output" == *'In `main.go`:'* ]]
+  [[ "$output" == *'In `app.py`:'* ]]
+  [[ "$output" == *'Around line 42: Missing nil check Add guard'* ]]
+  [[ "$output" == *'Around line 10: SQL injection Use parameterized queries'* ]]
+  [[ "$output" == *'Verify each finding'* ]]
+}
+
+@test "build_agent_prompt: returns empty for no findings" {
+  setup_build_agent_prompt
+  run build_agent_prompt "[]"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "build_agent_prompt: handles findings without remediation" {
+  setup_build_agent_prompt
+  local json='[{"file":"x.go","line":5,"finding":"Issue found"}]'
+  run build_agent_prompt "$json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Around line 5: Issue found'* ]]
+  [[ "$output" != *'null'* ]]
+}

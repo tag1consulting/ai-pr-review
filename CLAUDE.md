@@ -306,6 +306,14 @@ in the incremental diff) will have its suggestion dropped during range
 validation, but the finding itself still posts. To force a full-PR re-review,
 add the `ai-review-rescan` label to the PR.
 
+**Prompt for AI agents.** When findings are present, `build_agent_prompt()`
+appends a collapsible "Prompt for AI agents" block to the review body. The
+block contains a plain-text summary of all findings grouped by file, formatted
+as instructions that can be copy-pasted into an AI coding assistant (e.g.,
+Claude Code, Cursor, Copilot). The standalone review mode (GitHub Issues)
+includes the same block via an inline jq equivalent. The Bitbucket path does
+not include the prompt block (Bitbucket Cloud does not render `<details>` HTML).
+
 **Bitbucket.** The feature is GitHub-only. The Bitbucket path
 (`post-review-bitbucket.sh`) does not render suggestion fences — findings post
 as markdown bullets in the summary comment. `AI_ENABLE_SUGGESTIONS` is read
@@ -463,7 +471,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`, `build_agent_prompt`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
