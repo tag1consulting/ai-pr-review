@@ -296,6 +296,9 @@ format_source_tag() {
 # ---------------------------------------------------------------------------
 # Render all findings as markdown bullets (no inline splitting for v0.2.0).
 # Writes one bullet per finding to stdout.
+# Note: GitHub path uses <details> accordions for remediation (format_body_finding
+# in post-review.sh). Bitbucket Cloud does not render <details>/<summary> HTML,
+# so this script uses flat sub-bullets instead.
 # ---------------------------------------------------------------------------
 render_findings_markdown() {
   local findings_json="$1"
