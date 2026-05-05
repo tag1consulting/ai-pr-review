@@ -1,0 +1,10 @@
+[
+  {
+    "id": "dockerfile-healthcheck-not-applicable",
+    "reason": "This container runs review.sh as a batch job (runs once, exits). HEALTHCHECK is designed for long-running services, not one-shot CLI tools.",
+    "match": {
+      "file": "Dockerfile",
+      "pattern": "CKV_DOCKER_2|HEALTHCHECK|healthcheck"
+    }
+  }
+]

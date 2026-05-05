@@ -118,22 +118,6 @@
     }
   },
   {
-    "id": "dockerfile-healthcheck-not-applicable",
-    "reason": "This container runs review.sh as a batch job (runs once, exits). HEALTHCHECK is designed for long-running services, not one-shot CLI tools. Adding a HEALTHCHECK would never trigger during the container's ~2-minute lifespan.",
-    "match": {
-      "file": "Dockerfile",
-      "pattern": "CKV_DOCKER_2|HEALTHCHECK|healthcheck"
-    }
-  },
-  {
-    "id": "dockerfile-apt-pin-not-practical",
-    "reason": "Pinning apt packages to exact versions on Ubuntu is impractical — versions change with every mirror refresh and are not stable across point releases. The base image is pinned by digest, which provides reproducibility at the image layer.",
-    "match": {
-      "file": "Dockerfile",
-      "pattern": "DL3008|pin versions in apt"
-    }
-  },
-  {
     "id": "version-post-knowledge-cutoff-docker-hub",
     "reason": "LLMs flag Docker Hub image tags released after their training cutoff as 'nonexistent'. Scoped to findings with image:tag patterns. The verify field causes review.sh to confirm existence on hub.docker.com before suppressing. Private registries (GHCR, GCR, ECR) are excluded as they require auth.",
     "verify": "docker-hub",
