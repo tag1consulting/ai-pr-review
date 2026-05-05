@@ -113,7 +113,7 @@ The `source` field is optional in agent output — `extract_findings()` stamps t
 1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
 2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()` (sequential, default) or `call_agent_bg()` (parallel, opt-in). See [Parallel agent execution](#parallel-agent-execution) below.
 3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Filter by confidence ≥ 75. Apply `suppressions.json`. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
-4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub.
+4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub. Findings whose line is in the diff go inline (up to `AI_MAX_INLINE`); the rest go into the review body via `format_body_finding()`, which wraps remediation in a collapsible `<details>` accordion so the review stays scannable while preserving actionable detail.
 
 ## Incremental review / SHA watermark
 
@@ -458,7 +458,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
