@@ -222,6 +222,42 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`
+- Auto-detecting release PRs (see below)
+
+### Auto-detecting release PRs
+
+Full mode can be triggered automatically based on branch name, PR title, or other PR metadata by extending the `review-mode` expression in your workflow file. This keeps release PRs from getting only a quick review without requiring someone to remember to add a label.
+
+The [example workflow](examples/workflows/pr-review.yml) demonstrates auto-detecting `release/*` branches:
+
+```yaml
+review-mode: >-
+  ${{
+    contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' ||
+    startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
+    'quick'
+  }}
+```
+
+Customize the `startsWith()` pattern for your repo's branch convention. Common patterns:
+
+| Convention | Expression |
+|---|---|
+| Branch prefix `release/` | `startsWith(github.event.pull_request.head.ref, 'release/')` |
+| Branch prefix `hotfix/` | `startsWith(github.event.pull_request.head.ref, 'hotfix/')` |
+| PR title starts with "Release" | `startsWith(github.event.pull_request.title, 'Release ')` |
+| Merges to `main` from `release/*` | `github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'release/')` |
+| Multiple patterns | Chain with `\|\|` — each clause evaluates to `'full'` or falls through |
+
+Branch matching is case-sensitive — `release/v1.0` matches but `Release/v1.0` does not.
+
+**Bitbucket Pipelines** — use a shell conditional instead of GitHub Actions expressions:
+
+```bash
+if [[ "$BITBUCKET_PR_SOURCE_BRANCH" == release/* ]]; then
+  export AI_REVIEW_MODE=full
+fi
+```
 
 ## Code suggestions
 
