@@ -31,8 +31,30 @@ fences that the MR author can apply with one click.
 
 ## What does not work on GitLab
 
-- Slash-command triggers (GitLab CI has no `issue_comment` equivalent;
-  the review always runs on MR create/push via merge request pipelines)
+- Slash-command triggers — see [alternatives](#slash-command-alternatives)
+  below
+
+## Slash command alternatives
+
+GitLab CI has no `issue_comment` event trigger, so the `/ai-pr-review`
+slash commands (rescan, review-full, skip, dismiss) that work on GitHub
+PRs are not available on GitLab MRs.
+
+**Workarounds for common operations:**
+
+| GitHub slash command | GitLab equivalent |
+|---|---|
+| `/ai-pr-review rescan` | Set `FORCE_FULL_DIFF=true` as a CI/CD variable, then re-run the pipeline. Or delete the summary comment on the MR to reset the SHA watermark. |
+| `/ai-pr-review review-full` | Set `AI_REVIEW_MODE=full` as a CI/CD variable (persists for all future runs until changed back). |
+| `/ai-pr-review skip` | Add `[skip ci]` to a commit message, or set a CI/CD variable `SKIP_AI_REVIEW=true` and add a `rules:` condition to the pipeline job. |
+| `/ai-pr-review dismiss` | Resolve individual discussion threads manually in the GitLab UI. |
+
+For more advanced automation, GitLab supports
+[pipeline triggers via API](https://docs.gitlab.com/ee/ci/triggers/) and
+[webhook events on MR notes](https://docs.gitlab.com/ee/user/project/integrations/webhook_events.html#comment-events),
+which could be wired to an external service that triggers review pipelines
+with custom variables. This requires additional infrastructure beyond the
+CI config.
 
 ## One-time setup
 

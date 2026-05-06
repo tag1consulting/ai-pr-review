@@ -7,6 +7,12 @@ nav_order: 1
 
 # Slash commands
 
+> **GitHub-only.** Slash commands rely on GitHub Actions' `issue_comment`
+> and `pull_request_review_comment` event triggers, which have no native
+> equivalent in Bitbucket Pipelines or GitLab CI. For GitLab workarounds
+> (manual pipeline triggers, CI variables), see
+> [GitLab setup — slash command alternatives](gitlab-setup#slash-command-alternatives).
+
 AI PR Review supports commands posted as PR comments. Most commands are processed by a workflow that reacts to `issue_comment` events; the `dismiss` command listens on `pull_request_review_comment` events since it operates on inline review threads.
 
 ## Setup
