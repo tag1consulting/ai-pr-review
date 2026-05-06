@@ -12,6 +12,8 @@ ai-pr-review/
 ├── review.sh               # Main orchestrator: diff, manifest, agent calls, assembly
 ├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
 ├── post-review.sh          # GitHub API posting: summary, review, thread management
+├── post-review-bitbucket.sh # Bitbucket Cloud API posting: summary comment
+├── post-review-gitlab.sh   # GitLab API posting: summary, inline discussions, approval
 ├── analyzers/              # Static analyzer wrapper scripts
 │   ├── run-shellcheck.sh   # Shellcheck wrapper for shell script findings
 │   ├── run-cve-check.sh    # OSV.dev vulnerability lookup for dependency manifests
@@ -60,6 +62,7 @@ ai-pr-review/
 │   ├── parse_valid_lines.bats
 │   ├── post_review_functions.bats
 │   ├── post_review_bitbucket_functions.bats
+│   ├── post_review_gitlab_functions.bats
 │   ├── retry_curl.bats
 │   ├── run_shellcheck.bats
 │   ├── run_cve_check.bats
@@ -78,7 +81,9 @@ ai-pr-review/
 │   └── fixtures/
 └── .github/workflows/
     ├── ai-review.yml       # Self-test: runs the action on its own PRs
-    └── lint.yml            # Shellcheck + bats test suite
+    ├── lint.yml            # Shellcheck + bats test suite
+    ├── pages.yml           # GitHub Pages documentation site build
+    └── publish-image.yml   # Container image build, push, and signing
 ```
 
 ## Data flow
@@ -87,7 +92,7 @@ ai-pr-review/
 2. For each agent, **review.sh** assembles a context message and calls **llm-call.sh**
 3. **llm-call.sh** sends the prompt to the configured LLM provider via curl
 4. **review.sh** extracts JSON findings from agent responses, deduplicates, applies suppressions
-5. **post-review.sh** resolves stale threads, posts the summary and findings, advances the SHA watermark
+5. The **provider-specific post-review script** (`post-review.sh`, `post-review-bitbucket.sh`, or `post-review-gitlab.sh` — selected by the `VCS_PROVIDER` env var, valid values: `github`, `bitbucket`, `gitlab`; see [Configuration](configuration)) resolves stale threads, posts the summary and findings, advances the SHA watermark
 
 ## Dependencies
 

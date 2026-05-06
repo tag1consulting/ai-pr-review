@@ -9,12 +9,21 @@ render_with_liquid: false
 
 ## Code suggestions
 
-Code suggestions are enabled by default. The review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a GitHub ` ```suggestion ` block inside the inline review comment, which GitHub displays as an "Apply suggestion" button — the PR author can accept the fix with one click.
+Code suggestions are enabled by default. The review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a ` ```suggestion ` block inside the inline review comment, which GitHub and GitLab display as an "Apply suggestion" button — the PR/MR author can accept the fix with one click.
+
+> **New in v0.6.0:** Suggestions now work on GitLab MRs using GitLab's
+> native ` ```suggestion:-N+0 ` syntax for multi-line replacements.
+> Previously suggestions were GitHub-only. Requires GitLab 11.6+
+> (when the suggestion fence syntax was introduced). The
+> `enable-suggestions` flag (`true` by default) applies uniformly
+> across all VCS providers — setting it to `false` disables suggestions
+> on both GitHub and GitLab. Bitbucket always ignores suggestions
+> regardless of this flag.
 
 To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
-- uses: tag1consulting/ai-pr-review/container-action@v0.5.1
+- uses: tag1consulting/ai-pr-review/container-action@v0.6.0
   with:
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}
