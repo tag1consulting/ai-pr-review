@@ -304,7 +304,13 @@ To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR i
     _GL_API="${GITLAB_API_URL:-https://gitlab.com/api/v4}"
     _GL_AUTH=""
     if [[ -n "${GITLAB_TOKEN:-}" ]]; then
-      _GL_AUTH="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+      if [[ "$GITLAB_TOKEN" == glpat-* ]]; then
+        _GL_AUTH="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+      elif [[ "$GITLAB_TOKEN" == glcbt-* ]]; then
+        _GL_AUTH="JOB-TOKEN: ${GITLAB_TOKEN}"
+      else
+        _GL_AUTH="Authorization: Bearer ${GITLAB_TOKEN}"
+      fi
     elif [[ -n "${CI_JOB_TOKEN:-}" ]]; then
       _GL_AUTH="JOB-TOKEN: ${CI_JOB_TOKEN}"
     fi

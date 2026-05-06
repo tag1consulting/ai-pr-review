@@ -101,11 +101,20 @@ gl_api() {
   local method="$1" path="$2"
   shift 2
 
-  # Determine auth header: prefer GITLAB_TOKEN (PRIVATE-TOKEN), fall back
-  # to CI_JOB_TOKEN (JOB-TOKEN) for limited-scope CI operations.
+  # Determine auth header. Token type detection:
+  #   glpat-*  → Personal/project access token → PRIVATE-TOKEN header
+  #   glcbt-*  → CI build token → JOB-TOKEN header
+  #   other    → OAuth2 token (e.g. from glab auth login) → Authorization: Bearer
+  # Fall back to CI_JOB_TOKEN if GITLAB_TOKEN is unset.
   local auth_header
   if [[ -n "${GITLAB_TOKEN:-}" ]]; then
-    auth_header="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+    if [[ "$GITLAB_TOKEN" == glpat-* ]]; then
+      auth_header="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+    elif [[ "$GITLAB_TOKEN" == glcbt-* ]]; then
+      auth_header="JOB-TOKEN: ${GITLAB_TOKEN}"
+    else
+      auth_header="Authorization: Bearer ${GITLAB_TOKEN}"
+    fi
   elif [[ -n "${CI_JOB_TOKEN:-}" ]]; then
     auth_header="JOB-TOKEN: ${CI_JOB_TOKEN}"
   else
