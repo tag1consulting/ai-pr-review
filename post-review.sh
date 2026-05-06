@@ -1218,6 +1218,39 @@ ${agent_prompt}"
     --argjson comments "$inline_comments" \
     '{body: $body, event: $event, commit_id: $commit_id, comments: $comments}')
 
+  # Build a fallback body that inlines the findings as body content, used
+  # when every review-POST attempt fails and we degrade to a plain PR
+  # comment (which does not support inline anchoring). Without this, the
+  # finding text lives only in the inline_comments JSON and would be lost.
+  # Use --argjson to normalize literal newlines in the JSON (jq writes
+  # strings with embedded raw LF, which stdin parsing rejects but --argjson
+  # accepts).
+  local fallback_body="$review_body"
+  if [[ "$inline_count" -gt 0 ]]; then
+    local inline_rendered
+    inline_rendered=$(jq -r --argjson comments "$inline_comments" '
+      $comments[] |
+      "- " + (.body | gsub("\n"; "\n  "))
+    ' <<<'null')
+    if [[ -n "$inline_rendered" ]]; then
+      # Insert the rendered findings after the "inline comments" placeholder
+      # (or at the head if that placeholder was not used).
+      local inline_section
+      inline_section="### Findings (inline anchoring unavailable)
+${inline_rendered}"
+      if [[ "$fallback_body" == *"All findings are attached as inline comments."* ]]; then
+        fallback_body="${fallback_body//All findings are attached as inline comments./$inline_section}"
+      else
+        # Splice after the first "---" separator (below the summary),
+        # otherwise append before the footer by inserting after the Overall Risk line.
+        fallback_body=$(printf '%s' "$fallback_body" | awk -v section="$inline_section" '
+          !inserted && /^\*\*Overall Risk:\*\*/ { print; print ""; print section; inserted=1; next }
+          { print }
+        ')
+      fi
+    fi
+  fi
+
   echo "Posting review (${review_event}) with ${inline_count} inline comments..." >&2
 
   local review_result
@@ -1238,7 +1271,7 @@ ${agent_prompt}"
         echo "Falling back to posting as a PR comment..." >&2
         if gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
           --method POST \
-          --field body="${review_body}" > /dev/null 2>&1; then
+          --field body="${fallback_body}" > /dev/null 2>&1; then
           echo "Review posted as PR comment (${review_event} → COMMENT both unavailable) to PR #${PR_NUMBER}." >&2
           return 0
         fi
@@ -1254,7 +1287,7 @@ ${agent_prompt}"
     echo "Falling back to posting as a PR comment..." >&2
     if gh_api_retry api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
       --method POST \
-      --field body="${review_body}" > /dev/null 2>&1; then
+      --field body="${fallback_body}" > /dev/null 2>&1; then
       echo "Review posted as PR comment (${review_event} unavailable) to PR #${PR_NUMBER}." >&2
       return 0
     fi

@@ -6,5 +6,13 @@
       "file": "Dockerfile",
       "pattern": "CKV_DOCKER_2|HEALTHCHECK|healthcheck"
     }
+  },
+  {
+    "id": "github-actions-latest-major-version-post-cutoff",
+    "reason": "Catches LLM knowledge-cutoff false positives for actions/ references where the reviewer asserts 'the latest published major version is vN'. The pattern in global suppressions does not match this phrasing.",
+    "verify": "github-release",
+    "match": {
+      "pattern": "actions/.{0,200}latest (published )?(stable |major )?(version|release) is v[0-9]+|latest (published )?(stable |major )?(version|release) is v[0-9]+.{0,200}actions/"
+    }
   }
 ]
