@@ -29,7 +29,7 @@ nav_order: 2
 | `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
-| `enable-suggestions` | No | `true` | Add GitHub "Apply suggestion" buttons to inline review comments (GitHub-only). Set to `false` to disable. |
+| `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 
 ## Supported LLM providers
 
