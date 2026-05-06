@@ -1,13 +1,19 @@
+---
+title: Direct Action Reference
+parent: Getting Started
+nav_order: 1
+---
+
 # Installation: Direct action reference
 
 Use this installation method if you prefer to run without Docker. The root
 composite action installs shellcheck on
 the runner automatically but does **not** install semgrep, trufflehog, ruff,
-or golangci-lint. See [Static analyzers](../README.md#static-analyzers) in the
+or golangci-lint. See [Static analyzers](static-analyzers) in the
 main README if you need those.
 
 For most new installs, prefer the
-[container action](../README.md#installation) — it ships all analyzer binaries
+[container action](getting-started) — it ships all analyzer binaries
 pre-installed at pinned versions.
 
 ## Prerequisites

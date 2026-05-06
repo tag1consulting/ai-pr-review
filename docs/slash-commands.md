@@ -1,10 +1,16 @@
+---
+title: Slash Commands
+parent: Getting Started
+nav_order: 5
+---
+
 # Slash commands
 
 AI PR Review supports commands posted as PR comments. Most commands are processed by a workflow that reacts to `issue_comment` events; the `dismiss` command listens on `pull_request_review_comment` events since it operates on inline review threads.
 
 ## Setup
 
-Copy `examples/workflows/comment-triggers.yml` into your repo's `.github/workflows/` directory and merge it to your default branch. See [examples/README.md](../examples/README.md) for prerequisites.
+Copy `examples/workflows/comment-triggers.yml` into your repo's `.github/workflows/` directory and merge it to your default branch. See [examples/README.md](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/README.md) for prerequisites.
 
 ## Commands
 

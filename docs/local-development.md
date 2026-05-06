@@ -1,3 +1,9 @@
+---
+title: Local Development
+parent: Getting Started
+nav_order: 3
+---
+
 # Local Development
 
 Run ai-pr-review locally against any open PR using the container image — no GitHub Actions runner needed.
@@ -6,7 +12,7 @@ Run ai-pr-review locally against any open PR using the container image — no Gi
 
 - [Docker](https://docs.docker.com/get-started/get-docker/) installed and running
 - A GitHub token (`gh auth token` or a classic PAT with `repo` scope)
-- An API key for one of the [supported LLM providers](../README.md#supported-llm-providers)
+- An API key for one of the [supported LLM providers](configuration#supported-llm-providers)
 
 ## Quick start: review a PR
 

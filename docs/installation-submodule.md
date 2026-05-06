@@ -1,3 +1,9 @@
+---
+title: Git Submodule
+parent: Getting Started
+nav_order: 2
+---
+
 # Installation: git submodule
 
 Use this installation method if you need explicit, auditable version pinning
@@ -5,7 +11,7 @@ and prefer to commit the exact action source into your repository rather than
 referencing a tag or container image.
 
 For most new installs, prefer the
-[container action](../README.md#installation) — it is simpler to set up and
+[container action](getting-started) — it is simpler to set up and
 ships all analyzer binaries pre-installed.
 
 ## Add the submodule

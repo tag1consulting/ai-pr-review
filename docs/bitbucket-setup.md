@@ -1,3 +1,9 @@
+---
+title: Bitbucket Setup
+parent: Getting Started
+nav_order: 4
+---
+
 # Bitbucket Cloud Pipelines setup
 
 `ai-pr-review` supports Bitbucket Cloud PRs via the same container image used
@@ -59,7 +65,7 @@ user must have at least:
 
 ### 4. Copy the starter pipeline
 
-Copy [`examples/pipelines/bitbucket-pipelines.yml`](../examples/pipelines/bitbucket-pipelines.yml)
+Copy [`examples/pipelines/bitbucket-pipelines.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/pipelines/bitbucket-pipelines.yml)
 to the root of your repo as `bitbucket-pipelines.yml`, commit, and push. The
 review fires on every PR open/update.
 

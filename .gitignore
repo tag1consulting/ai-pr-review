@@ -1,1 +1,5 @@
 .claude/
+_site/
+.jekyll-cache/
+.jekyll-metadata
+docs/Gemfile.lock

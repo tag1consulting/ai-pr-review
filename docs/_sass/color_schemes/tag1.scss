@@ -1,0 +1,26 @@
+// Tag1 brand color scheme for just-the-docs
+//
+// Primary: orange (#e65c00) on white, with light blue (#d1eaf1) highlights
+// Text: navy (#061e32)
+
+$tag1-orange:     #e65c00;
+$tag1-navy:       #061e32;
+$tag1-white:      #ffffff;
+$tag1-light-blue: #d1eaf1;
+$tag1-jade:       #15787c;
+$tag1-cream:      #eeefe8;
+
+// Just-the-docs variable overrides
+$body-background-color: $tag1-white;
+$body-text-color: $tag1-navy;
+$body-heading-color: $tag1-navy;
+$link-color: $tag1-orange;
+$btn-primary-color: $tag1-orange;
+$sidebar-color: $tag1-light-blue;
+$nav-child-link-color: $tag1-navy;
+$search-background-color: $tag1-white;
+$search-result-preview-color: $tag1-navy;
+$code-background-color: #f6f8fa;
+$feedback-color: #b8d6e0;
+$base-button-color: $tag1-light-blue;
+$border-color: #d0d7de;

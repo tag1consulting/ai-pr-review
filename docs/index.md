@@ -1,0 +1,70 @@
+---
+layout: home
+title: Home
+nav_exclude: true
+permalink: /
+hero_title: AI PR Review
+hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline findings directly on your PRs."
+---
+
+<div class="features">
+  <div class="feature">
+    <h3>Multi-Agent Review</h3>
+    <p>Up to 8 specialized AI agents analyze your code from different perspectives — architecture, security, edge cases, and more.</p>
+  </div>
+  <div class="feature">
+    <h3>12+ Static Analyzers</h3>
+    <p>Shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, and tflint — all pre-installed in the container image.</p>
+  </div>
+  <div class="feature">
+    <h3>Works Everywhere</h3>
+    <p>GitHub Actions and Bitbucket Cloud Pipelines. Anthropic, OpenAI, Google, and Bedrock proxy providers.</p>
+  </div>
+  <div class="feature">
+    <h3>One-Click Fixes</h3>
+    <p>Code suggestion buttons let PR authors accept fixes with a single click, powered by GitHub's suggestion block syntax.</p>
+  </div>
+</div>
+
+## Quick start
+
+Get AI reviews on your PRs in two steps:
+
+**1. Add your LLM API key** as a repository secret named `ANTHROPIC_API_KEY` (or the equivalent for your [provider](configuration)).
+
+**2. Create `.github/workflows/ai-review.yml`** with this minimal workflow:
+
+```yaml
+name: AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tag1consulting/ai-pr-review/container-action@main
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          pr-number: ${{ github.event.pull_request.number }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+That's it — reviews start firing on the next PR.
+
+## Learn more
+
+- [Getting started](getting-started) — Installation, requirements, secrets and variables
+- [Configuration](configuration) — Action inputs and LLM provider options
+- [Features](features) — Code suggestions, incremental reviews, resilience, token usage
+- [Agents & Profiles](agents) — Review agents, severity icons, review modes, language profiles
+- [Static analyzers](static-analyzers) — Analyzer table, dependency vulnerability check
+- [Suppression rules](suppression) — Suppress false positives with JSON rules
+- [Architecture](architecture) — Directory tree, data flow, dependencies
