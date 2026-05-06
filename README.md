@@ -129,7 +129,7 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: 'latest'            # or pin to a release tag, e.g. '0.5.1'
+    image-tag: 'latest'            # or pin to a release tag, e.g. '0.6.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
@@ -268,7 +268,7 @@ Code suggestions are enabled by default. The review tool asks eligible LLM agent
 To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
-- uses: tag1consulting/ai-pr-review/container-action@v0.5.1
+- uses: tag1consulting/ai-pr-review/container-action@v0.6.0
   with:
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}

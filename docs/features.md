@@ -14,7 +14,7 @@ Code suggestions are enabled by default. The review tool asks eligible LLM agent
 To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
-- uses: tag1consulting/ai-pr-review/container-action@v0.5.1
+- uses: tag1consulting/ai-pr-review/container-action@v0.6.0
   with:
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}
