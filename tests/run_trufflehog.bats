@@ -93,3 +93,46 @@ teardown() {
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.[0].remediation | test("[Rr]otate")' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# Test-file demotion — unverified secrets in test paths are demoted to Low
+# ---------------------------------------------------------------------------
+
+@test "trufflehog: unverified secret in test dir demoted to Low/40" {
+  touch "$WORK/test.bats"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-unverified-test-file.json" run --separate-stderr "$SCRIPT" "$WORK/test.bats"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].severity == "Low"' > /dev/null
+  echo "$output" | jq -e '.[0].confidence == 40' > /dev/null
+}
+
+@test "trufflehog: unverified test-file finding tagged with mock data notice" {
+  touch "$WORK/test.bats"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-unverified-test-file.json" run --separate-stderr "$SCRIPT" "$WORK/test.bats"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].finding | test("test file")' > /dev/null
+}
+
+@test "trufflehog: unverified test-file remediation suggests verify instead of rotate" {
+  touch "$WORK/test.bats"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-unverified-test-file.json" run --separate-stderr "$SCRIPT" "$WORK/test.bats"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].remediation | test("[Vv]erify")' > /dev/null
+}
+
+@test "trufflehog: verified secret in test dir stays Critical (never demoted)" {
+  touch "$WORK/creds.json"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-verified-test-file.json" run --separate-stderr "$SCRIPT" "$WORK/creds.json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].severity == "Critical"' > /dev/null
+  echo "$output" | jq -e '.[0].confidence == 95' > /dev/null
+}
+
+@test "trufflehog: unverified secret in non-test path stays High" {
+  touch "$WORK/deploy.sh"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-unverified.json" run --separate-stderr "$SCRIPT" "$WORK/deploy.sh"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].severity == "High"' > /dev/null
+  echo "$output" | jq -e '.[0].confidence == 85' > /dev/null
+  echo "$output" | jq -e '.[0].finding | test("test file") | not' > /dev/null
+}
