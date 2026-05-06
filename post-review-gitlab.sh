@@ -351,9 +351,16 @@ No findings above the confidence threshold. The code looks good."
     fi
 
     if [[ -n "$_TOKEN_TABLE_FILE" && -s "$_TOKEN_TABLE_FILE" ]]; then
+      local _token_content
+      _token_content=$(sed '/^### Token Usage$/d' "$_TOKEN_TABLE_FILE")
       issue_body="${issue_body}
 
-$(cat "$_TOKEN_TABLE_FILE")"
+<details>
+<summary>Token Usage</summary>
+
+${_token_content}
+
+</details>"
     fi
 
     local failed_agents_env="${AI_REVIEW_FAILED_AGENTS:-}"
