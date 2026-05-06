@@ -112,9 +112,15 @@ h1, h2, h3, h4, h5, h6,
 // sets line-height: 1.6 on all <code> elements (fine for inline), but that
 // spreads the rows of ASCII-art diagrams and tree listings apart. Scope the
 // override to code within a highlighted block so inline code is unchanged.
+// !important is needed because the theme's bare `code` selector wins on
+// source order (it is declared later in the compiled CSS).
+div.highlighter-rouge pre.highlight,
+div.highlighter-rouge pre.highlight code,
+.highlight pre,
 .highlight pre code,
+pre.highlight,
 pre.highlight code {
-  line-height: 1.4;
+  line-height: 1.25 !important;
 }
 
 // Table styling
