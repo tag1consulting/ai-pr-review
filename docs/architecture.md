@@ -92,7 +92,7 @@ ai-pr-review/
 2. For each agent, **review.sh** assembles a context message and calls **llm-call.sh**
 3. **llm-call.sh** sends the prompt to the configured LLM provider via curl
 4. **review.sh** extracts JSON findings from agent responses, deduplicates, applies suppressions
-5. The **provider-specific post-review script** (`post-review.sh`, `post-review-bitbucket.sh`, or `post-review-gitlab.sh` — selected by `VCS_PROVIDER` env var at the top of `review.sh`) resolves stale threads, posts the summary and findings, advances the SHA watermark
+5. The **provider-specific post-review script** (`post-review.sh`, `post-review-bitbucket.sh`, or `post-review-gitlab.sh` — selected by the `VCS_PROVIDER` env var, valid values: `github`, `bitbucket`, `gitlab`; see [Configuration](configuration)) resolves stale threads, posts the summary and findings, advances the SHA watermark
 
 ## Dependencies
 
