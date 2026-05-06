@@ -44,7 +44,7 @@ set -euo pipefail
 # Mask provider API keys in GitHub Actions logs (defense-in-depth; also covers
 # direct invocations outside action.yml). Keep in sync with the env: mapping in
 # action.yml (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY / BEDROCK_API_KEY).
-for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY GH_TOKEN BITBUCKET_API_TOKEN; do
+for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY BEDROCK_API_KEY GH_TOKEN BITBUCKET_API_TOKEN GITLAB_TOKEN; do
   if [[ -n "${!key_var:-}" ]]; then
     echo "::add-mask::${!key_var}"
   fi
@@ -67,8 +67,9 @@ log_warn()  { [[ "${VCS_PROVIDER:-github}" == "github" ]] && echo "::warning::$*
 case "$VCS_PROVIDER" in
   github)    POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review.sh" ;;
   bitbucket) POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review-bitbucket.sh" ;;
+  gitlab)    POST_REVIEW_SCRIPT="${SCRIPT_DIR}/post-review-gitlab.sh" ;;
   *)
-    log_error "Invalid VCS_PROVIDER '${VCS_PROVIDER}'. Valid values: github, bitbucket"
+    log_error "Invalid VCS_PROVIDER '${VCS_PROVIDER}'. Valid values: github, bitbucket, gitlab"
     exit 1
     ;;
 esac
@@ -78,10 +79,19 @@ if [[ ! -x "$POST_REVIEW_SCRIPT" ]]; then
   exit 1
 fi
 
-if [[ "$VCS_PROVIDER" == "bitbucket" && "$REVIEW_TARGET" == "standalone" ]]; then
-  log_error "Standalone review mode is not supported for VCS_PROVIDER=bitbucket."
-  echo "Bitbucket Cloud has no Issues product; use REVIEW_TARGET=pr instead." >&2
-  exit 1
+if [[ "$REVIEW_TARGET" == "standalone" ]]; then
+  case "$VCS_PROVIDER" in
+    bitbucket)
+      log_error "Standalone review mode is not supported for VCS_PROVIDER=bitbucket."
+      echo "Bitbucket Cloud has no Issues product; use REVIEW_TARGET=pr instead." >&2
+      exit 1
+      ;;
+    gitlab)
+      log_error "Standalone review mode is not yet supported for VCS_PROVIDER=gitlab."
+      echo "Planned for a future release. Use REVIEW_TARGET=pr instead." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
@@ -262,16 +272,7 @@ fi
 if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
   log_warn "Diff is too large (${DIFF_LINES} lines; limit ${MAX_DIFF_LINES}). Skipping AI review."
   echo "To review large diffs, increase MAX_DIFF_LINES or split into smaller changes." >&2
-  if [[ "$REVIEW_TARGET" != "standalone" && "$VCS_PROVIDER" == "github" ]]; then
-  # Post (or update) a comment explaining the skip — idempotent via marker to avoid
-  # accumulating duplicate comments across repeated oversized pushes. GitHub-only
-  # in v0.2.0; Bitbucket consumers will see the log_warn output but
-  # no comment will be posted (the review still exits cleanly).
-  : "${GH_TOKEN:?GH_TOKEN is required}"
-  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-  : "${PR_NUMBER:?PR_NUMBER is required}"
-  OWNER="${GITHUB_REPOSITORY%%/*}"
-  REPO="${GITHUB_REPOSITORY##*/}"
+  if [[ "$REVIEW_TARGET" != "standalone" ]]; then
   SKIP_MARKER="<!-- ai-pr-review-skipped -->"
   SKIP_BODY="${SKIP_MARKER}
 ## AI Review Skipped
@@ -279,18 +280,61 @@ if [[ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]]; then
 This PR's diff is too large for automated review (${DIFF_LINES} lines; limit: ${MAX_DIFF_LINES}).
 
 To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR into smaller changes."
-  existing_skip_id=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
-    --paginate \
-    --jq ".[] | select(.body | contains(\"${SKIP_MARKER}\")) | .id" \
-    2>/dev/null | tail -1) || true
-  if [[ -n "$existing_skip_id" ]]; then
-    gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_skip_id}" \
-      --method PATCH --field body="$SKIP_BODY" > /dev/null 2>&1 || true
-  else
-    gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
-      --method POST --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+  if [[ "$VCS_PROVIDER" == "github" ]]; then
+    # Post (or update) a comment explaining the skip — idempotent via marker.
+    : "${GH_TOKEN:?GH_TOKEN is required}"
+    : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+    : "${PR_NUMBER:?PR_NUMBER is required}"
+    OWNER="${GITHUB_REPOSITORY%%/*}"
+    REPO="${GITHUB_REPOSITORY##*/}"
+    existing_skip_id=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+      --paginate \
+      --jq ".[] | select(.body | contains(\"${SKIP_MARKER}\")) | .id" \
+      2>/dev/null | tail -1) || true
+    if [[ -n "$existing_skip_id" ]]; then
+      gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_skip_id}" \
+        --method PATCH --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+    else
+      gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+        --method POST --field body="$SKIP_BODY" > /dev/null 2>&1 || true
+    fi
+  elif [[ "$VCS_PROVIDER" == "gitlab" ]]; then
+    # Post (or update) a skip note on the GitLab MR.
+    : "${PR_NUMBER:?PR_NUMBER is required}"
+    _GL_API="${GITLAB_API_URL:-https://gitlab.com/api/v4}"
+    _GL_AUTH=""
+    if [[ -n "${GITLAB_TOKEN:-}" ]]; then
+      _GL_AUTH="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+    elif [[ -n "${CI_JOB_TOKEN:-}" ]]; then
+      _GL_AUTH="JOB-TOKEN: ${CI_JOB_TOKEN}"
+    fi
+    if [[ -n "$_GL_AUTH" ]]; then
+      _GL_PROJECT_ID="${GITLAB_PROJECT_ID:-${CI_PROJECT_ID:-}}"
+      if [[ -z "$_GL_PROJECT_ID" ]]; then
+        _GL_PROJECT_ID=$(printf '%s' "${CI_PROJECT_PATH:-${GITHUB_REPOSITORY:-}}" | sed 's|/|%2F|g')
+      fi
+      if [[ -n "$_GL_PROJECT_ID" ]]; then
+        existing_skip_id=$(curl -sS -H "$_GL_AUTH" \
+          "${_GL_API}/projects/${_GL_PROJECT_ID}/merge_requests/${PR_NUMBER}/notes?per_page=100&sort=desc&order_by=updated_at" \
+          2>/dev/null | jq -r --arg marker "$SKIP_MARKER" \
+          '[.[] | select((.body // "") | contains($marker))] | first.id // empty' 2>/dev/null) || true
+        if [[ -n "$existing_skip_id" ]]; then
+          curl -sS -X PUT -H "$_GL_AUTH" \
+            --data-urlencode "body=${SKIP_BODY}" \
+            "${_GL_API}/projects/${_GL_PROJECT_ID}/merge_requests/${PR_NUMBER}/notes/${existing_skip_id}" \
+            > /dev/null 2>&1 || true
+        else
+          curl -sS -X POST -H "$_GL_AUTH" \
+            --data-urlencode "body=${SKIP_BODY}" \
+            "${_GL_API}/projects/${_GL_PROJECT_ID}/merge_requests/${PR_NUMBER}/notes" \
+            > /dev/null 2>&1 || true
+        fi
+      fi
+    fi
   fi
-  fi  # end REVIEW_TARGET != standalone && VCS_PROVIDER == github
+  # Bitbucket: no skip comment posted (by design); the log_warn output
+  # is visible in the pipeline log.
+  fi  # end REVIEW_TARGET != standalone
   exit 0
 fi
 

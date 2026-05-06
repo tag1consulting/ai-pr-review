@@ -14,6 +14,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Sibling-script pattern](#sibling-script-pattern)) |
+| `post-review-gitlab.sh` | GitLab API layer: upserts summary note, posts inline MR discussions with suggestion fences, resolves stale bot discussions, advances SHA watermark |
 | `analyzers/run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
 | `analyzers/run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
 | `analyzers/run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"` |
@@ -29,43 +30,48 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `analyzers/run-tflint.sh` | Wraps tflint for changed `.tf`/`.tfvars` files; runs per Terraform module directory; `error`→High, `warning`→Medium, `notice`→Low; confidence 90; source `"tflint"` |
 | `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
 
-## Multi-provider support (GitHub / Bitbucket Cloud)
+## Multi-provider support (GitHub / Bitbucket Cloud / GitLab)
 
-Since v0.2.0 the same container image drives PR reviews on either GitHub or
-Bitbucket Cloud. The provider is selected via the `VCS_PROVIDER` env var:
+Since v0.2.0 the same container image drives PR/MR reviews on GitHub,
+Bitbucket Cloud, and GitLab. The provider is selected via the `VCS_PROVIDER`
+env var:
 
 | `VCS_PROVIDER` | Provider | Post-review script |
 |---|---|---|
 | `github` (default) | GitHub | `post-review.sh` |
 | `bitbucket` | Bitbucket Cloud | `post-review-bitbucket.sh` |
+| `gitlab` | GitLab | `post-review-gitlab.sh` |
 
 `review.sh` resolves `POST_REVIEW_SCRIPT` once at startup based on
 `VCS_PROVIDER` and uses it at every post-review call site. Invalid provider
 values fail fast with a clear error. `REVIEW_TARGET=standalone` is rejected
-for Bitbucket (no Issues product).
+for Bitbucket (no Issues product) and GitLab (not yet implemented).
 
 ### Sibling-script pattern
 
-`post-review-bitbucket.sh` is a **sibling script**, not a refactor of
-`post-review.sh`. It duplicates pure helpers (`severity_icon`,
-`format_source_tag`, `truncate_body`, `mktemp_tracked`, `cleanup`)
-because sourcing across providers would couple two unrelated concerns.
+`post-review-bitbucket.sh` and `post-review-gitlab.sh` are **sibling
+scripts**, not refactors of `post-review.sh`. They duplicate pure helpers
+(`severity_icon`, `format_source_tag`, `truncate_body`, `mktemp_tracked`,
+`cleanup`, and for GitLab additionally `format_body_finding`,
+`build_agent_prompt`, `parse_valid_lines`, `parse_diff_new_lines`)
+because sourcing across providers would couple unrelated concerns.
 
 **Drift mitigation:** every duplicated helper carries a
-`# keep in sync with post-review.sh:<line>` comment above it, and
-`tests/post_review_bitbucket_functions.bats` contains parity tests that
-evaluate both implementations against shared fixtures — the test fails if
-either copy drifts.
+`# keep in sync with post-review.sh:<line>` comment above it.
+`tests/post_review_bitbucket_functions.bats` and
+`tests/post_review_gitlab_functions.bats` contain 3-way parity tests that
+evaluate all three implementations against shared fixtures — the test
+fails if any copy drifts.
 
 **Per-provider constants:** `MAX_BODY_SIZE` differs per provider
-(64000 for GitHub, 32000 for Bitbucket — Bitbucket's `content.raw` field
-has a 32768-char hard cap). These are defined inside each script, not
-shared.
+(64000 for GitHub, 32000 for Bitbucket, 250000 for GitLab). These are
+defined inside each script, not shared.
 
-**Refactor trigger:** rework to a `vcs/<provider>.sh` abstraction when
-either (a) a third VCS provider is scoped, or (b) either post-review
-script exceeds ~500 LOC of provider-specific logic. Below those thresholds
-the sibling pattern is strictly simpler than a dispatch layer.
+**Refactor trigger:** condition (a) from the original design (third VCS
+provider scoped) is now met with GitLab. The sibling pattern was retained
+for this release to reduce risk — the `vcs/<provider>.sh` abstraction
+refactor is planned as a separate follow-up when either script exceeds
+~500 LOC of provider-specific logic.
 
 ### Bitbucket-specific feature gaps (v0.2.0)
 
@@ -77,6 +83,15 @@ Not yet supported on the Bitbucket path:
 - Large-diff skip comment (exits cleanly with a warning, no comment posted)
 
 See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for the full list.
+
+### GitLab-specific feature gaps
+
+Not yet supported on the GitLab path:
+- `REVIEW_TARGET=standalone` (GitLab has Issues, but standalone mode is not yet implemented)
+- Slash-command triggers (GitLab CI has no `issue_comment` event equivalent)
+- APPROVE / UNAPPROVE MR events (separate Approvals API, optional)
+
+See [docs/gitlab-setup.md](docs/gitlab-setup.md) for the full list.
 
 ### Dockerfile COPY glob
 
@@ -383,10 +398,15 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable GitHub "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). GitHub-only. |
-| `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud). |
+| `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud--gitlab). |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |
 | `BITBUCKET_WORKSPACE` / `BITBUCKET_REPO_SLUG` | — | Bitbucket-only. Optional explicit override for the repo identifier; if unset, the script splits `GITHUB_REPOSITORY` |
+| `GITLAB_TOKEN` | — | GitLab-only. Personal or project access token with `api` scope; falls back to `CI_JOB_TOKEN` |
+| `GITLAB_API_URL` | `https://gitlab.com/api/v4` | GitLab-only. API base URL for self-hosted instances |
+| `GITLAB_PROJECT_ID` | — | GitLab-only. Numeric project ID; falls back to `CI_PROJECT_ID`, then URL-encodes `CI_PROJECT_PATH` or `GITHUB_REPOSITORY` |
+| `GITLAB_MR_DIFF_BASE_SHA` | — | GitLab-only. Base SHA for inline discussion positions; falls back to `CI_MERGE_REQUEST_DIFF_BASE_SHA`. Required for inline discussions. |
+| `GITLAB_BOT_USERNAME` | — | GitLab-only. Username of the bot posting reviews (for stale thread resolution); defaults to the authenticated user |
 
 Exit codes from `llm-call.sh`:
 - **0** — success

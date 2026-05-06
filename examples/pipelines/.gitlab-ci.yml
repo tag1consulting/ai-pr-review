@@ -1,0 +1,46 @@
+# GitLab CI starter for ai-pr-review.
+#
+# Copy this file to `.gitlab-ci.yml` at the root of your GitLab repository.
+#
+# Required CI/CD variables (Settings -> CI/CD -> Variables):
+#   ANTHROPIC_API_KEY   (masked)  — or OPENAI_API_KEY / GOOGLE_API_KEY etc.
+#                                    depending on AI_PROVIDER.
+#   GITLAB_TOKEN        (masked)  — Project access token with `api` scope.
+#                                    Falls back to CI_JOB_TOKEN (limited scopes).
+#
+# Optional CI/CD variables:
+#   AI_PROVIDER         (default: anthropic)
+#   AI_REVIEW_MODE      (default: quick; set to 'full' for deep agents)
+#
+# GIT_STRATEGY=clone + GIT_DEPTH=0 are required: review.sh calls
+# `git fetch origin $BASE_REF` to compute the diff, and the default
+# shallow GitLab CI clone does not always include the base branch history.
+#
+# The `rules:` block restricts this job to merge request pipelines only.
+# CI_MERGE_REQUEST_IID and related MR variables are only populated in
+# merge request pipelines (triggered by rules with $CI_MERGE_REQUEST_IID).
+
+image:
+  name: ghcr.io/tag1consulting/ai-pr-review:0
+
+variables:
+  GIT_STRATEGY: clone
+  GIT_DEPTH: "0"
+
+ai-review:
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - export VCS_PROVIDER=gitlab
+    - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
+    - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+    - export PR_NUMBER="$CI_MERGE_REQUEST_IID"
+    - export BASE_REF="$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - export HEAD_SHA="$CI_COMMIT_SHA"
+    - export GITLAB_PROJECT_ID="$CI_PROJECT_ID"
+    - export GITLAB_MR_DIFF_BASE_SHA="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+    - export GITLAB_TOKEN="${GITLAB_TOKEN:-}"
+    - export GITHUB_REPOSITORY="$CI_PROJECT_PATH"
+    # ANTHROPIC_API_KEY (or your provider's key) comes from CI/CD variables.
+    - /opt/ai-pr-review/review.sh

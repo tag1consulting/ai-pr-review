@@ -37,17 +37,19 @@ That's it — reviews start firing on the next PR. **Want slash commands?** (`/a
 
 ## Supported VCS providers
 
-The same container image drives PR reviews on both GitHub and Bitbucket Cloud.
-Select the provider via the `VCS_PROVIDER` env var (default: `github`).
+The same container image drives PR/MR reviews on GitHub, Bitbucket Cloud,
+and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github`).
 
 | Provider | `VCS_PROVIDER` | Summary comment | Inline findings | Standalone (issue) mode |
 |----------|---------------|-----------------|-----------------|------------------------|
 | GitHub | `github` (default) | ✅ | ✅ | ✅ |
 | Bitbucket Cloud | `bitbucket` | ✅ (findings rendered inside) | ❌ (v0.2.0) | ❌ (no Issues product) |
+| GitLab | `gitlab` | ✅ | ✅ | ❌ (planned) |
 
 See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for Bitbucket Pipelines
-setup (token scopes, repo variables, starter pipeline, caveats). The
-remainder of this README applies to the GitHub path.
+setup and [docs/gitlab-setup.md](docs/gitlab-setup.md) for GitLab CI/CD setup
+(token scopes, CI variables, starter pipeline, caveats). The remainder of
+this README applies to the GitHub path.
 
 ## What it does
 
@@ -279,7 +281,7 @@ To disable suggestions, set `enable-suggestions: false`:
 
 **How it works.** Eligible agents have a short prompt addendum appended to their system prompt instructing them to include a `suggested_code` field (and optional `start_line` for multi-line replacements) only when the fix is concrete and complete. The post-review script constructs the ```` ```suggestion ```` fence itself — agents are not trusted to emit the markdown directly. Multi-line suggestions are validated against the diff: every line in the replacement range must appear on the new-file side of a diff hunk, or the suggestion is dropped while keeping the natural-language remediation.
 
-**Caveats.** Suggestions increase output token usage. The feature is GitHub-only — Bitbucket reviews ignore it. Suggestions are validated defensively: `start_line` must be a positive integer ≤ `line` with no leading zeros, multi-line ranges are capped at 100 lines, and `suggested_code` containing triple backticks (which would break the suggestion fence) is rejected. When any validation fails, the suggestion is dropped with a WARNING logged to the Actions run and the finding still posts with its natural-language remediation. On incremental reviews (SHA watermark active), suggestions only render when the finding's line range is still in the current incremental diff — add the `ai-review-rescan` label to force a full re-review.
+**Caveats.** Suggestions increase output token usage. The feature works on both GitHub and GitLab (using GitLab's `suggestion` fence syntax) — Bitbucket reviews ignore it. Suggestions are validated defensively: `start_line` must be a positive integer ≤ `line` with no leading zeros, multi-line ranges are capped at 100 lines, and `suggested_code` containing triple backticks (which would break the suggestion fence) is rejected. When any validation fails, the suggestion is dropped with a WARNING logged to the Actions run and the finding still posts with its natural-language remediation. On incremental reviews (SHA watermark active), suggestions only render when the finding's line range is still in the current incremental diff — add the `ai-review-rescan` label to force a full re-review.
 
 ## Incremental reviews
 
