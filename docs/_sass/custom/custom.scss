@@ -108,6 +108,15 @@ h1, h2, h3, h4, h5, h6,
   border-radius: 4px;
 }
 
+// Tighten line spacing inside multi-line <pre> code blocks. just-the-docs
+// sets line-height: 1.6 on all <code> elements (fine for inline), but that
+// spreads the rows of ASCII-art diagrams and tree listings apart. Scope the
+// override to code within a highlighted block so inline code is unchanged.
+.highlight pre code,
+pre.highlight code {
+  line-height: 1.4;
+}
+
 // Table styling
 table {
   th {
