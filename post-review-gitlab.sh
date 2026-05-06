@@ -162,73 +162,6 @@ gl_api() {
 }
 
 # ---------------------------------------------------------------------------
-# --get-last-sha mode: must run before positional-arg validation so it can
-# be invoked with only one argument. Returns the SHA via stdout, or empty
-# string on first run. Never fails the caller on API error.
-# ---------------------------------------------------------------------------
-if [[ "${1:-}" == "--get-last-sha" ]]; then
-  MR_NUMBER="${2:?--get-last-sha requires MR number as second argument}"
-  resolve_project_id
-
-  local_page=1
-  comment_body=""
-  while true; do
-    notes_json=$(gl_api GET "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/notes?per_page=100&page=${local_page}&sort=desc&order_by=updated_at") || {
-      echo "WARNING: get_last_reviewed_sha: GitLab API error (treating as first run)." >&2
-      exit 0
-    }
-
-    comment_body=$(echo "$notes_json" | jq -r --arg marker "$MARKER_PREFIX" \
-      '[.[] | select(.body // "" | contains($marker))] | first.body // empty' 2>/dev/null) || {
-      echo "WARNING: get_last_reviewed_sha: could not parse notes response (treating as first run)." >&2
-      exit 0
-    }
-
-    [[ -n "$comment_body" ]] && break
-
-    # Check if there are more pages via array length
-    local_count=$(echo "$notes_json" | jq 'length' 2>/dev/null || echo "0")
-    [[ "$local_count" -lt 100 ]] && break
-    local_page=$((local_page + 1))
-  done
-
-  if [[ -n "$comment_body" ]]; then
-    echo "$comment_body" | grep -oE 'sha=[0-9a-f]+' | sed 's/sha=//' | head -1 || true
-  fi
-  exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# Reject --standalone: not yet implemented for GitLab (planned).
-# ---------------------------------------------------------------------------
-if [[ "${1:-}" == "--standalone" ]]; then
-  echo "ERROR: Standalone review mode is not yet supported for GitLab (planned for a future release)." >&2
-  echo "Use REVIEW_TARGET=pr instead." >&2
-  exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Main mode: positional args.
-# ---------------------------------------------------------------------------
-MR_NUMBER="${1:?Missing MR number}"
-SUMMARY_FILE="${2:?Missing summary file}"
-# shellcheck disable=SC2034
-FINDINGS_FILE="${3:?Missing findings file}"
-FINDINGS_JSON_FILE="${4:?Missing findings JSON file}"
-DIFF_FILE="${5:?Missing diff file}"
-HEAD_SHA="${6:?Missing head SHA}"
-TOKEN_TABLE_FILE="${7:-}"
-
-# Validate HEAD_SHA is a hex git SHA before it is interpolated into sed
-# expressions or embedded in the SHA watermark marker.
-if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
-  echo "ERROR: HEAD_SHA must be a hex git SHA (got '${HEAD_SHA}')." >&2
-  exit 1
-fi
-
-resolve_project_id
-
-# ---------------------------------------------------------------------------
 # GitLab MR notes have a ~1,000,000 char limit but posting enormous comments
 # is poor UX. Truncate at 250,000 to stay well within the limit while being
 # generous enough to never truncate real reviews.
@@ -288,6 +221,242 @@ format_source_tag() {
     echo "[${primary}]"
   fi
 }
+
+# ---------------------------------------------------------------------------
+# --get-last-sha mode: must run before positional-arg validation so it can
+# be invoked with only one argument. Returns the SHA via stdout, or empty
+# string on first run. Never fails the caller on API error.
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "--get-last-sha" ]]; then
+  MR_NUMBER="${2:?--get-last-sha requires MR number as second argument}"
+  resolve_project_id
+
+  local_page=1
+  comment_body=""
+  while true; do
+    notes_json=$(gl_api GET "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/notes?per_page=100&page=${local_page}&sort=desc&order_by=updated_at") || {
+      echo "WARNING: get_last_reviewed_sha: GitLab API error (treating as first run)." >&2
+      exit 0
+    }
+
+    comment_body=$(echo "$notes_json" | jq -r --arg marker "$MARKER_PREFIX" \
+      '[.[] | select(.body // "" | contains($marker))] | first.body // empty' 2>/dev/null) || {
+      echo "WARNING: get_last_reviewed_sha: could not parse notes response (treating as first run)." >&2
+      exit 0
+    }
+
+    [[ -n "$comment_body" ]] && break
+
+    # Check if there are more pages via array length
+    local_count=$(echo "$notes_json" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$local_count" -lt 100 ]] && break
+    local_page=$((local_page + 1))
+  done
+
+  if [[ -n "$comment_body" ]]; then
+    echo "$comment_body" | grep -oE 'sha=[0-9a-f]+' | sed 's/sha=//' | head -1 || true
+  fi
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# --standalone mode: post findings as a GitLab issue instead of MR comments.
+# Usage: post-review-gitlab.sh --standalone <summary_file> <findings_file>
+#        <findings_json_file> <diff_file> <head_sha> [token_table_file]
+# Env: GITLAB_TOKEN (or CI_JOB_TOKEN), GITLAB_PROJECT_ID (or CI_PROJECT_ID
+#      or CI_PROJECT_PATH or GITHUB_REPOSITORY), BASE_REF
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "--standalone" ]]; then
+  shift
+  _SUMMARY_FILE="${1:?Missing summary file}"
+  _FINDINGS_FILE="${2:?Missing findings file}"
+  _FINDINGS_JSON_FILE="${3:?Missing findings JSON file}"
+  _DIFF_FILE="${4:?Missing diff file}"
+  _HEAD_SHA="${5:?Missing head SHA}"
+  _TOKEN_TABLE_FILE="${6:-}"
+
+  : "${BASE_REF:?BASE_REF is required for standalone mode}"
+  resolve_project_id
+
+  post_standalone_issue() {
+    local summary findings_json finding_total overall_risk
+    summary=$(cat "$_SUMMARY_FILE")
+    findings_json="[]"
+    if [[ -f "$_FINDINGS_JSON_FILE" ]]; then
+      if jq -e 'type == "array"' "$_FINDINGS_JSON_FILE" > /dev/null 2>&1; then
+        findings_json=$(cat "$_FINDINGS_JSON_FILE")
+      fi
+    fi
+    finding_total=$(echo "$findings_json" | jq 'length')
+
+    if [[ "$finding_total" -eq 0 ]]; then
+      overall_risk="None"
+    elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "critical")' > /dev/null 2>&1; then
+      overall_risk="Critical"
+    elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "high")' > /dev/null 2>&1; then
+      overall_risk="High"
+    elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "medium")' > /dev/null 2>&1; then
+      overall_risk="Medium"
+    else
+      overall_risk="Low"
+    fi
+
+    local icon
+    icon=$(severity_icon "$overall_risk")
+
+    local issue_body
+    issue_body="<!-- ai-standalone-review sha=${_HEAD_SHA} -->
+## AI Code Review
+
+${icon} **Overall Risk:** ${overall_risk} | **Findings:** ${finding_total} | **Commit:** \`${_HEAD_SHA:0:12}\` | **Base:** \`${BASE_REF}\`
+
+### Summary
+
+${summary}
+"
+
+    if [[ "$finding_total" -gt 0 ]]; then
+      # shellcheck disable=SC2034
+      local _enable_lc="${AI_ENABLE_SUGGESTIONS:-true}"
+      _enable_lc="${_enable_lc,,}"
+      local _jq_enable=false
+      [[ "$_enable_lc" == "true" ]] && _jq_enable=true
+      issue_body="${issue_body}
+### Findings
+
+$(echo "$findings_json" | jq -r --argjson enable_suggestions "$_jq_enable" '
+  sort_by(
+    if (.severity | ascii_downcase) == "critical" then 0
+    elif (.severity | ascii_downcase) == "high" then 1
+    elif (.severity | ascii_downcase) == "medium" then 2
+    else 3 end
+  ) | .[] |
+  (
+    if (.sources | type) == "array" and (.sources | length) > 1 then
+      "[\(.sources[0])] *(also flagged by: \(.sources[1:] | join(", ")))*"
+    else
+      "[" + (.sources[0] // .source // "unknown") + "]"
+    end
+  ) as $stag |
+  "- **[\(.severity)]** \($stag) `\(.file // "unknown"):\(.line // "?")` — \(.finding)\n  **Remediation:** \(.remediation // "N/A")\n" +
+  if $enable_suggestions and ((.suggested_code // "") | length) > 0 and (.suggested_code | contains("```") | not) then
+    "  <details>\n  <summary>Suggested fix</summary>\n\n  ```\n" +
+    (.suggested_code | split("\n") | map("  " + .) | join("\n")) +
+    "\n  ```\n\n  </details>\n"
+  else "" end
+')"
+    else
+      issue_body="${issue_body}
+No findings above the confidence threshold. The code looks good."
+    fi
+
+    if [[ -n "$_TOKEN_TABLE_FILE" && -s "$_TOKEN_TABLE_FILE" ]]; then
+      issue_body="${issue_body}
+
+$(cat "$_TOKEN_TABLE_FILE")"
+    fi
+
+    local failed_agents_env="${AI_REVIEW_FAILED_AGENTS:-}"
+    if [[ -n "$failed_agents_env" ]]; then
+      issue_body="${issue_body}
+
+> **Warning:** The following agents failed and the review may be incomplete: ${failed_agents_env//:/, }"
+    fi
+
+    if [[ "$finding_total" -gt 0 ]]; then
+      local _agent_prompt
+      _agent_prompt=$(echo "$findings_json" | jq -r '
+        group_by(.file) | map(
+          "In `\(.[0].file)`:" as $header |
+          [$header] + [
+            .[] |
+            "- Around line \(.line // "?"): \(.finding)" +
+              if (.remediation // "") != "" then ". " + .remediation else "" end
+          ] | join("\n")
+        ) | join("\n\n")
+      ' 2>/dev/null)
+      if [[ -n "$_agent_prompt" ]]; then
+        issue_body="${issue_body}
+
+<details>
+<summary>🤖 Prompt for AI agents</summary>
+
+\`\`\`
+Verify each finding against the current code and only fix it if needed.
+
+${_agent_prompt}
+\`\`\`
+
+</details>"
+      fi
+    fi
+
+    issue_body="${issue_body}
+
+---
+*AI Code Review — generated by [ai-pr-review](https://github.com/tag1consulting/ai-pr-review)*"
+
+    issue_body=$(truncate_body "$issue_body")
+
+    local issue_title="${icon} AI Review: ${overall_risk} risk — ${_HEAD_SHA:0:7} on ${BASE_REF}"
+
+    echo "Creating standalone review issue on GitLab..." >&2
+
+    # GitLab Issues API: POST /projects/:id/issues
+    # Labels are passed as a comma-separated string in the labels field.
+    local labels="ai-review"
+    if [[ "$overall_risk" == "Critical" || "$overall_risk" == "High" ]]; then
+      labels="ai-review,ai-review-action-needed"
+    fi
+
+    local issue_result issue_url
+    if issue_result=$(gl_api POST \
+      "/projects/${PROJECT_ID}/issues" \
+      --data-urlencode "title=${issue_title}" \
+      --data-urlencode "description=${issue_body}" \
+      --data-urlencode "labels=${labels}" 2>&1); then
+      issue_url=$(echo "$issue_result" | jq -r '.web_url // empty' 2>/dev/null)
+      echo "Standalone review issue created: ${issue_url:-unknown}" >&2
+    else
+      # Retry without labels in case they don't exist on the project
+      echo "WARNING: Issue creation with labels failed; retrying without labels..." >&2
+      if issue_result=$(gl_api POST \
+        "/projects/${PROJECT_ID}/issues" \
+        --data-urlencode "title=${issue_title}" \
+        --data-urlencode "description=${issue_body}" 2>&1); then
+        issue_url=$(echo "$issue_result" | jq -r '.web_url // empty' 2>/dev/null)
+        echo "Standalone review issue created: ${issue_url:-unknown}" >&2
+      else
+        echo "ERROR: Failed to create standalone review issue." >&2
+        exit 1
+      fi
+    fi
+  }
+
+  post_standalone_issue
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Main mode: positional args.
+# ---------------------------------------------------------------------------
+MR_NUMBER="${1:?Missing MR number}"
+SUMMARY_FILE="${2:?Missing summary file}"
+# shellcheck disable=SC2034
+FINDINGS_FILE="${3:?Missing findings file}"
+FINDINGS_JSON_FILE="${4:?Missing findings JSON file}"
+DIFF_FILE="${5:?Missing diff file}"
+HEAD_SHA="${6:?Missing head SHA}"
+TOKEN_TABLE_FILE="${7:-}"
+
+# Validate HEAD_SHA is a hex git SHA before it is interpolated into sed
+# expressions or embedded in the SHA watermark marker.
+if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+  echo "ERROR: HEAD_SHA must be a hex git SHA (got '${HEAD_SHA}')." >&2
+  exit 1
+fi
+
+resolve_project_id
 
 # ---------------------------------------------------------------------------
 # keep in sync with post-review.sh:662

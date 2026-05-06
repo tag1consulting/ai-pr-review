@@ -44,7 +44,7 @@ and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github
 |----------|---------------|---------|--------|-------------|----------|------------|
 | GitHub | `github` (default) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Bitbucket Cloud | `bitbucket` | ✅ | ❌ | ❌ | ❌ | ❌ |
-| GitLab | `gitlab` | ✅ | ✅ | ✅ | ✅ | ❌ (planned) |
+| GitLab | `gitlab` | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for Bitbucket Pipelines
 setup and [docs/gitlab-setup.md](docs/gitlab-setup.md) for GitLab CI/CD setup

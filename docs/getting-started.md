@@ -46,11 +46,11 @@ That's it — reviews start firing on the next PR. Want slash commands? (`/ai-pr
 The same container image drives PR/MR reviews on GitHub, Bitbucket Cloud,
 and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github`).
 
-| Provider | `VCS_PROVIDER` | Summary comment | Inline findings | Suggestions | Approval |
-|----------|---------------|-----------------|-----------------|-------------|----------|
-| GitHub | `github` (default) | Yes | Yes | Yes | Yes (via review event) |
-| Bitbucket Cloud | `bitbucket` | Yes (findings rendered inside) | No | No | No |
-| GitLab | `gitlab` | Yes | Yes | Yes | Yes (approve/unapprove API) |
+| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval | Standalone |
+|----------|---------------|---------|--------|-------------|----------|------------|
+| GitHub | `github` (default) | Yes | Yes | Yes | Yes | Yes |
+| Bitbucket Cloud | `bitbucket` | Yes (findings inside) | No | No | No | No |
+| GitLab | `gitlab` | Yes | Yes | Yes | Yes | Yes |
 
 See [Bitbucket setup](bitbucket-setup) for Bitbucket Pipelines setup and
 [GitLab setup](gitlab-setup) for GitLab CI/CD setup (token scopes, CI

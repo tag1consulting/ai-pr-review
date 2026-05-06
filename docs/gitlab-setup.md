@@ -26,11 +26,11 @@ fences that the MR author can apply with one click.
 - All existing AI agents and static analyzers (same container image)
 - Self-hosted GitLab instances via `GITLAB_API_URL`
 - Provider-auto retry on transient GitLab API errors (408/429/500-504)
+- Standalone review mode (`REVIEW_TARGET=standalone`) — posts findings as
+  a GitLab Issue with severity labels
 
 ## What does not work on GitLab
 
-- `REVIEW_TARGET=standalone` mode (planned for a future release; GitLab
-  has Issues, so this is feasible — just not yet implemented)
 - Slash-command triggers (GitLab CI has no `issue_comment` equivalent;
   the review always runs on MR create/push via merge request pipelines)
 

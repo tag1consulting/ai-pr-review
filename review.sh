@@ -79,19 +79,10 @@ if [[ ! -x "$POST_REVIEW_SCRIPT" ]]; then
   exit 1
 fi
 
-if [[ "$REVIEW_TARGET" == "standalone" ]]; then
-  case "$VCS_PROVIDER" in
-    bitbucket)
-      log_error "Standalone review mode is not supported for VCS_PROVIDER=bitbucket."
-      echo "Bitbucket Cloud has no Issues product; use REVIEW_TARGET=pr instead." >&2
-      exit 1
-      ;;
-    gitlab)
-      log_error "Standalone review mode is not yet supported for VCS_PROVIDER=gitlab."
-      echo "Planned for a future release. Use REVIEW_TARGET=pr instead." >&2
-      exit 1
-      ;;
-  esac
+if [[ "$VCS_PROVIDER" == "bitbucket" && "$REVIEW_TARGET" == "standalone" ]]; then
+  log_error "Standalone review mode is not supported for VCS_PROVIDER=bitbucket."
+  echo "Bitbucket Cloud has no Issues product; use REVIEW_TARGET=pr instead." >&2
+  exit 1
 fi
 
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"

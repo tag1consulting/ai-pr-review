@@ -45,7 +45,8 @@ env var:
 `review.sh` resolves `POST_REVIEW_SCRIPT` once at startup based on
 `VCS_PROVIDER` and uses it at every post-review call site. Invalid provider
 values fail fast with a clear error. `REVIEW_TARGET=standalone` is rejected
-for Bitbucket (no Issues product) and GitLab (not yet implemented).
+for Bitbucket (no Issues product); GitLab standalone mode posts findings as
+a GitLab Issue.
 
 ### Sibling-script pattern
 
@@ -88,7 +89,6 @@ See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for the full list.
 ### GitLab-specific feature gaps
 
 Not yet supported on the GitLab path:
-- `REVIEW_TARGET=standalone` (GitLab has Issues, but standalone mode is not yet implemented)
 - Slash-command triggers (GitLab CI has no `issue_comment` event equivalent)
 - Incremental `start_sha` for inline discussions (on subsequent runs after
   the SHA watermark advances, `start_sha` is still set to the original MR
