@@ -124,5 +124,12 @@
     "match": {
       "pattern": "(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such (tag|version|image)).{0,200}([a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+:[0-9]|([a-zA-Z0-9._-]+/)?[a-zA-Z0-9._-]+:[0-9].{0,200}(does not exist|unreleased|not (a |an )?(valid |published |released )?version|no such (tag|version|image))"
     }
+  },
+  {
+    "id": "trufflehog-unverified-test-file",
+    "reason": "Unverified secret detections in test/fixture/example files are almost always intentional mock data (fake tokens, placeholder credentials). The run-trufflehog.sh script already demotes these to Low/confidence-40 and tags them '[test file — likely mock data]', but this rule provides explicit suppression as a safety net. Verified secrets in test files are NOT suppressed — a real leaked credential is critical regardless of location.",
+    "match": {
+      "pattern": "\\(unverified\\).{0,50}\\[test file"
+    }
   }
 ]
