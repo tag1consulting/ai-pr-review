@@ -13,6 +13,8 @@ fences that the MR author can apply with one click.
 - Suggestion fences in inline discussions (GitLab's `suggestion` syntax)
 - Incremental-diff SHA watermark (same HTML-comment marker as GitHub)
 - Stale discussion resolution (prior bot threads are auto-resolved)
+- MR approval / unapproval based on risk classification (no Critical/High
+  findings → approve; Critical/High present → remove prior approval)
 - All existing AI agents and static analyzers (same container image)
 - Self-hosted GitLab instances via `GITLAB_API_URL`
 - Provider-auto retry on transient GitLab API errors (408/429/500-504)
@@ -21,8 +23,6 @@ fences that the MR author can apply with one click.
 
 - `REVIEW_TARGET=standalone` mode (planned for a future release; GitLab
   has Issues, so this is feasible — just not yet implemented)
-- APPROVE / UNAPPROVE MR events (GitLab has a separate Approvals API;
-  the review classifies risk but does not call the approval endpoints)
 - Slash-command triggers (GitLab CI has no `issue_comment` equivalent;
   the review always runs on MR create/push via merge request pipelines)
 

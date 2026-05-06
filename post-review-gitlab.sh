@@ -975,6 +975,57 @@ $(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$l
 }
 
 # ---------------------------------------------------------------------------
+# Approve or unapprove the MR based on risk classification.
+# GitLab's approve/unapprove endpoints are separate from notes/discussions.
+# Non-fatal: approval failures (permissions, approval rules) are logged as
+# warnings but never block the review.
+# ---------------------------------------------------------------------------
+submit_approval_event() {
+  local findings_json="[]"
+  if [[ -f "$FINDINGS_JSON_FILE" ]]; then
+    findings_json=$(cat "$FINDINGS_JSON_FILE")
+    if ! echo "$findings_json" | jq -e 'type == "array"' > /dev/null 2>&1; then
+      findings_json="[]"
+    fi
+  fi
+
+  local risk_event
+  risk_event=$(classify_risk "$findings_json")
+  local event="${risk_event#*|}"
+
+  if [[ "$event" == "APPROVE" ]]; then
+    echo "Approving MR !${MR_NUMBER}..." >&2
+    local approve_result
+    if approve_result=$(gl_api POST \
+      "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/approve" \
+      -H 'Content-Type: application/json' \
+      --data-binary '{}' 2>&1); then
+      echo "MR !${MR_NUMBER} approved." >&2
+    else
+      echo "WARNING: Could not approve MR !${MR_NUMBER}: ${approve_result}" >&2
+      echo "This may be due to project approval rules, insufficient permissions, or the bot being the MR author." >&2
+    fi
+  elif [[ "$event" == "REQUEST_CHANGES" ]]; then
+    # GitLab has no native "request changes" concept. Unapprove any prior
+    # bot approval so a stale approval doesn't persist when new Critical/High
+    # findings are posted.
+    echo "Unapproving MR !${MR_NUMBER} (Critical/High findings present)..." >&2
+    local unapprove_result
+    if unapprove_result=$(gl_api POST \
+      "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/unapprove" \
+      -H 'Content-Type: application/json' \
+      --data-binary '{}' 2>&1); then
+      echo "Prior approval removed from MR !${MR_NUMBER}." >&2
+    else
+      # 404 or 403 = no prior approval to remove, or insufficient permissions.
+      # Both are expected and non-fatal.
+      echo "WARNING: Could not unapprove MR !${MR_NUMBER} (may not have a prior approval): ${unapprove_result}" >&2
+    fi
+  fi
+  # COMMENT event (incomplete review): no approval action taken.
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 echo "--- Posting review to GitLab MR !${MR_NUMBER} ---" >&2
@@ -1001,3 +1052,6 @@ if ! post_summary_with_findings "$summary_body"; then
   echo "ERROR: Review results were not delivered to MR !${MR_NUMBER}." >&2
   exit 1
 fi
+
+# Step 4: Submit approval event based on risk classification
+submit_approval_event

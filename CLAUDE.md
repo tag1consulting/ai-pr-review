@@ -89,11 +89,16 @@ See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for the full list.
 Not yet supported on the GitLab path:
 - `REVIEW_TARGET=standalone` (GitLab has Issues, but standalone mode is not yet implemented)
 - Slash-command triggers (GitLab CI has no `issue_comment` event equivalent)
-- APPROVE / UNAPPROVE MR events (separate Approvals API, optional)
 - Incremental `start_sha` for inline discussions (on subsequent runs after
   the SHA watermark advances, `start_sha` is still set to the original MR
   diff base; GitLab anchors discussions to the full MR diff rather than the
   incremental diff, so suggestions may show stale context)
+
+Note: APPROVE / UNAPPROVE events are supported. When no Critical/High
+findings are found, the bot approves the MR via `POST .../approve`. When
+Critical/High findings appear, any prior bot approval is removed via
+`POST .../unapprove`. Approval failures (permissions, project approval
+rules, bot-is-author) are non-fatal warnings.
 
 See [docs/gitlab-setup.md](docs/gitlab-setup.md) for the full list.
 
