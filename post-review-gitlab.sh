@@ -521,8 +521,15 @@ ${summary}
 
   local token_block=""
   if [[ -n "$TOKEN_TABLE_FILE" && -s "$TOKEN_TABLE_FILE" ]]; then
+    local token_content
+    token_content=$(sed '/^### Token Usage$/d' "$TOKEN_TABLE_FILE")
     token_block="
-$(cat "$TOKEN_TABLE_FILE")
+<details>
+<summary>Token Usage</summary>
+
+${token_content}
+
+</details>
 "
   fi
 
