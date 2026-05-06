@@ -707,12 +707,12 @@ resolve_stale_discussions() {
 
 # ---------------------------------------------------------------------------
 # Post inline findings as individual MR discussions with optional suggestion
-# fences. Populates body_findings_out (via nameref) with overflow findings
-# that could not be posted inline.
+# fences. Writes overflow body findings to $1 (a temp file path).
 #
 # Returns: inline_count via stdout
 # ---------------------------------------------------------------------------
 post_inline_discussions() {
+  local body_findings_file="${1:?Missing body_findings_file argument}"
   local findings_json="[]"
   if [[ -f "$FINDINGS_JSON_FILE" ]]; then
     findings_json=$(cat "$FINDINGS_JSON_FILE")
@@ -751,13 +751,7 @@ post_inline_discussions() {
       all_body="${all_body}
 $(format_body_finding "$severity" "$source_tag" "$finding" "${file:-unknown}:${line:-?}" "" "$remediation")"
     done <<< "$findings_ndjson"
-    # Write body findings to a temp file for the caller to read
-    if [[ -n "$all_body" ]]; then
-      local bf_file
-      bf_file=$(mktemp_tracked /tmp/gl-body-findings-XXXXXXXX)
-      printf '%s' "$all_body" > "$bf_file"
-      echo "BODY_FINDINGS_FILE=$bf_file" >&2
-    fi
+    [[ -n "$all_body" ]] && printf '%s' "$all_body" > "$body_findings_file"
     echo "0"
     return 0
   fi
@@ -959,13 +953,7 @@ $(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$l
     fi
   done <<< "$findings_ndjson"
 
-  # Write body findings to a temp file for the caller to read
-  if [[ -n "$body_findings" ]]; then
-    local bf_file
-    bf_file=$(mktemp_tracked /tmp/gl-body-findings-XXXXXXXX)
-    printf '%s' "$body_findings" > "$bf_file"
-    echo "BODY_FINDINGS_FILE=$bf_file" >&2
-  fi
+  [[ -n "$body_findings" ]] && printf '%s' "$body_findings" > "$body_findings_file"
 
   echo "$inline_count"
 }
@@ -979,16 +967,11 @@ echo "--- Posting review to GitLab MR !${MR_NUMBER} ---" >&2
 resolve_stale_discussions
 
 # Step 2: Post inline discussions and collect overflow body findings
-# post_inline_discussions writes the inline count to stdout and
-# BODY_FINDINGS_FILE=<path> to stderr if there are overflow findings.
-inline_stderr_file=$(mktemp_tracked /tmp/gl-inline-stderr-XXXXXXXX)
-inline_count=$(post_inline_discussions 2> >(tee "$inline_stderr_file" >&2))
+body_findings_file=$(mktemp_tracked /tmp/gl-body-findings-XXXXXXXX)
+inline_count=$(post_inline_discussions "$body_findings_file")
 
 body_findings=""
-bf_path=$(grep -oP 'BODY_FINDINGS_FILE=\K.*' "$inline_stderr_file" 2>/dev/null || true)
-if [[ -n "$bf_path" && -f "$bf_path" ]]; then
-  body_findings=$(cat "$bf_path")
-fi
+[[ -s "$body_findings_file" ]] && body_findings=$(cat "$body_findings_file")
 
 echo "Posted ${inline_count} inline discussion(s)." >&2
 
