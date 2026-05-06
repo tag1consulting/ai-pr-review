@@ -236,14 +236,56 @@ DIFF
   [ "$output" = "Critical|REQUEST_CHANGES" ]
 }
 
+@test "gitlab classify_risk: high finding -> High|REQUEST_CHANGES" {
+  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  run classify_risk '[{"severity":"High","file":"a.py","line":1,"finding":"x"}]'
+  [ "$output" = "High|REQUEST_CHANGES" ]
+}
+
 @test "gitlab classify_risk: medium finding -> Medium|APPROVE" {
   load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
   run classify_risk '[{"severity":"Medium","file":"a.py","line":1,"finding":"x"}]'
   [ "$output" = "Medium|APPROVE" ]
 }
 
+@test "gitlab classify_risk: low finding -> Low|APPROVE" {
+  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  run classify_risk '[{"severity":"Low","file":"a.py","line":1,"finding":"x"}]'
+  [ "$output" = "Low|APPROVE" ]
+}
+
 # ---------------------------------------------------------------------------
-# resolve_project_id
+# resolve_project_id — error paths
+# ---------------------------------------------------------------------------
+
+@test "gitlab resolve_project_id: no env vars set -> error exit" {
+  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" resolve_project_id
+  unset GITLAB_PROJECT_ID CI_PROJECT_ID CI_PROJECT_PATH GITHUB_REPOSITORY 2>/dev/null || true
+  run resolve_project_id
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Cannot resolve GitLab project ID"* ]]
+}
+
+@test "gitlab resolve_project_id: malformed GITHUB_REPOSITORY -> error exit" {
+  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" resolve_project_id
+  unset GITLAB_PROJECT_ID CI_PROJECT_ID CI_PROJECT_PATH 2>/dev/null || true
+  GITHUB_REPOSITORY="group/subgroup/project"
+  run resolve_project_id
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"namespace/project"* ]]
+}
+
+@test "gitlab resolve_project_id: non-numeric GITLAB_PROJECT_ID falls through to CI_PROJECT_ID" {
+  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" resolve_project_id
+  GITLAB_PROJECT_ID="not-a-number"
+  CI_PROJECT_ID="99999"
+  unset CI_PROJECT_PATH GITHUB_REPOSITORY 2>/dev/null || true
+  resolve_project_id
+  [ "$PROJECT_ID" = "99999" ]
+}
+
+# ---------------------------------------------------------------------------
+# resolve_project_id — positive paths (moved from above)
 # ---------------------------------------------------------------------------
 
 @test "gitlab resolve_project_id: explicit numeric GITLAB_PROJECT_ID" {
@@ -497,4 +539,56 @@ DIFF
   gl_out=$(bash -c "${gl_fn}"'; parse_valid_lines "$1"' _ "$diff_file")
   rm -f "$diff_file"
   [ "$gh_out" = "$gl_out" ] || { echo "drift in parse_valid_lines: gh='${gh_out}' gl='${gl_out}'" >&2; return 1; }
+}
+
+@test "parity: parse_diff_new_lines identical between GitHub and GitLab" {
+  local gh_fn gl_fn
+  gh_fn=$(awk '/^parse_diff_new_lines\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
+  gl_fn=$(awk '/^parse_diff_new_lines\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
+
+  local diff_file
+  diff_file=$(mktemp)
+  cat > "$diff_file" << 'DIFF'
+diff --git a/foo.py b/foo.py
+--- a/foo.py
++++ b/foo.py
+@@ -1,4 +1,5 @@
+ context
++added
+ more context
+-deleted
++replaced
+ end
+DIFF
+
+  local gh_out gl_out
+  gh_out=$(bash -c "${gh_fn}"'; parse_diff_new_lines "$1"' _ "$diff_file")
+  gl_out=$(bash -c "${gl_fn}"'; parse_diff_new_lines "$1"' _ "$diff_file")
+  rm -f "$diff_file"
+  [ "$gh_out" = "$gl_out" ] || { echo "drift in parse_diff_new_lines: gh='${gh_out}' gl='${gl_out}'" >&2; return 1; }
+}
+
+@test "parity: classify_risk identical between Bitbucket and GitLab" {
+  local bb_fn gl_fn
+  bb_fn=$(awk '/^classify_risk\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
+  gl_fn=$(awk '/^classify_risk\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
+
+  local fixtures=(
+    '[]'
+    '[{"severity":"Critical","file":"a.py","line":1,"finding":"x"}]'
+    '[{"severity":"High","file":"a.py","line":1,"finding":"x"}]'
+    '[{"severity":"Medium","file":"a.py","line":1,"finding":"x"}]'
+    '[{"severity":"Low","file":"a.py","line":1,"finding":"x"}]'
+  )
+  for fixture in "${fixtures[@]}"; do
+    local bb_out gl_out
+    bb_out=$(bash -c 'AI_REVIEW_FAILED_AGENTS=""; '"${bb_fn}"'; classify_risk "$1"' _ "$fixture")
+    gl_out=$(bash -c 'AI_REVIEW_FAILED_AGENTS=""; '"${gl_fn}"'; classify_risk "$1"' _ "$fixture")
+    [ "$bb_out" = "$gl_out" ] || { echo "drift on fixture='${fixture}': bb='${bb_out}' gl='${gl_out}'" >&2; return 1; }
+  done
+  # Also test with failed agents
+  local bb_fail gl_fail
+  bb_fail=$(bash -c 'AI_REVIEW_FAILED_AGENTS="agent-x"; '"${bb_fn}"'; classify_risk "[]"' _)
+  gl_fail=$(bash -c 'AI_REVIEW_FAILED_AGENTS="agent-x"; '"${gl_fn}"'; classify_risk "[]"' _)
+  [ "$bb_fail" = "$gl_fail" ] || { echo "drift on failed-agents: bb='${bb_fail}' gl='${gl_fail}'" >&2; return 1; }
 }
