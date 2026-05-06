@@ -19,11 +19,11 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
   <div class="feature">
     <h3>Works Everywhere</h3>
-    <p>GitHub Actions and Bitbucket Cloud Pipelines. Anthropic, OpenAI, Google, and Bedrock proxy providers.</p>
+    <p>GitHub Actions, Bitbucket Cloud Pipelines, and GitLab CI/CD. Anthropic, OpenAI, Google, and Bedrock proxy providers.</p>
   </div>
   <div class="feature">
     <h3>One-Click Fixes</h3>
-    <p>Code suggestion buttons let PR authors accept fixes with a single click, powered by GitHub's suggestion block syntax.</p>
+    <p>Code suggestion buttons let PR/MR authors accept fixes with a single click, powered by GitHub and GitLab's suggestion block syntax.</p>
   </div>
 </div>
 

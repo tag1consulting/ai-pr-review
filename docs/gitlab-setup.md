@@ -1,3 +1,11 @@
+---
+layout: default
+title: GitLab Setup
+parent: Getting Started
+nav_order: 6
+render_with_liquid: false
+---
+
 # GitLab CI/CD setup
 
 `ai-pr-review` supports GitLab merge requests via the same container image
@@ -39,7 +47,15 @@ new project access token:
 Store the token somewhere safe — GitLab shows it only once.
 
 Alternatively, use a personal access token with `api` scope, scoped to
-the project.
+the project. The Developer role can post notes and discussions. For MR
+approval to work, the token's user must be an eligible approver under
+the project's approval rules — if approval fails, the script logs a
+warning and continues.
+
+> **Token type detection:** The script auto-detects the token format:
+> `glpat-*` tokens use the `PRIVATE-TOKEN` header, `glcbt-*` tokens use
+> the `JOB-TOKEN` header, and all other tokens (e.g. OAuth2 tokens from
+> `glab auth login`) use the `Authorization: Bearer` header.
 
 > **Note on `CI_JOB_TOKEN`:** The built-in CI job token has limited
 > scopes and typically cannot create MR notes or discussions. The script
@@ -81,11 +97,18 @@ are set:
 | `GITLAB_TOKEN` | CI/CD variable (masked) |
 | `GITHUB_REPOSITORY` | `$CI_PROJECT_PATH` (used as fallback project identifier) |
 | `AI_PROVIDER` | CI/CD variable (default `anthropic`) |
+| `AI_REVIEW_MODE` | CI/CD variable (default `quick`; set to `full` for deep agents) |
 | `ANTHROPIC_API_KEY` (or equivalent) | CI/CD variable (masked) |
+| `GITLAB_BOT_USERNAME` | (optional) CI/CD variable; if unset, auto-detected via `GET /user` |
 
 > **Note:** `GITLAB_MR_DIFF_BASE_SHA` is required for inline discussion
 > threads. Without it, all findings are posted in the summary comment
 > body instead of as inline discussions.
+
+> **Forcing a full re-review:** The `ai-review-rescan` label mechanism
+> is GitHub Actions-only. For GitLab, set `FORCE_FULL_DIFF=true` as a
+> CI/CD variable for a single run, or delete the summary comment on the
+> MR to reset the SHA watermark.
 
 ## `GIT_STRATEGY: clone` and `GIT_DEPTH: "0"` are required
 

@@ -10,7 +10,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 
 | Script | Role |
 |--------|------|
-| `review.sh` | Main orchestrator: diff computation, manifest building, language detection, agent dispatch, findings merge/dedup/suppress, invokes `post-review.sh` |
+| `review.sh` | Main orchestrator: diff computation, manifest building, language detection, agent dispatch, findings merge/dedup/suppress, invokes the provider-specific post-review script |
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Sibling-script pattern](#sibling-script-pattern)) |
@@ -52,8 +52,9 @@ for Bitbucket (no Issues product) and GitLab (not yet implemented).
 `post-review-bitbucket.sh` and `post-review-gitlab.sh` are **sibling
 scripts**, not refactors of `post-review.sh`. They duplicate pure helpers
 (`severity_icon`, `format_source_tag`, `truncate_body`, `mktemp_tracked`,
-`cleanup`, and for GitLab additionally `format_body_finding`,
-`build_agent_prompt`, `parse_valid_lines`, `parse_diff_new_lines`)
+`cleanup`, and for GitLab additionally `classify_risk`,
+`format_body_finding`, `build_agent_prompt`, `parse_valid_lines`,
+`parse_diff_new_lines`)
 because sourcing across providers would couple unrelated concerns.
 
 **Drift mitigation:** every duplicated helper carries a
@@ -137,13 +138,13 @@ The `source` field is optional in agent output — `extract_findings()` stamps t
 1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
 2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()` (sequential, default) or `call_agent_bg()` (parallel, opt-in). See [Parallel agent execution](#parallel-agent-execution) below.
 3. **Phase 2** — Extract `json-findings` from each agent output. Merge with shellcheck findings. Filter by confidence ≥ 75. Apply `config/suppressions.json`. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
-4. **Phase 3** — Format findings as markdown. Call `post-review.sh` to post everything to GitHub. Findings whose line is in the diff go inline (up to `AI_MAX_INLINE`); the rest go into the review body via `format_body_finding()`, which wraps remediation in a collapsible `<details>` accordion so the review stays scannable while preserving actionable detail.
+4. **Phase 3** — Format findings as markdown. Call the provider-specific post-review script to post everything. Findings whose line is in the diff go inline (up to `AI_MAX_INLINE`); the rest go into the review body via `format_body_finding()`, which wraps remediation in a collapsible `<details>` accordion so the review stays scannable while preserving actionable detail.
 
 ## Incremental review / SHA watermark
 
-The SHA of the last-reviewed commit is stored in an HTML comment embedded in the PR summary comment (`<!-- ai-pr-review-summary sha=<sha> -->`). `post-review.sh --get-last-sha` extracts it. Subsequent pushes diff from that SHA to HEAD. `post-review.sh` calls `update_sha_marker()` at the end to advance it.
+The SHA of the last-reviewed commit is stored in an HTML comment embedded in the PR/MR summary comment (`<!-- ai-pr-review-summary sha=<sha> -->`). The provider-specific post-review script's `--get-last-sha` mode extracts it. Subsequent pushes diff from that SHA to HEAD. The watermark is advanced at the end of each run when the summary comment is posted with the new HEAD SHA.
 
-`post_summary()` keeps at most one summary comment on the PR by calling `_cleanup_duplicate_summary_comments()` after each upsert. Duplicates can accumulate when two runs fire concurrently. Cleanup is non-fatal: DELETE failures emit a WARNING and are retried via `gh_api_retry`, but the review never blocks on cleanup.
+Each post-review script keeps at most one summary comment on the PR/MR by calling `_cleanup_duplicate_summary_comments()` after each upsert. Duplicates can accumulate when two runs fire concurrently. Cleanup is non-fatal: DELETE failures emit a WARNING, but the review never blocks on cleanup.
 
 To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. This sets the `force-full-diff` action input to `true`, which causes `review.sh` to skip the `--get-last-sha` call (leaving `LAST_REVIEWED_SHA=""`) and fall through to the full `origin/BASE_REF...HEAD_SHA` diff. The watermark still advances normally at the end of the run.
 
@@ -283,7 +284,9 @@ LLM agents are instructed to emit an optional `suggested_code` field (and
 optional `start_line` field for multi-line replacements) alongside each finding.
 `post-review.sh` wraps `suggested_code` in a GitHub ```` ```suggestion ```` fence
 inside the inline comment body, which GitHub renders as an "Apply suggestion"
-button that the PR author can accept with one click.
+button that the PR author can accept with one click. `post-review-gitlab.sh`
+uses GitLab's equivalent ```` ```suggestion:-N+0 ```` syntax (where N is lines
+above the anchor line for multi-line replacements).
 
 **Eligible agents** (system prompt is augmented with `prompts/suggestion-addendum.md`):
 `code-reviewer`, `edge-case-hunter`, `security-reviewer`, `silent-failure-hunter`, `blind-hunter`.
@@ -298,9 +301,11 @@ runtime, into a temp file registered with `mktemp_tracked`. Non-eligible agents
 and disabled runs use the base prompt path unchanged — no prompt change ships
 when the feature is off.
 
-**Validation in `post-review.sh`.** The suggestion rendering is gated on
-`AI_ENABLE_SUGGESTIONS=true` (case-insensitive — `TRUE`/`True`/`true` all work).
-Additional guards applied in order inside `post_findings()`:
+**Validation in `post-review.sh` and `post-review-gitlab.sh`.** The suggestion
+rendering is gated on `AI_ENABLE_SUGGESTIONS=true` (case-insensitive —
+`TRUE`/`True`/`true` all work). The same validation guards are duplicated in
+`post-review-gitlab.sh`'s `post_inline_discussions()` function. Additional
+guards applied in order:
 1. `start_line` must match `^[1-9][0-9]*$` (positive integer, no leading zeros
    or 0) and be ≤ `line`. Leading zeros would trigger bash octal interpretation.
 2. Multi-line ranges are capped at `MAX_SUGGESTION_RANGE=100` lines to prevent
@@ -337,13 +342,15 @@ appends a collapsible "Prompt for AI agents" block to the review body. The
 block contains a plain-text summary of all findings grouped by file, formatted
 as instructions that can be copy-pasted into an AI coding assistant (e.g.,
 Claude Code, Cursor, Copilot). The standalone review mode (GitHub Issues)
-includes the same block via an inline jq equivalent. The Bitbucket path does
+includes the same block via an inline jq equivalent. The GitLab path includes
+the prompt block (GitLab renders `<details>` HTML). The Bitbucket path does
 not include the prompt block (Bitbucket Cloud does not render `<details>` HTML).
 
-**Bitbucket.** The feature is GitHub-only. The Bitbucket path
-(`post-review-bitbucket.sh`) does not render suggestion fences — findings post
-as markdown bullets in the summary comment. `AI_ENABLE_SUGGESTIONS` is read
-only in `post-review.sh`.
+**Bitbucket.** The Bitbucket path (`post-review-bitbucket.sh`) does not render
+suggestion fences — findings post as markdown bullets in the summary comment.
+**GitLab** supports suggestion fences using GitLab's native `suggestion` syntax.
+`AI_ENABLE_SUGGESTIONS` is read in both `post-review.sh` and
+`post-review-gitlab.sh`.
 
 **Cost.** Enabling suggestions adds ~400 tokens to the system prompt of each
 eligible agent and increases output token usage proportional to the number of
@@ -406,7 +413,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings to be included (mapped from `confidence-threshold` action input) |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
-| `AI_ENABLE_SUGGESTIONS` | `true` | Enable GitHub "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). GitHub-only. |
+| `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). Supported on GitHub and GitLab; ignored on Bitbucket. |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud--gitlab). |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |
@@ -423,7 +430,7 @@ Exit codes from `llm-call.sh`:
 - **2** — transient error (all retries exhausted)
 - **3** — content issue (provider safety/recitation filter blocked response)
 
-`post-review.sh` wraps critical GitHub API calls with `gh_api_retry()` (3 retries, 2s/4s/8s backoff) for transient errors (502, 503, 429, ETIMEDOUT).
+`post-review.sh` wraps critical GitHub API calls with `gh_api_retry()` (3 retries, 2s/4s/8s backoff) for transient errors (502, 503, 429, ETIMEDOUT). `post-review-gitlab.sh` has equivalent retry logic built into `gl_api()` (3 retries, exponential backoff + jitter) for transient errors (408, 429, 500-504) and curl failures.
 
 ## Graceful failure handling
 
@@ -434,8 +441,8 @@ When an agent call fails (transient API error, content filter block, configurati
 
 After all agents complete:
 - If **all** finding agents failed, the review aborts with exit 1
-- Otherwise, `FAILED_AGENTS` is exported as `AI_REVIEW_FAILED_AGENTS` (colon-separated) to `post-review.sh`
-- `post-review.sh` downgrades an empty-findings review from APPROVE to COMMENT to indicate an incomplete review
+- Otherwise, `FAILED_AGENTS` is exported as `AI_REVIEW_FAILED_AGENTS` (colon-separated) to the post-review script
+- The post-review script downgrades an empty-findings review from APPROVE to COMMENT to indicate an incomplete review
 
 ## Token usage and cost estimation
 
@@ -450,7 +457,7 @@ After all agents complete:
 bats tests/*.bats
 
 # Lint all shell scripts
-shellcheck review.sh llm-call.sh post-review.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
+shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh post-review-gitlab.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
 
 # Smoke-test llm-call.sh against a provider
 export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key>
@@ -502,7 +509,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), and from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`, `build_agent_prompt`)
+- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`, `build_agent_prompt`), and from `post-review-gitlab.sh` (`severity_icon`, `format_source_tag`, `classify_risk`, `resolve_project_id`, plus 3-way parity tests)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.

@@ -43,4 +43,9 @@ ai-review:
     - export GITLAB_TOKEN="${GITLAB_TOKEN:-}"
     - export GITHUB_REPOSITORY="$CI_PROJECT_PATH"
     # ANTHROPIC_API_KEY (or your provider's key) comes from CI/CD variables.
+    # Optional: uncomment to customize behavior
+    # - export GITLAB_BOT_USERNAME="my-bot-user"  # Skip a /user API call
+    # - export AI_ENABLE_SUGGESTIONS=true          # Default; set to 'false' to disable
+    # - export AI_MAX_INLINE=25                    # Max inline discussions per run
+    # - export AI_CONFIDENCE_THRESHOLD=75          # Min confidence for findings
     - /opt/ai-pr-review/review.sh

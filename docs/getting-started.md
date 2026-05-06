@@ -43,15 +43,19 @@ That's it — reviews start firing on the next PR. Want slash commands? (`/ai-pr
 
 ## Supported VCS providers
 
-The same container image drives PR reviews on both GitHub and Bitbucket Cloud.
-Select the provider via the `VCS_PROVIDER` env var (default: `github`).
+The same container image drives PR/MR reviews on GitHub, Bitbucket Cloud,
+and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github`).
 
-| Provider | `VCS_PROVIDER` | Summary comment | Inline findings | Standalone (issue) mode |
-|----------|---------------|-----------------|-----------------|------------------------|
-| GitHub | `github` (default) | Yes | Yes | Yes |
-| Bitbucket Cloud | `bitbucket` | Yes (findings rendered inside) | No (v0.2.0) | No (no Issues product) |
+| Provider | `VCS_PROVIDER` | Summary comment | Inline findings | Suggestions | Approval |
+|----------|---------------|-----------------|-----------------|-------------|----------|
+| GitHub | `github` (default) | Yes | Yes | Yes | Yes (via review event) |
+| Bitbucket Cloud | `bitbucket` | Yes (findings rendered inside) | No | No | No |
+| GitLab | `gitlab` | Yes | Yes | Yes | Yes (approve/unapprove API) |
 
-See [Bitbucket setup](bitbucket-setup) for Bitbucket Pipelines setup (token scopes, repo variables, starter pipeline, caveats). The remainder of this page applies to the GitHub path.
+See [Bitbucket setup](bitbucket-setup) for Bitbucket Pipelines setup and
+[GitLab setup](gitlab-setup) for GitLab CI/CD setup (token scopes, CI
+variables, starter pipeline, caveats). The remainder of this page applies
+to the GitHub path.
 
 ## Requirements
 
@@ -129,4 +133,5 @@ See [Local development](local-development) for the full reference including prov
 - **[Git submodule](installation-submodule)** — explicit, auditable version pinning; commits the exact action source into your repository. Uses a 3-job pattern to isolate the PAT used for submodule checkout.
 - **[Slash commands](slash-commands)** — add a comment-trigger workflow to enable `/ai-pr-review` commands on PRs.
 - **[Bitbucket setup](bitbucket-setup)** — Bitbucket Cloud Pipelines setup guide.
+- **[GitLab setup](gitlab-setup)** — GitLab CI/CD setup guide.
 - **[Local development](local-development)** — run reviews locally using Docker without a CI runner.
