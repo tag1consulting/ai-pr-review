@@ -31,6 +31,18 @@ nav_order: 2
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 
+## Supported VCS providers
+
+Select the VCS provider via the `VCS_PROVIDER` env var (default: `github`). This determines which post-review script is used and how findings are posted.
+
+| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval | Standalone |
+|----------|---------------|---------|--------|-------------|----------|------------|
+| GitHub | `github` (default) | Yes | Yes | Yes | Yes | Yes |
+| Bitbucket Cloud | `bitbucket` | Yes | No | No | No | No |
+| GitLab | `gitlab` | Yes | Yes | Yes | Yes | Yes |
+
+See [Bitbucket setup](bitbucket-setup), [GitLab setup](gitlab-setup), or the [Getting Started](getting-started) page for provider-specific configuration.
+
 ## Supported LLM providers
 
 | Provider | provider value | Required secret | Default models (standard / premium) |

@@ -2,7 +2,7 @@
 layout: default
 title: GitLab Setup
 parent: Getting Started
-nav_order: 6
+nav_order: 3
 render_with_liquid: false
 ---
 
