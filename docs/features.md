@@ -13,7 +13,7 @@ Code suggestions are enabled by default. The review tool asks eligible LLM agent
 
 > **New in v0.6.0:** Suggestions now work on GitLab MRs using GitLab's
 > native ` ```suggestion:-N+0 ` syntax for multi-line replacements.
-> Previously suggestions were GitHub-only. Requires GitLab 14.0+
+> Previously suggestions were GitHub-only. Requires GitLab 11.6+
 > (when the suggestion fence syntax was introduced). The
 > `enable-suggestions` flag (`true` by default) applies uniformly
 > across all VCS providers — setting it to `false` disables suggestions
