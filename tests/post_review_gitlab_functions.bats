@@ -266,13 +266,12 @@ DIFF
   [[ "$output" == *"Cannot resolve GitLab project ID"* ]]
 }
 
-@test "gitlab resolve_project_id: malformed GITHUB_REPOSITORY -> error exit" {
+@test "gitlab resolve_project_id: GITHUB_REPOSITORY with subgroups is accepted" {
   load_function "${PROJECT_ROOT}/post-review-gitlab.sh" resolve_project_id
   unset GITLAB_PROJECT_ID CI_PROJECT_ID CI_PROJECT_PATH 2>/dev/null || true
   GITHUB_REPOSITORY="group/subgroup/project"
-  run resolve_project_id
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"namespace/project"* ]]
+  resolve_project_id
+  [ "$PROJECT_ID" = "group%2Fsubgroup%2Fproject" ]
 }
 
 @test "gitlab resolve_project_id: non-numeric GITLAB_PROJECT_ID falls through to CI_PROJECT_ID" {

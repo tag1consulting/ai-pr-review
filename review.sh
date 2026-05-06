@@ -319,12 +319,12 @@ To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR i
           curl -sS -X PUT -H "$_GL_AUTH" \
             --data-urlencode "body=${SKIP_BODY}" \
             "${_GL_API}/projects/${_GL_PROJECT_ID}/merge_requests/${PR_NUMBER}/notes/${existing_skip_id}" \
-            > /dev/null 2>&1 || true
+            > /dev/null 2>&1 || echo "WARNING: Could not update skip note on GitLab MR." >&2
         else
           curl -sS -X POST -H "$_GL_AUTH" \
             --data-urlencode "body=${SKIP_BODY}" \
             "${_GL_API}/projects/${_GL_PROJECT_ID}/merge_requests/${PR_NUMBER}/notes" \
-            > /dev/null 2>&1 || true
+            > /dev/null 2>&1 || echo "WARNING: Could not post skip note to GitLab MR." >&2
         fi
       fi
     fi

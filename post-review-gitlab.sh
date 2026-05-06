@@ -54,10 +54,8 @@ resolve_project_id() {
   elif [[ -n "${CI_PROJECT_PATH:-}" ]]; then
     PROJECT_ID=$(printf '%s' "$CI_PROJECT_PATH" | sed 's|/|%2F|g')
   elif [[ -n "${GITHUB_REPOSITORY:-}" && "$GITHUB_REPOSITORY" == */* ]]; then
-    if [[ ! "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
-      echo "ERROR: GITHUB_REPOSITORY must be in 'namespace/project' format (got '${GITHUB_REPOSITORY}')." >&2
-      exit 1
-    fi
+    # GitLab supports subgroups (group/subgroup/project), so accept any
+    # path with at least one slash. URL-encoding handles the rest.
     PROJECT_ID=$(printf '%s' "$GITHUB_REPOSITORY" | sed 's|/|%2F|g')
   else
     echo "ERROR: Cannot resolve GitLab project ID. Set GITLAB_PROJECT_ID, CI_PROJECT_ID, CI_PROJECT_PATH, or GITHUB_REPOSITORY." >&2
@@ -149,6 +147,7 @@ gl_api() {
       local backoff=$(( 2 * (1 << (attempt - 1)) ))
       local jitter; jitter=$(printf '%03d' $(( RANDOM % 1000 )))
       echo "WARNING: gl_api ${method} ${path} -> ${http_code} (attempt ${attempt}/${max_retries}), retrying in ${backoff}.${jitter}s..." >&2
+      [[ "$http_code" == "000" && -s "$curl_err_file" ]] && echo "  curl error: $(cat "$curl_err_file")" >&2
       sleep "${backoff}.${jitter}"
       continue
     fi
@@ -235,7 +234,7 @@ if [[ "${1:-}" == "--get-last-sha" ]]; then
   comment_body=""
   while true; do
     notes_json=$(gl_api GET "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/notes?per_page=100&page=${local_page}&sort=desc&order_by=updated_at") || {
-      echo "WARNING: get_last_reviewed_sha: GitLab API error (treating as first run)." >&2
+      echo "WARNING: get_last_reviewed_sha: GitLab API error (treating as first run). If this persists, check GITLAB_TOKEN permissions." >&2
       exit 0
     }
 
@@ -421,7 +420,7 @@ ${_agent_prompt}
       "/projects/${PROJECT_ID}/issues" \
       --data-urlencode "title=${issue_title}" \
       --data-urlencode "description=${issue_body}" \
-      --data-urlencode "labels=${labels}" 2>&1); then
+      --data-urlencode "labels=${labels}"); then
       issue_url=$(echo "$issue_result" | jq -r '.web_url // empty' 2>/dev/null)
       echo "Standalone review issue created: ${issue_url:-unknown}" >&2
     else
@@ -430,7 +429,7 @@ ${_agent_prompt}
       if issue_result=$(gl_api POST \
         "/projects/${PROJECT_ID}/issues" \
         --data-urlencode "title=${issue_title}" \
-        --data-urlencode "description=${issue_body}" 2>&1); then
+        --data-urlencode "description=${issue_body}"); then
         issue_url=$(echo "$issue_result" | jq -r '.web_url // empty' 2>/dev/null)
         echo "Standalone review issue created: ${issue_url:-unknown}" >&2
       else
@@ -580,6 +579,7 @@ build_agent_prompt() {
   [[ "$count" -eq 0 ]] && return
 
   local prompt_body
+  local jq_ok=true
   prompt_body=$(echo "$findings_json" | jq -r '
     group_by(.file) | map(
       "In `\(.[0].file)`:" as $header |
@@ -589,7 +589,11 @@ build_agent_prompt() {
           if (.remediation // "") != "" then ". " + .remediation else "" end
       ] | join("\n")
     ) | join("\n\n")
-  ' 2>/dev/null)
+  ' 2>/dev/null) || jq_ok=false
+  if [[ "$jq_ok" == "false" ]]; then
+    echo "WARNING: build_agent_prompt: jq failed; agent prompt block will be omitted." >&2
+    return
+  fi
 
   [[ -z "$prompt_body" ]] && return
 
@@ -772,7 +776,7 @@ post_summary_with_findings() {
 
   local existing_id
   if ! existing_id=$(find_existing_summary_id); then
-    echo "ERROR: Could not query existing notes; cannot safely upsert." >&2
+    echo "ERROR: Could not query existing notes (see gl_api error above); cannot safely upsert summary comment." >&2
     return 1
   fi
 
@@ -812,7 +816,7 @@ _cleanup_duplicate_summary_comments() {
   local page=1
   while true; do
     local notes_json
-    notes_json=$(gl_api GET "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/notes?per_page=100&page=${page}&sort=desc&order_by=updated_at") || break
+    notes_json=$(gl_api GET "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/notes?per_page=100&page=${page}&sort=desc&order_by=updated_at") || { echo "WARNING: Could not fetch notes for duplicate cleanup." >&2; break; }
 
     while IFS= read -r dup_id; do
       [[ -z "$dup_id" || "$dup_id" == "$kept_id" ]] && continue
@@ -843,12 +847,14 @@ resolve_stale_discussions() {
   # set, fetch the authenticated user's username.
   local bot_username="${GITLAB_BOT_USERNAME:-}"
   if [[ -z "$bot_username" ]]; then
-    bot_username=$(gl_api GET "/user" | jq -r '.username // empty' 2>/dev/null) || {
-      echo "WARNING: Could not determine authenticated user; skipping stale discussion resolution." >&2
+    local user_response
+    user_response=$(gl_api GET "/user" 2>/dev/null) || {
+      echo "WARNING: GET /user failed (possible auth misconfiguration); skipping stale discussion resolution." >&2
       return 0
     }
+    bot_username=$(echo "$user_response" | jq -r '.username // empty' 2>/dev/null)
     if [[ -z "$bot_username" ]]; then
-      echo "WARNING: Could not determine bot username; skipping stale discussion resolution." >&2
+      echo "WARNING: Could not determine bot username from /user response; skipping stale discussion resolution." >&2
       return 0
     fi
   fi
@@ -864,7 +870,7 @@ resolve_stale_discussions() {
     local discussion_ids
     discussion_ids=$(echo "$discussions_json" | jq -r --arg bot "$bot_username" '
       .[] | select(
-        (.notes[0].author.username // "") == $bot and
+        any(.notes[]; .author.username == $bot) and
         (.notes[0].resolvable // false) == true and
         (.notes[0].resolved // false) == false
       ) | .id
@@ -1111,15 +1117,15 @@ ${suggested_code}
         --argjson position "$position_json" \
         '{body: $body, position: $position}' > "$payload_file"
 
-      local disc_result
-      if disc_result=$(gl_api POST \
+      if gl_api POST \
         "/projects/${PROJECT_ID}/merge_requests/${MR_NUMBER}/discussions" \
         -H 'Content-Type: application/json' \
-        --data-binary "@${payload_file}" 2>&1); then
+        --data-binary "@${payload_file}" > /dev/null; then
         inline_count=$((inline_count + 1))
       else
-        # 400 = position invalid (line not in MR diff); fall back to body
-        echo "WARNING: Failed to post inline discussion for ${file}:${line}: ${disc_result}" >&2
+        # 400 = position invalid (line not in MR diff); fall back to body.
+        # gl_api already logged the error details to stderr.
+        echo "WARNING: Falling back to body for ${file}:${line} (inline discussion post failed)." >&2
         local loc_note=" *(inline post failed)*"
         if [[ -n "$suggested_code" ]]; then
           echo "WARNING: Suggestion for ${file}:${line} not rendered inline (post failed); rendering in review body." >&2
