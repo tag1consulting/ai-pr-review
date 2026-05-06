@@ -2,7 +2,7 @@
 layout: default
 title: Local Development
 parent: Getting Started
-nav_order: 3
+nav_order: 4
 ---
 
 # Local Development

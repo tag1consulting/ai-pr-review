@@ -2,7 +2,7 @@
 layout: default
 title: Direct Action Reference
 parent: Getting Started
-nav_order: 5
+nav_order: 6
 render_with_liquid: false
 ---
 

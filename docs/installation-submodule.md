@@ -2,7 +2,7 @@
 layout: default
 title: Git Submodule
 parent: Getting Started
-nav_order: 4
+nav_order: 5
 render_with_liquid: false
 ---
 
