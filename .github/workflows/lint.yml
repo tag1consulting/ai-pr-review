@@ -22,6 +22,8 @@ jobs:
             review.sh \
             llm-call.sh \
             post-review.sh \
+            post-review-bitbucket.sh \
+            post-review-gitlab.sh \
             analyzers/run-shellcheck.sh \
             analyzers/run-cve-check.sh
 

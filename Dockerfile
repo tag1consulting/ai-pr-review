@@ -130,8 +130,8 @@ RUN curl -fsSL -o /usr/local/bin/composer \
     ln -s /opt/composer/vendor/bin/phpstan /usr/local/bin/phpstan
 
 # Copy core scripts. Uses a glob for post-review*.sh so sibling provider
-# scripts (post-review-bitbucket.sh, future providers) are picked up
-# automatically without per-release Dockerfile churn.
+# scripts (post-review-bitbucket.sh, post-review-gitlab.sh, and any future
+# providers) are picked up automatically without per-release Dockerfile churn.
 COPY review.sh post-review*.sh llm-call.sh \
      /opt/ai-pr-review/
 

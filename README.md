@@ -37,17 +37,19 @@ That's it — reviews start firing on the next PR. **Want slash commands?** (`/a
 
 ## Supported VCS providers
 
-The same container image drives PR reviews on both GitHub and Bitbucket Cloud.
-Select the provider via the `VCS_PROVIDER` env var (default: `github`).
+The same container image drives PR/MR reviews on GitHub, Bitbucket Cloud,
+and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github`).
 
-| Provider | `VCS_PROVIDER` | Summary comment | Inline findings | Standalone (issue) mode |
-|----------|---------------|-----------------|-----------------|------------------------|
-| GitHub | `github` (default) | ✅ | ✅ | ✅ |
-| Bitbucket Cloud | `bitbucket` | ✅ (findings rendered inside) | ❌ (v0.2.0) | ❌ (no Issues product) |
+| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval | Standalone |
+|----------|---------------|---------|--------|-------------|----------|------------|
+| GitHub | `github` (default) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Bitbucket Cloud | `bitbucket` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| GitLab | `gitlab` | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for Bitbucket Pipelines
-setup (token scopes, repo variables, starter pipeline, caveats). The
-remainder of this README applies to the GitHub path.
+setup and [docs/gitlab-setup.md](docs/gitlab-setup.md) for GitLab CI/CD setup
+(token scopes, CI variables, starter pipeline, caveats). The remainder of
+this README applies to the GitHub path.
 
 ## What it does
 
@@ -212,7 +214,7 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
-| `enable-suggestions` | No | `true` | Add GitHub "Apply suggestion" buttons to inline review comments (GitHub-only). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
+| `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
 
 ## Review modes
 
@@ -261,7 +263,7 @@ fi
 
 ## Code suggestions
 
-Code suggestions are enabled by default. The review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a GitHub ```` ```suggestion ```` block inside the inline review comment, which GitHub displays as an "Apply suggestion" button — the PR author can accept the fix with one click.
+Code suggestions are enabled by default. The review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a ```` ```suggestion ```` block inside the inline review comment, which GitHub and GitLab display as an "Apply suggestion" button — the PR/MR author can accept the fix with one click.
 
 To disable suggestions, set `enable-suggestions: false`:
 
@@ -279,7 +281,7 @@ To disable suggestions, set `enable-suggestions: false`:
 
 **How it works.** Eligible agents have a short prompt addendum appended to their system prompt instructing them to include a `suggested_code` field (and optional `start_line` for multi-line replacements) only when the fix is concrete and complete. The post-review script constructs the ```` ```suggestion ```` fence itself — agents are not trusted to emit the markdown directly. Multi-line suggestions are validated against the diff: every line in the replacement range must appear on the new-file side of a diff hunk, or the suggestion is dropped while keeping the natural-language remediation.
 
-**Caveats.** Suggestions increase output token usage. The feature is GitHub-only — Bitbucket reviews ignore it. Suggestions are validated defensively: `start_line` must be a positive integer ≤ `line` with no leading zeros, multi-line ranges are capped at 100 lines, and `suggested_code` containing triple backticks (which would break the suggestion fence) is rejected. When any validation fails, the suggestion is dropped with a WARNING logged to the Actions run and the finding still posts with its natural-language remediation. On incremental reviews (SHA watermark active), suggestions only render when the finding's line range is still in the current incremental diff — add the `ai-review-rescan` label to force a full re-review.
+**Caveats.** Suggestions increase output token usage. The feature works on both GitHub and GitLab (using GitLab's `suggestion` fence syntax) — Bitbucket reviews ignore it. Suggestions are validated defensively: `start_line` must be a positive integer ≤ `line` with no leading zeros, multi-line ranges are capped at 100 lines, and `suggested_code` containing triple backticks (which would break the suggestion fence) is rejected. When any validation fails, the suggestion is dropped with a WARNING logged to the Actions run and the finding still posts with its natural-language remediation. On incremental reviews (SHA watermark active), suggestions only render when the finding's line range is still in the current incremental diff — add the `ai-review-rescan` label to force a full re-review.
 
 ## Incremental reviews
 
@@ -433,6 +435,8 @@ ai-pr-review/
 ├── review.sh               # Main orchestrator: diff, manifest, agent calls, assembly
 ├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
 ├── post-review.sh          # GitHub API posting: summary, review, thread management
+├── post-review-bitbucket.sh # Bitbucket Cloud API posting: summary comment
+├── post-review-gitlab.sh   # GitLab API posting: summary, inline discussions, approval
 ├── analyzers/              # Static analyzer wrapper scripts
 │   ├── run-shellcheck.sh   # Shellcheck wrapper for shell script findings
 │   ├── run-cve-check.sh    # OSV.dev vulnerability lookup for dependency manifests
@@ -505,7 +509,7 @@ ai-pr-review/
 2. For each agent, **review.sh** assembles a context message and calls **llm-call.sh**
 3. **llm-call.sh** sends the prompt to the configured LLM provider via curl
 4. **review.sh** extracts JSON findings from agent responses, deduplicates, applies suppressions
-5. **post-review.sh** resolves stale threads, posts the summary and findings, advances the SHA watermark
+5. The **provider-specific post-review script** resolves stale threads, posts the summary and findings, advances the SHA watermark
 
 ### Dependencies
 

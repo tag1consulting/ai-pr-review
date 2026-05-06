@@ -1,15 +1,17 @@
-# Starter workflows
+# Starter workflows and pipelines
 
-Copy these files into your repository's `.github/workflows/` directory to enable AI PR reviews.
+Copy these files into your repository to enable AI PR/MR reviews.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `workflows/pr-review.yml` | Automatic review on PR open/sync |
-| `workflows/comment-triggers.yml` | Slash command support (`/ai-pr-review rescan`, etc.) |
+| `workflows/pr-review.yml` | GitHub Actions: automatic review on PR open/sync |
+| `workflows/comment-triggers.yml` | GitHub Actions: slash command support (`/ai-pr-review rescan`, etc.) |
+| `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
+| `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
 
-Both workflows use the container-action variant, which pulls a pinned public image from GHCR with all analyzer binaries pre-installed.
+GitHub workflows use the container-action variant, which pulls a pinned public image from GHCR with all analyzer binaries pre-installed. Bitbucket and GitLab pipelines use the same image directly.
 
 ## Setup
 
