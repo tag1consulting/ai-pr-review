@@ -1,7 +1,8 @@
 ---
+layout: default
 title: Slash Commands
 parent: Getting Started
-nav_order: 5
+nav_order: 1
 ---
 
 # Slash commands

@@ -33,7 +33,7 @@ nav_order: 2
 
 ## Supported LLM providers
 
-| Provider | `provider` value | Required secret | Default models (standard / premium) |
+| Provider | provider value | Required secret | Default models (standard / premium) |
 |----------|-----------------|-----------------|--------------------------------------|
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` / `claude-opus-4-7` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4o` |

@@ -1,7 +1,9 @@
 ---
+layout: default
 title: Git Submodule
 parent: Getting Started
-nav_order: 2
+nav_order: 4
+render_with_liquid: false
 ---
 
 # Installation: git submodule

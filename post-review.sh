@@ -1230,7 +1230,7 @@ ${agent_prompt}"
     local inline_rendered
     inline_rendered=$(jq -r --argjson comments "$inline_comments" '
       $comments[] |
-      "- " + (.body | gsub("\n"; "\n  "))
+      "- " + ((.body // "") | gsub("\n"; "\n  "))
     ' <<<'null')
     if [[ -n "$inline_rendered" ]]; then
       # Insert the rendered findings after the "inline comments" placeholder

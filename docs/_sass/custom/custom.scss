@@ -108,11 +108,33 @@ h1, h2, h3, h4, h5, h6,
   border-radius: 4px;
 }
 
+// Tighten line spacing inside multi-line <pre> code blocks. just-the-docs
+// inherits .main-content line-height: 1.6 into pre/code, which spreads
+// rows of ASCII-art diagrams and tree listings apart. Override both the
+// pre container and any code element inside it. !important is required
+// because the theme's typography rules load after our custom stylesheet.
+.main-content div.highlighter-rouge,
+.main-content div.highlighter-rouge pre,
+.main-content div.highlighter-rouge pre code,
+.main-content pre.highlight,
+.main-content pre.highlight code,
+.main-content .highlight,
+.main-content .highlight pre,
+.main-content .highlight pre code {
+  line-height: 1em !important;
+}
+
 // Table styling
 table {
   th {
     background-color: #061e32;
     color: #ffffff;
+
+    code {
+      background-color: rgba(255, 255, 255, 0.15);
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.3);
+    }
   }
 }
 

@@ -3,6 +3,7 @@ layout: home
 title: Home
 nav_exclude: true
 permalink: /
+render_with_liquid: false
 hero_title: AI PR Review
 hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline findings directly on your PRs."
 ---
