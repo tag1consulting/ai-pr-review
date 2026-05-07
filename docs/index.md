@@ -10,19 +10,19 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
 
 <div class="features">
   <div class="feature">
-    <h3>Multi-Agent Review</h3>
+    <h3><span class="feature-icon">&#9670;</span> Multi-Agent Review</h3>
     <p>Up to 8 specialized AI agents analyze your code from different perspectives — architecture, security, edge cases, and more.</p>
   </div>
   <div class="feature">
-    <h3>12+ Static Analyzers</h3>
+    <h3><span class="feature-icon">&#9670;</span> 12+ Static Analyzers</h3>
     <p>Shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, and tflint — all pre-installed in the container image.</p>
   </div>
   <div class="feature">
-    <h3>Works Everywhere</h3>
+    <h3><span class="feature-icon">&#9670;</span> Works Everywhere</h3>
     <p>GitHub Actions, Bitbucket Cloud Pipelines, and GitLab CI/CD. Anthropic, OpenAI, Google, and Bedrock proxy providers.</p>
   </div>
   <div class="feature">
-    <h3>One-Click Fixes</h3>
+    <h3><span class="feature-icon">&#9670;</span> One-Click Fixes</h3>
     <p>Code suggestion buttons let PR/MR authors accept fixes with a single click, powered by GitHub and GitLab's suggestion block syntax.</p>
   </div>
 </div>
