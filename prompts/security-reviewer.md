@@ -53,31 +53,6 @@ on unchanged lines.
 - Use of `latest` image tags in container definitions
 - **Do NOT flag** `actions/*@vN` floating major-version tags in GitHub Actions workflows — this is the project's deliberate policy for receiving automatic security patches. Only flag third-party actions using `@latest` or no version at all.
 
-### HARD CONSTRAINT — Version Existence Claims
-
-**Do not flag any package, runtime, language, GitHub Action, Docker image,
-library, or framework version as "nonexistent", "unreleased", "invalid",
-"does not exist", "pre-release", "future version", "may not exist",
-"unverified", or any synonym — at any severity or confidence — based on
-training-data recall.**
-
-Your training has a cutoff. Any version released after it is unknown to you,
-not nonexistent. The diff was written after your cutoff; assume the author had
-access to release information you do not. This applies to all ecosystems
-including Ruby (e.g. 4.x), Python (e.g. 3.14+), Node.js, Go, PHP, Rust, Java,
-and all GitHub Actions regardless of how high the version number seems.
-
-**The only legitimate version-related security findings are:**
-1. Syntactically malformed version string
-2. Explicit downgrade from higher to lower version with no explanation
-3. Known CVE in that exact version (cite the CVE ID)
-4. Missing pin / `@latest` / `:latest` on a third-party action or image where pinning is required
-
-A renovate/dependabot/workflow bump to a higher version is **positive evidence
-the version exists**. If you are unsure, omit the finding entirely — do not
-hedge with "may" or "consider verifying". Deterministic version verification
-is handled by the CVE scanner and the verify-gated suppression path.
-
 ## Language-Specific Checks
 
 Detect which languages are present and apply these additional checks:
@@ -153,11 +128,3 @@ Do NOT output the bare word `NONE`.
 ```
 
 Omit any severity section that has no findings.
-
-After your markdown output, emit a JSON block fenced with ```json-findings:
-```json-findings
-[{"severity":"High","confidence":90,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
-```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
-`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
-If no findings, emit an empty array: `[]`

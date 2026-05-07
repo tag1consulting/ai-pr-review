@@ -58,19 +58,6 @@ You will receive a diff of all changed files along with a file manifest. Tear it
 Everything in the diff is fair game. Unlike specialist reviewers, you are not limited
 to security, architecture, or error handling — you review the whole change holistically.
 
-## HARD CONSTRAINT — Version Existence Claims
-
-Despite your cynical posture, **do not flag any package, runtime, language,
-GitHub Action, Docker image, library, or framework version as "unreleased",
-"invalid", "does not exist", "not yet released", "future version",
-"may not exist", or any synonym — at any severity or confidence — based on
-training-data recall.** You have a knowledge cutoff; versions released after
-it are unknown to you, not nonexistent. The diff was written after your
-training cutoff. If you are tempted to emit such a finding, omit it — the
-CVE scanner and verify-gated suppression path handle version verification
-deterministically. Legitimate version-related findings require a malformed
-string, an explicit downgrade, or a cited CVE.
-
 ## Output Format
 
 ```markdown
@@ -94,15 +81,6 @@ string, an explicit downgrade, or a cited CVE.
 
 <1-2 sentences identifying the single most important thing to fix before merge>
 ```
-
-After your markdown output, emit a JSON block fenced with ```json-findings containing
-ONLY findings with confidence >= 75:
-```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
-```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
-`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
-If no findings meet the threshold, emit an empty array: `[]`
 
 ---
 

@@ -295,11 +295,22 @@ Not eligible (too design-level / holistic for concrete line-edits):
 `architecture-reviewer`, `adversarial-general`, `pr-summarizer`. Static analyzers
 (shellcheck, semgrep, ruff, etc.) never emit suggestions.
 
-**Prompt injection.** `effective_prompt()` in `review.sh` appends
-`prompts/suggestion-addendum.md` to the base prompt for eligible agents at
-runtime, into a temp file registered with `mktemp_tracked`. Non-eligible agents
-and disabled runs use the base prompt path unchanged — no prompt change ships
-when the feature is off.
+**Prompt injection.** `effective_prompt()` in `review.sh` composes the base
+prompt with up to three shared trailers at runtime:
+- `prompts/_knowledge-cutoff.md` — HARD CONSTRAINT block against
+  version-existence hallucinations. Applied to all 7 finding-producing agents
+  (not `pr-summarizer`).
+- `prompts/_trailer-findings.md` — `json-findings` schema instruction.
+  Applied to all 7 finding-producing agents.
+- `prompts/suggestion-addendum.md` — "Apply suggestion" formatting. Gated by
+  `AI_ENABLE_SUGGESTIONS`; applied only to the 5 line-edit-eligible agents
+  listed above.
+
+Composition order: base prompt + knowledge-cutoff + findings-trailer +
+(optional) suggestion-addendum. The composed output is written to a temp
+file under `${EFFECTIVE_PROMPT_PREFIX}-*.md`; `pr-summarizer` and missing-file
+fallbacks return the base prompt path unchanged. Stable composition order
+keeps the trailer bytes identical across eligible agents.
 
 **Validation in `post-review.sh` and `post-review-gitlab.sh`.** The suggestion
 rendering is gated on `AI_ENABLE_SUGGESTIONS=true` (case-insensitive —

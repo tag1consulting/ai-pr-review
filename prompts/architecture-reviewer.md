@@ -59,7 +59,6 @@ relationships, or restructure modules.
 
 Do NOT assess: security implications (security-reviewer), code-level style/formatting
 (code-reviewer), error handling quality (silent-failure-hunter), test coverage.
-Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," "may not exist," or "unverified" based on training-data recall. You have a knowledge cutoff — versions released after it are unknown to you, not nonexistent. Only flag a version if the diff provides concrete evidence of a problem (e.g., a downgrade, a known CVE, or a syntactically malformed version string). A renovate/dependabot bump to a higher version number is strong evidence the version exists.
 
 ## Empty State
 
@@ -115,11 +114,3 @@ Do NOT output the bare word `NONE`.
 
 Omit any severity section that has no findings. If no issues: "This change is
 architecturally sound. No significant concerns identified."
-
-After your markdown output, emit a JSON block fenced with ```json-findings:
-```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
-```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
-`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
-If no findings, emit an empty array: `[]`
