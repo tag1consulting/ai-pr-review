@@ -221,46 +221,9 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs up to 8 agents — 6 always-on finding agents (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
-- Adding the `ai-review-full` label to the PR
-- Using `workflow_dispatch` with `review_mode: full`
-- Setting the `review-mode` input to `full`
-- Auto-detecting release PRs (see below)
+**Full mode**: Runs up to 8 agents — 6 always-on finding agents plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger with the `ai-review-full` PR label, `workflow_dispatch` input, or by setting `review-mode: full` (optionally via an expression that auto-selects full mode for release branches).
 
-### Auto-detecting release PRs
-
-Full mode can be triggered automatically based on branch name, PR title, or other PR metadata by extending the `review-mode` expression in your workflow file. This keeps release PRs from getting only a quick review without requiring someone to remember to add a label.
-
-The [example workflow](examples/workflows/pr-review.yml) demonstrates auto-detecting `release/*` branches:
-
-```yaml
-review-mode: >-
-  ${{
-    contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' ||
-    startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
-    'quick'
-  }}
-```
-
-Customize the `startsWith()` pattern for your repo's branch convention. Common patterns:
-
-| Convention | Expression |
-|---|---|
-| Branch prefix `release/` | `startsWith(github.event.pull_request.head.ref, 'release/')` |
-| Branch prefix `hotfix/` | `startsWith(github.event.pull_request.head.ref, 'hotfix/')` |
-| PR title starts with "Release" | `startsWith(github.event.pull_request.title, 'Release ')` |
-| Merges to `main` from `release/*` | `github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'release/')` |
-| Multiple patterns | Chain with `\|\|` — each clause evaluates to `'full'` or falls through |
-
-Branch matching is case-sensitive — `release/v1.0` matches but `Release/v1.0` does not.
-
-**Bitbucket Pipelines** — use a shell conditional instead of GitHub Actions expressions:
-
-```bash
-if [[ "$BITBUCKET_PR_SOURCE_BRANCH" == release/* ]]; then
-  export AI_REVIEW_MODE=full
-fi
-```
+For the full agent roster, trigger patterns, and auto-full-on-release workflow expressions (GitHub Actions and Bitbucket Pipelines), see [docs/agents.md](docs/agents.md#review-modes).
 
 ## Code suggestions
 
@@ -420,93 +383,9 @@ Costs are calculated using public list prices as of April 2026 and do not reflec
 
 ## Architecture
 
-```
-ai-pr-review/
-├── action.yml              # GitHub Actions composite action definition
-├── review.sh               # Main orchestrator: diff, manifest, agent calls, assembly
-├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
-├── post-review.sh          # GitHub API posting: summary, review, thread management
-├── post-review-bitbucket.sh # Bitbucket Cloud API posting: summary comment
-├── post-review-gitlab.sh   # GitLab API posting: summary, inline discussions, approval
-├── analyzers/              # Static analyzer wrapper scripts
-│   ├── run-shellcheck.sh   # Shellcheck wrapper for shell script findings
-│   ├── run-cve-check.sh    # OSV.dev vulnerability lookup for dependency manifests
-│   ├── run-semgrep.sh      # Semgrep SAST wrapper (optional binary)
-│   ├── run-trufflehog.sh   # Trufflehog secret scanning wrapper (optional binary)
-│   ├── run-ruff.sh         # Ruff Python linter wrapper (optional binary)
-│   ├── run-golangci-lint.sh # golangci-lint Go linter wrapper (optional binary)
-│   ├── run-hadolint.sh     # Hadolint Dockerfile linter wrapper (optional binary)
-│   ├── run-checkov.sh      # Checkov IaC scanner wrapper (optional binary)
-│   ├── run-phpcs.sh        # PHP_CodeSniffer wrapper, Drupal+DrupalPractice standard
-│   ├── run-eslint.sh       # ESLint JS/TS wrapper — uses consumer config, no-op if absent
-│   ├── run-phpstan.sh      # PHPStan static analysis wrapper (optional binary)
-│   ├── run-kube-linter.sh  # kube-linter Kubernetes manifest wrapper (optional binary)
-│   └── run-tflint.sh       # tflint Terraform linter wrapper (optional binary)
-├── config/                 # Configuration and data files
-│   ├── model-pricing.json  # Per-model token pricing for cost estimation
-│   └── suppressions.json   # Declarative false-positive suppression rules
-├── prompts/                # System prompts for each review agent
-│   ├── pr-summarizer.md
-│   ├── code-reviewer.md
-│   ├── silent-failure-hunter.md
-│   ├── architecture-reviewer.md
-│   ├── security-reviewer.md
-│   ├── blind-hunter.md
-│   ├── edge-case-hunter.md
-│   └── adversarial-general.md
-├── language-profiles/      # Per-language review context
-│   ├── go.md
-│   ├── python.md
-│   ├── typescript.md
-│   ├── php.md
-│   ├── shell.md
-│   ├── ruby.md
-│   ├── rust.md
-│   ├── java.md
-│   └── c++.md
-├── tests/                  # bats-core unit tests
-│   ├── review_functions.bats
-│   ├── extract_findings.bats
-│   ├── is_test_file.bats
-│   ├── configurable_inputs.bats
-│   ├── dedup_filter.bats
-│   ├── apply_suppressions.bats
-│   ├── call_agent.bats
-│   ├── llm_call_functions.bats
-│   ├── post_review_functions.bats
-│   ├── run_shellcheck.bats
-│   ├── run_cve_check.bats
-│   ├── run_semgrep.bats
-│   ├── run_trufflehog.bats
-│   ├── run_ruff.bats
-│   ├── run_golangci_lint.bats
-│   ├── run_hadolint.bats
-│   ├── run_checkov.bats
-│   ├── run_phpcs.bats
-│   ├── run_eslint.bats
-│   ├── run_phpstan.bats
-│   ├── run_kube_linter.bats
-│   ├── run_tflint.bats
-│   ├── test_helper.bash
-│   └── fixtures/
-└── .github/workflows/
-    ├── ai-review.yml       # Self-test: runs the action on its own PRs
-    └── lint.yml            # Shellcheck + bats test suite
-```
+At runtime, `review.sh` computes the diff, dispatches LLM agents and static analyzers in parallel, merges and dedupes findings, then hands off to a provider-specific post-review script (`post-review.sh` for GitHub, `post-review-bitbucket.sh` for Bitbucket, `post-review-gitlab.sh` for GitLab) that posts the summary and inline findings and advances the SHA watermark.
 
-### Data flow
-
-1. **review.sh** computes the diff, builds a file manifest, detects languages
-2. For each agent, **review.sh** assembles a context message and calls **llm-call.sh**
-3. **llm-call.sh** sends the prompt to the configured LLM provider via curl
-4. **review.sh** extracts JSON findings from agent responses, deduplicates, applies suppressions
-5. The **provider-specific post-review script** resolves stale threads, posts the summary and findings, advances the SHA watermark
-
-### Dependencies
-
-The action requires `bash`, `curl`, `jq`, `git`, and `gh` — all pre-installed on standard GitHub-hosted runners. `shellcheck` is installed automatically if not already present.
-
-The **container action** (recommended) ships all static analyzer binaries pre-installed at pinned versions — no runner setup needed. The **direct action reference** and **git submodule** paths do not install analyzer binaries; see [docs/installation-direct-action.md](docs/installation-direct-action.md#runtime-dependencies) for the optional install-in-workflow snippet.
+For the full directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md).
 
 ## License
 
