@@ -62,10 +62,20 @@ That's it — reviews start firing on the next PR.
 
 ## Learn more
 
+**Start here**
+
 - [Getting started](getting-started) — Installation, requirements, secrets and variables
 - [Configuration](configuration) — Action inputs and LLM provider options
+
+**Reference**
+
 - [Features](features) — Code suggestions, incremental reviews, resilience, token usage
-- [Agents & Profiles](agents) — Review agents, severity icons, review modes, language profiles
+- [Agents & profiles](agents) — Review agents, severity icons, review modes, language profiles
 - [Static analyzers](static-analyzers) — Analyzer table, dependency vulnerability check
 - [Suppression rules](suppression) — Suppress false positives with JSON rules
+- [Slash commands](slash-commands) — PR-comment commands (rescan, review-full, skip, dismiss, help)
+
+**Internals**
+
 - [Architecture](architecture) — Directory tree, data flow, dependencies
+- [Local development](local-development) — Run the container locally against any PR
