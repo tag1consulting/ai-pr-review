@@ -168,67 +168,67 @@ setup() {
 @test "model_pricing: claude-sonnet-4-6 returns correct rates" {
   run model_pricing "claude-sonnet-4-6-20250514"
   [ "$status" -eq 0 ]
-  [ "$output" = "3000000 15000000" ]
+  [ "$output" = "3000000 15000000 3750000 300000" ]
 }
 
 @test "model_pricing: claude-opus-4-7 returns correct rates" {
   run model_pricing "claude-opus-4-7"
   [ "$status" -eq 0 ]
-  [ "$output" = "5000000 25000000" ]
+  [ "$output" = "5000000 25000000 6250000 500000" ]
 }
 
 @test "model_pricing: claude-opus-4-6 still matched by Opus pattern" {
   run model_pricing "claude-opus-4-6-20250514"
   [ "$status" -eq 0 ]
-  [ "$output" = "5000000 25000000" ]
+  [ "$output" = "5000000 25000000 6250000 500000" ]
 }
 
 @test "model_pricing: claude-haiku-4-5 returns correct rates" {
   run model_pricing "claude-haiku-4-5-20251001"
   [ "$status" -eq 0 ]
-  [ "$output" = "800000 4000000" ]
+  [ "$output" = "800000 4000000 1000000 80000" ]
 }
 
 @test "model_pricing: gpt-4o-mini is not shadowed by gpt-4o pattern" {
   run model_pricing "gpt-4o-mini"
   [ "$status" -eq 0 ]
-  [ "$output" = "150000 600000" ]
+  [ "$output" = "150000 600000 0 75000" ]
 }
 
 @test "model_pricing: gpt-4o returns correct rates" {
   run model_pricing "gpt-4o"
   [ "$status" -eq 0 ]
-  [ "$output" = "2500000 10000000" ]
+  [ "$output" = "2500000 10000000 0 1250000" ]
 }
 
 @test "model_pricing: gemini-2.5-flash returns correct rates" {
   run model_pricing "gemini-2.5-flash"
   [ "$status" -eq 0 ]
-  [ "$output" = "150000 3500000" ]
+  [ "$output" = "150000 3500000 0 0" ]
 }
 
 @test "model_pricing: gemini-2.5-pro returns correct rates" {
   run model_pricing "gemini-2.5-pro"
   [ "$status" -eq 0 ]
-  [ "$output" = "1250000 10000000" ]
+  [ "$output" = "1250000 10000000 0 0" ]
 }
 
 @test "model_pricing: unknown model returns zero rates" {
   run model_pricing "some-unknown-model-v1"
   [ "$status" -eq 0 ]
-  [ "$output" = "0 0" ]
+  [ "$output" = "0 0 0 0" ]
 }
 
 @test "model_pricing: bedrock-prefixed claude-sonnet matches" {
   run model_pricing "us.anthropic.claude-sonnet-4-6"
   [ "$status" -eq 0 ]
-  [ "$output" = "3000000 15000000" ]
+  [ "$output" = "3000000 15000000 3750000 300000" ]
 }
 
 @test "model_pricing: uppercase model name matched case-insensitively" {
   run model_pricing "CLAUDE-SONNET-4-6-20250514"
   [ "$status" -eq 0 ]
-  [ "$output" = "3000000 15000000" ]
+  [ "$output" = "3000000 15000000 3750000 300000" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,9 @@ EOF
   [ -f "${out}.name" ]
   [ "$(cat "${out}.name")" = "my-agent" ]
   [ -f "${out}.tokens" ]
-  [ "$(cat "${out}.tokens")" = "my-agent: input=100 output=200 model=test-model" ]
+  # .tokens sidecar now includes cache fields (defaulting to 0 when the
+  # llm-call.sh stderr line omits them, as in this legacy-format mock).
+  [ "$(cat "${out}.tokens")" = "my-agent: input=100 output=200 cache_creation=0 cache_read=0 model=test-model" ]
   [ ! -f "${out}.failed" ]
   [ "$(cat "$out")" = "agent output" ]
 
@@ -411,6 +413,32 @@ EOF
 
   [ -f "${out}.truncated" ]
   [ -f "${out}.tokens" ]
+
+  _parallel_teardown
+}
+
+@test "call_agent_bg: forwards cache fields through .tokens sidecar" {
+  # Parallel runs must propagate cache_creation / cache_read through the
+  # .tokens sidecar so the parent's emit_token_table() can render the
+  # cache-aware column layout. Without this, cache activity would be
+  # visible only in sequential runs.
+  _parallel_setup
+
+  cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "response"
+echo "TOKENS: input=100 output=200 cache_creation=5000 cache_read=15000 model=test-model" >&2
+EOF
+  chmod +x "${MOCK_DIR}/llm-call.sh"
+
+  local out
+  out=$(mktemp)
+  TMPFILES+=("$out")
+
+  call_agent_bg "cache-agent" "test-model" "/dev/null" "/dev/null" "$out"
+
+  [ -f "${out}.tokens" ]
+  [ "$(cat "${out}.tokens")" = "cache-agent: input=100 output=200 cache_creation=5000 cache_read=15000 model=test-model" ]
 
   _parallel_teardown
 }
@@ -486,4 +514,73 @@ EOF
   [[ " ${TMPFILES[*]} " == *"${out}.tokens"* ]]
 
   _parallel_teardown
+}
+
+# ---------------------------------------------------------------------------
+# emit_token_table — adaptive column layout based on cache activity
+# ---------------------------------------------------------------------------
+
+_token_table_setup() {
+  load_function "${PROJECT_ROOT}/review.sh" emit_token_table
+  # All functions emit_token_table calls transitively. The file-level setup()
+  # already loads model_pricing, model_display_name, and format_cost, but
+  # list them here explicitly so these tests remain self-contained and don't
+  # silently break if someone rearranges the outer setup() or moves these
+  # cases to a different file.
+  load_function "${PROJECT_ROOT}/review.sh" model_pricing
+  load_function "${PROJECT_ROOT}/review.sh" model_display_name
+  load_function "${PROJECT_ROOT}/review.sh" format_cost
+}
+
+@test "emit_token_table: no cache activity → 6-column layout (legacy)" {
+  _token_table_setup
+  # Legacy TOKEN_LOG entry shape (no cache_* fields) should also work.
+  TOKEN_LOG=("agent-a: input=100 output=50 model=claude-sonnet-4-6")
+  run emit_token_table
+  [ "$status" -eq 0 ]
+  # Header has 6 fields (no Cache Write / Cache Read columns)
+  header_line=$(echo "$output" | head -1)
+  [[ "$header_line" == *"| Agent | Model | Input | Output | Total | Est. Cost |"* ]]
+  # No cache columns
+  [[ "$header_line" != *"Cache Write"* ]]
+}
+
+@test "emit_token_table: with cache activity → 8-column layout" {
+  _token_table_setup
+  TOKEN_LOG=(
+    "agent-a: input=100 output=50 cache_creation=1000 cache_read=0 model=claude-sonnet-4-6"
+    "agent-b: input=50 output=30 cache_creation=0 cache_read=1000 model=claude-sonnet-4-6"
+  )
+  run emit_token_table
+  [ "$status" -eq 0 ]
+  header_line=$(echo "$output" | head -1)
+  [[ "$header_line" == *"Cache Write"* ]]
+  [[ "$header_line" == *"Cache Read"* ]]
+}
+
+@test "emit_token_table: cache cost uses cache_write and cache_read rates" {
+  _token_table_setup
+  # claude-sonnet-4-6: in=3M, out=15M, cache_write=3.75M, cache_read=0.3M per 1M tokens
+  # 1000 cache_read tokens × 300000 ÷ 10^8 = 0.003 = 3 tenths-of-a-cent
+  # 1000 cache_creation × 3750000 ÷ 10^8 = 0.0375 = 37 tenths-of-a-cent
+  # 100 input × 3000000 ÷ 10^8 = 0.003 = 3 tenths-of-a-cent
+  # 50 output × 15000000 ÷ 10^8 = 0.0075 = 7 tenths-of-a-cent
+  # Total: 3+37+0+7 = 47 tenths-of-a-cent = $0.0047
+  # (Exact value depends on integer truncation in awk)
+  TOKEN_LOG=("agent-a: input=100 output=50 cache_creation=1000 cache_read=0 model=claude-sonnet-4-6")
+  run emit_token_table
+  [ "$status" -eq 0 ]
+  # Row should contain the 8-col format; cost > 0
+  echo "$output" | grep -qE '\| agent-a \| Sonnet 4.6 \| 100 \| 50 \| 1000 \| 0 \| 1150 \|'
+}
+
+@test "emit_token_table: legacy TOKEN_LOG entries (no cache fields) treated as zero" {
+  _token_table_setup
+  # Backward compat: entries without cache_* fields must not break the table.
+  TOKEN_LOG=("agent-a: input=100 output=50 model=claude-sonnet-4-6")
+  run emit_token_table
+  [ "$status" -eq 0 ]
+  # Should use legacy 6-col layout (no cache activity detected)
+  header_line=$(echo "$output" | head -1)
+  [[ "$header_line" != *"Cache Write"* ]]
 }

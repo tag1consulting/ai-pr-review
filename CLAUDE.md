@@ -11,7 +11,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | Script | Role |
 |--------|------|
 | `review.sh` | Main orchestrator: diff computation, manifest building, language detection, agent dispatch, findings merge/dedup/suppress, invokes the provider-specific post-review script |
-| `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr |
+| `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS: input=N output=N cache_creation=N cache_read=N model=M` line to stderr. Anthropic and Bedrock paths enable prompt caching via `cache_control: ephemeral` markers on the system prompt and user message (gated by `LLM_PROMPT_CACHING`; default `auto`). |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Sibling-script pattern](#sibling-script-pattern)) |
 | `post-review-gitlab.sh` | GitLab API layer: upserts summary note, posts inline MR discussions with suggestion fences, resolves stale bot discussions, advances SHA watermark |
@@ -414,6 +414,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). Supported on GitHub and GitLab; ignored on Bitbucket. |
+| `LLM_PROMPT_CACHING` | `auto` | Enable Anthropic/Bedrock prompt caching via `cache_control: ephemeral` markers. See [Prompt caching](#prompt-caching). Valid: `auto`, `true`, `false`. |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud--gitlab). |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |
@@ -446,9 +447,28 @@ After all agents complete:
 
 ## Token usage and cost estimation
 
-`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr.
+`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N cache_creation=N cache_read=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr. The `cache_creation` and `cache_read` fields are 0 on providers where caching doesn't engage (OpenAI, Google) or runs where `LLM_PROMPT_CACHING=false` was set.
 
-`config/model-pricing.json` maps model ID patterns to display names and per-token rates (cost per 1M tokens). The `model_pricing()`, `model_display_name()`, and `format_cost()` functions in `review.sh` use this data; `emit_token_table_rows()` generates the markdown table rows for the review comment and the Actions step summary.
+`config/model-pricing.json` maps model ID patterns to display names and per-token rates. Each entry carries four rates: `input_rate`, `output_rate`, `cache_write_rate`, and `cache_read_rate` (all cost per 1M tokens, in units of `$1e-6 / 1M tokens`). The `model_pricing()` function returns all four rates as a space-separated tuple; `emit_token_table()` generates the markdown table with an adaptive column layout — 6 columns when no rows have cache activity, 8 columns (Input / Output / Cache Write / Cache Read / Total / Est. Cost) when any row does.
+
+## Prompt caching
+
+When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, `llm-call.sh` wraps the system prompt and user message in structured-content arrays with `cache_control: {type: "ephemeral"}` markers. Anthropic's ephemeral cache (5-minute TTL) reduces input-token cost by ~90% on cache hits and cuts TTFT by ~50%.
+
+Gated by `LLM_PROMPT_CACHING` (default: `auto`):
+- `auto` — enabled for `anthropic` and `bedrock-proxy`; no-op for OpenAI (automatic prefix caching; no marker needed) and Google Gemini (different caching API, unsupported).
+- `true` — force-enable markers (useful only on OpenAI for testing; harmless no-op on Google).
+- `false` — force-disable markers (legacy request shape).
+
+**When caching pays off (and when it doesn't):** each agent uses a *different* system prompt (`prompts/<agent>.md`), and Anthropic's cache key is the full prefix up to the `cache_control` marker — so each agent creates its own separate cache entry. On the **first** run of a PR, every agent pays a 25% cache-write surcharge and gets nothing in return; blended cost is ~23% *higher* than no caching. On **subsequent** runs within the 5-minute TTL (retry, duplicate webhook, incremental push), every agent hits its warm cache entry at 10% of the input rate — roughly 83% cheaper. A weighted estimate across typical PR traffic (70% cold / 25% hot / 5% mixed) works out to ~10% cheaper on average.
+
+The real cache win will unlock when issue #123 lands: by moving the `cache_control` marker to sit AFTER the shared `CODE_CONTEXT_MSG` and BEFORE the per-agent system prompt, all 5 agents will share ONE cache entry per review run rather than 5 separate ones. This PR establishes the wire format that #123 needs.
+
+**Cache-minimum threshold:** Anthropic caches only prefixes ≥ 1024 tokens (Sonnet/Opus) or ≥ 2048 tokens (Haiku). Empirically the Sonnet floor observed on Bedrock is ~2048. Agent prompts + context under ~8KB text may silently not cache — verify via `cache_creation_input_tokens` > 0 in the first response. Our typical `CODE_CONTEXT_MSG` well exceeds this, so the threshold only matters on tiny-PR fixtures.
+
+**What is NOT cached:** blind-hunter uses `BLIND_MSG` (zero-context constraint) which is much shorter and structurally distinct, so it doesn't share the cache with other agents.
+
+**Live benchmark data** is in `claude/BENCHMARK-REPORT.md` (scripts `bench-cache3.sh` + `bench-analyze.sh`). Not committed in production runs — `claude/` is gitignored via CLAUDE.md conventions.
 
 ## Testing locally
 

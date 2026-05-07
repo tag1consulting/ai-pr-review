@@ -12,6 +12,11 @@
 # Environment:
 #   AI_PROVIDER       — Required: anthropic | openai | openai-compatible | google | bedrock-proxy
 #   AI_TEMPERATURE    — Optional: defaults to 0.3
+#   LLM_PROMPT_CACHING — Optional: auto (default) | true | false
+#       auto/true enables Anthropic/Bedrock prompt caching via cache_control
+#       markers on the system prompt and user message. No effect on OpenAI
+#       (automatic prefix caching is stable-prefix-based, no marker needed)
+#       or Google (Gemini uses a different caching API, currently unsupported).
 #
 #   Provider credentials (one set required based on AI_PROVIDER):
 #     anthropic:          ANTHROPIC_API_KEY
@@ -22,7 +27,9 @@
 #
 # Output:
 #   Writes the assistant response text to stdout.
-#   Emits "TOKENS: input=N output=N model=M" to stderr for usage tracking.
+#   Emits "TOKENS: input=N output=N cache_creation=N cache_read=N model=M" to
+#   stderr for usage tracking. cache_creation/cache_read are 0 on providers
+#   or runs where caching did not engage.
 #   Exits non-zero on API errors.
 
 set -euo pipefail
@@ -33,6 +40,19 @@ USER_MESSAGE_FILE="${3:?Missing user message file}"
 MAX_TOKENS="${4:-4096}"
 if ! [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]]; then
   echo "ERROR: max_tokens must be a positive integer; got '${MAX_TOKENS}'" >&2
+  exit 1
+fi
+
+# Fail fast on missing or empty prompt files. Anthropic rejects requests with
+# system: "" (HTTP 400 "system must be a non-empty string"); other providers
+# produce garbage output without a system prompt. Earlier detection here also
+# avoids burning an API call on a preventable misconfiguration.
+if [[ ! -s "$SYSTEM_PROMPT_FILE" ]]; then
+  echo "ERROR: system prompt file is missing or empty: ${SYSTEM_PROMPT_FILE}" >&2
+  exit 1
+fi
+if [[ ! -s "$USER_MESSAGE_FILE" ]]; then
+  echo "ERROR: user message file is missing or empty: ${USER_MESSAGE_FILE}" >&2
   exit 1
 fi
 
@@ -52,6 +72,41 @@ model_supports_temperature() {
   case "$1" in
     *opus-4-7*|*opus-4.7*) return 1 ;;
     *) return 0 ;;
+  esac
+}
+
+# Prompt caching: resolve the effective flag. "auto" (default) enables caching
+# on Anthropic and Bedrock paths (both use the Anthropic API shape with
+# cache_control markers). Explicit "true"/"false" override the auto-detection.
+# OpenAI's automatic prefix caching does not require a marker, so this flag
+# is a no-op there. Google Gemini caching uses a separate cachedContents API
+# and is not currently implemented.
+#
+# Trim surrounding whitespace so values like " true " or "\tauto\t" work as
+# expected (operators occasionally set env vars via `export VAR=" value"`
+# from copy-pasted secrets). Uses bash's extglob-free idiom.
+LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING:-auto}"
+# Strip leading whitespace
+LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING#"${LLM_PROMPT_CACHING%%[![:space:]]*}"}"
+# Strip trailing whitespace
+LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING%"${LLM_PROMPT_CACHING##*[![:space:]]}"}"
+prompt_caching_enabled() {
+  case "$LLM_PROMPT_CACHING" in
+    true|TRUE|True|1) return 0 ;;
+    false|FALSE|False|0) return 1 ;;
+    auto|AUTO|Auto|"")
+      case "${AI_PROVIDER:-}" in
+        anthropic|bedrock-proxy) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *)
+      echo "WARNING: LLM_PROMPT_CACHING='${LLM_PROMPT_CACHING}' is not a valid value; defaulting to auto." >&2
+      case "${AI_PROVIDER:-}" in
+        anthropic|bedrock-proxy) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
   esac
 }
 
@@ -202,6 +257,7 @@ retry_curl() {
 
 emit_response() {
   local response_text="$1" input_tokens="$2" output_tokens="$3" stop_reason="${4:-}"
+  local cache_creation_tokens="${5:-0}" cache_read_tokens="${6:-0}"
 
   # Check provider-specific content filter reasons before the empty-response check
   # so error messages are specific rather than generic "Could not extract response text"
@@ -227,13 +283,95 @@ emit_response() {
     echo "ERROR: Could not extract response text from API response" >&2
     _dump_response_file; exit 1
   fi
-  echo "TOKENS: input=${input_tokens} output=${output_tokens} model=${MODEL_ID}" >&2
+  # Token line format: input and output are always present; cache_creation and
+  # cache_read default to 0 when caching didn't engage. Downstream parsers
+  # (review.sh:emit_token_table_rows) accept the extended form and treat
+  # missing fields as 0 for backward compatibility.
+  echo "TOKENS: input=${input_tokens} output=${output_tokens} cache_creation=${cache_creation_tokens} cache_read=${cache_read_tokens} model=${MODEL_ID}" >&2
   # Warn and signal callers when the model hit the token limit
   if [[ "$stop_reason" == "max_tokens" || "$stop_reason" == "length" || "$stop_reason" == "MAX_TOKENS" ]]; then
     echo "WARNING: response truncated (stop_reason=${stop_reason}); output may be incomplete" >&2
     echo "TRUNCATED:true" >&2
   fi
   printf '%s\n' "$response_text"
+}
+
+# Build an Anthropic-shaped request body (shared by call_anthropic and
+# call_bedrock_proxy — bedrock-proxy wraps the same API with a version field).
+#
+# When prompt caching is enabled, both the system prompt and user message are
+# wrapped in a structured-content array with a cache_control: ephemeral marker
+# at the end. This makes the entire system prompt AND the entire user message
+# cacheable. Anthropic permits up to 4 cache_control markers per request;
+# we use 2 (system + user).
+#
+# Per-agent caching works because:
+#   * The system prompt file is stable for a given agent+mode (retries hit
+#     the cache on the second+ attempt within the 5-minute TTL).
+#   * The user message (CODE_CONTEXT_MSG or FULL_CONTEXT_MSG) is re-used
+#     across 4-5 agents in a single run, so the 2nd+ agent in that group
+#     gets a cache hit on its input.
+#
+# Args:
+#   $1 — extra_fields_jq  (e.g. '{anthropic_version: "bedrock-2023-05-31"}' or '{}')
+#   $2 — include_model    ("true" to include .model field; Bedrock paths put
+#                          the model in the URL instead)
+_build_anthropic_body() {
+  local extra_fields="$1" include_model="$2"
+  local caching_flag include_model_flag temperature_val model_val
+  if prompt_caching_enabled; then caching_flag="true"; else caching_flag="false"; fi
+  if [[ "$include_model" == "true" ]]; then
+    include_model_flag="true"
+    model_val="$MODEL_ID"
+  else
+    include_model_flag="false"
+    model_val=""
+  fi
+  # jq requires all --argjson vars to be defined; use JSON null for "not
+  # applicable" cases. The filter checks for null and omits the field.
+  if model_supports_temperature "$MODEL_ID"; then
+    temperature_val="$TEMPERATURE"
+  else
+    temperature_val="null"
+  fi
+
+  # Build the body: jq-merge the caller-provided extra fields (e.g.
+  # anthropic_version for Bedrock), the optional model field, then the
+  # core message/system/max_tokens block, then the optional temperature.
+  jq -n \
+    --arg model "$model_val" \
+    --rawfile system "$SYSTEM_PROMPT_FILE" \
+    --rawfile user "$USER_MESSAGE_FILE" \
+    --argjson max_tokens "$MAX_TOKENS" \
+    --argjson temperature "$temperature_val" \
+    --argjson caching "$caching_flag" \
+    --argjson extra "$extra_fields" \
+    --argjson include_model "$include_model_flag" \
+    '
+    ($extra) +
+    (if $include_model then {model: $model} else {} end) +
+    {
+      system: (
+        if $caching then
+          [{type: "text", text: $system, cache_control: {type: "ephemeral"}}]
+        else
+          $system
+        end
+      ),
+      messages: [{
+        role: "user",
+        content: (
+          if $caching then
+            [{type: "text", text: $user, cache_control: {type: "ephemeral"}}]
+          else
+            $user
+          end
+        )
+      }],
+      max_tokens: $max_tokens
+    } +
+    (if $temperature != null then {temperature: $temperature} else {} end)
+    '
 }
 
 # ---------------------------------------------------------------------------
@@ -243,28 +381,10 @@ call_anthropic() {
   : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required for AI_PROVIDER=anthropic}"
 
   local request_body
-  if model_supports_temperature "$MODEL_ID"; then
-    request_body=$(jq -n \
-      --arg model "$MODEL_ID" \
-      --rawfile system "$SYSTEM_PROMPT_FILE" \
-      --rawfile user "$USER_MESSAGE_FILE" \
-      --argjson max_tokens "$MAX_TOKENS" \
-      --argjson temperature "$TEMPERATURE" \
-      '{model: $model, system: $system, messages: [{role: "user", content: $user}], max_tokens: $max_tokens, temperature: $temperature}') || {
-      echo "ERROR: jq failed to build Anthropic request body" >&2
-      exit 1
-    }
-  else
-    request_body=$(jq -n \
-      --arg model "$MODEL_ID" \
-      --rawfile system "$SYSTEM_PROMPT_FILE" \
-      --rawfile user "$USER_MESSAGE_FILE" \
-      --argjson max_tokens "$MAX_TOKENS" \
-      '{model: $model, system: $system, messages: [{role: "user", content: $user}], max_tokens: $max_tokens}') || {
-      echo "ERROR: jq failed to build Anthropic request body" >&2
-      exit 1
-    }
-  fi
+  request_body=$(_build_anthropic_body '{}' "true") || {
+    echo "ERROR: jq failed to build Anthropic request body" >&2
+    exit 1
+  }
 
   echo "$request_body" | retry_curl "Anthropic" \
     -s -w "%{http_code}" -o "$RESPONSE_FILE" \
@@ -275,12 +395,14 @@ call_anthropic() {
     -H "Content-Type: application/json" \
     --data-binary @-
 
-  local response_text input_tokens output_tokens stop_reason
+  local response_text input_tokens output_tokens stop_reason cache_creation cache_read
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usage.input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usage.output_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  cache_creation=$(jq -r '.usage.cache_creation_input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  cache_read=$(jq -r '.usage.cache_read_input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   stop_reason=$(jq -r '.stop_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
+  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason" "$cache_creation" "$cache_read"
 }
 
 # ---------------------------------------------------------------------------
@@ -365,38 +487,13 @@ call_bedrock_proxy() {
   : "${BEDROCK_API_URL:?BEDROCK_API_URL is required for AI_PROVIDER=bedrock-proxy}"
   : "${BEDROCK_API_KEY:?BEDROCK_API_KEY is required for AI_PROVIDER=bedrock-proxy}"
 
+  # Bedrock uses Anthropic's request shape with an anthropic_version field.
+  # Model is encoded into the URL path (not the request body).
   local request_body
-  if model_supports_temperature "$MODEL_ID"; then
-    request_body=$(jq -n \
-      --rawfile system "$SYSTEM_PROMPT_FILE" \
-      --rawfile user "$USER_MESSAGE_FILE" \
-      --argjson max_tokens "$MAX_TOKENS" \
-      --argjson temperature "$TEMPERATURE" \
-      '{
-        anthropic_version: "bedrock-2023-05-31",
-        system: $system,
-        messages: [{role: "user", content: $user}],
-        max_tokens: $max_tokens,
-        temperature: $temperature
-      }') || {
-      echo "ERROR: jq failed to build Bedrock request body" >&2
-      exit 1
-    }
-  else
-    request_body=$(jq -n \
-      --rawfile system "$SYSTEM_PROMPT_FILE" \
-      --rawfile user "$USER_MESSAGE_FILE" \
-      --argjson max_tokens "$MAX_TOKENS" \
-      '{
-        anthropic_version: "bedrock-2023-05-31",
-        system: $system,
-        messages: [{role: "user", content: $user}],
-        max_tokens: $max_tokens
-      }') || {
-      echo "ERROR: jq failed to build Bedrock request body" >&2
-      exit 1
-    }
-  fi
+  request_body=$(_build_anthropic_body '{"anthropic_version": "bedrock-2023-05-31"}' "false") || {
+    echo "ERROR: jq failed to build Bedrock request body" >&2
+    exit 1
+  }
 
   local encoded_model_id
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)
@@ -410,12 +507,14 @@ call_bedrock_proxy() {
     -H "Content-Type: application/json" \
     --data-binary @-
 
-  local response_text input_tokens output_tokens stop_reason
+  local response_text input_tokens output_tokens stop_reason cache_creation cache_read
   response_text=$(jq -r '.content[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usage.input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usage.output_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  cache_creation=$(jq -r '.usage.cache_creation_input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  cache_read=$(jq -r '.usage.cache_read_input_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   stop_reason=$(jq -r '.stop_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
+  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason" "$cache_creation" "$cache_read"
 }
 
 # ---------------------------------------------------------------------------
