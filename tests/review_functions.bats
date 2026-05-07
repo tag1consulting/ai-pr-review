@@ -494,7 +494,13 @@ EOF
 
 _token_table_setup() {
   load_function "${PROJECT_ROOT}/review.sh" emit_token_table
-  # Dependencies the function calls
+  # All functions emit_token_table calls transitively. The file-level setup()
+  # already loads model_pricing, model_display_name, and format_cost, but
+  # list them here explicitly so these tests remain self-contained and don't
+  # silently break if someone rearranges the outer setup() or moves these
+  # cases to a different file.
+  load_function "${PROJECT_ROOT}/review.sh" model_pricing
+  load_function "${PROJECT_ROOT}/review.sh" model_display_name
   load_function "${PROJECT_ROOT}/review.sh" format_cost
 }
 

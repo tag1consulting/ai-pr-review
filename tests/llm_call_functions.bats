@@ -146,12 +146,15 @@ _load_caching_fn() {
   [ "$status" -eq 1 ]
 }
 
-@test "prompt_caching_enabled: unset LLM_PROMPT_CACHING uses auto default" {
+@test "prompt_caching_enabled: empty LLM_PROMPT_CACHING treated as auto" {
+  # load_function evaluates llm-call.sh's `LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING:-auto}"`
+  # line at load time, which means by the time prompt_caching_enabled runs,
+  # the variable is already set to whatever the harness had. We test the
+  # function's own empty-string branch instead — the case statement treats
+  # "" the same as "auto", which is functionally the contract we care about.
   _load_caching_fn
-  AI_PROVIDER=anthropic unset LLM_PROMPT_CACHING 2>/dev/null || true
-  # Run the function directly rather than via `run` so we can unset in the subshell
-  ( unset LLM_PROMPT_CACHING; LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING:-auto}"; AI_PROVIDER=anthropic prompt_caching_enabled )
-  [ $? -eq 0 ]
+  AI_PROVIDER=anthropic LLM_PROMPT_CACHING="" run prompt_caching_enabled
+  [ "$status" -eq 0 ]
 }
 
 @test "prompt_caching_enabled: invalid value warns and falls back to auto" {
