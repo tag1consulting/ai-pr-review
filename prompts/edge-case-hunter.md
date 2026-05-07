@@ -110,14 +110,6 @@ Traced <N> functions/methods across <M> files. Found <P> branching constructs.
 Omit any severity section that has no findings. If no gaps survive Pass 2:
 "All branching paths in the changed code are handled. Traced <N> functions across <M> files."
 
-After your markdown output, emit a JSON block fenced with ```json-findings:
-```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
-```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
-`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
-If no findings, emit an empty array: `[]`
-
 ---
 
 *Adapted from the BMAD-METHOD project (MIT License, BMad Code LLC).*

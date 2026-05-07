@@ -63,7 +63,6 @@ Analyze the diff for the following categories:
 Do NOT assess: project convention conformance (invisible to you), architectural fitness
 (no context), in-depth security vulnerabilities (security-reviewer handles this),
 test coverage.
-Do NOT flag dependency versions, GitHub Action versions, or package versions as "nonexistent," "unreleased," "may not exist," or "unverified" based on training-data recall. You have a knowledge cutoff — versions released after it are unknown to you, not nonexistent. Only raise a version-related finding if the diff itself provides concrete evidence of a problem (e.g., a syntactically malformed version string, a downgrade, or a known CVE). A renovate/dependabot bump to a higher version number is strong evidence the version exists.
 
 ## Empty State
 
@@ -108,14 +107,6 @@ Reviewed <N> files / <N> lines of diff with no project context.
 ```
 
 Omit any severity section that has no findings.
-
-After your markdown output, emit a JSON block fenced with ```json-findings:
-```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
-```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
-`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
-If no findings, emit an empty array: `[]`
 
 ---
 

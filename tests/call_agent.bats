@@ -11,10 +11,10 @@ setup() {
   load_function "${PROJECT_ROOT}/review.sh" effective_prompt
 
   MOCK_DIR=$(mktemp -d)
-  SCRIPT_DIR="$MOCK_DIR"
+  export SCRIPT_DIR="$MOCK_DIR"
   # effective_prompt() uses this prefix for combined-prompt temp files; the
   # parent review.sh sets it at script top and cleans matching files on exit.
-  EFFECTIVE_PROMPT_PREFIX="${MOCK_DIR}/ai-review-prompt-$$"
+  export EFFECTIVE_PROMPT_PREFIX="${MOCK_DIR}/ai-review-prompt-$$"
   TMPFILES=()
   FAILED_AGENTS=()
   TOKEN_LOG=()
@@ -190,55 +190,89 @@ EOF
 # system prompt for agents that support code suggestions.
 # ---------------------------------------------------------------------------
 
-@test "effective_prompt: returns base prompt unchanged when suggestions disabled" {
+@test "effective_prompt: returns base prompt for pr-summarizer (never composed)" {
+  # pr-summarizer has a different output contract and does not receive any
+  # shared trailers regardless of flags.
   local base
   base=$(mktemp); TMPFILES+=("$base")
   echo "base prompt content" > "$base"
 
-  AI_ENABLE_SUGGESTIONS=false run effective_prompt "code-reviewer" "$base"
+  AI_ENABLE_SUGGESTIONS=true run effective_prompt "pr-summarizer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+
+  AI_ENABLE_SUGGESTIONS=false run effective_prompt "pr-summarizer" "$base"
   [ "$status" -eq 0 ]
   [ "$output" = "$base" ]
 }
 
-@test "effective_prompt: default (unset) enables suggestions for eligible agents" {
-  local base addendum
+# Helper: populate MOCK_DIR with all three shared trailer files.
+_install_shared_trailers() {
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "KNOWLEDGE_CUTOFF_CONTENT" > "${MOCK_DIR}/prompts/_knowledge-cutoff.md"
+  echo "FINDINGS_TRAILER_CONTENT" > "${MOCK_DIR}/prompts/_trailer-findings.md"
+  echo "ADDENDUM_CONTENT"         > "${MOCK_DIR}/prompts/suggestion-addendum.md"
+}
+
+@test "effective_prompt: default (unset) composes trailers for eligible agents" {
+  _install_shared_trailers
+  local base
   base=$(mktemp); TMPFILES+=("$base")
-  echo "base prompt content" > "$base"
-  addendum="${PROJECT_ROOT}/prompts/suggestion-addendum.md"
-  [[ -f "$addendum" ]] || skip "suggestion-addendum.md not found"
+  echo "BASE CONTENT" > "$base"
 
   unset AI_ENABLE_SUGGESTIONS
   run effective_prompt "code-reviewer" "$base"
   [ "$status" -eq 0 ]
   [ "$output" != "$base" ]
+  [ -f "$output" ]
+  TMPFILES+=("$output")
+  grep -q "BASE CONTENT" "$output"
+  grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
+  grep -q "FINDINGS_TRAILER_CONTENT" "$output"
+  grep -q "ADDENDUM_CONTENT" "$output"
 }
 
-@test "effective_prompt: returns base prompt unchanged when AI_ENABLE_SUGGESTIONS=false" {
+@test "effective_prompt: AI_ENABLE_SUGGESTIONS=false still composes shared trailers" {
+  # Suggestions-disabled runs still need the findings trailer and
+  # knowledge-cutoff rule — only the suggestion-addendum is gated.
+  _install_shared_trailers
   local base
   base=$(mktemp); TMPFILES+=("$base")
-  echo "base prompt content" > "$base"
+  echo "BASE CONTENT" > "$base"
 
   AI_ENABLE_SUGGESTIONS=false run effective_prompt "code-reviewer" "$base"
   [ "$status" -eq 0 ]
-  [ "$output" = "$base" ]
+  [ "$output" != "$base" ]
+  [ -f "$output" ]
+  TMPFILES+=("$output")
+  grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
+  grep -q "FINDINGS_TRAILER_CONTENT" "$output"
+  # Suggestion addendum must be absent when suggestions are disabled
+  ! grep -q "ADDENDUM_CONTENT" "$output"
 }
 
-@test "effective_prompt: returns base prompt for agents that do NOT support suggestions" {
+@test "effective_prompt: architecture-reviewer and adversarial-general get trailers but not addendum" {
+  # These agents are eligible for findings+knowledge-cutoff trailers but NOT
+  # for the suggestion addendum (they don't emit line-edit suggestions).
+  _install_shared_trailers
   local base
   base=$(mktemp); TMPFILES+=("$base")
-  echo "base prompt content" > "$base"
+  echo "BASE CONTENT" > "$base"
 
-  for agent in pr-summarizer architecture-reviewer adversarial-general; do
+  for agent in architecture-reviewer adversarial-general; do
     AI_ENABLE_SUGGESTIONS=true run effective_prompt "$agent" "$base"
     [ "$status" -eq 0 ]
-    [ "$output" = "$base" ]
+    [ "$output" != "$base" ]
+    [ -f "$output" ]
+    TMPFILES+=("$output")
+    grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
+    grep -q "FINDINGS_TRAILER_CONTENT" "$output"
+    ! grep -q "ADDENDUM_CONTENT" "$output"
   done
 }
 
-@test "effective_prompt: appends addendum for eligible agents when enabled" {
-  # Set up a fake SCRIPT_DIR with a prompts/ subdir containing the addendum
-  mkdir -p "${MOCK_DIR}/prompts"
-  echo "ADDENDUM CONTENT" > "${MOCK_DIR}/prompts/suggestion-addendum.md"
+@test "effective_prompt: appends addendum for suggestion-eligible agents when enabled" {
+  _install_shared_trailers
 
   local base
   base=$(mktemp); TMPFILES+=("$base")
@@ -247,17 +281,69 @@ EOF
   for agent in code-reviewer edge-case-hunter security-reviewer silent-failure-hunter blind-hunter; do
     AI_ENABLE_SUGGESTIONS=true run effective_prompt "$agent" "$base"
     [ "$status" -eq 0 ]
-    # Output is a path to a new file combining base + addendum
     [ "$output" != "$base" ]
     [ -f "$output" ]
     TMPFILES+=("$output")
     grep -q "BASE CONTENT" "$output"
-    grep -q "ADDENDUM CONTENT" "$output"
+    grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
+    grep -q "FINDINGS_TRAILER_CONTENT" "$output"
+    grep -q "ADDENDUM_CONTENT" "$output"
   done
 }
 
-@test "effective_prompt: falls back to base when addendum file is missing" {
-  # No prompts/ subdir created — addendum does not exist
+@test "effective_prompt: composition order is base, knowledge-cutoff, findings, addendum" {
+  # The order matters for cache-friendliness of future prompt layouts —
+  # shared tails need to be in the same order every time so they compose
+  # to byte-identical suffixes across agents.
+  _install_shared_trailers
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  AI_ENABLE_SUGGESTIONS=true run effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  TMPFILES+=("$output")
+
+  # Extract markers in order of appearance
+  local order
+  order=$(grep -oE 'BASE CONTENT|KNOWLEDGE_CUTOFF_CONTENT|FINDINGS_TRAILER_CONTENT|ADDENDUM_CONTENT' "$output" | tr '\n' ',')
+  [ "$order" = "BASE CONTENT,KNOWLEDGE_CUTOFF_CONTENT,FINDINGS_TRAILER_CONTENT,ADDENDUM_CONTENT," ]
+}
+
+@test "effective_prompt: falls back to base when knowledge-cutoff file is missing" {
+  # No prompts/ subdir created — all shared trailers are missing.
+  # knowledge-cutoff is checked first, so its absence is the reported cause.
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  AI_ENABLE_SUGGESTIONS=true run --separate-stderr effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+  [[ "$stderr" == *"knowledge-cutoff trailer missing"* ]]
+}
+
+@test "effective_prompt: falls back to base when findings trailer is missing" {
+  # knowledge-cutoff present, findings trailer missing.
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "KNOWLEDGE_CUTOFF_CONTENT" > "${MOCK_DIR}/prompts/_knowledge-cutoff.md"
+
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  AI_ENABLE_SUGGESTIONS=true run --separate-stderr effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+  [[ "$stderr" == *"findings trailer missing"* ]]
+}
+
+@test "effective_prompt: falls back to base when addendum is missing but trailers present" {
+  # Only suggestion-addendum.md absent; trailers present.
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "KNOWLEDGE_CUTOFF_CONTENT" > "${MOCK_DIR}/prompts/_knowledge-cutoff.md"
+  echo "FINDINGS_TRAILER_CONTENT" > "${MOCK_DIR}/prompts/_trailer-findings.md"
+
   local base
   base=$(mktemp); TMPFILES+=("$base")
   echo "BASE CONTENT" > "$base"
@@ -279,8 +365,7 @@ EOF
 }
 
 @test "effective_prompt: accepts TRUE and True as enabled (case-insensitive)" {
-  mkdir -p "${MOCK_DIR}/prompts"
-  echo "ADDENDUM CONTENT" > "${MOCK_DIR}/prompts/suggestion-addendum.md"
+  _install_shared_trailers
 
   local base
   base=$(mktemp); TMPFILES+=("$base")
@@ -292,6 +377,6 @@ EOF
     [ "$output" != "$base" ]
     [ -f "$output" ]
     TMPFILES+=("$output")
-    grep -q "ADDENDUM CONTENT" "$output"
+    grep -q "ADDENDUM_CONTENT" "$output"
   done
 }

@@ -743,62 +743,122 @@ collect_parallel_results() {
   done
 }
 
-# --- Build effective prompt path (appends suggestion addendum when enabled) ---
+# --- Build effective prompt path (composes shared trailers with the base) ---
 # Called from 10 agent dispatch sites via $(effective_prompt <agent> <base_prompt>).
-# Note: the returned path must be registered with TMPFILES in the caller's shell,
-# not inside the command substitution — mktemp_tracked's TMPFILES+= mutation is
-# lost when it runs in a $(...) subshell. The caller captures the echoed path and
-# we rely on the shared /tmp cleanup. On missing addendum, missing base prompt,
-# or cat failure, this function falls back to the base prompt with a WARNING
-# rather than silently passing a truncated prompt to the LLM.
 #
-# Fallback behavior for a missing base prompt: the function echoes the missing
-# path back verbatim (not a sentinel or empty string). This is intentional — the
-# pre-existing flow without this helper passes the base prompt path directly to
-# call_agent → llm-call.sh, which already handles "file does not exist" via its
-# own exit-1 path. Emitting the missing path here preserves that behavior and
-# avoids a second failure mode for callers to handle. Operators see two signals:
-# a WARNING from this function plus the downstream "file not found" error from
-# the agent invocation.
+# Composes three shared blocks onto the base agent prompt depending on agent
+# eligibility:
+#   * prompts/_knowledge-cutoff.md  — HARD CONSTRAINT against version-existence
+#                                     hallucinations. Applied to all 7
+#                                     finding-producing agents.
+#   * prompts/_trailer-findings.md  — json-findings schema instruction.
+#                                     Applied to all 7 finding-producing agents.
+#   * prompts/suggestion-addendum.md — "Apply suggestion" formatting instructions.
+#                                      Gated by AI_ENABLE_SUGGESTIONS; applied only
+#                                      to agents that emit inline line edits
+#                                      (code-reviewer, edge-case-hunter,
+#                                      security-reviewer, silent-failure-hunter,
+#                                      blind-hunter).
+#
+# pr-summarizer is NOT eligible — its prompt has a different output contract
+# (no findings, no version checks) and is passed through verbatim.
+#
+# Composition order: base prompt + knowledge-cutoff + findings-trailer +
+# (optional) suggestion-addendum. This puts agent-specific voice first and
+# shared trailers last, which keeps the trailer bytes identical across the
+# eligible agents — making those bytes cache-friendly when a future change
+# positions the cache_control marker inside the user message.
+#
+# Note: the returned path is cleaned up in the parent trap via a glob match
+# on EFFECTIVE_PROMPT_PREFIX since TMPFILES+= would not propagate back through
+# the $(...) call site. On any missing-file or cat failure, the function falls
+# back to the base prompt with a WARNING rather than silently passing a
+# truncated prompt to the LLM.
+#
+# Fallback for a missing base prompt: the function echoes the missing path
+# back verbatim (not a sentinel or empty string). This is intentional —
+# call_agent → llm-call.sh already handles "file does not exist" via its own
+# exit-1 path. Operators see two signals: a WARNING from this function plus
+# the downstream "file not found" error from the agent invocation.
+
 effective_prompt() {
   local agent_name="$1" base_prompt="$2"
-  # Case-insensitive gate so TRUE/True/true all work consistently with post-review.sh.
+
+  # Agents that receive the shared findings trailer + knowledge-cutoff rule.
+  # pr-summarizer is deliberately excluded; it has a different output contract.
+  # Agents that receive the "Apply suggestion" formatting instructions.
+  # Architecture-reviewer and adversarial-general are holistic/design-level and
+  # do not emit line-edit suggestions.
+  #
+  # Inlined here (rather than set at script top) so the function is
+  # self-contained: the bats harness loads a single function via awk
+  # extraction and does not see top-level variable assignments.
+  local agents_with_findings_trailer='code-reviewer|silent-failure-hunter|security-reviewer|edge-case-hunter|blind-hunter|architecture-reviewer|adversarial-general'
+  local agents_with_suggestion_addendum='code-reviewer|edge-case-hunter|security-reviewer|silent-failure-hunter|blind-hunter'
+
+  if [[ ! -f "$base_prompt" ]]; then
+    echo "WARNING: Base prompt missing at ${base_prompt}; cannot build effective prompt for ${agent_name}." >&2
+    echo "$base_prompt"
+    return
+  fi
+
+  # Decide which trailers apply.
+  local want_trailers=0 want_suggestion=0
+  if [[ "$agent_name" =~ ^(${agents_with_findings_trailer})$ ]]; then
+    want_trailers=1
+  fi
   local _enable="${AI_ENABLE_SUGGESTIONS:-true}"
   _enable="${_enable,,}"
-  if [[ "$_enable" == "true" ]]; then
-    case "$agent_name" in
-      code-reviewer|edge-case-hunter|security-reviewer|silent-failure-hunter|blind-hunter)
-        local addendum="${SCRIPT_DIR}/prompts/suggestion-addendum.md"
-        if [[ ! -f "$addendum" ]]; then
-          echo "WARNING: Suggestion addendum missing at ${addendum}; using base prompt for ${agent_name}." >&2
-          echo "$base_prompt"
-          return
-        fi
-        if [[ ! -f "$base_prompt" ]]; then
-          echo "WARNING: Base prompt missing at ${base_prompt}; cannot build effective prompt for ${agent_name}." >&2
-          echo "$base_prompt"
-          return
-        fi
-        # Cleaned up in the parent trap via a glob match on EFFECTIVE_PROMPT_PREFIX,
-        # since TMPFILES+= would not propagate back through the $(...) call site.
-        local combined
-        combined=$(mktemp "${EFFECTIVE_PROMPT_PREFIX}-XXXXXXXX.md" 2>/dev/null) || {
-          echo "WARNING: Failed to create temp file for ${agent_name} effective prompt; using base prompt." >&2
-          echo "$base_prompt"
-          return
-        }
-        if ! cat "$base_prompt" "$addendum" > "$combined" 2>/dev/null; then
-          echo "WARNING: Failed to assemble effective prompt for ${agent_name}; using base prompt." >&2
-          rm -f "$combined"
-          echo "$base_prompt"
-          return
-        fi
-        echo "$combined"
-        return
-        ;;
-    esac
+  if [[ "$_enable" == "true" ]] \
+     && [[ "$agent_name" =~ ^(${agents_with_suggestion_addendum})$ ]]; then
+    want_suggestion=1
   fi
-  echo "$base_prompt"
+
+  # No trailers to compose → pass through unchanged (the pr-summarizer path
+  # and the AI_ENABLE_SUGGESTIONS=false path for non-eligible-for-trailers
+  # agents, though the latter is currently empty).
+  if [[ "$want_trailers" -eq 0 && "$want_suggestion" -eq 0 ]]; then
+    echo "$base_prompt"
+    return
+  fi
+
+  # Build the list of files to concatenate. Verify each exists before use;
+  # a missing shared trailer should fall back to the base prompt, not ship
+  # a truncated composition.
+  local -a parts=("$base_prompt")
+  local kc="${SCRIPT_DIR}/prompts/_knowledge-cutoff.md"
+  local ft="${SCRIPT_DIR}/prompts/_trailer-findings.md"
+  local sa="${SCRIPT_DIR}/prompts/suggestion-addendum.md"
+  if [[ "$want_trailers" -eq 1 ]]; then
+    if [[ ! -f "$kc" ]]; then
+      echo "WARNING: Shared knowledge-cutoff trailer missing at ${kc}; using base prompt for ${agent_name}." >&2
+      echo "$base_prompt"; return
+    fi
+    if [[ ! -f "$ft" ]]; then
+      echo "WARNING: Shared findings trailer missing at ${ft}; using base prompt for ${agent_name}." >&2
+      echo "$base_prompt"; return
+    fi
+    parts+=("$kc" "$ft")
+  fi
+  if [[ "$want_suggestion" -eq 1 ]]; then
+    if [[ ! -f "$sa" ]]; then
+      echo "WARNING: Suggestion addendum missing at ${sa}; using base prompt for ${agent_name}." >&2
+      echo "$base_prompt"; return
+    fi
+    parts+=("$sa")
+  fi
+
+  local combined
+  combined=$(mktemp "${EFFECTIVE_PROMPT_PREFIX}-XXXXXXXX.md" 2>/dev/null) || {
+    echo "WARNING: Failed to create temp file for ${agent_name} effective prompt; using base prompt." >&2
+    echo "$base_prompt"; return
+  }
+  if ! cat "${parts[@]}" > "$combined" 2>/dev/null; then
+    echo "WARNING: Failed to assemble effective prompt for ${agent_name}; using base prompt." >&2
+    rm -f "$combined"
+    echo "$base_prompt"; return
+  fi
+  echo "$combined"
 }
 
 # --- Detect conditional agent triggers ---
@@ -929,7 +989,7 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ARCH_FILE")
     call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
@@ -953,7 +1013,7 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$ADV_FILE")
     call_agent_bg "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      "$(effective_prompt adversarial-general "${SCRIPT_DIR}/prompts/adversarial-general.md")" "$CODE_CONTEXT_MSG" "$ADV_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$ADV_FILE")
 
     wait_tier_pids "${TIER2_WAIT_ARGS[@]}"
@@ -1139,7 +1199,7 @@ else
   if [[ "$REVIEW_MODE" == "full" ]]; then
     ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
     call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-      "${SCRIPT_DIR}/prompts/architecture-reviewer.md" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$ARCH_FILE")
 
     SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
@@ -1159,7 +1219,7 @@ else
 
     ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
     call_agent "adversarial-general" "$AI_MODEL_STANDARD" \
-      "${SCRIPT_DIR}/prompts/adversarial-general.md" "$CODE_CONTEXT_MSG" "$ADV_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+      "$(effective_prompt adversarial-general "${SCRIPT_DIR}/prompts/adversarial-general.md")" "$CODE_CONTEXT_MSG" "$ADV_FILE" "$AI_MAX_TOKENS_PER_AGENT"
     AGENT_OUTPUTS+=("$ADV_FILE")
   fi
 

@@ -101,11 +101,3 @@ patterns found") followed by an empty json-findings block. Do NOT output the bar
 ```
 
 Omit any severity section that has no findings.
-
-After your markdown output, emit a JSON block fenced with ```json-findings:
-```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]
-```
-`severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
-`confidence` must be an integer 0–100. Only include findings with confidence ≥ 75.
-If no findings, emit an empty array: `[]`
