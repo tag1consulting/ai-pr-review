@@ -45,7 +45,9 @@ EOF
 
   [ "$(cat "$out")" = "agent response" ]
   [ "${#TOKEN_LOG[@]}" -eq 1 ]
-  [ "${TOKEN_LOG[0]}" = "my-agent: input=100 output=200 model=test-model" ]
+  # TOKEN_LOG entry now includes cache fields; defaults to cache_creation=0,
+  # cache_read=0 when llm-call.sh emits the legacy format (no cache_* fields).
+  [ "${TOKEN_LOG[0]}" = "my-agent: input=100 output=200 cache_creation=0 cache_read=0 model=test-model" ]
   [ "${#FAILED_AGENTS[@]}" -eq 0 ]
 }
 
@@ -179,8 +181,8 @@ EOF
   call_agent "agent-two" "test-model" "/dev/null" "/dev/null" "$out2"
 
   [ "${#TOKEN_LOG[@]}" -eq 2 ]
-  [ "${TOKEN_LOG[0]}" = "agent-one: input=10 output=20 model=m" ]
-  [ "${TOKEN_LOG[1]}" = "agent-two: input=10 output=20 model=m" ]
+  [ "${TOKEN_LOG[0]}" = "agent-one: input=10 output=20 cache_creation=0 cache_read=0 model=m" ]
+  [ "${TOKEN_LOG[1]}" = "agent-two: input=10 output=20 cache_creation=0 cache_read=0 model=m" ]
 }
 
 # ---------------------------------------------------------------------------

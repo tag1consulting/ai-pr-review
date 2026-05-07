@@ -605,12 +605,22 @@ call_agent() {
   fi
 
   if [[ -n "$token_line" ]]; then
-    local input_tokens output_tokens model_id
+    local input_tokens output_tokens cache_creation cache_read model_id
     input_tokens=$(echo "$token_line" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
     output_tokens=$(echo "$token_line" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
+    # cache_creation / cache_read are optional — defaults to 0 for providers
+    # (OpenAI, Google) and for pre-caching llm-call.sh versions.
+    cache_creation=$(echo "$token_line" | grep -oE 'cache_creation=[0-9]+' | sed 's/cache_creation=//' || echo "")
+    cache_read=$(echo "$token_line" | grep -oE 'cache_read=[0-9]+' | sed 's/cache_read=//' || echo "")
+    cache_creation="${cache_creation:-0}"
+    cache_read="${cache_read:-0}"
     model_id=$(echo "$token_line" | grep -oE 'model=[^ ]+' | sed 's/model=//' || echo "unknown")
-    echo "  tokens: input=${input_tokens} output=${output_tokens} model=${model_id}" >&2
-    TOKEN_LOG+=("${name}: input=${input_tokens} output=${output_tokens} model=${model_id}")
+    if [[ "$cache_creation" -gt 0 || "$cache_read" -gt 0 ]]; then
+      echo "  tokens: input=${input_tokens} output=${output_tokens} cache_creation=${cache_creation} cache_read=${cache_read} model=${model_id}" >&2
+    else
+      echo "  tokens: input=${input_tokens} output=${output_tokens} model=${model_id}" >&2
+    fi
+    TOKEN_LOG+=("${name}: input=${input_tokens} output=${output_tokens} cache_creation=${cache_creation} cache_read=${cache_read} model=${model_id}")
   fi
 }
 
@@ -1878,6 +1888,10 @@ fi
 # Returns two integers: IN_RATE OUT_RATE (microdollars per million tokens).
 # Callers compute: cost_microdollars = tokens * rate / 1_000_000
 MODEL_PRICING_FILE="${SCRIPT_DIR}/config/model-pricing.json"
+# Returns four space-separated rates:
+#   input_rate output_rate cache_write_rate cache_read_rate
+# Cache rates default to 0 when the pricing entry predates the cache-column
+# extension; callers should guard with `[[ $rate -gt 0 ]]` before costing.
 model_pricing() {
   local model="$1"
   local m result
@@ -1885,10 +1899,10 @@ model_pricing() {
   result=$(jq -r --arg m "$m" '
     first(
       .[] | select(.patterns[] as $p | ($m | test($p)))
-      | "\(.input_rate) \(.output_rate)"
-    ) // "0 0"
-  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result="0 0"
-  echo "${result:-0 0}"
+      | "\(.input_rate) \(.output_rate) \(.cache_write_rate // 0) \(.cache_read_rate // 0)"
+    ) // "0 0 0 0"
+  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result="0 0 0 0"
+  echo "${result:-0 0 0 0}"
 }
 
 # Human-readable model display name: "Sonnet 4.6", "GPT-4o mini", etc.
@@ -1923,39 +1937,99 @@ format_cost() {
 # Uses awk for cost arithmetic to avoid bash integer overflow on large
 # token counts multiplied by rate constants (up to 75,000,000).
 # ---------------------------------------------------------------------------
-emit_token_table_rows() {
-  local total_in=0 total_out=0 total_cost=0 any_unknown=0
+# Emit the full markdown token table (header + rows + total) to stdout.
+# Adaptive: if any row had cache activity (cache_creation or cache_read > 0),
+# emits two extra columns "Cache Write" and "Cache Read"; otherwise uses the
+# original 6-column layout so non-caching runs stay visually identical.
+#
+# Rationale for the two-pass approach: we don't know whether to emit the
+# cache columns until we've scanned every entry. Rather than snapshot state
+# in a global, we compute totals in pass 1 and emit rows in pass 2.
+emit_token_table() {
+  # Pass 1: decide column layout
+  local any_cache=0
+  local entry
   for entry in "${TOKEN_LOG[@]}"; do
-    local agent_name in_tok out_tok model_id row_total in_rate out_rate cost_display model_short
+    local cw_tok cr_tok
+    cw_tok=$(echo "$entry" | grep -oE 'cache_creation=[0-9]+' | sed 's/cache_creation=//' || echo "")
+    cr_tok=$(echo "$entry" | grep -oE 'cache_read=[0-9]+' | sed 's/cache_read=//' || echo "")
+    if [[ "${cw_tok:-0}" -gt 0 || "${cr_tok:-0}" -gt 0 ]]; then any_cache=1; break; fi
+  done
+
+  # Header
+  if [[ "$any_cache" -eq 1 ]]; then
+    echo "| Agent | Model | Input | Output | Cache Write | Cache Read | Total | Est. Cost |"
+    echo "|-------|-------|------:|-------:|------------:|-----------:|------:|----------:|"
+  else
+    echo "| Agent | Model | Input | Output | Total | Est. Cost |"
+    echo "|-------|-------|------:|-------:|------:|----------:|"
+  fi
+
+  # Pass 2: rows + totals
+  local total_in=0 total_out=0 total_cw=0 total_cr=0 total_cost=0 any_unknown=0
+  for entry in "${TOKEN_LOG[@]}"; do
+    local agent_name in_tok out_tok cw_tok cr_tok model_id row_total
+    local in_rate out_rate cw_rate cr_rate cost_display model_short
     agent_name="${entry%%:*}"
     in_tok=$(echo "$entry" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
     out_tok=$(echo "$entry" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
+    cw_tok=$(echo "$entry" | grep -oE 'cache_creation=[0-9]+' | sed 's/cache_creation=//' || echo "")
+    cr_tok=$(echo "$entry" | grep -oE 'cache_read=[0-9]+' | sed 's/cache_read=//' || echo "")
+    cw_tok="${cw_tok:-0}"
+    cr_tok="${cr_tok:-0}"
     model_id=$(echo "$entry" | grep -oE 'model=[^ ]+' | sed 's/model=//' || echo "unknown")
-    row_total=$(( in_tok + out_tok ))
-    read -r in_rate out_rate <<< "$(model_pricing "$model_id")"
+    row_total=$(( in_tok + out_tok + cw_tok + cr_tok ))
+    read -r in_rate out_rate cw_rate cr_rate <<< "$(model_pricing "$model_id")"
     if [[ "$in_rate" -eq 0 && "$out_rate" -eq 0 ]]; then
       cost_display="n/a"
       any_unknown=1
     else
-      # Use awk to avoid bash integer overflow (in_tok * in_rate can exceed 2^63 for large runs)
+      # awk-based arithmetic avoids 64-bit overflow on large token counts.
+      # Cost: input*rate + output*rate + cache_creation*write_rate + cache_read*read_rate
+      # Rates are in dollars/1M-tokens × 1e6; divide by 10^8 to get $0.0001 units.
       local cost_units
-      cost_units=$(awk -v it="${in_tok:-0}" -v ir="${in_rate:-0}" -v ot="${out_tok:-0}" -v or_="${out_rate:-0}" \
-        'BEGIN {printf "%d", (it * ir + ot * or_) / 100000000}')
+      cost_units=$(awk \
+        -v it="${in_tok:-0}"  -v ir="${in_rate:-0}" \
+        -v ot="${out_tok:-0}" -v or_="${out_rate:-0}" \
+        -v wt="${cw_tok:-0}"  -v wr="${cw_rate:-0}" \
+        -v rt="${cr_tok:-0}"  -v rr="${cr_rate:-0}" \
+        'BEGIN {printf "%d", (it*ir + ot*or_ + wt*wr + rt*rr) / 100000000}')
       cost_display=$(format_cost "$cost_units")
       total_cost=$(( total_cost + cost_units ))
     fi
     model_short=$(model_display_name "$model_id")
-    echo "| ${agent_name} | ${model_short} | ${in_tok} | ${out_tok} | ${row_total} | ${cost_display} |"
+    if [[ "$any_cache" -eq 1 ]]; then
+      echo "| ${agent_name} | ${model_short} | ${in_tok} | ${out_tok} | ${cw_tok} | ${cr_tok} | ${row_total} | ${cost_display} |"
+    else
+      echo "| ${agent_name} | ${model_short} | ${in_tok} | ${out_tok} | ${row_total} | ${cost_display} |"
+    fi
     total_in=$(( total_in + in_tok ))
     total_out=$(( total_out + out_tok ))
+    total_cw=$(( total_cw + cw_tok ))
+    total_cr=$(( total_cr + cr_tok ))
   done
+
+  # Total row
   local total_cost_display
   if [[ "$any_unknown" -eq 1 ]]; then
     total_cost_display="$(format_cost "$total_cost")+"
   else
     total_cost_display="$(format_cost "$total_cost")"
   fi
-  echo "| **Total** | | **${total_in}** | **${total_out}** | **$(( total_in + total_out ))** | **${total_cost_display}** |"
+  local grand_total=$(( total_in + total_out + total_cw + total_cr ))
+  if [[ "$any_cache" -eq 1 ]]; then
+    echo "| **Total** | | **${total_in}** | **${total_out}** | **${total_cw}** | **${total_cr}** | **${grand_total}** | **${total_cost_display}** |"
+  else
+    echo "| **Total** | | **${total_in}** | **${total_out}** | **${grand_total}** | **${total_cost_display}** |"
+  fi
+}
+
+# Backward-compat shim: the old emit_token_table_rows only emitted rows
+# (header was echo'd separately). Keep it for anything that still calls it
+# directly; it now emits the whole table (header + rows + total) via the new
+# entry point. Call sites below have been updated to not emit their own header.
+emit_token_table_rows() {
+  emit_token_table
 }
 
 # Build token usage table as a collapsed details block
@@ -1965,9 +2039,7 @@ if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
     echo "<details>"
     echo "<summary>Token usage by agent</summary>"
     echo ""
-    echo "| Agent | Model | Input | Output | Total | Est. Cost |"
-    echo "|-------|-------|------:|-------:|------:|----------:|"
-    emit_token_table_rows
+    emit_token_table
     echo ""
     echo "_Prices are public list rates and do not reflect discounts, commitments, or proxy markups._"
     echo ""
@@ -2041,9 +2113,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
       echo "### Token Usage"
       echo ""
-      echo "| Agent | Model | Input | Output | Total | Est. Cost |"
-      echo "|-------|-------|------:|-------:|------:|----------:|"
-      emit_token_table_rows
+      emit_token_table
       echo ""
       echo "_Prices are public list rates and do not reflect discounts, commitments, or proxy markups._"
       echo ""
