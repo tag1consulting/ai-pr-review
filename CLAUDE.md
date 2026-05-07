@@ -460,9 +460,15 @@ Gated by `LLM_PROMPT_CACHING` (default: `auto`):
 - `true` — force-enable markers (useful only on OpenAI for testing; harmless no-op on Google).
 - `false` — force-disable markers (legacy request shape).
 
-**Why this works across ~5 agents per run:** `CODE_CONTEXT_MSG` (manifest + language profiles + diff) is reused across `code-reviewer`, `silent-failure-hunter`, `security-reviewer`, `edge-case-hunter`, `adversarial-general`. The first agent to run creates the cache entry (`cache_creation_input_tokens` in response); subsequent agents in the same 5-minute window get a cache hit (`cache_read_input_tokens` in response), typically saving 40–60% of the run's input-token spend.
+**When caching pays off (and when it doesn't):** each agent uses a *different* system prompt (`prompts/<agent>.md`), and Anthropic's cache key is the full prefix up to the `cache_control` marker — so each agent creates its own separate cache entry. On the **first** run of a PR, every agent pays a 25% cache-write surcharge and gets nothing in return; blended cost is ~23% *higher* than no caching. On **subsequent** runs within the 5-minute TTL (retry, duplicate webhook, incremental push), every agent hits its warm cache entry at 10% of the input rate — roughly 83% cheaper. A weighted estimate across typical PR traffic (70% cold / 25% hot / 5% mixed) works out to ~10% cheaper on average.
 
-**What is NOT cached:** each agent's system prompt is unique per-agent, so the cache key differs. Retries of the same agent within 5 minutes benefit. Blind-hunter uses a separate `BLIND_MSG` (zero-context constraint) and therefore doesn't share the cache with other agents.
+The real cache win will unlock when issue #123 lands: by moving the `cache_control` marker to sit AFTER the shared `CODE_CONTEXT_MSG` and BEFORE the per-agent system prompt, all 5 agents will share ONE cache entry per review run rather than 5 separate ones. This PR establishes the wire format that #123 needs.
+
+**Cache-minimum threshold:** Anthropic caches only prefixes ≥ 1024 tokens (Sonnet/Opus) or ≥ 2048 tokens (Haiku). Empirically the Sonnet floor observed on Bedrock is ~2048. Agent prompts + context under ~8KB text may silently not cache — verify via `cache_creation_input_tokens` > 0 in the first response. Our typical `CODE_CONTEXT_MSG` well exceeds this, so the threshold only matters on tiny-PR fixtures.
+
+**What is NOT cached:** blind-hunter uses `BLIND_MSG` (zero-context constraint) which is much shorter and structurally distinct, so it doesn't share the cache with other agents.
+
+**Live benchmark data** is in `claude/BENCHMARK-REPORT.md` (scripts `bench-cache3.sh` + `bench-analyze.sh`). Not committed in production runs — `claude/` is gitignored via CLAUDE.md conventions.
 
 ## Testing locally
 
