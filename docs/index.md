@@ -27,6 +27,10 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What it does
+
+On every push to a pull request, AI PR Review runs a roster of LLM agents and deterministic static analyzers against the diff, then posts a structured review — a summary comment plus inline findings with "Apply suggestion" buttons where applicable. It's incremental (subsequent pushes only review what changed), suppresses known false positives via a JSON rules file, and is designed to fail gracefully when a model times out or a scanner is missing. Runs on GitHub Actions, Bitbucket Cloud Pipelines, or GitLab CI/CD against Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint.
+
 ## Quick start
 
 Get AI reviews on your PRs in two steps:
@@ -62,10 +66,20 @@ That's it — reviews start firing on the next PR.
 
 ## Learn more
 
+**Start here**
+
 - [Getting started](getting-started) — Installation, requirements, secrets and variables
 - [Configuration](configuration) — Action inputs and LLM provider options
+
+**Reference**
+
 - [Features](features) — Code suggestions, incremental reviews, resilience, token usage
-- [Agents & Profiles](agents) — Review agents, severity icons, review modes, language profiles
+- [Agents & profiles](agents) — Review agents, severity icons, review modes, language profiles
 - [Static analyzers](static-analyzers) — Analyzer table, dependency vulnerability check
 - [Suppression rules](suppression) — Suppress false positives with JSON rules
+- [Slash commands](slash-commands) — PR-comment commands (rescan, review-full, skip, dismiss, help)
+
+**Internals**
+
 - [Architecture](architecture) — Directory tree, data flow, dependencies
+- [Local development](local-development) — Run the container locally against any PR

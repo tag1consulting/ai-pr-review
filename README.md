@@ -105,13 +105,13 @@ Findings use shape-distinct icons for accessibility:
 
 ## Requirements
 
-**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
+**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. Most analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, phpstan, kube-linter, tflint) ship pre-installed at pinned versions. ESLint is not bundled (it runs from the consumer's `node_modules` / `npx` via the project's own config); the review proceeds without ESLint findings if no JS toolchain is present.
 
 If you prefer to run without Docker (e.g., on self-hosted runners without container support), the [direct action reference](docs/installation-direct-action.md) and [git submodule](docs/installation-submodule.md) methods work as standard GitHub Actions composite actions. These require:
 
 - **Bash 4+**, **curl**, **jq**, **git**, **gh** — all pre-installed on standard GitHub-hosted runners
 - **shellcheck** — installed automatically by the action if not already present
-- Static analyzer binaries installed separately if desired (see [runtime dependencies](docs/installation-direct-action.md#runtime-dependencies))
+- Other static-analyzer binaries installed separately if desired (see [runtime dependencies](docs/installation-direct-action.md#runtime-dependencies))
 
 Both methods require:
 
@@ -188,6 +188,7 @@ Once the comment-trigger workflow is merged to your default branch, users with w
 | `/ai-pr-review review-full` | Run all agents (full mode) |
 | `/ai-pr-review skip` | Add `skip-ai-review` label |
 | `/ai-pr-review help` | Post command list as reply |
+| `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive; dismisses the `CHANGES_REQUESTED` review when every thread is resolved |
 
 Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch gotcha.
 
@@ -220,46 +221,9 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs up to 8 agents — 6 always-on finding agents (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
-- Adding the `ai-review-full` label to the PR
-- Using `workflow_dispatch` with `review_mode: full`
-- Setting the `review-mode` input to `full`
-- Auto-detecting release PRs (see below)
+**Full mode**: Runs up to 8 agents — 6 always-on finding agents plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger with the `ai-review-full` PR label, `workflow_dispatch` input, or by setting `review-mode: full` (optionally via an expression that auto-selects full mode for release branches).
 
-### Auto-detecting release PRs
-
-Full mode can be triggered automatically based on branch name, PR title, or other PR metadata by extending the `review-mode` expression in your workflow file. This keeps release PRs from getting only a quick review without requiring someone to remember to add a label.
-
-The [example workflow](examples/workflows/pr-review.yml) demonstrates auto-detecting `release/*` branches:
-
-```yaml
-review-mode: >-
-  ${{
-    contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' ||
-    startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
-    'quick'
-  }}
-```
-
-Customize the `startsWith()` pattern for your repo's branch convention. Common patterns:
-
-| Convention | Expression |
-|---|---|
-| Branch prefix `release/` | `startsWith(github.event.pull_request.head.ref, 'release/')` |
-| Branch prefix `hotfix/` | `startsWith(github.event.pull_request.head.ref, 'hotfix/')` |
-| PR title starts with "Release" | `startsWith(github.event.pull_request.title, 'Release ')` |
-| Merges to `main` from `release/*` | `github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'release/')` |
-| Multiple patterns | Chain with `\|\|` — each clause evaluates to `'full'` or falls through |
-
-Branch matching is case-sensitive — `release/v1.0` matches but `Release/v1.0` does not.
-
-**Bitbucket Pipelines** — use a shell conditional instead of GitHub Actions expressions:
-
-```bash
-if [[ "$BITBUCKET_PR_SOURCE_BRANCH" == release/* ]]; then
-  export AI_REVIEW_MODE=full
-fi
-```
+For the full agent roster, trigger patterns, and auto-full-on-release workflow expressions (GitHub Actions and Bitbucket Pipelines), see [docs/agents.md](docs/agents.md#review-modes).
 
 ## Code suggestions
 
@@ -295,9 +259,9 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
 
-**LLM retries**: Transient API failures (HTTP 429, 500, 502, 503) and transient curl errors (connection refused, timeout) are retried with exponential backoff and jitter. Controlled by the `retry-count` input (default: 3).
+**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl errors (connection refused, timeout, network failure) are retried with exponential backoff and jitter. Controlled by the `retry-count` input (default: 3).
 
-**Parallel execution**: Agents run in a tiered fan-out by default (Tier 1: up to 3 concurrent; Tier 2 full-mode: up to 5 concurrent). If your LLM provider's rate limits cannot sustain this throughput, set `parallel: false` to revert to sequential execution.
+**Parallel execution**: Agents run in a tiered fan-out by default — Tier 1 issues up to ~3 concurrent LLM calls alongside any triggered static analyzers; Tier 2 (full mode only) issues up to 5 concurrent LLM calls. The concurrency numbers apply to LLM calls only (for rate-limit planning); static analyzers run concurrently with them but do not consume LLM quota. If your provider's rate limits cannot sustain this throughput, set `parallel: false` to revert to sequential execution.
 
 **GitHub API retries**: Critical GitHub API calls (posting reviews, comments) retry on 502, 503, 429, and ETIMEDOUT with fixed backoff.
 
@@ -377,17 +341,7 @@ Findings are mapped from CVSS score: ≥ 9.0 → Critical, 7.0–8.9 → High, 4
 
 No configuration is required — the check runs automatically when a manifest file is in the diff. The OSV.dev API is unauthenticated and free. If the API is unreachable, the check emits a warning and continues — the review is never blocked by CVE-lookup failures.
 
-To accept a specific CVE (e.g. library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID:
-
-```json
-{
-  "id": "accept-risk-CVE-2025-12345",
-  "reason": "Library used only in test fixtures, not production",
-  "match": {
-    "pattern": "CVE-2025-12345|GHSA-xxxx-yyyy-zzzz"
-  }
-}
-```
+To accept a specific CVE (e.g. a library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID. See [docs/suppression.md](docs/suppression.md) for the schema and a worked example.
 
 ## Static analyzers
 
@@ -403,14 +357,14 @@ The container action ships all analyzer binaries pre-installed. For the direct-a
 | **ruff** | `.py` files | `F`/`E` prefix→High, `W`/`C`→Medium, else→Low | 90 | `ruff` |
 | **golangci-lint** | `.go` files | `errcheck`/`govet`/`staticcheck`→High, others→Medium | 90 | `golangci-lint` |
 | **hadolint** | `Dockerfile*`, `*.dockerfile` | `error`→High, `warning`→Medium, else→Low | 90 | `hadolint` |
-| **checkov** | `.tf`, `.tfvars`, `.yaml`, `.yml`, `Dockerfile*`, `.json` | All→Medium (checkov has no per-check severity) | 80 | `checkov` |
+| **checkov** | `.tf`, `.tfvars`, `.yaml`, `.yml`, `Dockerfile*`, `.json` | `CKV2_*` and `CKV_SECRET_*`→High; all other checks→Medium | 80 | `checkov` |
 | **phpcs** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | `ERROR`→High, `WARNING`→Medium; Drupal+DrupalPractice standard when available, else PSR12 | 90 | `phpcs` |
 | **eslint** | `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | severity 2→High, severity 1→Medium; uses consumer's config — no-op if no `eslint.config.*` or `.eslintrc.*` found | 90 | `eslint` |
 | **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; runs at level `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist` | 85 | `phpstan` |
 | **kube-linter** | `.yaml`, `.yml`, `.json` with `apiVersion:` + `kind:` headers | All findings→Medium (reliability-focused: missing probes, resource limits, etc.) | 85 | `kube-linter` |
 | **tflint** | `.tf`, `.tfvars` | `error`→High, `warning`→Medium, `notice`→Low; runs per Terraform module directory | 90 | `tflint` |
 
-CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, `requirements*.txt`, and `composer.json`. See [Dependency vulnerability check](#dependency-vulnerability-check) for details.
+CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, `requirements.txt`, and `composer.json`. See [Dependency vulnerability check](#dependency-vulnerability-check) for details.
 
 ## Token usage
 
@@ -429,93 +383,9 @@ Costs are calculated using public list prices as of April 2026 and do not reflec
 
 ## Architecture
 
-```
-ai-pr-review/
-├── action.yml              # GitHub Actions composite action definition
-├── review.sh               # Main orchestrator: diff, manifest, agent calls, assembly
-├── llm-call.sh             # Multi-provider LLM API wrapper (curl-based)
-├── post-review.sh          # GitHub API posting: summary, review, thread management
-├── post-review-bitbucket.sh # Bitbucket Cloud API posting: summary comment
-├── post-review-gitlab.sh   # GitLab API posting: summary, inline discussions, approval
-├── analyzers/              # Static analyzer wrapper scripts
-│   ├── run-shellcheck.sh   # Shellcheck wrapper for shell script findings
-│   ├── run-cve-check.sh    # OSV.dev vulnerability lookup for dependency manifests
-│   ├── run-semgrep.sh      # Semgrep SAST wrapper (optional binary)
-│   ├── run-trufflehog.sh   # Trufflehog secret scanning wrapper (optional binary)
-│   ├── run-ruff.sh         # Ruff Python linter wrapper (optional binary)
-│   ├── run-golangci-lint.sh # golangci-lint Go linter wrapper (optional binary)
-│   ├── run-hadolint.sh     # Hadolint Dockerfile linter wrapper (optional binary)
-│   ├── run-checkov.sh      # Checkov IaC scanner wrapper (optional binary)
-│   ├── run-phpcs.sh        # PHP_CodeSniffer wrapper, Drupal+DrupalPractice standard
-│   ├── run-eslint.sh       # ESLint JS/TS wrapper — uses consumer config, no-op if absent
-│   ├── run-phpstan.sh      # PHPStan static analysis wrapper (optional binary)
-│   ├── run-kube-linter.sh  # kube-linter Kubernetes manifest wrapper (optional binary)
-│   └── run-tflint.sh       # tflint Terraform linter wrapper (optional binary)
-├── config/                 # Configuration and data files
-│   ├── model-pricing.json  # Per-model token pricing for cost estimation
-│   └── suppressions.json   # Declarative false-positive suppression rules
-├── prompts/                # System prompts for each review agent
-│   ├── pr-summarizer.md
-│   ├── code-reviewer.md
-│   ├── silent-failure-hunter.md
-│   ├── architecture-reviewer.md
-│   ├── security-reviewer.md
-│   ├── blind-hunter.md
-│   ├── edge-case-hunter.md
-│   └── adversarial-general.md
-├── language-profiles/      # Per-language review context
-│   ├── go.md
-│   ├── python.md
-│   ├── typescript.md
-│   ├── php.md
-│   ├── shell.md
-│   ├── ruby.md
-│   ├── rust.md
-│   ├── java.md
-│   └── c++.md
-├── tests/                  # bats-core unit tests
-│   ├── review_functions.bats
-│   ├── extract_findings.bats
-│   ├── is_test_file.bats
-│   ├── configurable_inputs.bats
-│   ├── dedup_filter.bats
-│   ├── apply_suppressions.bats
-│   ├── call_agent.bats
-│   ├── llm_call_functions.bats
-│   ├── post_review_functions.bats
-│   ├── run_shellcheck.bats
-│   ├── run_cve_check.bats
-│   ├── run_semgrep.bats
-│   ├── run_trufflehog.bats
-│   ├── run_ruff.bats
-│   ├── run_golangci_lint.bats
-│   ├── run_hadolint.bats
-│   ├── run_checkov.bats
-│   ├── run_phpcs.bats
-│   ├── run_eslint.bats
-│   ├── run_phpstan.bats
-│   ├── run_kube_linter.bats
-│   ├── run_tflint.bats
-│   ├── test_helper.bash
-│   └── fixtures/
-└── .github/workflows/
-    ├── ai-review.yml       # Self-test: runs the action on its own PRs
-    └── lint.yml            # Shellcheck + bats test suite
-```
+At runtime, `review.sh` computes the diff, dispatches LLM agents and static analyzers in parallel, merges and dedupes findings, then hands off to a provider-specific post-review script (`post-review.sh` for GitHub, `post-review-bitbucket.sh` for Bitbucket, `post-review-gitlab.sh` for GitLab) that posts the summary and inline findings and advances the SHA watermark.
 
-### Data flow
-
-1. **review.sh** computes the diff, builds a file manifest, detects languages
-2. For each agent, **review.sh** assembles a context message and calls **llm-call.sh**
-3. **llm-call.sh** sends the prompt to the configured LLM provider via curl
-4. **review.sh** extracts JSON findings from agent responses, deduplicates, applies suppressions
-5. The **provider-specific post-review script** resolves stale threads, posts the summary and findings, advances the SHA watermark
-
-### Dependencies
-
-The action requires `bash`, `curl`, `jq`, `git`, and `gh` — all pre-installed on standard GitHub-hosted runners. `shellcheck` is installed automatically if not already present.
-
-The **container action** (recommended) ships all static analyzer binaries pre-installed at pinned versions — no runner setup needed. The **direct action reference** and **git submodule** paths do not install analyzer binaries; see [docs/installation-direct-action.md](docs/installation-direct-action.md#runtime-dependencies) for the optional install-in-workflow snippet.
+For the full directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md).
 
 ## License
 

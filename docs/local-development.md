@@ -19,9 +19,21 @@ Run ai-pr-review locally against any open PR using the container image — no Gi
 
 The container fetches the diff directly from GitHub — you don't need a local clone.
 
+### Resolving `HEAD_SHA`
+
+Every example below references `HEAD_SHA` — the commit SHA at the tip of the PR branch. The easiest way to fill it in is to let `gh` resolve it inline:
+
+```bash
+HEAD_SHA=$(gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid)
+```
+
+Alternatives: copy the SHA from the PR's "Commits" tab in the GitHub UI, or run `git rev-parse HEAD` from a local clone on the PR branch.
+
 ### Anthropic
 
 ```bash
+HEAD_SHA=$(gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid)
+
 docker run --rm \
   -e AI_PROVIDER=anthropic \
   -e ANTHROPIC_API_KEY=sk-ant-... \
@@ -29,7 +41,7 @@ docker run --rm \
   -e GITHUB_REPOSITORY=owner/repo \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
-  -e HEAD_SHA=abc1234 \
+  -e HEAD_SHA="$HEAD_SHA" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
@@ -43,7 +55,7 @@ docker run --rm \
   -e GITHUB_REPOSITORY=owner/repo \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
-  -e HEAD_SHA=abc1234 \
+  -e HEAD_SHA="$HEAD_SHA" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
@@ -57,7 +69,7 @@ docker run --rm \
   -e GITHUB_REPOSITORY=owner/repo \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
-  -e HEAD_SHA=abc1234 \
+  -e HEAD_SHA="$HEAD_SHA" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
@@ -72,23 +84,11 @@ docker run --rm \
   -e GITHUB_REPOSITORY=owner/repo \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
-  -e HEAD_SHA=abc1234 \
+  -e HEAD_SHA="$HEAD_SHA" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
 For a generic OpenAI-compatible endpoint, use `AI_PROVIDER=openai-compatible` and `OPENAI_API_KEY` instead of `BEDROCK_API_KEY`.
-
-## Finding the HEAD_SHA
-
-```bash
-# From the GitHub UI: copy the commit SHA from the PR's "Commits" tab.
-
-# Or with the gh CLI:
-gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid
-
-# Or from a local clone on the PR branch:
-git rev-parse HEAD
-```
 
 ## Dry run (no posting)
 
@@ -102,7 +102,7 @@ docker run --rm \
   -e GITHUB_REPOSITORY=owner/repo \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
-  -e HEAD_SHA=abc1234 \
+  -e HEAD_SHA="$HEAD_SHA" \
   -e AI_DRY_RUN=true \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
@@ -183,7 +183,7 @@ By default the container runs in `quick` mode (code-reviewer + silent-failure-hu
 | `AI_DRY_RUN` | No | `true` — print findings to stdout, do not post to GitHub |
 | `AI_REVIEW_MODE` | No | `quick` (default) or `full` |
 | `FORCE_FULL_DIFF` | No | `true` — bypass the SHA watermark; review the full PR diff |
-| `AI_PARALLEL` | No | `true` (default) or `false` — disable to reduce concurrent API calls |
+| `AI_PARALLEL` | No | `true` (default). Set to `false` to disable the tiered parallel fan-out if your LLM provider's rate limits can't sustain it. |
 | `AI_CONFIDENCE_THRESHOLD` | No | Minimum confidence 0–100 (default: 75) |
 | `AI_MAX_INLINE` | No | Max inline comments per run (default: 25) |
 | `AI_MAX_TOKENS_PER_AGENT` | No | Max tokens per agent call (default: 8192) |

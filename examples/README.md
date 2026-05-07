@@ -59,6 +59,7 @@ Once `comment-triggers.yml` is merged to your default branch, post these command
 | `/ai-pr-review review-full` | Run all agents (full mode) |
 | `/ai-pr-review skip` | Add `skip-ai-review` label to suppress the next review |
 | `/ai-pr-review help` | Post the command list as a reply |
+| `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive (dispatched via `pull_request_review_comment`, not `issue_comment`) |
 
 Only users with `OWNER`, `MEMBER`, or `COLLABORATOR` association can trigger commands. This is enforced via an `author_association` guard in the workflow — GitHub does **not** do this automatically.
 
