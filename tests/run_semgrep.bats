@@ -105,3 +105,92 @@ teardown() {
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.[0].remediation | test("semgrep.dev")' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# Baked-in ruleset resolution
+# ---------------------------------------------------------------------------
+#
+# These tests stub `semgrep` on PATH with a shell wrapper that writes its
+# argv to $SEMGREP_ARGV_LOG (readable by the test) and prints a valid
+# empty-results JSON on stdout. We can't use stderr because run-semgrep.sh
+# redirects the real binary's stderr to a temp file.
+
+_install_semgrep_stub() {
+  STUB_DIR=$(mktemp -d)
+  SEMGREP_ARGV_LOG=$(mktemp)
+  cat > "$STUB_DIR/semgrep" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "$SEMGREP_ARGV_LOG"
+echo '{"results": []}'
+EOF
+  chmod +x "$STUB_DIR/semgrep"
+  export SEMGREP_ARGV_LOG
+}
+
+_cleanup_semgrep_stub() {
+  rm -rf "$STUB_DIR"
+  rm -f "$SEMGREP_ARGV_LOG"
+}
+
+@test "semgrep: uses baked-in rules when SEMGREP_RULES_DIR contains .yml files" {
+  touch "$WORK/app.py"
+  RULES_DIR=$(mktemp -d)
+  cat > "$RULES_DIR/ci.yml" <<'YAML'
+rules:
+  - id: stub.rule
+    pattern: x
+    message: stub
+    languages: [python]
+    severity: WARNING
+YAML
+
+  _install_semgrep_stub
+
+  PATH="$STUB_DIR:$PATH" SEMGREP_RULES_DIR="$RULES_DIR" \
+    run --separate-stderr "$SCRIPT" "$WORK/app.py"
+
+  argv=$(cat "$SEMGREP_ARGV_LOG")
+
+  rm -rf "$RULES_DIR"
+  _cleanup_semgrep_stub
+
+  [ "$status" -eq 0 ]
+  # argv should show the baked-in rule file, not --config=auto
+  [[ "$argv" == *"--config ${RULES_DIR%/}/ci.yml"* ]] \
+    || { echo "argv was: $argv"; false; }
+  [[ "$argv" != *"--config=auto"* ]] \
+    || { echo "argv was: $argv"; false; }
+}
+
+@test "semgrep: falls back to --config=auto when SEMGREP_RULES_DIR is absent" {
+  touch "$WORK/app.py"
+  _install_semgrep_stub
+
+  PATH="$STUB_DIR:$PATH" SEMGREP_RULES_DIR="/nonexistent/path/$$" \
+    run --separate-stderr "$SCRIPT" "$WORK/app.py"
+
+  argv=$(cat "$SEMGREP_ARGV_LOG")
+  _cleanup_semgrep_stub
+
+  [ "$status" -eq 0 ]
+  [[ "$argv" == *"--config=auto"* ]] \
+    || { echo "argv was: $argv"; false; }
+}
+
+@test "semgrep: falls back to --config=auto when SEMGREP_RULES_DIR has no .yml files" {
+  touch "$WORK/app.py"
+  RULES_DIR=$(mktemp -d)  # empty dir
+  _install_semgrep_stub
+
+  PATH="$STUB_DIR:$PATH" SEMGREP_RULES_DIR="$RULES_DIR" \
+    run --separate-stderr "$SCRIPT" "$WORK/app.py"
+
+  argv=$(cat "$SEMGREP_ARGV_LOG")
+
+  rm -rf "$RULES_DIR"
+  _cleanup_semgrep_stub
+
+  [ "$status" -eq 0 ]
+  [[ "$argv" == *"--config=auto"* ]] \
+    || { echo "argv was: $argv"; false; }
+}

@@ -17,7 +17,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `post-review-gitlab.sh` | GitLab API layer: upserts summary note, posts inline MR discussions with suggestion fences, resolves stale bot discussions, advances SHA watermark |
 | `analyzers/run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
 | `analyzers/run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
-| `analyzers/run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"` |
+| `analyzers/run-semgrep.sh` | Wraps semgrep for any changed file; `ERROR`→High, `WARNING`→Medium, else→Low; confidence 90; source `"semgrep"`. When running inside the container image, uses rulesets baked into `/opt/ai-pr-review/semgrep-rules/` (no network fetch). Outside the container, falls back to `--config=auto`. Consumers can override the ruleset directory via `SEMGREP_RULES_DIR`. |
 | `analyzers/run-trufflehog.sh` | Wraps trufflehog secret scanning for any changed file; verified→Critical/95, unverified→High/85; source `"trufflehog"` |
 | `analyzers/run-ruff.sh` | Wraps ruff for changed `.py` files; `F`/`E` prefix→High, `W`/`C`→Medium, else→Low; confidence 90; source `"ruff"` |
 | `analyzers/run-golangci-lint.sh` | Wraps golangci-lint for changed `.go` files; `errcheck`/`govet`/`staticcheck`→High, others→Medium; confidence 90; source `"golangci-lint"` |

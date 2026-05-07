@@ -42,7 +42,26 @@ if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# Run semgrep (or read mock) — --json --config=auto scans with default ruleset
+# Resolve semgrep config. Prefer the baked-in rule bundle shipped with the
+# container image (no network fetch, deterministic ruleset). Fall back to
+# `--config=auto` when the bundle is absent — that lets the script remain
+# usable outside the container (direct script invocation, composite-action
+# users who install semgrep themselves).
+#
+# SEMGREP_RULES_DIR can also be overridden by consumers who want to point
+# at their own rule bundle.
+SEMGREP_RULES_DIR="${SEMGREP_RULES_DIR:-/opt/ai-pr-review/semgrep-rules}"
+SEMGREP_CONFIG_ARGS=()
+if [[ -d "$SEMGREP_RULES_DIR" ]] \
+   && compgen -G "$SEMGREP_RULES_DIR/*.yml" > /dev/null; then
+  for rule_file in "$SEMGREP_RULES_DIR"/*.yml; do
+    SEMGREP_CONFIG_ARGS+=(--config "$rule_file")
+  done
+else
+  SEMGREP_CONFIG_ARGS+=(--config=auto)
+fi
+
+# Run semgrep (or read mock)
 if [[ -n "${SEMGREP_MOCK_FILE:-}" ]]; then
   if [[ ! -r "$SEMGREP_MOCK_FILE" ]]; then
     echo "WARNING: SEMGREP_MOCK_FILE '${SEMGREP_MOCK_FILE}' is not readable." >&2
@@ -53,7 +72,7 @@ if [[ -n "${SEMGREP_MOCK_FILE:-}" ]]; then
 else
   SEMGREP_STDERR=$(mktemp)
   trap 'rm -f "$SEMGREP_STDERR"' EXIT
-  SEMGREP_OUTPUT=$(semgrep --json --config=auto --quiet "${TARGET_FILES[@]}" 2>"$SEMGREP_STDERR") || true
+  SEMGREP_OUTPUT=$(semgrep --json "${SEMGREP_CONFIG_ARGS[@]}" --quiet "${TARGET_FILES[@]}" 2>"$SEMGREP_STDERR") || true
   if [[ -z "$SEMGREP_OUTPUT" ]]; then
     echo "WARNING: semgrep produced no output — possible network failure or config error. semgrep stderr: $(cat "$SEMGREP_STDERR")" >&2
     echo "[]"

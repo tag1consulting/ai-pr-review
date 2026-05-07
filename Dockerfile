@@ -15,6 +15,13 @@ ARG GOLANGCI_LINT_SHA256=200c5b7503f67b59a6743ccf32133026c174e272b930ee79aa2aa6f
 ARG RUFF_VERSION=0.15.11
 ARG SEMGREP_VERSION=1.161.0
 
+# Semgrep rulesets to bake into the image. At runtime, run-semgrep.sh points
+# --config at /opt/ai-pr-review/semgrep-rules/ instead of the network-fetching
+# `--config=auto`. This saves 20–40s per run and removes a network dependency.
+# Bumping SEMGREP_RULESET_DATE (arbitrary cache-buster) forces a fresh pull
+# of the curated rule files on rebuild.
+ARG SEMGREP_RULESET_DATE=2026-05-07
+
 ARG HADOLINT_VERSION=v2.14.0
 ARG HADOLINT_SHA256=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
 
@@ -113,6 +120,26 @@ RUN pip3 install --no-cache-dir --break-system-packages \
       "ruff==${RUFF_VERSION}" \
       "semgrep==${SEMGREP_VERSION}" \
       "checkov==${CHECKOV_VERSION}"
+
+# Bake semgrep rulesets into the image so runtime scans don't hit the network.
+# Semgrep's registry serves each ruleset as a single concatenated YAML file at
+# https://semgrep.dev/c/p/<name>. We download p/ci (CI-appropriate security
+# rules) and p/security-audit (broader security coverage). run-semgrep.sh
+# points --config at this directory and falls back to --config=auto if the
+# directory is absent (e.g. when the script is invoked outside the container).
+#
+# SEMGREP_RULESET_DATE is an ARG used only to invalidate this layer's cache
+# so rebuilds pick up registry updates on a predictable cadence.
+RUN mkdir -p /opt/ai-pr-review/semgrep-rules && \
+    echo "Fetching semgrep rulesets (cache-buster: ${SEMGREP_RULESET_DATE})" && \
+    curl -fsSL -o /opt/ai-pr-review/semgrep-rules/ci.yml \
+      "https://semgrep.dev/c/p/ci" && \
+    curl -fsSL -o /opt/ai-pr-review/semgrep-rules/security-audit.yml \
+      "https://semgrep.dev/c/p/security-audit" && \
+    # Smoke-test: both files should be valid semgrep rule YAML with a "rules:"
+    # top-level key. Fail the build if either download was corrupt.
+    grep -q '^rules:' /opt/ai-pr-review/semgrep-rules/ci.yml && \
+    grep -q '^rules:' /opt/ai-pr-review/semgrep-rules/security-audit.yml
 
 # phpcs with Drupal coding standards + phpstan with phpstan-drupal
 RUN curl -fsSL -o /usr/local/bin/composer \
