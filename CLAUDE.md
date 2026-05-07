@@ -22,7 +22,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `analyzers/run-ruff.sh` | Wraps ruff for changed `.py` files; `F`/`E` prefix→High, `W`/`C`→Medium, else→Low; confidence 90; source `"ruff"` |
 | `analyzers/run-golangci-lint.sh` | Wraps golangci-lint for changed `.go` files; `errcheck`/`govet`/`staticcheck`→High, others→Medium; confidence 90; source `"golangci-lint"` |
 | `analyzers/run-hadolint.sh` | Wraps hadolint for changed Dockerfiles (`Dockerfile*`, `*.dockerfile`); `error`→High, `warning`→Medium, else→Low; confidence 90; source `"hadolint"` |
-| `analyzers/run-checkov.sh` | Wraps checkov for changed IaC files. Unconditionally accepts `.tf`, `.tfvars`, `Dockerfile*`. For `.yaml`/`.yml`/`.json`, applies a content sniff to skip non-IaC files (package-lock.json, GitHub Actions workflows, docker-compose, etc.) — accepts k8s/Helm manifests (`apiVersion:`+`kind:`), CloudFormation (`AWSTemplateFormatVersion`), and Azure ARM (`$schema: …schema.management.azure.com…`). Intentionally skipped: GitHub Actions workflows (use actionlint), Serverless Framework `serverless.yml`, Helm `Chart.yaml`. All findings→Medium (no per-check severity from checkov); confidence 80; source `"checkov"`. |
+| `analyzers/run-checkov.sh` | Wraps checkov for changed IaC files. Unconditionally accepts `.tf`, `.tfvars`, `Dockerfile*`. For `.yaml`/`.yml`/`.json`, applies a content sniff to skip non-IaC files (package-lock.json, GitHub Actions workflows, docker-compose, etc.) — accepts k8s/Helm manifests (`apiVersion:`+`kind:`), CloudFormation (`AWSTemplateFormatVersion`), and Azure ARM (`$schema: …schema.management.azure.com…`). Intentionally skipped: GitHub Actions workflows (use actionlint), Serverless Framework `serverless.yml`, Helm `Chart.yaml`. `CKV2_*` (v2 rules) and `CKV_SECRET_*` (secret-detection rules)→High; all other checks→Medium; confidence 80; source `"checkov"`. |
 | `analyzers/run-phpcs.sh` | Wraps phpcs for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); `ERROR`→High, `WARNING`→Medium; confidence 90; source `"phpcs"`. Uses Drupal,DrupalPractice standard when drupal/coder is installed, else PSR12. |
 | `analyzers/run-eslint.sh` | Wraps ESLint for changed JS/TS files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`); requires consumer's `eslint.config.*` or `.eslintrc.*` — no-op if absent; severity 2→High, 1→Medium; confidence 90; source `"eslint"` |
 | `analyzers/run-phpstan.sh` | Wraps phpstan for changed PHP files (`.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile`); all findings→High; confidence 85; source `"phpstan"`. Runs at `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist`. |
@@ -209,7 +209,7 @@ Supported languages and their profile files:
 |---|---|---|
 | `go` | `Go` | `language-profiles/go.md` |
 | `py` | `Python` | `language-profiles/python.md` |
-| `js`, `jsx` | `JavaScript` | *(no profile — uses TypeScript profile conventions)* |
+| `js`, `jsx` | `JavaScript` | *(no profile loaded — `detect_language()` returns `JavaScript` but no `language-profiles/javascript.md` exists; the TypeScript profile is only loaded for `.ts`/`.tsx`)* |
 | `ts`, `tsx` | `TypeScript` | `language-profiles/typescript.md` |
 | `php`, `module`, `theme`, `inc` | `PHP` | `language-profiles/php.md` |
 | `sh`, `bash` | `Shell` | `language-profiles/shell.md` |
