@@ -33,16 +33,68 @@ if [[ -z "${CHECKOV_MOCK_FILE:-}" ]] && ! command -v checkov >/dev/null 2>&1; th
   exit 0
 fi
 
-# Collect IaC files that exist on disk
+# Collect IaC files that exist on disk.
+#
+# Terraform (.tf, .tfvars) and Dockerfiles are unambiguous — always accept.
+# YAML and JSON are ambiguous (the majority of .yaml/.yml/.json files in a
+# typical repo are not IaC: package-lock.json, GitHub Actions workflows,
+# tsconfig.json, docker-compose.yml, etc.). Without a content sniff checkov
+# spins up Python and loads its policy library (~3–8s cold start) just to
+# find nothing. Require a telltale IaC header before accepting these files:
+#   * k8s / Helm manifests: top-level "apiVersion:" AND "kind:"
+#   * CloudFormation (YAML or JSON): "AWSTemplateFormatVersion"
+#   * Azure ARM templates (YAML or JSON): "$schema" referencing schema.management.azure.com
+#
+# Deliberately NOT scanned by this filter (regression from the previous
+# "accept all .yaml/.yml/.json" behavior, but intentional — see CLAUDE.md):
+#   * GitHub Actions workflows (checkov's CKV_GHA_* rules)
+#   * Serverless Framework (serverless.yml)
+#   * Helm Chart.yaml (has apiVersion but no kind)
+# These frameworks are better served by dedicated tooling (actionlint,
+# serverless-framework-audit, helm lint). Consumers who want them scanned
+# can invoke checkov directly in their workflow with an explicit --framework.
 IAC_FILES=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   [[ -f "$file" ]] || continue
   case "$file" in
-    *.tf|*.tfvars) IAC_FILES+=("$file") ;;
-    *.yaml|*.yml)  IAC_FILES+=("$file") ;;
-    Dockerfile|*/Dockerfile|Dockerfile.*|*/Dockerfile.*|*.dockerfile) IAC_FILES+=("$file") ;;
-    *.json)        IAC_FILES+=("$file") ;;
+    *.tf|*.tfvars)
+      IAC_FILES+=("$file") ;;
+    Dockerfile|*/Dockerfile|Dockerfile.*|*/Dockerfile.*|*.dockerfile)
+      IAC_FILES+=("$file") ;;
+    *.yaml|*.yml)
+      # Accept if file looks like a k8s manifest, a CloudFormation template
+      # (AWSTemplateFormatVersion), or an Azure ARM template ($schema pointing
+      # at schema.management.azure.com).
+      #
+      # k8s sniff: apiVersion must match a k8s-shaped value — either bare
+      # "v<N>" (core API group, e.g. v1) or "<group>/v<N>[alpha|beta<N>]"
+      # (named group, e.g. apps/v1, networking.k8s.io/v1beta1). Plus kind
+      # must be present. This avoids false positives from non-k8s YAML
+      # that happens to use both keys (OpenAPI schemas, custom tooling
+      # configs, CRD example docs) where `apiVersion:` values are free-form.
+      # Handles multi-document YAML since the two greps scan the whole file.
+      #
+      # POSIX ERE has no backreferences, so matched-quote handling is done
+      # via two alternate patterns (unquoted | double-quoted) rather than
+      # a \1 capture reference. Single-quoted YAML values are uncommon for
+      # apiVersion and not covered.
+      if grep -qE '^[[:space:]]*AWSTemplateFormatVersion:' "$file" 2>/dev/null \
+         || grep -qE 'schema\.management\.azure\.com' "$file" 2>/dev/null \
+         || { grep -qE '^[[:space:]]*apiVersion:[[:space:]]*(([a-z0-9][-a-z0-9.]*/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?|"([a-z0-9][-a-z0-9.]*/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?")[[:space:]]*$' "$file" 2>/dev/null \
+              && grep -qE '^[[:space:]]*kind:' "$file" 2>/dev/null; }; then
+        IAC_FILES+=("$file")
+      fi ;;
+    *.json)
+      # CloudFormation: "AWSTemplateFormatVersion": "..."
+      # Azure ARM: "$schema": "https://schema.management.azure.com/..."
+      # Anchor on the JSON key shape to avoid matching dependency names or
+      # doc fixtures that happen to contain the bare string.
+      # shellcheck disable=SC2016  # $schema is a literal JSON key, not a shell var
+      if grep -qE '"AWSTemplateFormatVersion"[[:space:]]*:' "$file" 2>/dev/null \
+         || grep -qE '"\$schema"[[:space:]]*:[[:space:]]*"[^"]*schema\.management\.azure\.com' "$file" 2>/dev/null; then
+        IAC_FILES+=("$file")
+      fi ;;
   esac
 done <<< "$CHANGED_FILES"
 

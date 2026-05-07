@@ -73,12 +73,14 @@ else
     :
   else
     PHPSTAN_ARGS+=(--level="$LEVEL")
-    # Auto-include phpstan-drupal bootstrap stub if the extension is available
-    if command -v composer >/dev/null 2>&1; then
-      DRUPAL_EXT=$(composer show mglaman/phpstan-drupal 2>/dev/null | grep -c "mglaman" || true)
-      if [[ "$DRUPAL_EXT" -gt 0 ]]; then
-        PHPSTAN_ARGS+=(--autoload-file=vendor/autoload.php)
-      fi
+    # Auto-include phpstan-drupal bootstrap stub if the extension is available.
+    # A file-exists check avoids the 2–5s composer subprocess (which may also
+    # touch the network) — the result is deterministic per commit anyway.
+    # Also verify vendor/autoload.php actually exists: passing a nonexistent
+    # autoload file would make phpstan hard-fail into the exit-code-≥2 branch,
+    # which masks a broken install as "no findings".
+    if [[ -d vendor/mglaman/phpstan-drupal ]] && [[ -f vendor/autoload.php ]]; then
+      PHPSTAN_ARGS+=(--autoload-file=vendor/autoload.php)
     fi
   fi
 
