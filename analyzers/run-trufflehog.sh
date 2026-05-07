@@ -110,24 +110,20 @@ if [[ -n "${TRUFFLEHOG_MOCK_FILE:-}" ]]; then
   exit 0
 fi
 
-# Production path: run trufflehog once per file, collect arrays, merge once at the end
-FILE_ARRAYS=()
-for file in "${TARGET_FILES[@]}"; do
-  TH_OUTPUT=$(trufflehog filesystem --json --no-update "$file" 2>/dev/null || true)
-  [[ -z "$TH_OUTPUT" ]] && continue
+# Production path: trufflehog filesystem accepts multiple paths in a single
+# invocation, so pass all target files at once rather than forking per file.
+# On PRs touching many files this avoids N-1 process startups.
+TH_OUTPUT=$(trufflehog filesystem --json --no-update "${TARGET_FILES[@]}" 2>/dev/null || true)
 
-  FILE_FINDINGS=$(echo "$TH_OUTPUT" | _th_transform 2>/dev/null) || {
-    echo "WARNING: trufflehog output for ${file} could not be parsed; skipping." >&2
-    continue
-  }
-
-  FILE_ARRAYS+=("$FILE_FINDINGS")
-done
-
-if [[ ${#FILE_ARRAYS[@]} -eq 0 ]]; then
+if [[ -z "$TH_OUTPUT" ]]; then
   echo "[]"
   exit 0
 fi
 
-# Single merge: concatenate all per-file arrays and flatten
-printf '%s\n' "${FILE_ARRAYS[@]}" | jq -s 'add // []'
+FINDINGS=$(echo "$TH_OUTPUT" | _th_transform 2>/dev/null) || {
+  echo "WARNING: trufflehog output could not be parsed; trufflehog findings skipped." >&2
+  echo "[]"
+  exit 0
+}
+
+echo "${FINDINGS:-[]}"

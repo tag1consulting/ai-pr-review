@@ -63,11 +63,69 @@ teardown() {
   echo "$output" | jq -e 'length > 0' > /dev/null
 }
 
-@test "checkov: .yaml file triggers scan" {
-  touch "$WORK/deployment.yaml"
+@test "checkov: k8s YAML (apiVersion + kind) triggers scan" {
+  cat > "$WORK/deployment.yaml" <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo
+EOF
   CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/deployment.yaml"
   [ "$status" -eq 0 ]
   echo "$output" | jq -e 'length > 0' > /dev/null
+}
+
+@test "checkov: CloudFormation YAML triggers scan" {
+  cat > "$WORK/stack.yaml" <<'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+EOF
+  CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/stack.yaml"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'length > 0' > /dev/null
+}
+
+@test "checkov: CloudFormation JSON triggers scan" {
+  cat > "$WORK/stack.json" <<'EOF'
+{"AWSTemplateFormatVersion": "2010-09-09", "Resources": {}}
+EOF
+  CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/stack.json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'length > 0' > /dev/null
+}
+
+@test "checkov: non-IaC YAML (docker-compose) is skipped" {
+  cat > "$WORK/docker-compose.yml" <<'EOF'
+version: '3'
+services:
+  web:
+    image: nginx
+EOF
+  CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/docker-compose.yml"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "checkov: non-IaC YAML (GitHub Actions workflow) is skipped" {
+  cat > "$WORK/ci.yml" <<'EOF'
+name: CI
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+EOF
+  CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/ci.yml"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "checkov: non-IaC JSON (package-lock) is skipped" {
+  echo '{"name": "demo", "lockfileVersion": 3}' > "$WORK/package-lock.json"
+  CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/package-lock.json"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
 }
 
 @test "checkov: Dockerfile triggers scan" {

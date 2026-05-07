@@ -33,16 +33,39 @@ if [[ -z "${CHECKOV_MOCK_FILE:-}" ]] && ! command -v checkov >/dev/null 2>&1; th
   exit 0
 fi
 
-# Collect IaC files that exist on disk
+# Collect IaC files that exist on disk.
+#
+# Terraform (.tf, .tfvars) and Dockerfiles are unambiguous — always accept.
+# YAML and JSON are ambiguous (the majority of .yaml/.yml/.json files in a
+# typical repo are not IaC: package-lock.json, GitHub Actions workflows,
+# tsconfig.json, docker-compose.yml, etc.). Without a content sniff checkov
+# spins up Python and loads its policy library (~3–8s cold start) just to
+# find nothing. Require a telltale IaC header before accepting these files:
+#   * k8s / Helm manifests: top-level "apiVersion:" AND "kind:"
+#   * CloudFormation (YAML or JSON): "AWSTemplateFormatVersion"
 IAC_FILES=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   [[ -f "$file" ]] || continue
   case "$file" in
-    *.tf|*.tfvars) IAC_FILES+=("$file") ;;
-    *.yaml|*.yml)  IAC_FILES+=("$file") ;;
-    Dockerfile|*/Dockerfile|Dockerfile.*|*/Dockerfile.*|*.dockerfile) IAC_FILES+=("$file") ;;
-    *.json)        IAC_FILES+=("$file") ;;
+    *.tf|*.tfvars)
+      IAC_FILES+=("$file") ;;
+    Dockerfile|*/Dockerfile|Dockerfile.*|*/Dockerfile.*|*.dockerfile)
+      IAC_FILES+=("$file") ;;
+    *.yaml|*.yml)
+      # Accept if file looks like a k8s manifest (apiVersion + kind) OR a
+      # CloudFormation template (AWSTemplateFormatVersion). The double grep
+      # for k8s handles multi-document YAML where the two keys can appear
+      # in either order within a document.
+      if grep -qE '^[[:space:]]*AWSTemplateFormatVersion:' "$file" 2>/dev/null \
+         || { grep -qE '^[[:space:]]*apiVersion:' "$file" 2>/dev/null \
+              && grep -qE '^[[:space:]]*kind:' "$file" 2>/dev/null; }; then
+        IAC_FILES+=("$file")
+      fi ;;
+    *.json)
+      if grep -q 'AWSTemplateFormatVersion' "$file" 2>/dev/null; then
+        IAC_FILES+=("$file")
+      fi ;;
   esac
 done <<< "$CHANGED_FILES"
 
