@@ -99,6 +99,20 @@ EOF
   echo "$output" | jq -e 'length > 0' > /dev/null
 }
 
+@test "checkov: k8s YAML with quoted apiVersion triggers scan" {
+  # Some tooling emits apiVersion with quotes; the portable (no-backreference)
+  # pattern must handle both shapes.
+  cat > "$WORK/quoted.yaml" <<'EOF'
+apiVersion: "apps/v1"
+kind: Deployment
+metadata:
+  name: demo
+EOF
+  CHECKOV_MOCK_FILE="$FIXTURES/checkov-failed.json" run --separate-stderr "$SCRIPT" "$WORK/quoted.yaml"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'length > 0' > /dev/null
+}
+
 @test "checkov: OpenAPI spec with apiVersion+kind (non-k8s shape) is skipped" {
   # OpenAPI specs and similar tooling configs can use both apiVersion and
   # kind keys without being k8s. The apiVersion value here is free-form

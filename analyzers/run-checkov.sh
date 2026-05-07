@@ -74,9 +74,14 @@ while IFS= read -r file; do
       # that happens to use both keys (OpenAPI schemas, custom tooling
       # configs, CRD example docs) where `apiVersion:` values are free-form.
       # Handles multi-document YAML since the two greps scan the whole file.
+      #
+      # POSIX ERE has no backreferences, so matched-quote handling is done
+      # via two alternate patterns (unquoted | double-quoted) rather than
+      # a \1 capture reference. Single-quoted YAML values are uncommon for
+      # apiVersion and not covered.
       if grep -qE '^[[:space:]]*AWSTemplateFormatVersion:' "$file" 2>/dev/null \
          || grep -qE 'schema\.management\.azure\.com' "$file" 2>/dev/null \
-         || { grep -qE '^[[:space:]]*apiVersion:[[:space:]]*("?)([a-z0-9][-a-z0-9.]*/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?\1[[:space:]]*$' "$file" 2>/dev/null \
+         || { grep -qE '^[[:space:]]*apiVersion:[[:space:]]*(([a-z0-9][-a-z0-9.]*/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?|"([a-z0-9][-a-z0-9.]*/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?")[[:space:]]*$' "$file" 2>/dev/null \
               && grep -qE '^[[:space:]]*kind:' "$file" 2>/dev/null; }; then
         IAC_FILES+=("$file")
       fi ;;
