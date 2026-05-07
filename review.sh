@@ -1676,7 +1676,7 @@ apply_suppressions() {
         # returns 200 for released versions and 404 otherwise.
         # URL form: https://cache.ruby-lang.org/pub/ruby/{MAJOR.MINOR}/ruby-{MAJOR.MINOR.PATCH}.tar.gz
         local ruby_ver ruby_majmin
-        ruby_ver=$(echo "$finding_text" | grep -oE '\b[0-9]+\.[0-9]+\.[0-9]+\b' | head -1)
+        ruby_ver=$(echo "$finding_text" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
         if [[ -z "$ruby_ver" ]]; then continue; fi
         ruby_majmin="${ruby_ver%.*}"
         echo "Verifying Ruby release: ${ruby_ver}" >&2
