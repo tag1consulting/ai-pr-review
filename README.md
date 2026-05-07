@@ -378,17 +378,7 @@ Findings are mapped from CVSS score: ≥ 9.0 → Critical, 7.0–8.9 → High, 4
 
 No configuration is required — the check runs automatically when a manifest file is in the diff. The OSV.dev API is unauthenticated and free. If the API is unreachable, the check emits a warning and continues — the review is never blocked by CVE-lookup failures.
 
-To accept a specific CVE (e.g. library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID:
-
-```json
-{
-  "id": "accept-risk-CVE-2025-12345",
-  "reason": "Library used only in test fixtures, not production",
-  "match": {
-    "pattern": "CVE-2025-12345|GHSA-xxxx-yyyy-zzzz"
-  }
-}
-```
+To accept a specific CVE (e.g. a library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID. See [docs/suppression.md](docs/suppression.md) for the schema and a worked example.
 
 ## Static analyzers
 
