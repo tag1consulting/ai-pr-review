@@ -212,11 +212,6 @@ Usually harmless if the base branch is already present in the clone. If
 the review aborts with `ERROR: origin/<ref> is not reachable`, set
 `GIT_STRATEGY: clone` and `GIT_DEPTH: "0"` in your pipeline YAML.
 
-### `ERROR: Standalone review mode is not yet supported for GitLab`
-
-You have `REVIEW_TARGET=standalone` set somewhere. Remove it — standalone
-mode is planned for a future release. Use `REVIEW_TARGET=pr` instead.
-
 ### Nothing posts, review exits 0
 
 Most likely the diff is over `MAX_DIFF_LINES` (default 5000). The pipeline
