@@ -63,14 +63,20 @@ while IFS= read -r file; do
     Dockerfile|*/Dockerfile|Dockerfile.*|*/Dockerfile.*|*.dockerfile)
       IAC_FILES+=("$file") ;;
     *.yaml|*.yml)
-      # Accept if file looks like a k8s manifest (apiVersion + kind),
-      # a CloudFormation template (AWSTemplateFormatVersion), or an Azure
-      # ARM template ($schema pointing at schema.management.azure.com).
-      # The double grep for k8s handles multi-document YAML where the two
-      # keys can appear in either order within a document.
+      # Accept if file looks like a k8s manifest, a CloudFormation template
+      # (AWSTemplateFormatVersion), or an Azure ARM template ($schema pointing
+      # at schema.management.azure.com).
+      #
+      # k8s sniff: apiVersion must match a k8s-shaped value — either bare
+      # "v<N>" (core API group, e.g. v1) or "<group>/v<N>[alpha|beta<N>]"
+      # (named group, e.g. apps/v1, networking.k8s.io/v1beta1). Plus kind
+      # must be present. This avoids false positives from non-k8s YAML
+      # that happens to use both keys (OpenAPI schemas, custom tooling
+      # configs, CRD example docs) where `apiVersion:` values are free-form.
+      # Handles multi-document YAML since the two greps scan the whole file.
       if grep -qE '^[[:space:]]*AWSTemplateFormatVersion:' "$file" 2>/dev/null \
          || grep -qE 'schema\.management\.azure\.com' "$file" 2>/dev/null \
-         || { grep -qE '^[[:space:]]*apiVersion:' "$file" 2>/dev/null \
+         || { grep -qE '^[[:space:]]*apiVersion:[[:space:]]*("?)([a-z0-9][-a-z0-9.]*/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?\1[[:space:]]*$' "$file" 2>/dev/null \
               && grep -qE '^[[:space:]]*kind:' "$file" 2>/dev/null; }; then
         IAC_FILES+=("$file")
       fi ;;
