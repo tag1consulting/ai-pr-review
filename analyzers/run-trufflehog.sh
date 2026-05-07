@@ -113,7 +113,15 @@ fi
 # Production path: trufflehog filesystem accepts multiple paths in a single
 # invocation, so pass all target files at once rather than forking per file.
 # On PRs touching many files this avoids N-1 process startups.
-TH_OUTPUT=$(trufflehog filesystem --json --no-update "${TARGET_FILES[@]}" 2>/dev/null || true)
+#
+# Capture the exit code so we can distinguish "no secrets found" (exit 0,
+# empty output) from "tool failed" (exit non-zero, empty output). Silent
+# tool failure would otherwise look identical to a clean scan.
+TH_EC=0
+TH_OUTPUT=$(trufflehog filesystem --json --no-update "${TARGET_FILES[@]}" 2>/dev/null) || TH_EC=$?
+if [[ "$TH_EC" -ne 0 ]]; then
+  echo "WARNING: trufflehog exited with code ${TH_EC}; trufflehog findings may be incomplete." >&2
+fi
 
 if [[ -z "$TH_OUTPUT" ]]; then
   echo "[]"

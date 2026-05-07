@@ -43,6 +43,16 @@ fi
 # find nothing. Require a telltale IaC header before accepting these files:
 #   * k8s / Helm manifests: top-level "apiVersion:" AND "kind:"
 #   * CloudFormation (YAML or JSON): "AWSTemplateFormatVersion"
+#   * Azure ARM templates (YAML or JSON): "$schema" referencing schema.management.azure.com
+#
+# Deliberately NOT scanned by this filter (regression from the previous
+# "accept all .yaml/.yml/.json" behavior, but intentional — see CLAUDE.md):
+#   * GitHub Actions workflows (checkov's CKV_GHA_* rules)
+#   * Serverless Framework (serverless.yml)
+#   * Helm Chart.yaml (has apiVersion but no kind)
+# These frameworks are better served by dedicated tooling (actionlint,
+# serverless-framework-audit, helm lint). Consumers who want them scanned
+# can invoke checkov directly in their workflow with an explicit --framework.
 IAC_FILES=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
@@ -53,17 +63,25 @@ while IFS= read -r file; do
     Dockerfile|*/Dockerfile|Dockerfile.*|*/Dockerfile.*|*.dockerfile)
       IAC_FILES+=("$file") ;;
     *.yaml|*.yml)
-      # Accept if file looks like a k8s manifest (apiVersion + kind) OR a
-      # CloudFormation template (AWSTemplateFormatVersion). The double grep
-      # for k8s handles multi-document YAML where the two keys can appear
-      # in either order within a document.
+      # Accept if file looks like a k8s manifest (apiVersion + kind),
+      # a CloudFormation template (AWSTemplateFormatVersion), or an Azure
+      # ARM template ($schema pointing at schema.management.azure.com).
+      # The double grep for k8s handles multi-document YAML where the two
+      # keys can appear in either order within a document.
       if grep -qE '^[[:space:]]*AWSTemplateFormatVersion:' "$file" 2>/dev/null \
+         || grep -qE 'schema\.management\.azure\.com' "$file" 2>/dev/null \
          || { grep -qE '^[[:space:]]*apiVersion:' "$file" 2>/dev/null \
               && grep -qE '^[[:space:]]*kind:' "$file" 2>/dev/null; }; then
         IAC_FILES+=("$file")
       fi ;;
     *.json)
-      if grep -q 'AWSTemplateFormatVersion' "$file" 2>/dev/null; then
+      # CloudFormation: "AWSTemplateFormatVersion": "..."
+      # Azure ARM: "$schema": "https://schema.management.azure.com/..."
+      # Anchor on the JSON key shape to avoid matching dependency names or
+      # doc fixtures that happen to contain the bare string.
+      # shellcheck disable=SC2016  # $schema is a literal JSON key, not a shell var
+      if grep -qE '"AWSTemplateFormatVersion"[[:space:]]*:' "$file" 2>/dev/null \
+         || grep -qE '"\$schema"[[:space:]]*:[[:space:]]*"[^"]*schema\.management\.azure\.com' "$file" 2>/dev/null; then
         IAC_FILES+=("$file")
       fi ;;
   esac
