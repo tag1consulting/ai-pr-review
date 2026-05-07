@@ -376,6 +376,7 @@ An optional `verify` field triggers pre-suppression verification before acceptin
 | `go-module` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
 | `cargo` | `pkg = "version"` or `pkg@version` | `crates.io/api/v1/crates/{pkg}/{version}` |
 | `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com/v2/namespaces/{ns}/repositories/{name}/tags/{tag}` |
+| `ruby-org` | Ruby MRI `X.Y.Z` | `cache.ruby-lang.org/pub/ruby/{MAJ.MIN}/ruby-{MAJ.MIN.PATCH}.tar.gz` |
 
 If verification confirms the version exists, the suppression stands. If the API returns a non-zero exit (version not found), the finding is kept — the AI reviewer may be correct. Private registries (GHCR, GCR, ECR) are not supported as they require authentication.
 

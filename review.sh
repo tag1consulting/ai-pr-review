@@ -1696,6 +1696,24 @@ apply_suppressions() {
         fi
         ;;
 
+      ruby-org)
+        # Extract Ruby MRI version X.Y.Z (e.g. "4.0.3", "3.4.1") from finding text.
+        # Verified against ruby-lang.org's canonical release tarball index, which
+        # returns 200 for released versions and 404 otherwise.
+        # URL form: https://cache.ruby-lang.org/pub/ruby/{MAJOR.MINOR}/ruby-{MAJOR.MINOR.PATCH}.tar.gz
+        local ruby_ver ruby_majmin
+        ruby_ver=$(echo "$finding_text" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        if [[ -z "$ruby_ver" ]]; then continue; fi
+        ruby_majmin="${ruby_ver%.*}"
+        echo "Verifying Ruby release: ${ruby_ver}" >&2
+        if curl -sfI "https://cache.ruby-lang.org/pub/ruby/${ruby_majmin}/ruby-${ruby_ver}.tar.gz" > /dev/null 2>&1; then
+          echo "  Confirmed released on ruby-lang.org — suppressing finding." >&2
+        else
+          echo "  Version not found on ruby-lang.org — keeping finding (may be genuine)." >&2
+          _suppression_restore "$finding_json"
+        fi
+        ;;
+
     esac
   done < <(echo "$result" | jq -c '.suppressed[]' 2>/dev/null)
 
