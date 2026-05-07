@@ -360,7 +360,9 @@ EOF
   [ -f "${out}.name" ]
   [ "$(cat "${out}.name")" = "my-agent" ]
   [ -f "${out}.tokens" ]
-  [ "$(cat "${out}.tokens")" = "my-agent: input=100 output=200 model=test-model" ]
+  # .tokens sidecar now includes cache fields (defaulting to 0 when the
+  # llm-call.sh stderr line omits them, as in this legacy-format mock).
+  [ "$(cat "${out}.tokens")" = "my-agent: input=100 output=200 cache_creation=0 cache_read=0 model=test-model" ]
   [ ! -f "${out}.failed" ]
   [ "$(cat "$out")" = "agent output" ]
 
@@ -411,6 +413,32 @@ EOF
 
   [ -f "${out}.truncated" ]
   [ -f "${out}.tokens" ]
+
+  _parallel_teardown
+}
+
+@test "call_agent_bg: forwards cache fields through .tokens sidecar" {
+  # Parallel runs must propagate cache_creation / cache_read through the
+  # .tokens sidecar so the parent's emit_token_table() can render the
+  # cache-aware column layout. Without this, cache activity would be
+  # visible only in sequential runs.
+  _parallel_setup
+
+  cat > "${MOCK_DIR}/llm-call.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "response"
+echo "TOKENS: input=100 output=200 cache_creation=5000 cache_read=15000 model=test-model" >&2
+EOF
+  chmod +x "${MOCK_DIR}/llm-call.sh"
+
+  local out
+  out=$(mktemp)
+  TMPFILES+=("$out")
+
+  call_agent_bg "cache-agent" "test-model" "/dev/null" "/dev/null" "$out"
+
+  [ -f "${out}.tokens" ]
+  [ "$(cat "${out}.tokens")" = "cache-agent: input=100 output=200 cache_creation=5000 cache_read=15000 model=test-model" ]
 
   _parallel_teardown
 }

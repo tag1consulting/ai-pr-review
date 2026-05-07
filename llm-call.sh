@@ -43,6 +43,19 @@ if ! [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# Fail fast on missing or empty prompt files. Anthropic rejects requests with
+# system: "" (HTTP 400 "system must be a non-empty string"); other providers
+# produce garbage output without a system prompt. Earlier detection here also
+# avoids burning an API call on a preventable misconfiguration.
+if [[ ! -s "$SYSTEM_PROMPT_FILE" ]]; then
+  echo "ERROR: system prompt file is missing or empty: ${SYSTEM_PROMPT_FILE}" >&2
+  exit 1
+fi
+if [[ ! -s "$USER_MESSAGE_FILE" ]]; then
+  echo "ERROR: user message file is missing or empty: ${USER_MESSAGE_FILE}" >&2
+  exit 1
+fi
+
 : "${AI_PROVIDER:?AI_PROVIDER is required (anthropic|openai|openai-compatible|google|bedrock-proxy)}"
 TEMPERATURE="${AI_TEMPERATURE:-0.3}"
 # Validate temperature is a number in [0, 2]; fall back to 0.3 if not.
@@ -68,20 +81,28 @@ model_supports_temperature() {
 # OpenAI's automatic prefix caching does not require a marker, so this flag
 # is a no-op there. Google Gemini caching uses a separate cachedContents API
 # and is not currently implemented.
+#
+# Trim surrounding whitespace so values like " true " or "\tauto\t" work as
+# expected (operators occasionally set env vars via `export VAR=" value"`
+# from copy-pasted secrets). Uses bash's extglob-free idiom.
 LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING:-auto}"
+# Strip leading whitespace
+LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING#"${LLM_PROMPT_CACHING%%[![:space:]]*}"}"
+# Strip trailing whitespace
+LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING%"${LLM_PROMPT_CACHING##*[![:space:]]}"}"
 prompt_caching_enabled() {
   case "$LLM_PROMPT_CACHING" in
     true|TRUE|True|1) return 0 ;;
     false|FALSE|False|0) return 1 ;;
     auto|AUTO|Auto|"")
-      case "$AI_PROVIDER" in
+      case "${AI_PROVIDER:-}" in
         anthropic|bedrock-proxy) return 0 ;;
         *) return 1 ;;
       esac
       ;;
     *)
       echo "WARNING: LLM_PROMPT_CACHING='${LLM_PROMPT_CACHING}' is not a valid value; defaulting to auto." >&2
-      case "$AI_PROVIDER" in
+      case "${AI_PROVIDER:-}" in
         anthropic|bedrock-proxy) return 0 ;;
         *) return 1 ;;
       esac

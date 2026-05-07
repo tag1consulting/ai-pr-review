@@ -606,15 +606,19 @@ call_agent() {
 
   if [[ -n "$token_line" ]]; then
     local input_tokens output_tokens cache_creation cache_read model_id
-    input_tokens=$(echo "$token_line" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
-    output_tokens=$(echo "$token_line" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
+    # Anchor each key on line-start OR preceding whitespace so a model_id
+    # that happened to contain "cache_creation=5" couldn't shadow the real
+    # cache_creation field. In practice model_id values come from a known
+    # list (see config/model-pricing.json) so this is defense-in-depth.
+    input_tokens=$(echo "$token_line" | grep -oE '(^| )input=[0-9]+' | sed 's/.*input=//' || echo "0")
+    output_tokens=$(echo "$token_line" | grep -oE '(^| )output=[0-9]+' | sed 's/.*output=//' || echo "0")
     # cache_creation / cache_read are optional — defaults to 0 for providers
     # (OpenAI, Google) and for pre-caching llm-call.sh versions.
-    cache_creation=$(echo "$token_line" | grep -oE 'cache_creation=[0-9]+' | sed 's/cache_creation=//' || echo "")
-    cache_read=$(echo "$token_line" | grep -oE 'cache_read=[0-9]+' | sed 's/cache_read=//' || echo "")
+    cache_creation=$(echo "$token_line" | grep -oE '(^| )cache_creation=[0-9]+' | sed 's/.*cache_creation=//' || echo "")
+    cache_read=$(echo "$token_line" | grep -oE '(^| )cache_read=[0-9]+' | sed 's/.*cache_read=//' || echo "")
     cache_creation="${cache_creation:-0}"
     cache_read="${cache_read:-0}"
-    model_id=$(echo "$token_line" | grep -oE 'model=[^ ]+' | sed 's/model=//' || echo "unknown")
+    model_id=$(echo "$token_line" | grep -oE '(^| )model=[^ ]+' | sed 's/.*model=//' || echo "unknown")
     if [[ "$cache_creation" -gt 0 || "$cache_read" -gt 0 ]]; then
       echo "  tokens: input=${input_tokens} output=${output_tokens} cache_creation=${cache_creation} cache_read=${cache_read} model=${model_id}" >&2
     else
@@ -677,12 +681,24 @@ call_agent_bg() {
   fi
 
   if [[ -n "$token_line" ]]; then
-    local input_tokens output_tokens model_id
-    input_tokens=$(echo "$token_line" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
-    output_tokens=$(echo "$token_line" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
-    model_id=$(echo "$token_line" | grep -oE 'model=[^ ]+' | sed 's/model=//' || echo "unknown")
-    echo "  tokens: input=${input_tokens} output=${output_tokens} model=${model_id}" >&2
-    echo "${name}: input=${input_tokens} output=${output_tokens} model=${model_id}" > "${output}.tokens"
+    local input_tokens output_tokens cache_creation cache_read model_id
+    input_tokens=$(echo "$token_line" | grep -oE '(^| )input=[0-9]+' | sed 's/.*input=//' || echo "0")
+    output_tokens=$(echo "$token_line" | grep -oE '(^| )output=[0-9]+' | sed 's/.*output=//' || echo "0")
+    # cache_creation / cache_read are optional — defaults to 0 for providers
+    # (OpenAI, Google) and for pre-caching llm-call.sh versions. Parallel
+    # agents must forward these fields through the .tokens sidecar so the
+    # parent's emit_token_table() can render cache activity correctly.
+    cache_creation=$(echo "$token_line" | grep -oE '(^| )cache_creation=[0-9]+' | sed 's/.*cache_creation=//' || echo "")
+    cache_read=$(echo "$token_line" | grep -oE '(^| )cache_read=[0-9]+' | sed 's/.*cache_read=//' || echo "")
+    cache_creation="${cache_creation:-0}"
+    cache_read="${cache_read:-0}"
+    model_id=$(echo "$token_line" | grep -oE '(^| )model=[^ ]+' | sed 's/.*model=//' || echo "unknown")
+    if [[ "$cache_creation" -gt 0 || "$cache_read" -gt 0 ]]; then
+      echo "  tokens: input=${input_tokens} output=${output_tokens} cache_creation=${cache_creation} cache_read=${cache_read} model=${model_id}" >&2
+    else
+      echo "  tokens: input=${input_tokens} output=${output_tokens} model=${model_id}" >&2
+    fi
+    echo "${name}: input=${input_tokens} output=${output_tokens} cache_creation=${cache_creation} cache_read=${cache_read} model=${model_id}" > "${output}.tokens"
   fi
 }
 
@@ -1320,8 +1336,8 @@ if [[ "${#TOKEN_LOG[@]}" -gt 0 ]]; then
   TOTAL_OUTPUT=0
   for entry in "${TOKEN_LOG[@]}"; do
     echo "  ${entry}" >&2
-    in_tok=$(echo "$entry" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
-    out_tok=$(echo "$entry" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
+    in_tok=$(echo "$entry" | grep -oE '(^| )input=[0-9]+' | sed 's/.*input=//' || echo "0")
+    out_tok=$(echo "$entry" | grep -oE '(^| )output=[0-9]+' | sed 's/.*output=//' || echo "0")
     TOTAL_INPUT=$(( TOTAL_INPUT + in_tok ))
     TOTAL_OUTPUT=$(( TOTAL_OUTPUT + out_tok ))
   done
@@ -1947,12 +1963,15 @@ format_cost() {
 # in a global, we compute totals in pass 1 and emit rows in pass 2.
 emit_token_table() {
   # Pass 1: decide column layout
+  # Grep patterns anchor on line-start OR whitespace so an agent name or
+  # model_id containing "cache_creation=" as a substring could not shadow
+  # the real field. Defensive — model IDs come from a fixed list today.
   local any_cache=0
   local entry
   for entry in "${TOKEN_LOG[@]}"; do
     local cw_tok cr_tok
-    cw_tok=$(echo "$entry" | grep -oE 'cache_creation=[0-9]+' | sed 's/cache_creation=//' || echo "")
-    cr_tok=$(echo "$entry" | grep -oE 'cache_read=[0-9]+' | sed 's/cache_read=//' || echo "")
+    cw_tok=$(echo "$entry" | grep -oE '(^| )cache_creation=[0-9]+' | sed 's/.*cache_creation=//' || echo "")
+    cr_tok=$(echo "$entry" | grep -oE '(^| )cache_read=[0-9]+' | sed 's/.*cache_read=//' || echo "")
     if [[ "${cw_tok:-0}" -gt 0 || "${cr_tok:-0}" -gt 0 ]]; then any_cache=1; break; fi
   done
 
@@ -1971,13 +1990,13 @@ emit_token_table() {
     local agent_name in_tok out_tok cw_tok cr_tok model_id row_total
     local in_rate out_rate cw_rate cr_rate cost_display model_short
     agent_name="${entry%%:*}"
-    in_tok=$(echo "$entry" | grep -oE 'input=[0-9]+' | sed 's/input=//' || echo "0")
-    out_tok=$(echo "$entry" | grep -oE 'output=[0-9]+' | sed 's/output=//' || echo "0")
-    cw_tok=$(echo "$entry" | grep -oE 'cache_creation=[0-9]+' | sed 's/cache_creation=//' || echo "")
-    cr_tok=$(echo "$entry" | grep -oE 'cache_read=[0-9]+' | sed 's/cache_read=//' || echo "")
+    in_tok=$(echo "$entry" | grep -oE '(^| )input=[0-9]+' | sed 's/.*input=//' || echo "0")
+    out_tok=$(echo "$entry" | grep -oE '(^| )output=[0-9]+' | sed 's/.*output=//' || echo "0")
+    cw_tok=$(echo "$entry" | grep -oE '(^| )cache_creation=[0-9]+' | sed 's/.*cache_creation=//' || echo "")
+    cr_tok=$(echo "$entry" | grep -oE '(^| )cache_read=[0-9]+' | sed 's/.*cache_read=//' || echo "")
     cw_tok="${cw_tok:-0}"
     cr_tok="${cr_tok:-0}"
-    model_id=$(echo "$entry" | grep -oE 'model=[^ ]+' | sed 's/model=//' || echo "unknown")
+    model_id=$(echo "$entry" | grep -oE '(^| )model=[^ ]+' | sed 's/.*model=//' || echo "unknown")
     row_total=$(( in_tok + out_tok + cw_tok + cr_tok ))
     read -r in_rate out_rate cw_rate cr_rate <<< "$(model_pricing "$model_id")"
     if [[ "$in_rate" -eq 0 && "$out_rate" -eq 0 ]]; then

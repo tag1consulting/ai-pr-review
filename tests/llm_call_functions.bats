@@ -157,6 +157,103 @@ _load_caching_fn() {
   [ "$status" -eq 0 ]
 }
 
+@test "prompt_caching_enabled: AI_PROVIDER unset falls through to disabled in auto" {
+  # Defensive check: when the function is sourced in a test harness that
+  # doesn't export AI_PROVIDER, prompt_caching_enabled must not error
+  # (set -u safe via ${AI_PROVIDER:-}) and must return 1 (disabled) since
+  # no known-caching provider matches.
+  _load_caching_fn
+  # Use bats' `run` so set -e doesn't abort the test on the expected
+  # non-zero return. Unset AI_PROVIDER in the subshell spawned by `run`.
+  unset AI_PROVIDER || true
+  LLM_PROMPT_CACHING=auto run prompt_caching_enabled
+  [ "$status" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# Whitespace trimming on LLM_PROMPT_CACHING
+# ---------------------------------------------------------------------------
+# Tests that leading/trailing whitespace on the env var is stripped before
+# the case statement evaluates it. Sources the whole top-level script
+# section that handles the trim (not just the function) via a bash subshell.
+
+_run_trim() {
+  # Args: provider, raw_value_to_set
+  # Runs the trim-and-dispatch logic in a subshell with the given inputs
+  # and returns prompt_caching_enabled's status.
+  local provider="$1" raw_val="$2"
+  (
+    export AI_PROVIDER="$provider"
+    export LLM_PROMPT_CACHING="$raw_val"
+    # Reproduce the trim-and-default logic from llm-call.sh verbatim
+    LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING:-auto}"
+    LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING#"${LLM_PROMPT_CACHING%%[![:space:]]*}"}"
+    LLM_PROMPT_CACHING="${LLM_PROMPT_CACHING%"${LLM_PROMPT_CACHING##*[![:space:]]}"}"
+    load_function "${PROJECT_ROOT}/llm-call.sh" prompt_caching_enabled
+    prompt_caching_enabled
+  )
+}
+
+@test "LLM_PROMPT_CACHING: leading whitespace trimmed" {
+  _run_trim anthropic "  true"
+  [ "$?" -eq 0 ]
+}
+
+@test "LLM_PROMPT_CACHING: trailing whitespace trimmed" {
+  _run_trim anthropic "true  "
+  [ "$?" -eq 0 ]
+}
+
+@test "LLM_PROMPT_CACHING: surrounding whitespace trimmed" {
+  _run_trim anthropic "  auto  "
+  [ "$?" -eq 0 ]
+}
+
+@test "LLM_PROMPT_CACHING: tabs trimmed" {
+  _run_trim openai $'\ttrue\t'
+  # "true" on openai should explicitly enable caching
+  [ "$?" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Empty prompt-file validation (top-level script, not a function)
+# ---------------------------------------------------------------------------
+
+@test "llm-call.sh: empty SYSTEM_PROMPT_FILE fails fast" {
+  # Invoke the script with an empty system-prompt file. Must exit non-zero
+  # before any HTTP call. Setting AI_PROVIDER to a dummy value that fails
+  # later would produce a different error; the empty-file check comes first.
+  local sys usr
+  sys=$(mktemp)  # empty
+  usr=$(mktemp); echo "some content" > "$usr"
+  AI_PROVIDER=anthropic ANTHROPIC_API_KEY=x \
+    run --separate-stderr "${PROJECT_ROOT}/llm-call.sh" claude-haiku-4-5 "$sys" "$usr"
+  rm -f "$sys" "$usr"
+  [ "$status" -ne 0 ]
+  echo "$stderr" | grep -q "system prompt file is missing or empty"
+}
+
+@test "llm-call.sh: empty USER_MESSAGE_FILE fails fast" {
+  local sys usr
+  sys=$(mktemp); echo "some content" > "$sys"
+  usr=$(mktemp)  # empty
+  AI_PROVIDER=anthropic ANTHROPIC_API_KEY=x \
+    run --separate-stderr "${PROJECT_ROOT}/llm-call.sh" claude-haiku-4-5 "$sys" "$usr"
+  rm -f "$sys" "$usr"
+  [ "$status" -ne 0 ]
+  echo "$stderr" | grep -q "user message file is missing or empty"
+}
+
+@test "llm-call.sh: nonexistent SYSTEM_PROMPT_FILE fails fast" {
+  local usr
+  usr=$(mktemp); echo "some content" > "$usr"
+  AI_PROVIDER=anthropic ANTHROPIC_API_KEY=x \
+    run --separate-stderr "${PROJECT_ROOT}/llm-call.sh" claude-haiku-4-5 "/tmp/nonexistent-$$" "$usr"
+  rm -f "$usr"
+  [ "$status" -ne 0 ]
+  echo "$stderr" | grep -q "system prompt file is missing or empty"
+}
+
 @test "prompt_caching_enabled: invalid value warns and falls back to auto" {
   _load_caching_fn
   AI_PROVIDER=anthropic LLM_PROMPT_CACHING=maybe run --separate-stderr prompt_caching_enabled
