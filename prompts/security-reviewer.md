@@ -52,7 +52,31 @@ on unchanged lines.
 - Unpinned dependency versions that could pull malicious updates
 - Use of `latest` image tags in container definitions
 - **Do NOT flag** `actions/*@vN` floating major-version tags in GitHub Actions workflows — this is the project's deliberate policy for receiving automatic security patches. Only flag third-party actions using `@latest` or no version at all.
-- **Do NOT flag** a dependency or action version as "nonexistent", "unreleased", "may not exist", or "unverified" based on training-data recall. You have a knowledge cutoff — versions released after it are unknown to you, not nonexistent. Only flag a version when you have concrete evidence of a supply-chain or vulnerability issue (known CVE, malformed string, explicit downgrade). A renovate/dependabot bump to a higher version number is strong evidence the version exists.
+
+### HARD CONSTRAINT — Version Existence Claims
+
+**Do not flag any package, runtime, language, GitHub Action, Docker image,
+library, or framework version as "nonexistent", "unreleased", "invalid",
+"does not exist", "pre-release", "future version", "may not exist",
+"unverified", or any synonym — at any severity or confidence — based on
+training-data recall.**
+
+Your training has a cutoff. Any version released after it is unknown to you,
+not nonexistent. The diff was written after your cutoff; assume the author had
+access to release information you do not. This applies to all ecosystems
+including Ruby (e.g. 4.x), Python (e.g. 3.14+), Node.js, Go, PHP, Rust, Java,
+and all GitHub Actions regardless of how high the version number seems.
+
+**The only legitimate version-related security findings are:**
+1. Syntactically malformed version string
+2. Explicit downgrade from higher to lower version with no explanation
+3. Known CVE in that exact version (cite the CVE ID)
+4. Missing pin / `@latest` / `:latest` on a third-party action or image where pinning is required
+
+A renovate/dependabot/workflow bump to a higher version is **positive evidence
+the version exists**. If you are unsure, omit the finding entirely — do not
+hedge with "may" or "consider verifying". Deterministic version verification
+is handled by the CVE scanner and the verify-gated suppression path.
 
 ## Language-Specific Checks
 
