@@ -764,17 +764,25 @@ cache_priming_effective() {
     true|TRUE|True|1) ;;
     *) echo "false"; return ;;
   esac
-  # Priming requires prompt caching itself to be on — it's pointless
-  # otherwise. Must align with prompt_caching_enabled() in llm-call.sh.
+  # Priming is only meaningful when cache_control markers are actually
+  # emitted — i.e., only on Anthropic-shaped request bodies. OpenAI's
+  # automatic prefix caching doesn't need markers (cache key is implicit)
+  # and Google Gemini uses a different API that this project doesn't mark.
+  # Forcing priming on those providers would pay the +30s serialization
+  # penalty for zero cache benefit. Gate the caching check on provider
+  # BEFORE honoring LLM_PROMPT_CACHING, not after (the llm-call.sh
+  # counterpart is looser because that function is only asking "should
+  # I emit markers if building an Anthropic body" — the priming question
+  # is different: "will this serialization help cache hit rate").
+  case "${AI_PROVIDER:-}" in
+    anthropic|bedrock-proxy) ;;
+    *) echo "false"; return ;;
+  esac
+  # Now on an Anthropic-shaped provider. Honor explicit LLM_PROMPT_CACHING=false
+  # (operator opted out of caching entirely); otherwise auto-on.
   case "${LLM_PROMPT_CACHING:-auto}" in
-    true|TRUE|True|1) echo "true"; return ;;
     false|FALSE|False|0) echo "false"; return ;;
-    *)  # auto / empty / invalid — enabled for anthropic and bedrock-proxy only
-      case "${AI_PROVIDER:-}" in
-        anthropic|bedrock-proxy) echo "true"; return ;;
-      esac
-      echo "false"
-      ;;
+    *) echo "true" ;;
   esac
 }
 
@@ -1115,6 +1123,15 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
     # security-reviewer: skip if already primed synchronously above.
+    #
+    # Invariant note for future maintainers: when primed, SEC_FILE is NOT
+    # added to TIER2_OUTPUTS. Its output and token accounting already flow
+    # through the primer block (via PRIMER_OUTPUTS → collect_parallel_results
+    # → AGENT_OUTPUTS). `AGENT_OUTPUTS` remains the authoritative list of
+    # all agent outputs for findings extraction — do NOT rely on
+    # `TIER2_OUTPUTS` to enumerate every Tier 2 agent, because primed
+    # agents bypass it intentionally to avoid double-collection of their
+    # .name / .tokens / .failed sidecar files.
     if [[ "$SECURITY_REVIEWER_PRIMED" != "true" ]]; then
       SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
       TIER2_OUTPUTS+=("$SEC_FILE")

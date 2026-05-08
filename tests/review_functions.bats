@@ -629,11 +629,15 @@ _cp_setup() {
   [ "$output" = "false" ]
 }
 
-@test "cache_priming_effective: AI_CACHE_PRIMING=true + explicit LLM_PROMPT_CACHING=true on openai → true" {
+@test "cache_priming_effective: AI_CACHE_PRIMING=true + openai → false (priming only helps Anthropic-shaped providers)" {
+  # Even if LLM_PROMPT_CACHING is explicitly enabled, priming is useless
+  # on openai/google because those providers don't use cache_control
+  # markers. Forcing priming there would pay +30s latency for no cache
+  # benefit, so cache_priming_effective gates on provider first.
   _cp_setup
   AI_CACHE_PRIMING=true LLM_PROMPT_CACHING=true AI_PROVIDER=openai run cache_priming_effective
   [ "$status" -eq 0 ]
-  [ "$output" = "true" ]
+  [ "$output" = "false" ]
 }
 
 @test "cache_priming_effective: AI_CACHE_PRIMING=true but LLM_PROMPT_CACHING=false → false" {
