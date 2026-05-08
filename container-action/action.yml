@@ -113,7 +113,7 @@ inputs:
     default: '8192'
 
   enable-suggestions:
-    description: 'Enable GitHub "Apply suggestion" buttons on inline review comments (GitHub-only; increases token usage)'
+    description: 'Enable "Apply suggestion" buttons on inline review comments (GitHub and GitLab; ignored on Bitbucket; increases token usage)'
     required: false
     default: 'true'
 

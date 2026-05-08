@@ -338,11 +338,11 @@ _install_shared_trailers() {
   [[ "$stderr" == *"findings trailer missing"* ]]
 }
 
-@test "effective_prompt: falls back to base when addendum is missing but trailers present" {
-  # Only suggestion-addendum.md absent; trailers present.
-  mkdir -p "${MOCK_DIR}/prompts"
-  echo "KNOWLEDGE_CUTOFF_CONTENT" > "${MOCK_DIR}/prompts/_knowledge-cutoff.md"
-  echo "FINDINGS_TRAILER_CONTENT" > "${MOCK_DIR}/prompts/_trailer-findings.md"
+@test "effective_prompt: composes trailers without addendum when addendum is missing" {
+  # Only suggestion-addendum.md absent; trailers present. The function should
+  # compose base + kc + ft (without addendum) rather than discarding trailers.
+  _install_shared_trailers
+  rm -f "${MOCK_DIR}/prompts/suggestion-addendum.md"
 
   local base
   base=$(mktemp); TMPFILES+=("$base")
@@ -350,8 +350,14 @@ _install_shared_trailers() {
 
   AI_ENABLE_SUGGESTIONS=true run --separate-stderr effective_prompt "code-reviewer" "$base"
   [ "$status" -eq 0 ]
-  [ "$output" = "$base" ]
+  # Should return a composed temp file, not the bare base prompt
+  [ "$output" != "$base" ]
   [[ "$stderr" == *"Suggestion addendum missing"* ]]
+  # Composed file should contain base + trailers but not addendum
+  grep -q "BASE CONTENT" "$output"
+  grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
+  grep -q "FINDINGS_TRAILER_CONTENT" "$output"
+  ! grep -q "ADDENDUM_CONTENT" "$output"
 }
 
 @test "effective_prompt: falls back to base when base prompt is missing" {

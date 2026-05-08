@@ -59,7 +59,7 @@ to the GitHub path.
 
 ## Requirements
 
-**The container action is the recommended way to run ai-pr-review.** It pulls a public image from GHCR — no additional authentication or toolchain setup required. All analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) ship pre-installed at pinned versions.
+**The container action is the recommended way to run ai-pr-review.** It pulls a public multi-arch image from GHCR (linux/amd64 and linux/arm64) — no additional authentication or toolchain setup required. Most analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, phpstan, kube-linter, tflint) ship pre-installed at pinned versions. ESLint is not bundled (it runs from the consumer's `node_modules` / `npx` via the project's own config); the review proceeds without ESLint findings if no JS toolchain is present.
 
 If you prefer to run without Docker (e.g., on self-hosted runners without container support), the [direct action reference](installation-direct-action) and [git submodule](installation-submodule) methods work as standard GitHub Actions composite actions. These require:
 
@@ -74,7 +74,7 @@ Both methods require:
 
 ## Installation
 
-The container action is the recommended installation method — it ships all analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint) pre-installed at pinned, verified versions. No toolchain setup on your runner.
+The container action is the recommended installation method — it ships most analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, phpstan, kube-linter, tflint) pre-installed at pinned, verified versions. The image supports linux/amd64 and linux/arm64 natively. No toolchain setup on your runner.
 
 ### Full setup
 

@@ -62,13 +62,19 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
 
-| Column | Description |
-|--------|-------------|
-| Agent | Agent name |
-| Model | Human-readable model name (e.g. "Sonnet 4.6") |
-| Input | Input tokens consumed |
-| Output | Output tokens generated |
-| Total | Combined token count |
-| Est. Cost | Estimated cost at public list prices |
+The table layout adapts based on cache activity:
+
+| Column | Description | When shown |
+|--------|-------------|------------|
+| Agent | Agent name | Always |
+| Model | Human-readable model name (e.g. "Sonnet 4.6") | Always |
+| Input | Input tokens consumed | Always |
+| Output | Output tokens generated | Always |
+| Cache Write | Tokens written to prompt cache | When any row has cache activity |
+| Cache Read | Tokens read from prompt cache | When any row has cache activity |
+| Total | Combined token count | Always |
+| Est. Cost | Estimated cost at public list prices (April 2026) | Always |
+
+When `LLM_PROMPT_CACHING` is active (default `auto` for Anthropic/Bedrock), the table expands to 8 columns showing Cache Write and Cache Read alongside the standard columns.
 
 Costs are calculated using public list prices and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.

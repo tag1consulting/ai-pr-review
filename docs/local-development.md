@@ -7,7 +7,7 @@ nav_order: 4
 
 # Local Development
 
-Run ai-pr-review locally against any open PR using the container image — no GitHub Actions runner needed.
+Run ai-pr-review locally against any open PR using the container image — no GitHub Actions runner needed. The image supports linux/amd64 and linux/arm64 natively.
 
 ## Prerequisites
 
@@ -187,6 +187,9 @@ By default the container runs in `quick` mode (code-reviewer + silent-failure-hu
 | `AI_CONFIDENCE_THRESHOLD` | No | Minimum confidence 0–100 (default: 75) |
 | `AI_MAX_INLINE` | No | Max inline comments per run (default: 25) |
 | `AI_MAX_TOKENS_PER_AGENT` | No | Max tokens per agent call (default: 8192) |
+| `AI_ENABLE_SUGGESTIONS` | No | `true` (default). Enable "Apply suggestion" buttons on inline comments (GitHub and GitLab; ignored on Bitbucket). |
+| `LLM_PROMPT_CACHING` | No | `auto` (default). Enable Anthropic/Bedrock prompt caching. `true` force-enables; `false` force-disables. |
+| `AI_TEMPERATURE` | No | Sampling temperature for LLM calls (default: 0.3; clamped to [0, 2]) |
 
 ## Pinning a version
 
