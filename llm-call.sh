@@ -28,8 +28,11 @@
 # Output:
 #   Writes the assistant response text to stdout.
 #   Emits "TOKENS: input=N output=N cache_creation=N cache_read=N model=M" to
-#   stderr for usage tracking. cache_creation/cache_read are 0 on providers
-#   or runs where caching did not engage.
+#   stderr for usage tracking. For Anthropic/Bedrock, input is uncached tokens
+#   and cache_creation/cache_read are from the cache_control markers. For
+#   OpenAI, input is prompt_tokens minus cached_tokens (to match Anthropic's
+#   convention), cache_creation is always 0, and cache_read is the automatic
+#   prefix caching hit count. For Google, both cache fields are 0.
 #   Exits non-zero on API errors.
 
 set -euo pipefail
@@ -67,10 +70,12 @@ elif awk "BEGIN { exit !($TEMPERATURE > 2) }"; then
   TEMPERATURE="2"
 fi
 
-# Some models (e.g. Claude Opus 4.7) reject the temperature parameter.
+# Some models reject the temperature parameter: Claude Opus 4.7 and
+# OpenAI reasoning models (o-series).
 model_supports_temperature() {
   case "$1" in
     *opus-4-7*|*opus-4.7*) return 1 ;;
+    o1*|o3*|o4*) return 1 ;;
     *) return 0 ;;
   esac
 }
@@ -454,14 +459,31 @@ call_openai() {
   : "${OPENAI_API_KEY:?OPENAI_API_KEY is required for AI_PROVIDER=${AI_PROVIDER}}"
   local base_url="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 
+  # OpenAI deprecated max_tokens in favor of max_completion_tokens for newer
+  # models (gpt-4.1, o3, o4-mini). gpt-4o accepts both. Use the new field
+  # for first-party OpenAI; keep the legacy field for openai-compatible
+  # endpoints where third-party providers may not support it yet.
+  local token_field="max_completion_tokens"
+  if [[ "$AI_PROVIDER" == "openai-compatible" ]]; then
+    token_field="max_tokens"
+  fi
+
+  local temperature_val
+  if model_supports_temperature "$MODEL_ID"; then
+    temperature_val="$TEMPERATURE"
+  else
+    temperature_val="null"
+  fi
+
   local request_body
   request_body=$(jq -n \
     --arg model "$MODEL_ID" \
     --rawfile system "$SYSTEM_PROMPT_FILE" \
     --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
-    --argjson temperature "$TEMPERATURE" \
-    '{model: $model, messages: [{role: "system", content: $system}, {role: "user", content: $user}], max_tokens: $max_tokens, temperature: $temperature}') || {
+    --argjson temperature "$temperature_val" \
+    --arg token_field "$token_field" \
+    '{model: $model, messages: [{role: "system", content: $system}, {role: "user", content: $user}], ($token_field): $max_tokens} + (if $temperature != null then {temperature: $temperature} else {} end)') || {
     echo "ERROR: jq failed to build OpenAI request body" >&2
     exit 1
   }
@@ -474,12 +496,20 @@ call_openai() {
     -H "Content-Type: application/json" \
     --data-binary @-
 
-  local response_text input_tokens output_tokens stop_reason
+  local response_text input_tokens output_tokens stop_reason cache_read
   response_text=$(jq -r '.choices[0].message.content // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usage.prompt_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usage.completion_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  cache_read=$(jq -r '.usage.prompt_tokens_details.cached_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   stop_reason=$(jq -r '.choices[0].finish_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
+
+  # OpenAI's prompt_tokens INCLUDES cached_tokens as a subset. Subtract to
+  # match Anthropic's convention where input_tokens = uncached only, so the
+  # cost formula (input*input_rate + cache_read*cache_read_rate) works
+  # correctly without double-counting.
+  local uncached_input=$(( input_tokens - cache_read ))
+  if (( uncached_input < 0 )); then uncached_input=$input_tokens; cache_read=0; fi
+  emit_response "$response_text" "$uncached_input" "$output_tokens" "$stop_reason" "0" "$cache_read"
 }
 
 # ---------------------------------------------------------------------------

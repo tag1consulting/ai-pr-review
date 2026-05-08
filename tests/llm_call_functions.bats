@@ -379,3 +379,55 @@ _teardown_body_fixture() {
   # auto + non-anthropic provider → no cache_control markers
   echo "$body" | jq -e '.system | type == "string"' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# model_supports_temperature — OpenAI o-series reasoning models
+# ---------------------------------------------------------------------------
+
+@test "model_supports_temperature: o3 rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "o3"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: o3-2025-04-16 rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "o3-2025-04-16"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: o3-mini rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "o3-mini"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: o4-mini rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "o4-mini"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: o1 rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "o1"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: gpt-4o accepts temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-4o"
+  [ "$status" -eq 0 ]
+}
+
+@test "model_supports_temperature: gpt-4.1 accepts temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-4.1"
+  [ "$status" -eq 0 ]
+}
+
+@test "model_supports_temperature: claude-sonnet-4-6 accepts temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "claude-sonnet-4-6"
+  [ "$status" -eq 0 ]
+}
