@@ -213,7 +213,7 @@ ghcr.io/tag1consulting/ai-pr-review:0.1.0
 ghcr.io/tag1consulting/ai-pr-review:0
 ```
 
-Available tags: `latest`, `v<major>` (e.g. `v2`), `v<major.minor.patch>`.
+Available tags: `latest`, `<major>` (e.g. `0`), `<major.minor>` (e.g. `0.7`), `<major.minor.patch>` (e.g. `0.7.0`).
 
 ## Building the image locally
 

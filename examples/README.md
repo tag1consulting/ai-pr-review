@@ -85,7 +85,7 @@ For reproducible builds, pin the image tag instead of using `latest`:
     ...
 ```
 
-Available tags: `latest`, `<major>` (e.g. `0`), `<major.minor.patch>` (e.g. `0.7.0`).
+Available tags: `latest`, `<major>` (e.g. `0`), `<major.minor>` (e.g. `0.7`), `<major.minor.patch>` (e.g. `0.7.0`).
 
 ## Using the non-container action
 
