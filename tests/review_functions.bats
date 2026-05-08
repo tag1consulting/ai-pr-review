@@ -825,6 +825,25 @@ _cp_setup() {
   [ "$output" = "true" ]
 }
 
+# ---------------------------------------------------------------------------
+# lib/*.sh standalone sourcing
+#
+# load_function in test_helper.bash extracts individual function text via awk,
+# so a broken file-scope reference (e.g. to a variable only set in review.sh's
+# main()) wouldn't fail any existing test. These smoke tests catch that class
+# of regression by sourcing the whole module in a clean subshell.
+# ---------------------------------------------------------------------------
+
+@test "lib/languages.sh: sources standalone without error" {
+  run bash -c "source '${PROJECT_ROOT}/lib/languages.sh'"
+  [ "$status" -eq 0 ]
+}
+
+@test "lib/pricing.sh: sources standalone without error" {
+  run bash -c "source '${PROJECT_ROOT}/lib/pricing.sh'"
+  [ "$status" -eq 0 ]
+}
+
 @test "cache_priming_effective: AI_PROVIDER unset returns false (no caching possible)" {
   _cp_setup
   unset AI_CACHE_PRIMING LLM_PROMPT_CACHING AI_PROVIDER
