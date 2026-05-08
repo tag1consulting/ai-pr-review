@@ -438,7 +438,8 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
 | `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-7` |
-| `openai` / `openai-compatible` | `gpt-4o` | same as standard |
+| `openai` | `gpt-4o` | `gpt-4.1` |
+| `openai-compatible` | (user-specified) | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 | `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-7` |
 
@@ -580,6 +581,14 @@ Anthropic caches only prefixes ≥ 1024 tokens (Sonnet/Opus) or ≥ 2048 tokens 
 ### What is NOT cached
 
 `blind-hunter` uses `BLIND_MSG` (zero-context constraint) which is much shorter and structurally distinct, so it does not share the cache with other agents.
+
+### OpenAI automatic prefix caching
+
+OpenAI provides automatic prefix caching (50% discount on cached input tokens) for prompts ≥ 1024 tokens. No explicit markers are needed — caching is based on the longest matching prefix. `call_openai()` extracts `usage.prompt_tokens_details.cached_tokens` from the response and reports it as `cache_read` in the TOKENS line. The `input` count is adjusted to exclude cached tokens (matching Anthropic's convention where `input` = uncached only) so the cost formula works correctly across providers.
+
+OpenAI's cache_write_rate is 0 (no write premium — unlike Anthropic's 1.25x write cost). The discount is applied only on reads via `cache_read_rate` in `model-pricing.json`.
+
+**Current limitation:** Our request layout puts the agent-specific system prompt first, so agents with different prompts have different prefixes, defeating cross-agent cache sharing within a review run. A follow-up optimization could restructure the OpenAI request to mirror the Anthropic shared-cache layout (shared context first, agent prompt second).
 
 ### Live benchmarks
 

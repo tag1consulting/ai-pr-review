@@ -201,6 +201,54 @@ setup() {
   [ "$output" = "2500000 10000000 0 1250000" ]
 }
 
+@test "model_pricing: gpt-4.1 returns correct rates" {
+  run model_pricing "gpt-4.1"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2000000 8000000 0 500000" ]
+}
+
+@test "model_pricing: gpt-4.1 dated variant matches" {
+  run model_pricing "gpt-4.1-2025-04-14"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2000000 8000000 0 500000" ]
+}
+
+@test "model_pricing: gpt-4.1-mini is not shadowed by gpt-4.1 pattern" {
+  run model_pricing "gpt-4.1-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "400000 1600000 0 100000" ]
+}
+
+@test "model_pricing: gpt-4.1-nano is not shadowed by gpt-4.1 pattern" {
+  run model_pricing "gpt-4.1-nano"
+  [ "$status" -eq 0 ]
+  [ "$output" = "100000 400000 0 25000" ]
+}
+
+@test "model_pricing: o3 returns correct rates" {
+  run model_pricing "o3"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2000000 8000000 0 500000" ]
+}
+
+@test "model_pricing: o3 dated variant matches" {
+  run model_pricing "o3-2025-04-16"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2000000 8000000 0 500000" ]
+}
+
+@test "model_pricing: o3-mini is not shadowed by o3 pattern" {
+  run model_pricing "o3-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1100000 4400000 0 550000" ]
+}
+
+@test "model_pricing: o4-mini returns correct rates" {
+  run model_pricing "o4-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1100000 4400000 0 275000" ]
+}
+
 @test "model_pricing: gemini-2.5-flash returns correct rates" {
   run model_pricing "gemini-2.5-flash"
   [ "$status" -eq 0 ]
@@ -269,6 +317,42 @@ setup() {
   run model_display_name "gpt-4o"
   [ "$status" -eq 0 ]
   [ "$output" = "GPT-4o" ]
+}
+
+@test "model_display_name: gpt-4.1 -> GPT-4.1" {
+  run model_display_name "gpt-4.1"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-4.1" ]
+}
+
+@test "model_display_name: gpt-4.1-mini -> GPT-4.1 mini" {
+  run model_display_name "gpt-4.1-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-4.1 mini" ]
+}
+
+@test "model_display_name: gpt-4.1-nano -> GPT-4.1 nano" {
+  run model_display_name "gpt-4.1-nano"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-4.1 nano" ]
+}
+
+@test "model_display_name: o3 -> o3" {
+  run model_display_name "o3"
+  [ "$status" -eq 0 ]
+  [ "$output" = "o3" ]
+}
+
+@test "model_display_name: o3-mini -> o3-mini" {
+  run model_display_name "o3-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "o3-mini" ]
+}
+
+@test "model_display_name: o4-mini -> o4-mini" {
+  run model_display_name "o4-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "o4-mini" ]
 }
 
 @test "model_display_name: gemini-2.5-flash -> Gemini 2.5 Flash" {
