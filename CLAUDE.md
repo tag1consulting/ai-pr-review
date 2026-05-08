@@ -121,9 +121,9 @@ corresponding `_SHA256_<ARCH>` ARG.
   `xz-utils`, `python3-pip`, `composer.phar`), downloads every analyzer
   binary, pip-installs ruff/semgrep/checkov, composer-installs
   phpcs/phpstan, and fetches the semgrep rulesets.
-- **final stage** — slim runtime with only what the analyzers need at
-  execution time (`bash`, `ca-certificates`, `git`, `jq`, `php-cli` +
-  extensions, `python3`). Copies `/usr/local/bin` and
+- **final stage** — slim runtime with `bash`, `ca-certificates`, `curl`
+  (required at runtime for LLM calls and provider API calls), `git`,
+  `jq`, `php-cli` + extensions, `python3`. Copies `/usr/local/bin` and
   `/usr/local/lib/python3.12/dist-packages` wholesale from the builder
   (pip-installed tools bring a web of companion entry points — e.g.
   `semgrep` shells out to `pysemgrep`, `checkov` pulls in
@@ -135,8 +135,9 @@ Action scripts (`review.sh`, `post-review*.sh`, `analyzers/`, `prompts/`,
 etc.) are copied at the end of the final stage so source-only changes
 don't invalidate the heavy builder layers.
 
-Drops `curl`, `unzip`, `xz-utils`, `python3-pip`, and `composer.phar`
-from the runtime image, trimming attack surface and ~40 MB.
+Drops `unzip`, `xz-utils`, `python3-pip`, and `composer.phar` from the
+runtime image. `curl` stays — `llm-call.sh`, the provider post-review
+scripts, and `analyzers/run-cve-check.sh` invoke it at runtime.
 
 Split slim vs full image (LLM-only vs with-analyzers) was considered but
 deferred — see issue #130 rationale.
