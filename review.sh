@@ -743,6 +743,49 @@ collect_parallel_results() {
   done
 }
 
+# --- Resolve whether cache-priming should run for this invocation ---
+# Echoes "true" or "false". Priming is effective when BOTH:
+#   * AI_CACHE_PRIMING is explicitly "true" (default: false — opt-in tuning knob)
+#   * Prompt caching itself is on — either AI_PROVIDER is anthropic or
+#     bedrock-proxy (automatic) OR LLM_PROMPT_CACHING is explicitly true.
+#
+# Why default-off: live-benchmarked against a real PR on Bedrock, priming
+# delivered no measurable cost win vs the unprimed baseline. Parallel
+# Tier 2 agents already got the same cache hits opportunistically via
+# natural start-up staggering (different agent prompts, Opus vs Sonnet TTFT).
+# Priming traded +30s wall-clock latency for guaranteed (rather than
+# opportunistic) hits — roughly cost-neutral but slower. Left in as an
+# opt-in tuning knob for environments where cache-hit timing differs
+# (strict rate-limiting, proxy serialization, etc.) where opportunistic
+# hits don't happen.
+cache_priming_effective() {
+  # Default is "false" — opt-in only.
+  case "${AI_CACHE_PRIMING:-false}" in
+    true|TRUE|True|1) ;;
+    *) echo "false"; return ;;
+  esac
+  # Priming is only meaningful when cache_control markers are actually
+  # emitted — i.e., only on Anthropic-shaped request bodies. OpenAI's
+  # automatic prefix caching doesn't need markers (cache key is implicit)
+  # and Google Gemini uses a different API that this project doesn't mark.
+  # Forcing priming on those providers would pay the +30s serialization
+  # penalty for zero cache benefit. Gate the caching check on provider
+  # BEFORE honoring LLM_PROMPT_CACHING, not after (the llm-call.sh
+  # counterpart is looser because that function is only asking "should
+  # I emit markers if building an Anthropic body" — the priming question
+  # is different: "will this serialization help cache hit rate").
+  case "${AI_PROVIDER:-}" in
+    anthropic|bedrock-proxy) ;;
+    *) echo "false"; return ;;
+  esac
+  # Now on an Anthropic-shaped provider. Honor explicit LLM_PROMPT_CACHING=false
+  # (operator opted out of caching entirely); otherwise auto-on.
+  case "${LLM_PROMPT_CACHING:-auto}" in
+    false|FALSE|False|0) echo "false"; return ;;
+    *) echo "true" ;;
+  esac
+}
+
 # --- Build effective prompt path (composes shared trailers with the base) ---
 #
 # Composes three shared blocks onto the base agent prompt depending on agent
@@ -900,6 +943,90 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
   TIER1_OUTPUTS=()
   TIER1_WAIT_ARGS=()
 
+  # Cache-priming (issue #144): Anthropic's cache only becomes visible AFTER
+  # the first response begins. When 5 agents fan out concurrently against the
+  # same shared context, none of them see a warm cache — each writes its own
+  # entry (5 cache writes, 0 reads). Priming runs one agent synchronously on
+  # the CODE_CONTEXT_MSG cohort FIRST so the cache entry is warm by the time
+  # the rest of Tier 1 + all of Tier 2 fan out.
+  #
+  # We reuse code-reviewer as the primer (it always runs, its output is
+  # useful real work, and it uses CODE_CONTEXT_MSG — the most-shared
+  # context). Docs: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+  # "For concurrent requests, note that a cache entry only becomes available
+  # after the first response begins. If you need cache hits for parallel
+  # requests, wait for the first response before sending subsequent requests."
+  #
+  # Wall-clock cost: code-reviewer's latency becomes serial with the rest of
+  # Tier 1 (~15-30s instead of overlapping). Gain: 4 more cache-read hits
+  # per run in the CODE_CONTEXT_MSG cohort, worth roughly 20-30% of the run's
+  # input token cost on the typical cold-cache path.
+  #
+  # No priming is needed for FULL_CONTEXT_MSG (only pr-summarizer uses it
+  # in Tier 1; architecture-reviewer uses it in Tier 2, after pr-summarizer
+  # has already completed via the tier barrier) or BLIND_MSG (only one
+  # agent uses it — blind-hunter).
+  #
+  # Gated by AI_CACHE_PRIMING (default: false — opt-in tuning knob).
+  # Set AI_CACHE_PRIMING=true to enable synchronous primer calls before
+  # Tier 1 fan-out. Default is off because live benchmarks (#153) showed
+  # no net cost win vs the opportunistic-timing baseline on Bedrock.
+  # Left as an opt-in for environments where concurrent cache-visibility
+  # timing fails (strict rate limits, proxy serialization, etc.).
+  CACHE_PRIMING_EFFECTIVE=$(cache_priming_effective)
+
+  # Track whether security-reviewer has been primed (full mode only).
+  # If yes, the Tier 2 dispatch below will skip it to avoid double-running.
+  SECURITY_REVIEWER_PRIMED="false"
+
+  if [[ "$CACHE_PRIMING_EFFECTIVE" == "true" ]]; then
+    # Why two primers: Anthropic caches per-model. One primer writes a
+    # Sonnet cache entry (helps adversarial-general + silent-failure-hunter
+    # when those are Sonnet); a second primer is needed for the Opus
+    # CODE_CONTEXT_MSG cohort (security-reviewer, edge-case-hunter,
+    # silent-failure-hunter in full mode).
+    #
+    # Primers run in parallel with each other (different models → no
+    # mutual cache dependency) so total wall-clock ≈ max(sonnet, opus)
+    # latency rather than sum(sonnet, opus). Then all other agents fan out.
+    #
+    # The Sonnet primer is code-reviewer (always runs, always Tier 1).
+    # The Opus primer is security-reviewer (only in full mode — it's a
+    # Tier 2 agent pulled forward). In quick mode only the Sonnet primer
+    # fires; Opus agents don't run.
+
+    PRIMER_OUTPUTS=()
+    PRIMER_WAIT_ARGS=()
+
+    # Sonnet primer: code-reviewer — its output is part of Tier 1 anyway,
+    # so running it as the primer costs only the serialization (not a wasted call).
+    echo "Cache priming: warming Sonnet CODE_CONTEXT_MSG via code-reviewer." >&2
+    PRIMER_OUTPUTS+=("$FINDINGS_FILE")
+    call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
+      "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+    PRIMER_WAIT_ARGS+=($! "$FINDINGS_FILE")
+
+    # Opus primer: security-reviewer (full mode only). Pulled forward from
+    # Tier 2 so the cache entry is warm before Tier 2's parallel fan-out.
+    if [[ "$REVIEW_MODE" == "full" ]]; then
+      echo "Cache priming: warming Opus CODE_CONTEXT_MSG via security-reviewer (pulled forward from Tier 2)." >&2
+      SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
+      PRIMER_OUTPUTS+=("$SEC_FILE")
+      call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
+        "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      PRIMER_WAIT_ARGS+=($! "$SEC_FILE")
+      SECURITY_REVIEWER_PRIMED="true"
+    fi
+
+    wait_tier_pids "${PRIMER_WAIT_ARGS[@]}"
+    collect_parallel_results "${PRIMER_OUTPUTS[@]}"
+    # Primer outputs are real review outputs — push onto AGENT_OUTPUTS so
+    # Phase 2 (findings extraction) sees them alongside other Tier 1/2 agents.
+    for f in "${PRIMER_OUTPUTS[@]}"; do
+      AGENT_OUTPUTS+=("$f")
+    done
+  fi
+
   # pr-summarizer: only on first review (gate evaluated in parent)
   if [[ -z "$LAST_REVIEWED_SHA" ]]; then
     TIER1_OUTPUTS+=("$SUMMARY_FILE")
@@ -910,10 +1037,13 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
     echo "Skipping pr-summarizer (incremental run — summary already posted)." >&2
   fi
 
-  TIER1_OUTPUTS+=("$FINDINGS_FILE")
-  call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
-    "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
-  TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
+  # code-reviewer: only dispatch as parallel if priming didn't already run it.
+  if [[ "$CACHE_PRIMING_EFFECTIVE" != "true" ]]; then
+    TIER1_OUTPUTS+=("$FINDINGS_FILE")
+    call_agent_bg "code-reviewer" "$AI_MODEL_STANDARD" \
+      "$(effective_prompt code-reviewer "${SCRIPT_DIR}/prompts/code-reviewer.md")" "$CODE_CONTEXT_MSG" "$FINDINGS_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+    TIER1_WAIT_ARGS+=($! "$FINDINGS_FILE")
+  fi
 
   if [[ "$HAS_ERROR_PATTERNS" -eq 1 ]]; then
     SFH_FILE=$(mktemp_tracked /tmp/ai-review-sfh-XXXXXXXX.md)
@@ -991,11 +1121,23 @@ if [[ "${AI_PARALLEL:-true}" == "true" ]]; then
       "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
     TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
 
-    SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
-    TIER2_OUTPUTS+=("$SEC_FILE")
-    call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-      "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
-    TIER2_WAIT_ARGS+=($! "$SEC_FILE")
+    # security-reviewer: skip if already primed synchronously above.
+    #
+    # Invariant note for future maintainers: when primed, SEC_FILE is NOT
+    # added to TIER2_OUTPUTS. Its output and token accounting already flow
+    # through the primer block (via PRIMER_OUTPUTS → collect_parallel_results
+    # → AGENT_OUTPUTS). `AGENT_OUTPUTS` remains the authoritative list of
+    # all agent outputs for findings extraction — do NOT rely on
+    # `TIER2_OUTPUTS` to enumerate every Tier 2 agent, because primed
+    # agents bypass it intentionally to avoid double-collection of their
+    # .name / .tokens / .failed sidecar files.
+    if [[ "$SECURITY_REVIEWER_PRIMED" != "true" ]]; then
+      SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
+      TIER2_OUTPUTS+=("$SEC_FILE")
+      call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
+        "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+      TIER2_WAIT_ARGS+=($! "$SEC_FILE")
+    fi
 
     BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
     TIER2_OUTPUTS+=("$BLIND_FILE")
