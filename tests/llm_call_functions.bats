@@ -381,6 +381,131 @@ _teardown_body_fixture() {
 }
 
 # ---------------------------------------------------------------------------
+# _build_openai_body — request body shape for OpenAI and OpenAI-compatible
+# ---------------------------------------------------------------------------
+
+_setup_openai_body_fixture() {
+  command -v jq >/dev/null 2>&1 || skip "jq not available"
+  SYS_FILE=$(mktemp); USR_FILE=$(mktemp)
+  echo "system content" > "$SYS_FILE"
+  echo "user content" > "$USR_FILE"
+  export SYSTEM_PROMPT_FILE="$SYS_FILE" USER_MESSAGE_FILE="$USR_FILE"
+  export MAX_TOKENS=4096 TEMPERATURE=0.3
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  load_function "${PROJECT_ROOT}/llm-call.sh" _build_openai_body
+}
+
+_teardown_openai_body_fixture() {
+  rm -f "$SYS_FILE" "$USR_FILE"
+}
+
+@test "_build_openai_body: openai uses shared-cache layout (issue #164)" {
+  _setup_openai_body_fixture
+  MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+
+  # messages: 2-element array (system + user)
+  echo "$body" | jq -e '.messages | length == 2' > /dev/null
+  echo "$body" | jq -e '.messages[0].role == "system"' > /dev/null
+  echo "$body" | jq -e '.messages[1].role == "user"' > /dev/null
+
+  # system message starts with user content (shared context first)
+  echo "$body" | jq -e '.messages[0].content | startswith("user content")' > /dev/null
+
+  # system message contains the separator and agent prompt
+  echo "$body" | jq -e '.messages[0].content | contains("===AGENT_INSTRUCTIONS===")' > /dev/null
+  echo "$body" | jq -e '.messages[0].content | endswith("system content\n")' > /dev/null
+
+  # user message is the sentinel
+  echo "$body" | jq -e '.messages[1].content == "Please perform your review now."' > /dev/null
+
+  # uses max_completion_tokens (first-party OpenAI)
+  echo "$body" | jq -e '.max_completion_tokens == 4096' > /dev/null
+  echo "$body" | jq -e 'has("max_tokens") | not' > /dev/null
+}
+
+@test "_build_openai_body: openai-compatible uses legacy layout" {
+  _setup_openai_body_fixture
+  MODEL_ID="some-model" AI_PROVIDER=openai-compatible \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+
+  # Legacy layout: system = agent prompt, user = shared context
+  echo "$body" | jq -e '.messages | length == 2' > /dev/null
+  echo "$body" | jq -e '.messages[0].role == "system"' > /dev/null
+  echo "$body" | jq -e '.messages[0].content == "system content\n"' > /dev/null
+  echo "$body" | jq -e '.messages[1].role == "user"' > /dev/null
+  echo "$body" | jq -e '.messages[1].content == "user content\n"' > /dev/null
+
+  # uses max_tokens (openai-compatible)
+  echo "$body" | jq -e '.max_tokens == 4096' > /dev/null
+  echo "$body" | jq -e 'has("max_completion_tokens") | not' > /dev/null
+}
+
+@test "_build_openai_body: shared-cache prefix is identical across agents" {
+  # Two agents with different system prompts should share the same prefix
+  # up to the separator in the system message.
+  _setup_openai_body_fixture
+
+  MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body1=$(_build_openai_body)
+
+  # Change agent prompt but keep user content the same
+  echo "different agent prompt" > "$SYS_FILE"
+  MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body2=$(_build_openai_body)
+  _teardown_openai_body_fixture
+
+  # Extract the shared prefix (everything up to and including the separator)
+  local prefix1 prefix2
+  prefix1=$(echo "$body1" | jq -r '.messages[0].content' | sed -n '1,/^===AGENT_INSTRUCTIONS===$/p')
+  prefix2=$(echo "$body2" | jq -r '.messages[0].content' | sed -n '1,/^===AGENT_INSTRUCTIONS===$/p')
+  [ "$prefix1" = "$prefix2" ]
+
+  # But the full system messages differ (different agent prompts)
+  local sys1 sys2
+  sys1=$(echo "$body1" | jq -r '.messages[0].content')
+  sys2=$(echo "$body2" | jq -r '.messages[0].content')
+  [ "$sys1" != "$sys2" ]
+}
+
+@test "_build_openai_body: o-series model omits temperature" {
+  _setup_openai_body_fixture
+  MODEL_ID="o3" AI_PROVIDER=openai \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+  echo "$body" | jq -e 'has("temperature") | not' > /dev/null
+}
+
+@test "_build_openai_body: gpt-5.4-mini includes temperature" {
+  _setup_openai_body_fixture
+  MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+  [ "$(echo "$body" | jq -r '.temperature')" = "0.3" ]
+}
+
+@test "_build_openai_body: LLM_PROMPT_CACHING=false reverts openai to legacy layout" {
+  _setup_openai_body_fixture
+  LLM_PROMPT_CACHING=false MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+
+  # Legacy layout: system = agent prompt, user = shared context
+  echo "$body" | jq -e '.messages[0].content == "system content\n"' > /dev/null
+  echo "$body" | jq -e '.messages[1].content == "user content\n"' > /dev/null
+}
+
+@test "_build_openai_body: model field is always present" {
+  _setup_openai_body_fixture
+  MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+  [ "$(echo "$body" | jq -r '.model')" = "gpt-5.4-mini" ]
+}
+
+# ---------------------------------------------------------------------------
 # model_supports_temperature — OpenAI o-series reasoning models
 # ---------------------------------------------------------------------------
 

@@ -518,7 +518,7 @@ After all agents complete:
 
 ## Token usage and cost estimation
 
-`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N cache_creation=N cache_read=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr. The `cache_creation` and `cache_read` fields are 0 on providers where caching doesn't engage (OpenAI, Google) or runs where `LLM_PROMPT_CACHING=false` was set.
+`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N cache_creation=N cache_read=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr. The `cache_creation` and `cache_read` fields are 0 on providers where caching doesn't engage or runs where `LLM_PROMPT_CACHING=false` was set. For Google Gemini, `cache_read` reports `cachedContentTokenCount` when present; thinking tokens (`thoughtsTokenCount`) are added to the output count since they are billed at the output rate. `call_google()` also emits `THINKING: N tokens` to stderr for transparency.
 
 `config/model-pricing.json` maps model ID patterns to display names and per-token rates. Each entry carries four rates: `input_rate`, `output_rate`, `cache_write_rate`, and `cache_read_rate` (all cost per 1M tokens, in units of `$1e-6 / 1M tokens`). The `model_pricing()` function returns all four rates as a space-separated tuple; `emit_token_table()` generates the markdown table with an adaptive column layout — 6 columns when no rows have cache activity, 8 columns (Input / Output / Cache Write / Cache Read / Total / Est. Cost) when any row does.
 
@@ -526,7 +526,7 @@ After all agents complete:
 
 When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, `llm-call.sh` uses Anthropic's ephemeral cache (5-minute TTL) via `cache_control: {type: "ephemeral"}` markers. Enabled by `LLM_PROMPT_CACHING` (default: `auto`):
 
-- `auto` — enabled for `anthropic` and `bedrock-proxy`; no-op for OpenAI (automatic prefix caching; no marker needed) and Google Gemini (different caching API, unsupported).
+- `auto` — enabled for `anthropic` and `bedrock-proxy`; no-op for OpenAI (uses shared-cache layout for prefix caching without markers; see [OpenAI automatic prefix caching](#openai-automatic-prefix-caching)) and Google Gemini (different caching API, unsupported).
 - `true` — force-enable markers.
 - `false` — force-disable; falls back to the legacy request layout (system = agent prompt, messages[0] = user content).
 
@@ -607,7 +607,9 @@ OpenAI provides automatic prefix caching (50% discount on cached input tokens) f
 
 OpenAI's cache_write_rate is 0 (no write premium — unlike Anthropic's 1.25x write cost). The discount is applied only on reads via `cache_read_rate` in `model-pricing.json`.
 
-**Current limitation:** Our request layout puts the agent-specific system prompt first, so agents with different prompts have different prefixes, defeating cross-agent cache sharing within a review run. A follow-up optimization could restructure the OpenAI request to mirror the Anthropic shared-cache layout (shared context first, agent prompt second).
+**Shared-cache layout (issue #164).** `_build_openai_body()` restructures the request for first-party OpenAI (`AI_PROVIDER=openai`) to maximize the shared prefix across agents in the same cohort. The shared context (CODE_CONTEXT_MSG / FULL_CONTEXT_MSG) is placed first in the system message, followed by a separator and the per-agent prompt. The user message becomes a minimal sentinel (`"Please perform your review now."`). This mirrors the Anthropic shared-cache layout (issue #142) but uses string concatenation instead of a content-block array (OpenAI doesn't support system arrays).
+
+`openai-compatible` endpoints keep the legacy layout (system = agent prompt, user = shared context) because third-party providers may have different caching behavior or no prefix caching at all.
 
 ### Live benchmarks
 
