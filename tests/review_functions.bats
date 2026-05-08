@@ -249,6 +249,48 @@ setup() {
   [ "$output" = "1100000 4400000 0 275000" ]
 }
 
+@test "model_pricing: gpt-5.4 returns correct rates" {
+  run model_pricing "gpt-5.4"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2500000 15000000 0 250000" ]
+}
+
+@test "model_pricing: gpt-5.4 dated variant matches" {
+  run model_pricing "gpt-5.4-2026-03-05"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2500000 15000000 0 250000" ]
+}
+
+@test "model_pricing: gpt-5.4-mini is not shadowed by gpt-5.4 pattern" {
+  run model_pricing "gpt-5.4-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "750000 4500000 0 75000" ]
+}
+
+@test "model_pricing: gpt-5.4-nano is not shadowed by gpt-5.4 pattern" {
+  run model_pricing "gpt-5.4-nano"
+  [ "$status" -eq 0 ]
+  [ "$output" = "200000 1250000 0 20000" ]
+}
+
+@test "model_pricing: gpt-5.5 returns correct rates" {
+  run model_pricing "gpt-5.5"
+  [ "$status" -eq 0 ]
+  [ "$output" = "5000000 30000000 0 500000" ]
+}
+
+@test "model_pricing: gpt-5 returns correct rates" {
+  run model_pricing "gpt-5"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1250000 10000000 0 125000" ]
+}
+
+@test "model_pricing: gpt-5 is not shadowed by gpt-5.4 or gpt-5.5" {
+  run model_pricing "gpt-5-2025-08-07"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1250000 10000000 0 125000" ]
+}
+
 @test "model_pricing: gemini-2.5-flash returns correct rates" {
   run model_pricing "gemini-2.5-flash"
   [ "$status" -eq 0 ]
@@ -353,6 +395,30 @@ setup() {
   run model_display_name "o4-mini"
   [ "$status" -eq 0 ]
   [ "$output" = "o4-mini" ]
+}
+
+@test "model_display_name: gpt-5.4 -> GPT-5.4" {
+  run model_display_name "gpt-5.4"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-5.4" ]
+}
+
+@test "model_display_name: gpt-5.4-mini -> GPT-5.4 mini" {
+  run model_display_name "gpt-5.4-mini"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-5.4 mini" ]
+}
+
+@test "model_display_name: gpt-5.5 -> GPT-5.5" {
+  run model_display_name "gpt-5.5"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-5.5" ]
+}
+
+@test "model_display_name: gpt-5 -> GPT-5" {
+  run model_display_name "gpt-5"
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPT-5" ]
 }
 
 @test "model_display_name: gemini-2.5-flash -> Gemini 2.5 Flash" {

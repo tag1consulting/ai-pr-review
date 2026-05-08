@@ -70,12 +70,13 @@ elif awk "BEGIN { exit !($TEMPERATURE > 2) }"; then
   TEMPERATURE="2"
 fi
 
-# Some models reject the temperature parameter: Claude Opus 4.7 and
-# OpenAI reasoning models (o-series).
+# Some models reject the temperature parameter: Claude Opus 4.7,
+# OpenAI reasoning models (o-series), and GPT-5/5.5 (reasoning-capable).
 model_supports_temperature() {
   case "$1" in
     *opus-4-7*|*opus-4.7*) return 1 ;;
     o1*|o3*|o4*) return 1 ;;
+    gpt-5.5*|gpt-5-*|gpt-5) return 1 ;;
     *) return 0 ;;
   esac
 }

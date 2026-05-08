@@ -103,8 +103,8 @@ case "$AI_PROVIDER" in
     AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-claude-opus-4-7}"
     ;;
   openai)
-    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-gpt-4o}"
-    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-gpt-4.1}"
+    AI_MODEL_STANDARD="${AI_MODEL_STANDARD:-gpt-5.4-mini}"
+    AI_MODEL_PREMIUM="${AI_MODEL_PREMIUM:-gpt-5.4}"
     ;;
   openai-compatible)
     # No universal default — user must specify a model for custom endpoints.

@@ -431,3 +431,33 @@ _teardown_body_fixture() {
   run model_supports_temperature "claude-sonnet-4-6"
   [ "$status" -eq 0 ]
 }
+
+@test "model_supports_temperature: gpt-5 rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-5"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: gpt-5 dated variant rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-5-2025-08-07"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: gpt-5.5 rejects temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-5.5"
+  [ "$status" -eq 1 ]
+}
+
+@test "model_supports_temperature: gpt-5.4 accepts temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-5.4"
+  [ "$status" -eq 0 ]
+}
+
+@test "model_supports_temperature: gpt-5.4-mini accepts temperature" {
+  load_function "${PROJECT_ROOT}/llm-call.sh" model_supports_temperature
+  run model_supports_temperature "gpt-5.4-mini"
+  [ "$status" -eq 0 ]
+}
