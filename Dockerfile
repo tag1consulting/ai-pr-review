@@ -1,16 +1,26 @@
 FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
 
+# TARGETARCH is set automatically by buildx (e.g. "amd64" or "arm64").
+# Each binary install below selects the matching URL and SHA256 via a
+# case "${TARGETARCH}" block. Adding a new arch requires extending each
+# case and supplying the corresponding _SHA256_<ARCH> ARG.
+ARG TARGETARCH
+
 ARG SHELLCHECK_VERSION=v0.11.0
-ARG SHELLCHECK_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+ARG SHELLCHECK_SHA256_AMD64=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+ARG SHELLCHECK_SHA256_ARM64=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
 
 ARG GH_VERSION=2.91.0
-ARG GH_SHA256=304a0d2460f4a8847d2f192bad4e2a32cd9420d28716e7ae32198181b65b5f9c
+ARG GH_SHA256_AMD64=304a0d2460f4a8847d2f192bad4e2a32cd9420d28716e7ae32198181b65b5f9c
+ARG GH_SHA256_ARM64=ccbed39c472d3dc1c501d1e164a9cffd934c5f6fce1012811a1a59d24cb7d7c6
 
 ARG TRUFFLEHOG_VERSION=3.95.2
-ARG TRUFFLEHOG_SHA256=fded1c139fe4d3872d9fde65e1428d82d5556d655439e82f492d87ae8d846779
+ARG TRUFFLEHOG_SHA256_AMD64=fded1c139fe4d3872d9fde65e1428d82d5556d655439e82f492d87ae8d846779
+ARG TRUFFLEHOG_SHA256_ARM64=5588f09da2d52e840273b6a8c57751021709182dff42574f09dbaf81ebdf8366
 
 ARG GOLANGCI_LINT_VERSION=2.11.4
-ARG GOLANGCI_LINT_SHA256=200c5b7503f67b59a6743ccf32133026c174e272b930ee79aa2aa6f37aca7ef1
+ARG GOLANGCI_LINT_SHA256_AMD64=200c5b7503f67b59a6743ccf32133026c174e272b930ee79aa2aa6f37aca7ef1
+ARG GOLANGCI_LINT_SHA256_ARM64=3bcfa2e6f3d32b2bf5cd75eaa876447507025e0303698633f722a05331988db4
 
 ARG RUFF_VERSION=0.15.11
 ARG SEMGREP_VERSION=1.161.0
@@ -23,13 +33,16 @@ ARG SEMGREP_VERSION=1.161.0
 ARG SEMGREP_RULESET_DATE=2026-05-07
 
 ARG HADOLINT_VERSION=v2.14.0
-ARG HADOLINT_SHA256=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
+ARG HADOLINT_SHA256_AMD64=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
+ARG HADOLINT_SHA256_ARM64=331f1d3511b84a4f1e3d18d52fec284723e4019552f4f47b19322a53ce9a40ed
 
 ARG KUBELINTER_VERSION=v0.8.3
-ARG KUBELINTER_SHA256=618d299a3e2839c8ca9d86fce0db617be0fba41f0fecbbbfb7fbf1c04299fae1
+ARG KUBELINTER_SHA256_AMD64=618d299a3e2839c8ca9d86fce0db617be0fba41f0fecbbbfb7fbf1c04299fae1
+ARG KUBELINTER_SHA256_ARM64=9c39d35252e0dcafb16b26197b9e93ba578e44eb402c3c6660fc94e08f94094f
 
 ARG TFLINT_VERSION=v0.62.0
-ARG TFLINT_SHA256=000400d7f4c2236d9ed4b35fec3ee95617c3747571593cc6138169fc78cc226a
+ARG TFLINT_SHA256_AMD64=000400d7f4c2236d9ed4b35fec3ee95617c3747571593cc6138169fc78cc226a
+ARG TFLINT_SHA256_ARM64=064206ec85adaf90f637c880eb3cd5a8e07ddce09e4da7c813eb362cb794f95f
 
 ARG CHECKOV_VERSION=3.2.524
 
@@ -60,56 +73,91 @@ RUN apt-get update -qq && \
     && rm -rf /var/lib/apt/lists/*
 
 # shellcheck
-RUN curl -fsSL -o /tmp/shellcheck.tar.xz \
-      "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" && \
-    echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c - && \
+RUN case "${TARGETARCH}" in \
+      amd64) ARCH=x86_64;  SHA="${SHELLCHECK_SHA256_AMD64}" ;; \
+      arm64) ARCH=aarch64; SHA="${SHELLCHECK_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /tmp/shellcheck.tar.xz \
+      "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.${ARCH}.tar.xz" && \
+    echo "${SHA}  /tmp/shellcheck.tar.xz" | sha256sum -c - && \
     tar -xJ --strip-components=1 -C /usr/local/bin -f /tmp/shellcheck.tar.xz \
         "shellcheck-${SHELLCHECK_VERSION}/shellcheck" && \
     chmod +x /usr/local/bin/shellcheck && \
     rm /tmp/shellcheck.tar.xz
 
 # gh CLI
-RUN curl -fsSL -o /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" && \
-    echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - && \
+RUN case "${TARGETARCH}" in \
+      amd64) SHA="${GH_SHA256_AMD64}" ;; \
+      arm64) SHA="${GH_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" && \
+    echo "${SHA}  /tmp/gh.tar.gz" | sha256sum -c - && \
     tar -xz --strip-components=2 -C /usr/local/bin -f /tmp/gh.tar.gz \
-        "gh_${GH_VERSION}_linux_amd64/bin/gh" && \
+        "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" && \
     chmod +x /usr/local/bin/gh && \
     rm /tmp/gh.tar.gz
 
 # trufflehog
-RUN curl -fsSL -o /tmp/trufflehog.tar.gz \
-      "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz" && \
-    echo "${TRUFFLEHOG_SHA256}  /tmp/trufflehog.tar.gz" | sha256sum -c - && \
+RUN case "${TARGETARCH}" in \
+      amd64) SHA="${TRUFFLEHOG_SHA256_AMD64}" ;; \
+      arm64) SHA="${TRUFFLEHOG_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /tmp/trufflehog.tar.gz \
+      "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TARGETARCH}.tar.gz" && \
+    echo "${SHA}  /tmp/trufflehog.tar.gz" | sha256sum -c - && \
     tar -xz -C /usr/local/bin -f /tmp/trufflehog.tar.gz trufflehog && \
     chmod +x /usr/local/bin/trufflehog && \
     rm /tmp/trufflehog.tar.gz
 
 # golangci-lint
-RUN curl -fsSL -o /tmp/golangci-lint.tar.gz \
-      "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz" && \
-    echo "${GOLANGCI_LINT_SHA256}  /tmp/golangci-lint.tar.gz" | sha256sum -c - && \
+RUN case "${TARGETARCH}" in \
+      amd64) SHA="${GOLANGCI_LINT_SHA256_AMD64}" ;; \
+      arm64) SHA="${GOLANGCI_LINT_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /tmp/golangci-lint.tar.gz \
+      "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${TARGETARCH}.tar.gz" && \
+    echo "${SHA}  /tmp/golangci-lint.tar.gz" | sha256sum -c - && \
     tar -xz --strip-components=1 -C /usr/local/bin -f /tmp/golangci-lint.tar.gz \
-        "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint" && \
+        "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${TARGETARCH}/golangci-lint" && \
     chmod +x /usr/local/bin/golangci-lint && \
     rm /tmp/golangci-lint.tar.gz
 
 # hadolint
-RUN curl -fsSL -o /usr/local/bin/hadolint \
-      "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" && \
-    echo "${HADOLINT_SHA256}  /usr/local/bin/hadolint" | sha256sum -c - && \
+RUN case "${TARGETARCH}" in \
+      amd64) ARCH=x86_64; SHA="${HADOLINT_SHA256_AMD64}" ;; \
+      arm64) ARCH=arm64;  SHA="${HADOLINT_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /usr/local/bin/hadolint \
+      "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-${ARCH}" && \
+    echo "${SHA}  /usr/local/bin/hadolint" | sha256sum -c - && \
     chmod +x /usr/local/bin/hadolint
 
-# kube-linter
-RUN curl -fsSL -o /usr/local/bin/kube-linter \
-      "https://github.com/stackrox/kube-linter/releases/download/${KUBELINTER_VERSION}/kube-linter-linux" && \
-    echo "${KUBELINTER_SHA256}  /usr/local/bin/kube-linter" | sha256sum -c - && \
+# kube-linter (amd64 asset has no arch suffix, arm64 uses underscore-separated suffix)
+RUN case "${TARGETARCH}" in \
+      amd64) ASSET=kube-linter-linux;        SHA="${KUBELINTER_SHA256_AMD64}" ;; \
+      arm64) ASSET=kube-linter-linux_arm64;  SHA="${KUBELINTER_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /usr/local/bin/kube-linter \
+      "https://github.com/stackrox/kube-linter/releases/download/${KUBELINTER_VERSION}/${ASSET}" && \
+    echo "${SHA}  /usr/local/bin/kube-linter" | sha256sum -c - && \
     chmod +x /usr/local/bin/kube-linter
 
 # tflint
-RUN curl -fsSL -o /tmp/tflint.zip \
-      "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip" && \
-    echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c - && \
+RUN case "${TARGETARCH}" in \
+      amd64) SHA="${TFLINT_SHA256_AMD64}" ;; \
+      arm64) SHA="${TFLINT_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /tmp/tflint.zip \
+      "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_${TARGETARCH}.zip" && \
+    echo "${SHA}  /tmp/tflint.zip" | sha256sum -c - && \
     unzip -o /tmp/tflint.zip -d /usr/local/bin && \
     chmod +x /usr/local/bin/tflint && \
     rm /tmp/tflint.zip
