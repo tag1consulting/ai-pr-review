@@ -132,7 +132,11 @@ emit_token_table() {
     fi
     cw_tok="${cw_tok:-0}"
     cr_tok="${cr_tok:-0}"
-    model_id=$(echo "$entry" | grep -oE '(^| )model=[^ ]+' | sed 's/.*model=//' || echo "unknown")
+    # Don't trust `|| echo unknown` on a pipeline — grep's non-zero exit is
+    # hidden by sed's success, so a missing `model=` field silently produces
+    # an empty string. Validate after.
+    model_id=$(echo "$entry" | grep -oE '(^| )model=[^ ]+' | sed 's/.*model=//')
+    [[ -n "$model_id" ]] || model_id="unknown"
     row_total=$(( in_tok + out_tok + cw_tok + cr_tok ))
     read -r in_rate out_rate cw_rate cr_rate <<< "$(model_pricing "$model_id")"
     if [[ "$in_rate" -eq 0 && "$out_rate" -eq 0 ]]; then

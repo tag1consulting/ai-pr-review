@@ -54,8 +54,12 @@ EFFECTIVE_PROMPT_PREFIX=""
 
 cleanup() {
   rm -f "${TMPFILES[@]}" 2>/dev/null || true
-  # shellcheck disable=SC2086 # intentional glob expansion
-  [[ -n "${EFFECTIVE_PROMPT_PREFIX}" ]] && rm -f ${EFFECTIVE_PROMPT_PREFIX}-*.md 2>/dev/null || true
+  if [[ -n "${EFFECTIVE_PROMPT_PREFIX}" ]]; then
+    # Quote the prefix so spaces/metacharacters don't word-split; the trailing
+    # -*.md is unquoted on purpose so the shell expands the glob.
+    # shellcheck disable=SC2086 # intentional glob expansion of -*.md suffix
+    rm -f "${EFFECTIVE_PROMPT_PREFIX}"-*.md 2>/dev/null || true
+  fi
 }
 
 
