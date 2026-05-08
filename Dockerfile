@@ -282,6 +282,7 @@ COPY review.sh post-review*.sh llm-call.sh \
 
 COPY analyzers/         /opt/ai-pr-review/analyzers/
 COPY config/            /opt/ai-pr-review/config/
+COPY lib/               /opt/ai-pr-review/lib/
 COPY prompts/           /opt/ai-pr-review/prompts/
 COPY language-profiles/ /opt/ai-pr-review/language-profiles/
 COPY vcs/               /opt/ai-pr-review/vcs/
