@@ -2,6 +2,8 @@
 
 AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline review findings directly on the PR.
 
+> **[Full documentation](https://tag1consulting.github.io/ai-pr-review)** | [Getting started](https://tag1consulting.github.io/ai-pr-review/getting-started) | [Configuration](https://tag1consulting.github.io/ai-pr-review/configuration) | [Contributing](CONTRIBUTING.md)
+
 ## Quickstart
 
 Get AI reviews on your PRs in two steps:
@@ -399,7 +401,7 @@ Costs are calculated using rates from `config/model-pricing.json` and do not ref
 
 At runtime, `review.sh` computes the diff, dispatches LLM agents and static analyzers in parallel, merges and dedupes findings, then hands off to a provider-specific post-review script (`post-review.sh` for GitHub, `post-review-bitbucket.sh` for Bitbucket, `post-review-gitlab.sh` for GitLab) that posts the summary and inline findings and advances the SHA watermark.
 
-For the full directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md).
+For the directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md). For deep implementation internals (findings pipeline, caching, parallel execution, suggestions, test architecture), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

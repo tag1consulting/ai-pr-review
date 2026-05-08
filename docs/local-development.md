@@ -201,6 +201,7 @@ By default the container runs in `quick` mode (code-reviewer + silent-failure-hu
 | `AI_MAX_TOKENS_PER_AGENT` | No | Max tokens per agent call (default: 8192) |
 | `AI_ENABLE_SUGGESTIONS` | No | `true` (default). Enable "Apply suggestion" buttons on inline comments (GitHub and GitLab; ignored on Bitbucket). |
 | `LLM_PROMPT_CACHING` | No | `auto` (default). Enable Anthropic/Bedrock prompt caching. `true` force-enables; `false` force-disables. |
+| `AI_CACHE_PRIMING` | No | `false` (default). Serialize cache-writing calls before parallel fan-out. Enable in rate-limited environments. |
 | `AI_TEMPERATURE` | No | Sampling temperature for LLM calls (default: 0.3; clamped to [0, 2]) |
 
 ## Pinning a version
