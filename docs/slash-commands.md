@@ -74,4 +74,4 @@ The comment-trigger workflow runs from the **default branch** of your repository
 
 ## Extending the command surface
 
-To add custom commands, edit your copy of `comment-triggers.yml`. The parsing block is a simple `case` statement — add new entries there and corresponding steps below. The action itself only needs different inputs (`force-full-diff`, `review-mode`, labels); no changes to the action scripts are required.
+To add custom commands, edit your copy of `comment-triggers.yml`. The parsing block is a simple `case` statement — add new entries there and corresponding steps below. The action itself only needs different inputs/env vars (`FORCE_FULL_DIFF`, `review-mode`, labels); no changes to the action scripts are required.

@@ -134,17 +134,20 @@ jobs:
       - name: Run review (rescan)
         if: steps.cmd.outputs.command == 'rescan'
         uses: tag1consulting/ai-pr-review/container-action@main
+        env:
+          FORCE_FULL_DIFF: 'true'
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.issue.number }}
           base-ref: ${{ steps.pr.outputs.base }}
           head-sha: ${{ steps.pr.outputs.sha }}
-          force-full-diff: 'true'
 
       - name: Run review (review-full)
         if: steps.cmd.outputs.command == 'review-full'
         uses: tag1consulting/ai-pr-review/container-action@main
+        env:
+          FORCE_FULL_DIFF: 'true'
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ github.token }}
@@ -152,7 +155,6 @@ jobs:
           base-ref: ${{ steps.pr.outputs.base }}
           head-sha: ${{ steps.pr.outputs.sha }}
           review-mode: 'full'
-          force-full-diff: 'true'
 
       # React with checkmark on success
       - name: React — done
