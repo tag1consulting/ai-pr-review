@@ -235,7 +235,9 @@ OpenAI provides automatic prefix caching (50% discount on cached input tokens) f
 
 #### Shared-cache layout for OpenAI (issue #164)
 
-The OpenAI request layout mirrors the Anthropic shared-cache structure: shared context (CODE_CONTEXT_MSG or FULL_CONTEXT_MSG) is placed in the first system message, and the per-agent prompt in the second system message. This ensures agents sharing the same context variant have identical prefixes, enabling cross-agent prefix caching. `blind-hunter` uses `BLIND_MSG` and stays on its own prefix.
+`_build_openai_body()` restructures the request for first-party OpenAI (`AI_PROVIDER=openai`) to maximize the shared prefix across agents in the same cohort. The shared context (CODE_CONTEXT_MSG or FULL_CONTEXT_MSG) is placed first in the system message, followed by a separator and the per-agent prompt. The user message becomes a minimal sentinel (`"Please perform your review now."`). This mirrors the Anthropic shared-cache layout (issue #142) but uses string concatenation instead of a content-block array (OpenAI doesn't support system arrays). `blind-hunter` uses `BLIND_MSG` and stays on its own prefix.
+
+`openai-compatible` endpoints keep the legacy layout (system = agent prompt, user = shared context) because third-party providers may have different caching behavior or no prefix caching at all.
 
 ### Google Gemini
 
