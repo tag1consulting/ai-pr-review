@@ -18,22 +18,34 @@ Run ai-pr-review locally against any open PR using the container image — no Gi
 
 ## Quick start: review a PR
 
-The container fetches the diff directly from GitHub — you don't need a local clone.
+The container computes the diff with `git` against a checkout mounted at
+`/workspace`, so you need a local clone of the target repo with the PR branch
+checked out and `origin/<base-ref>` fetched. The container does **not** clone
+the repo for you.
+
+### Prepare a local checkout
+
+```bash
+git clone https://github.com/owner/repo.git
+cd repo
+gh pr checkout 42        # check out the PR branch
+git fetch origin main    # ensure origin/main is present locally
+```
 
 ### Resolving `HEAD_SHA`
 
-Every example below references `HEAD_SHA` — the commit SHA at the tip of the PR branch. The easiest way to fill it in is to let `gh` resolve it inline:
+Every example below references `HEAD_SHA` — the commit SHA at the tip of the PR branch. From your local checkout:
 
 ```bash
-HEAD_SHA=$(gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid)
+HEAD_SHA=$(git rev-parse HEAD)
 ```
 
-Alternatives: copy the SHA from the PR's "Commits" tab in the GitHub UI, or run `git rev-parse HEAD` from a local clone on the PR branch.
+Alternatives: `gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid`, or copy the SHA from the PR's "Commits" tab in the GitHub UI.
 
 ### Anthropic
 
 ```bash
-HEAD_SHA=$(gh pr view 42 --repo owner/repo --json headRefOid --jq .headRefOid)
+HEAD_SHA=$(git rev-parse HEAD)
 
 docker run --rm \
   -e AI_PROVIDER=anthropic \
@@ -43,6 +55,7 @@ docker run --rm \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
   -e HEAD_SHA="$HEAD_SHA" \
+  -v "$(pwd):/workspace" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
@@ -57,6 +70,7 @@ docker run --rm \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
   -e HEAD_SHA="$HEAD_SHA" \
+  -v "$(pwd):/workspace" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
@@ -71,6 +85,7 @@ docker run --rm \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
   -e HEAD_SHA="$HEAD_SHA" \
+  -v "$(pwd):/workspace" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
@@ -86,10 +101,26 @@ docker run --rm \
   -e PR_NUMBER=42 \
   -e BASE_REF=main \
   -e HEAD_SHA="$HEAD_SHA" \
+  -v "$(pwd):/workspace" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
 For a generic OpenAI-compatible endpoint, use `AI_PROVIDER=openai-compatible` and `OPENAI_API_KEY` instead of `BEDROCK_API_KEY`.
+
+### Troubleshooting: `origin/<base-ref> is not reachable`
+
+If you see:
+
+```
+WARNING: git fetch failed; attempting to proceed with existing local refs.
+ERROR: origin/main is not reachable. Cannot compute diff. Aborting.
+```
+
+the container can't find the base branch in the mounted checkout. Common causes:
+
+- No `-v "$(pwd):/workspace"` mount — `/workspace` is empty, so `git fetch` has nothing to operate on.
+- The local clone is shallow and missing the base branch — run `git fetch origin <base-ref> --depth=50` before re-running.
+- `origin` points somewhere unreachable from the container, or the checkout has no `origin` remote — verify with `git remote -v`.
 
 ## Dry run (no posting)
 
@@ -105,31 +136,11 @@ docker run --rm \
   -e BASE_REF=main \
   -e HEAD_SHA="$HEAD_SHA" \
   -e AI_DRY_RUN=true \
-  ghcr.io/tag1consulting/ai-pr-review:latest
-```
-
-## With a local repo checkout
-
-Mounting your local clone avoids a remote git fetch and lets you test changes to prompts or scripts before pushing:
-
-```bash
-# Run from the root of your local clone (on the PR branch)
-docker run --rm \
-  -e AI_PROVIDER=anthropic \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e GH_TOKEN=$(gh auth token) \
-  -e GITHUB_REPOSITORY=owner/repo \
-  -e PR_NUMBER=42 \
-  -e BASE_REF=main \
-  -e HEAD_SHA=$(git rev-parse HEAD) \
-  -e AI_DRY_RUN=true \
   -v "$(pwd):/workspace" \
   ghcr.io/tag1consulting/ai-pr-review:latest
 ```
 
-The container needs to reach the base branch ref (`origin/main`) to compute the diff. If it can't — for example, if you cloned with `--depth=1` — it will fall back to fetching over HTTPS using `GH_TOKEN` automatically.
-
-### Git worktrees
+## Git worktrees
 
 If your checkout is a **git worktree** (the `.git` entry is a pointer file rather than a directory), you must also mount the parent repository's `.git` directory so the container can resolve refs:
 
