@@ -8,9 +8,9 @@ setup() {
   MODEL_PRICING_FILE="${PROJECT_ROOT}/config/model-pricing.json"
   load_function "${PROJECT_ROOT}/review.sh" detect_language
   load_function "${PROJECT_ROOT}/review.sh" is_test_file
-  load_function "${PROJECT_ROOT}/review.sh" model_pricing
-  load_function "${PROJECT_ROOT}/review.sh" model_display_name
-  load_function "${PROJECT_ROOT}/review.sh" format_cost
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" model_pricing
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" model_display_name
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" format_cost
 }
 
 # ---------------------------------------------------------------------------
@@ -671,15 +671,15 @@ EOF
 # ---------------------------------------------------------------------------
 
 _token_table_setup() {
-  load_function "${PROJECT_ROOT}/review.sh" emit_token_table
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" emit_token_table
   # All functions emit_token_table calls transitively. The file-level setup()
   # already loads model_pricing, model_display_name, and format_cost, but
   # list them here explicitly so these tests remain self-contained and don't
   # silently break if someone rearranges the outer setup() or moves these
   # cases to a different file.
-  load_function "${PROJECT_ROOT}/review.sh" model_pricing
-  load_function "${PROJECT_ROOT}/review.sh" model_display_name
-  load_function "${PROJECT_ROOT}/review.sh" format_cost
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" model_pricing
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" model_display_name
+  load_function "${PROJECT_ROOT}/lib/pricing.sh" format_cost
 }
 
 @test "emit_token_table: no cache activity → 6-column layout (legacy)" {
