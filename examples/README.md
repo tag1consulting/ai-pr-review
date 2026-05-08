@@ -81,11 +81,11 @@ For reproducible builds, pin the image tag instead of using `latest`:
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: '0.6.0'   # pin to a specific release
+    image-tag: '0.7.0'   # pin to a specific release
     ...
 ```
 
-Available tags: `latest`, `<major>` (e.g. `0`), `<major.minor.patch>` (e.g. `0.6.0`).
+Available tags: `latest`, `<major>` (e.g. `0`), `<major.minor.patch>` (e.g. `0.7.0`).
 
 ## Using the non-container action
 
