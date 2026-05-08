@@ -67,7 +67,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Build-time toolchain. None of these need to exist in the final stage.
-# hadolint ignore=DL3008,DL3015
+# hadolint ignore=DL3008
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       bash \
@@ -223,7 +223,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Runtime-only dependencies. Notably absent vs builder: curl, unzip, xz-utils,
 # python3-pip (and its large dependency tree). git is runtime-only here (the
 # action scripts invoke `git` against the mounted workspace).
-# hadolint ignore=DL3008,DL3015
+# hadolint ignore=DL3008
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       bash \
