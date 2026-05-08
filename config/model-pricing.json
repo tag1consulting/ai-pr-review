@@ -133,14 +133,22 @@
     "input_rate": 1250000,
     "output_rate": 10000000,
     "cache_write_rate": 0,
-    "cache_read_rate": 0
+    "cache_read_rate": 125000
+  },
+  {
+    "patterns": ["gemini-2\\.5-flash-lite"],
+    "display_name": "Gemini 2.5 Flash Lite",
+    "input_rate": 100000,
+    "output_rate": 400000,
+    "cache_write_rate": 0,
+    "cache_read_rate": 10000
   },
   {
     "patterns": ["gemini-2\\.5-flash"],
     "display_name": "Gemini 2.5 Flash",
-    "input_rate": 150000,
-    "output_rate": 3500000,
+    "input_rate": 300000,
+    "output_rate": 2500000,
     "cache_write_rate": 0,
-    "cache_read_rate": 0
+    "cache_read_rate": 30000
   }
 ]
