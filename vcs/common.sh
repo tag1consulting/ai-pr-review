@@ -7,16 +7,11 @@
 # (truncate_body, *_api, find_existing_summary_id, etc.) stay in their
 # owning scripts.
 #
-# Contract: sourcing scripts must initialize TMPFILES=() before calling
-# mktemp_tracked or cleanup. Each script is expected to
-# `trap cleanup EXIT` itself so siblings can override ordering if needed.
-
-# TMPFILES is declared here as a sentinel so shellcheck knows it exists;
-# sourcing scripts should also declare it (they already do). The +=()
-# assignment in mktemp_tracked relies on an array being in scope — the
-# declaration here ensures the helper is usable standalone during tests.
-# shellcheck disable=SC2034
-TMPFILES=("${TMPFILES[@]:-}")
+# Contract: sourcing scripts MUST declare `TMPFILES=()` before sourcing
+# this file, then `trap cleanup EXIT` afterwards. All three post-review
+# scripts (and the bats tests that source common.sh) comply. No sentinel
+# is declared here — an unguarded `TMPFILES=("${TMPFILES[@]:-}")` would
+# create a `[0]=""` entry when TMPFILES is unset, which is incorrect.
 
 # --- Temp-file lifecycle ---------------------------------------------------
 
