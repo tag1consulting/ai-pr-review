@@ -7,6 +7,25 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.7.0
+
+**Performance**
+- **Prompt caching** — Anthropic/Bedrock prompt caching via shared-cache layout delivers ~47% cost reduction on average (−46% cold, −61% hot). All agents in a cache cohort share one cache entry per run. (#137, #143)
+- **Baked semgrep rulesets** — Container image ships with `p/ci` and `p/security-audit` rulesets pre-downloaded, eliminating the 20-40s network fetch on every run. (#136)
+- **Analyzer overhead reduction** — Trufflehog uses batch invocation (single call for all files), checkov has tighter YAML/JSON content sniffing, phpstan avoids a subprocess for Drupal detection. (#134)
+
+**Platform**
+- **Multi-arch container images** — `linux/amd64` and `linux/arm64` builds, enabling native ARM runners. (#145)
+- **Fork PR support** — Internal workflow uses `pull_request_target` for reviewing fork PRs. (#146)
+- **Cache priming (opt-in)** — `AI_CACHE_PRIMING=true` serializes cache-writing calls before parallel fan-out for environments where opportunistic cache hits don't occur. Default off. (#154)
+
+**Quality**
+- **Prompt trailer consolidation** — Shared `_knowledge-cutoff.md` and `_trailer-findings.md` files replace duplicated blocks across 7 agent prompts, reducing maintenance surface. (#141)
+- **Version hallucination hardening** — `ruby-org` verification type and portable ERE patterns in suppressions. (#140)
+
+**Documentation**
+- Comprehensive documentation audit addressing 27+ accuracy findings across README, CLAUDE.md, and the docs site. (#138, #155)
+
 ## Code suggestions
 
 Code suggestions are enabled by default. The review tool asks eligible LLM agents to emit concrete code fixes alongside their findings. Each fix is rendered as a ` ```suggestion ` block inside the inline review comment, which GitHub and GitLab display as an "Apply suggestion" button — the PR/MR author can accept the fix with one click.
@@ -23,7 +42,7 @@ Code suggestions are enabled by default. The review tool asks eligible LLM agent
 To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
-- uses: tag1consulting/ai-pr-review/container-action@v0.6.0
+- uses: tag1consulting/ai-pr-review/container-action@v0.7.0
   with:
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}
