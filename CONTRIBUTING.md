@@ -154,7 +154,7 @@ Also add the sequential `call_agent` in the `else` branch.
 
 ### 4. Enable suggestions (optional)
 
-If your agent produces concrete line-level fixes, add it to the `SUGGESTION_ELIGIBLE_AGENTS` list in `review.sh` so `effective_prompt()` appends `prompts/suggestion-addendum.md` to its system prompt.
+If your agent produces concrete line-level fixes, add your agent name to the `agents_with_suggestion_addendum` pattern string inside `effective_prompt()` in `review.sh` so it appends `prompts/suggestion-addendum.md` to its system prompt.
 
 ## Adding a language profile
 

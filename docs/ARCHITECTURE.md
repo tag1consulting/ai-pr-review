@@ -293,7 +293,7 @@ bash review.sh
 
 ### Issue output format
 
-- Title: `AI Review: High risk — abc1234 on main`
+- Title: `🚨 AI Review: High risk — abc1234 on main` (icon is severity-dependent via `severity_icon`)
 - Labels: `ai-review` (always), `ai-review-action-needed` (Critical/High)
 
 ## Multi-arch container image
@@ -323,6 +323,7 @@ Variables consumed by the scripts but not exposed as action inputs:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `AI_PARALLEL` | `true` | Tiered parallel agent execution |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings |
