@@ -503,6 +503,11 @@ call_openai() {
   cache_read=$(jq -r '.usage.prompt_tokens_details.cached_tokens // "0"' "$RESPONSE_FILE" 2>/dev/null)
   stop_reason=$(jq -r '.choices[0].finish_reason // empty' "$RESPONSE_FILE" 2>/dev/null)
 
+  # Sanitize to integers before arithmetic (defensive against unexpected
+  # floats or empty strings from the API response).
+  input_tokens=$(( ${input_tokens%%.*} + 0 ))
+  cache_read=$(( ${cache_read%%.*} + 0 ))
+
   # OpenAI's prompt_tokens INCLUDES cached_tokens as a subset. Subtract to
   # match Anthropic's convention where input_tokens = uncached only, so the
   # cost formula (input*input_rate + cache_read*cache_read_rate) works
