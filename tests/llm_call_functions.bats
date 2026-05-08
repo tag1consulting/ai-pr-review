@@ -305,16 +305,20 @@ _teardown_body_fixture() {
   echo "$body" | jq -e '.system[0].text == "user content\n"' > /dev/null
 
   # system[1] = per-agent prompt WITHOUT cache_control
+  # Use has() + assert the block exists first — '// "absent"' would also
+  # return "absent" if system[1] were missing entirely, masking a real bug.
+  echo "$body" | jq -e '.system[1] | type == "object"' > /dev/null
   echo "$body" | jq -e '.system[1].text == "system content\n"' > /dev/null
-  echo "$body" | jq -e '.system[1].cache_control // "absent"' | grep -q absent
+  echo "$body" | jq -e '.system[1] | has("cache_control") | not' > /dev/null
 
   # messages: single sentinel turn (small, stable, not cached)
   echo "$body" | jq -e '.messages | length == 1' > /dev/null
   echo "$body" | jq -e '.messages[0].role == "user"' > /dev/null
   echo "$body" | jq -e '.messages[0].content | type == "string"' > /dev/null
   echo "$body" | jq -e '.messages[0].content | length > 0' > /dev/null
-  # No cache_control anywhere on the messages path
-  echo "$body" | jq -e '.messages[0].content | contains("cache_control") | not' > /dev/null
+  # No cache_control on the message OBJECT. A substring check on the content
+  # string is meaningless since the sentinel never contains "cache_control".
+  echo "$body" | jq -e '.messages[0] | has("cache_control") | not' > /dev/null
 }
 
 @test "_build_anthropic_body: caching=false produces legacy shape (no cache_control)" {
