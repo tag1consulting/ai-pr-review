@@ -57,11 +57,6 @@ inputs:
     required: false
     default: 'quick'
 
-  force-full-diff:
-    description: 'true to bypass SHA watermark and force full-PR diff'
-    required: false
-    default: 'false'
-
   review-target:
     description: 'pr (default) or standalone'
     required: false
@@ -87,20 +82,10 @@ inputs:
     required: false
     default: '5000'
 
-  retry-count:
-    description: 'LLM retry attempts on transient errors'
-    required: false
-    default: '3'
-
   parallel:
     description: 'true to run agents in parallel (default), false to run sequentially'
     required: false
     default: 'true'
-
-  confidence-threshold:
-    description: 'Minimum confidence score (0-100) for findings to be included'
-    required: false
-    default: '75'
 
   max-inline:
     description: 'Maximum inline review comments per run'
@@ -116,11 +101,6 @@ inputs:
     description: 'Enable "Apply suggestion" buttons on inline review comments (GitHub and GitLab; ignored on Bitbucket; increases token usage)'
     required: false
     default: 'true'
-
-  standalone-depth:
-    description: 'Git fetch depth for standalone mode'
-    required: false
-    default: '50'
 
 runs:
   using: composite
@@ -150,9 +130,7 @@ runs:
         IMAGE: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
         AI_PROVIDER: ${{ inputs.provider }}
         AI_REVIEW_MODE: ${{ inputs.review-mode }}
-        FORCE_FULL_DIFF: ${{ inputs.force-full-diff }}
         REVIEW_TARGET: ${{ inputs.review-target }}
-        STANDALONE_DEPTH: ${{ inputs.standalone-depth }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         AI_MODEL_STANDARD: ${{ inputs.model-standard }}
         AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
@@ -167,9 +145,7 @@ runs:
         PR_NUMBER: ${{ inputs.pr-number }}
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_SHA: ${{ inputs.head-sha }}
-        LLM_RETRY_COUNT: ${{ inputs.retry-count }}
         AI_PARALLEL: ${{ inputs.parallel }}
-        AI_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
@@ -184,9 +160,7 @@ runs:
         docker run --rm \
           -e AI_PROVIDER \
           -e AI_REVIEW_MODE \
-          -e FORCE_FULL_DIFF \
           -e REVIEW_TARGET \
-          -e STANDALONE_DEPTH \
           -e MAX_DIFF_LINES \
           -e AI_MODEL_STANDARD \
           -e AI_MODEL_PREMIUM \
@@ -201,12 +175,14 @@ runs:
           -e PR_NUMBER \
           -e BASE_REF \
           -e HEAD_SHA \
-          -e LLM_RETRY_COUNT \
           -e AI_PARALLEL \
-          -e AI_CONFIDENCE_THRESHOLD \
           -e AI_MAX_INLINE \
           -e AI_MAX_TOKENS_PER_AGENT \
           -e AI_ENABLE_SUGGESTIONS \
+          ${FORCE_FULL_DIFF:+-e FORCE_FULL_DIFF} \
+          ${STANDALONE_DEPTH:+-e STANDALONE_DEPTH} \
+          ${LLM_RETRY_COUNT:+-e LLM_RETRY_COUNT} \
+          ${AI_CONFIDENCE_THRESHOLD:+-e AI_CONFIDENCE_THRESHOLD} \
           -e GITHUB_WORKSPACE=/workspace \
           -v "$GITHUB_WORKSPACE:/workspace" \
           "${SUMMARY_MOUNT[@]}" \
