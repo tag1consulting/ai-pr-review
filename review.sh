@@ -46,10 +46,16 @@
 log_error() { [[ "${VCS_PROVIDER:-github}" == "github" ]] && echo "::error::$*" >&2 || echo "ERROR: $*" >&2; }
 log_warn()  { [[ "${VCS_PROVIDER:-github}" == "github" ]] && echo "::warning::$*" >&2 || echo "WARNING: $*" >&2; }
 
+# Initialized at file scope so cleanup() is safe to invoke before main() sets
+# these (e.g. via a signal trap installed by a test harness, or if the EOF
+# guard is bypassed). main() re-initializes them after its own trap install.
+TMPFILES=()
+EFFECTIVE_PROMPT_PREFIX=""
+
 cleanup() {
   rm -f "${TMPFILES[@]}" 2>/dev/null || true
   # shellcheck disable=SC2086 # intentional glob expansion
-  rm -f ${EFFECTIVE_PROMPT_PREFIX}-*.md 2>/dev/null || true
+  [[ -n "${EFFECTIVE_PROMPT_PREFIX}" ]] && rm -f ${EFFECTIVE_PROMPT_PREFIX}-*.md 2>/dev/null || true
 }
 
 
@@ -834,8 +840,10 @@ main() {
   # they need these helpers — main() is not called in test context (see the
   # EOF guard).
   # shellcheck source=lib/pricing.sh
+  [[ -f "${SCRIPT_DIR}/lib/pricing.sh" ]] || { log_error "lib/pricing.sh not found at ${SCRIPT_DIR}/lib/pricing.sh; check Docker image build (COPY lib/)."; exit 1; }
   source "${SCRIPT_DIR}/lib/pricing.sh"
   # shellcheck source=lib/languages.sh
+  [[ -f "${SCRIPT_DIR}/lib/languages.sh" ]] || { log_error "lib/languages.sh not found at ${SCRIPT_DIR}/lib/languages.sh; check Docker image build (COPY lib/)."; exit 1; }
   source "${SCRIPT_DIR}/lib/languages.sh"
 
   # Resolve the provider-specific post-review script. GitHub uses the canonical
@@ -2113,6 +2121,7 @@ main() {
   # ---------------------------------------------------------------------------
   # Returns two integers: IN_RATE OUT_RATE (microdollars per million tokens).
   # Callers compute: cost_microdollars = tokens * rate / 1_000_000
+  # shellcheck disable=SC2034 # consumed by model_pricing/model_display_name in lib/pricing.sh (sourced above)
   MODEL_PRICING_FILE="${SCRIPT_DIR}/config/model-pricing.json"
 
   # Build token usage table as a collapsed details block

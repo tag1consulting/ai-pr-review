@@ -20,13 +20,21 @@
 model_pricing() {
   local model="$1"
   local m result
+  if [[ ! -f "${MODEL_PRICING_FILE:-}" ]]; then
+    echo "WARNING: model_pricing: MODEL_PRICING_FILE not found ('${MODEL_PRICING_FILE:-unset}'); cost estimates will show as \$0." >&2
+    echo "0 0 0 0"
+    return
+  fi
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
-  result=$(jq -r --arg m "$m" '
+  if ! result=$(jq -r --arg m "$m" '
     first(
       .[] | select(.patterns[] as $p | ($m | test($p)))
       | "\(.input_rate) \(.output_rate) \(.cache_write_rate // 0) \(.cache_read_rate // 0)"
     ) // "0 0 0 0"
-  ' "$MODEL_PRICING_FILE" 2>/dev/null) || result="0 0 0 0"
+  ' "$MODEL_PRICING_FILE" 2>/dev/null); then
+    echo "WARNING: model_pricing: jq failed reading '${MODEL_PRICING_FILE}' for model '${model}'; cost will be unavailable." >&2
+    result="0 0 0 0"
+  fi
   echo "${result:-0 0 0 0}"
 }
 
@@ -35,6 +43,10 @@ model_pricing() {
 model_display_name() {
   local model="$1"
   local m result
+  if [[ ! -f "${MODEL_PRICING_FILE:-}" ]]; then
+    echo "$model"
+    return
+  fi
   m=$(echo "$model" | tr '[:upper:]' '[:lower:]')
   result=$(jq -r --arg m "$m" '
     first(
@@ -102,10 +114,22 @@ emit_token_table() {
     local agent_name in_tok out_tok cw_tok cr_tok model_id row_total
     local in_rate out_rate cw_rate cr_rate cost_display model_short
     agent_name="${entry%%:*}"
-    in_tok=$(echo "$entry" | grep -oE '(^| )input=[0-9]+' | sed 's/.*input=//' || echo "0")
-    out_tok=$(echo "$entry" | grep -oE '(^| )output=[0-9]+' | sed 's/.*output=//' || echo "0")
+    in_tok=$(echo "$entry" | grep -oE '(^| )input=[0-9]+' | sed 's/.*input=//' || echo "")
+    out_tok=$(echo "$entry" | grep -oE '(^| )output=[0-9]+' | sed 's/.*output=//' || echo "")
     cw_tok=$(echo "$entry" | grep -oE '(^| )cache_creation=[0-9]+' | sed 's/.*cache_creation=//' || echo "")
     cr_tok=$(echo "$entry" | grep -oE '(^| )cache_read=[0-9]+' | sed 's/.*cache_read=//' || echo "")
+    # Warn on malformed TOKEN_LOG entries. input/output are always required — a
+    # missing/non-numeric value silently zeroes the row and understates the
+    # total. cache_creation/cache_read legitimately absent on non-caching
+    # providers, so default to 0 without warning.
+    if ! [[ "$in_tok" =~ ^[0-9]+$ ]]; then
+      echo "WARNING: emit_token_table: malformed TOKEN_LOG entry for '${agent_name}' — missing or non-numeric input count. Entry: '${entry}'" >&2
+      in_tok=0
+    fi
+    if ! [[ "$out_tok" =~ ^[0-9]+$ ]]; then
+      echo "WARNING: emit_token_table: malformed TOKEN_LOG entry for '${agent_name}' — missing or non-numeric output count. Entry: '${entry}'" >&2
+      out_tok=0
+    fi
     cw_tok="${cw_tok:-0}"
     cr_tok="${cr_tok:-0}"
     model_id=$(echo "$entry" | grep -oE '(^| )model=[^ ]+' | sed 's/.*model=//' || echo "unknown")

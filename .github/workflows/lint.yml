@@ -24,6 +24,8 @@ jobs:
             post-review.sh \
             post-review-bitbucket.sh \
             post-review-gitlab.sh \
+            lib/pricing.sh \
+            lib/languages.sh \
             analyzers/run-shellcheck.sh \
             analyzers/run-cve-check.sh
 
