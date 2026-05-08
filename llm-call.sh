@@ -516,7 +516,7 @@ _build_openai_body() {
     {model: $model} +
     (if $shared_cache then
       {messages: [
-        {role: "system", content: ($user + "\n\n---\n\nYou are a specialized review agent. Follow these instructions:\n\n" + $system)},
+        {role: "system", content: ($user + "\n\n===AGENT_INSTRUCTIONS===\n\nYou are a specialized review agent. Follow these instructions:\n\n" + $system)},
         {role: "user", content: "Please perform your review now."}
       ]}
     else

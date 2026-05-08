@@ -414,7 +414,7 @@ _teardown_openai_body_fixture() {
   echo "$body" | jq -e '.messages[0].content | startswith("user content")' > /dev/null
 
   # system message contains the separator and agent prompt
-  echo "$body" | jq -e '.messages[0].content | contains("---")' > /dev/null
+  echo "$body" | jq -e '.messages[0].content | contains("===AGENT_INSTRUCTIONS===")' > /dev/null
   echo "$body" | jq -e '.messages[0].content | endswith("system content\n")' > /dev/null
 
   # user message is the sentinel
@@ -459,8 +459,8 @@ _teardown_openai_body_fixture() {
 
   # Extract the shared prefix (everything up to and including the separator)
   local prefix1 prefix2
-  prefix1=$(echo "$body1" | jq -r '.messages[0].content' | sed -n '1,/^---$/p')
-  prefix2=$(echo "$body2" | jq -r '.messages[0].content' | sed -n '1,/^---$/p')
+  prefix1=$(echo "$body1" | jq -r '.messages[0].content' | sed -n '1,/^===AGENT_INSTRUCTIONS===$/p')
+  prefix2=$(echo "$body2" | jq -r '.messages[0].content' | sed -n '1,/^===AGENT_INSTRUCTIONS===$/p')
   [ "$prefix1" = "$prefix2" ]
 
   # But the full system messages differ (different agent prompts)
@@ -475,7 +475,7 @@ _teardown_openai_body_fixture() {
   MODEL_ID="o3" AI_PROVIDER=openai \
     body=$(_build_openai_body)
   _teardown_openai_body_fixture
-  echo "$body" | jq -e '.temperature // "absent"' | grep -q absent
+  echo "$body" | jq -e 'has("temperature") | not' > /dev/null
 }
 
 @test "_build_openai_body: gpt-5.4-mini includes temperature" {
