@@ -465,22 +465,53 @@ After all agents complete:
 
 ## Prompt caching
 
-When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, `llm-call.sh` wraps the system prompt and user message in structured-content arrays with `cache_control: {type: "ephemeral"}` markers. Anthropic's ephemeral cache (5-minute TTL) reduces input-token cost by ~90% on cache hits and cuts TTFT by ~50%.
+When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, `llm-call.sh` uses Anthropic's ephemeral cache (5-minute TTL) via `cache_control: {type: "ephemeral"}` markers. Enabled by `LLM_PROMPT_CACHING` (default: `auto`):
 
-Gated by `LLM_PROMPT_CACHING` (default: `auto`):
 - `auto` — enabled for `anthropic` and `bedrock-proxy`; no-op for OpenAI (automatic prefix caching; no marker needed) and Google Gemini (different caching API, unsupported).
-- `true` — force-enable markers (useful only on OpenAI for testing; harmless no-op on Google).
-- `false` — force-disable markers (legacy request shape).
+- `true` — force-enable markers.
+- `false` — force-disable; falls back to the legacy request layout (system = agent prompt, messages[0] = user content).
 
-**When caching pays off (and when it doesn't):** each agent uses a *different* system prompt (`prompts/<agent>.md`), and Anthropic's cache key is the full prefix up to the `cache_control` marker — so each agent creates its own separate cache entry. On the **first** run of a PR, every agent pays a 25% cache-write surcharge and gets nothing in return; blended cost is ~23% *higher* than no caching. On **subsequent** runs within the 5-minute TTL (retry, duplicate webhook, incremental push), every agent hits its warm cache entry at 10% of the input rate — roughly 83% cheaper. A weighted estimate across typical PR traffic (70% cold / 25% hot / 5% mixed) works out to ~10% cheaper on average.
+### Shared-cache layout (issue #142)
 
-The real cache win will unlock when issue #123 lands: by moving the `cache_control` marker to sit AFTER the shared `CODE_CONTEXT_MSG` and BEFORE the per-agent system prompt, all 5 agents will share ONE cache entry per review run rather than 5 separate ones. This PR establishes the wire format that #123 needs.
+Anthropic's cache key is CUMULATIVE — a hash of the full prefix up to each `cache_control` marker. Two requests with different system prompts never share a cache entry if the marker is anywhere in or after the system prompt.
 
-**Cache-minimum threshold:** Anthropic caches only prefixes ≥ 1024 tokens (Sonnet/Opus) or ≥ 2048 tokens (Haiku). Empirically the Sonnet floor observed on Bedrock is ~2048. Agent prompts + context under ~8KB text may silently not cache — verify via `cache_creation_input_tokens` > 0 in the first response. Our typical `CODE_CONTEXT_MSG` well exceeds this, so the threshold only matters on tiny-PR fixtures.
+Since our 5–8 agents per review have different per-agent system prompts but reuse the same `CODE_CONTEXT_MSG` / `FULL_CONTEXT_MSG`, we restructure the request when caching is enabled so the shared context becomes the FIRST system content block with a cache_control marker, and the per-agent prompt becomes the SECOND system block without a marker:
 
-**What is NOT cached:** blind-hunter uses `BLIND_MSG` (zero-context constraint) which is much shorter and structurally distinct, so it doesn't share the cache with other agents.
+```
+system: [
+  { text: "<shared CODE_CONTEXT_MSG>",  cache_control: ephemeral },
+  { text: "<per-agent system prompt>" }
+]
+messages: [{ role: "user", content: "Please perform your review now." }]
+```
 
-**Live benchmark data** is in `claude/BENCHMARK-REPORT.md` (scripts `bench-cache3.sh` + `bench-analyze.sh`). Not committed in production runs — `claude/` is gitignored via CLAUDE.md conventions.
+Anthropic's "walk backward" lookup finds the matching prefix hash at the end of system[0] even when system[1] differs per agent, so **every agent after the first in a run hits a cache read on the shared context bytes** (typically the majority of input tokens).
+
+**Live-benchmarked impact** (Sonnet 4.6, 5 agents, ~25 KB shared context):
+
+| Run | input | cache_write | cache_read | est. cost | vs no cache |
+|---|---:|---:|---:|---:|---:|
+| A (caching off) | 56,652 | 0 | 0 | $0.189 | baseline |
+| B (cold cache, first run of a PR) | 13,722 | 8,593 | 34,372 | $0.103 | **−46%** |
+| C (hot cache, re-run within 5 min) | 13,722 | 0 | 42,965 | $0.073 | **−61%** |
+
+Weighted across typical PR traffic (70% cold / 25% hot): **~47% cheaper on average**. This replaces the pre-#142 layout which had cold runs ~23% MORE expensive (per-agent cache entries, no cross-agent sharing).
+
+### Semantic change
+
+The shared-cache layout moves the diff/context from the user message into system[0]. Prompts were originally written assuming the diff arrived as a user turn. Empirically Claude treats late-system content as "additional instructions" and early-system content as "context," so the two layouts produce equivalent findings (verified by `claude/bench-quality.sh`). The layout is used only when prompt caching is active; `LLM_PROMPT_CACHING=false` preserves the legacy shape bit-for-bit.
+
+### Cache-minimum threshold
+
+Anthropic caches only prefixes ≥ 1024 tokens (Sonnet/Opus) or ≥ 2048 tokens (Haiku). Empirically the Sonnet floor on Bedrock is ~2048. Contexts below ~8KB may silently not cache — verify via `cache_creation_input_tokens` > 0 in the first response. Typical review runs far exceed this threshold.
+
+### What is NOT cached
+
+`blind-hunter` uses `BLIND_MSG` (zero-context constraint) which is much shorter and structurally distinct, so it does not share the cache with other agents.
+
+### Live benchmarks
+
+Scripts in `claude/` (gitignored): `bench-cache3.sh` (single-agent round-trip), `bench-shared.sh` (5-agent cross-cache), `bench-analyze-shared.sh` (cost computation), `bench-quality.sh` (output-equivalence check between layouts). Results summarized in `claude/BENCHMARK-REPORT.md` and `claude/SHARED-CACHE-BENCHMARK.md`.
 
 ## Testing locally
 

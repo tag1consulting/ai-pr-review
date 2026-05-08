@@ -285,21 +285,36 @@ _teardown_body_fixture() {
   rm -f "$SYS_FILE" "$USR_FILE"
 }
 
-@test "_build_anthropic_body: caching=true produces cache_control on system and user" {
+@test "_build_anthropic_body: caching=true uses shared-cache layout (issue #142)" {
+  # Shared-cache layout: system is a 2-block array where block 0 is the
+  # shared CODE_CONTEXT_MSG (from USER_MESSAGE_FILE) with cache_control,
+  # and block 1 is the per-agent prompt (from SYSTEM_PROMPT_FILE) without
+  # cache_control. messages carries only a sentinel turn. This lets agents
+  # with different per-agent prompts share a cache entry on the context.
   _setup_body_fixture
   MODEL_ID="claude-sonnet-4-6" AI_PROVIDER=anthropic LLM_PROMPT_CACHING=true \
     body=$(_build_anthropic_body '{}' 'true')
   _teardown_body_fixture
 
-  # system should be a structured-content array with cache_control
+  # system: 2-block array
   echo "$body" | jq -e '.system | type == "array"' > /dev/null
-  echo "$body" | jq -e '.system[0].cache_control.type == "ephemeral"' > /dev/null
-  echo "$body" | jq -e '.system[0].text == "system content\n"' > /dev/null
+  echo "$body" | jq -e '.system | length == 2' > /dev/null
 
-  # user message should also be structured with cache_control
-  echo "$body" | jq -e '.messages[0].content | type == "array"' > /dev/null
-  echo "$body" | jq -e '.messages[0].content[0].cache_control.type == "ephemeral"' > /dev/null
-  echo "$body" | jq -e '.messages[0].content[0].text == "user content\n"' > /dev/null
+  # system[0] = shared user content WITH cache_control
+  echo "$body" | jq -e '.system[0].cache_control.type == "ephemeral"' > /dev/null
+  echo "$body" | jq -e '.system[0].text == "user content\n"' > /dev/null
+
+  # system[1] = per-agent prompt WITHOUT cache_control
+  echo "$body" | jq -e '.system[1].text == "system content\n"' > /dev/null
+  echo "$body" | jq -e '.system[1].cache_control // "absent"' | grep -q absent
+
+  # messages: single sentinel turn (small, stable, not cached)
+  echo "$body" | jq -e '.messages | length == 1' > /dev/null
+  echo "$body" | jq -e '.messages[0].role == "user"' > /dev/null
+  echo "$body" | jq -e '.messages[0].content | type == "string"' > /dev/null
+  echo "$body" | jq -e '.messages[0].content | length > 0' > /dev/null
+  # No cache_control anywhere on the messages path
+  echo "$body" | jq -e '.messages[0].content | contains("cache_control") | not' > /dev/null
 }
 
 @test "_build_anthropic_body: caching=false produces legacy shape (no cache_control)" {
