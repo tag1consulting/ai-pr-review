@@ -486,6 +486,17 @@ _teardown_openai_body_fixture() {
   [ "$(echo "$body" | jq -r '.temperature')" = "0.3" ]
 }
 
+@test "_build_openai_body: LLM_PROMPT_CACHING=false reverts openai to legacy layout" {
+  _setup_openai_body_fixture
+  LLM_PROMPT_CACHING=false MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \
+    body=$(_build_openai_body)
+  _teardown_openai_body_fixture
+
+  # Legacy layout: system = agent prompt, user = shared context
+  echo "$body" | jq -e '.messages[0].content == "system content\n"' > /dev/null
+  echo "$body" | jq -e '.messages[1].content == "user content\n"' > /dev/null
+}
+
 @test "_build_openai_body: model field is always present" {
   _setup_openai_body_fixture
   MODEL_ID="gpt-5.4-mini" AI_PROVIDER=openai \

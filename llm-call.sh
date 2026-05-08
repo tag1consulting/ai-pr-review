@@ -495,7 +495,13 @@ _build_openai_body() {
 
   use_shared_cache="false"
   if [[ "$AI_PROVIDER" == "openai" ]]; then
-    use_shared_cache="true"
+    local _caching="${LLM_PROMPT_CACHING:-auto}"
+    _caching="${_caching#"${_caching%%[![:space:]]*}"}"
+    _caching="${_caching%"${_caching##*[![:space:]]}"}"
+    case "$_caching" in
+      false|FALSE|False|0) ;;
+      *) use_shared_cache="true" ;;
+    esac
   fi
 
   jq -n \
