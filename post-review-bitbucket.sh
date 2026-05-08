@@ -60,26 +60,23 @@ BB_API="https://api.bitbucket.org/2.0"
 MARKER_PREFIX="<!-- ai-pr-review-summary"
 
 # ---------------------------------------------------------------------------
-# Temp file bookkeeping (keep in sync with post-review.sh:285).
+# Temp file bookkeeping.
 # Every bb_api call is invoked via $() command substitution (a subshell).
 # The subshell inherits a copy of TMPFILES and the trap cleanup EXIT. Any
 # files added to TMPFILES inside bb_api are cleaned up when the subshell
 # exits — cleanup runs correctly per-subshell even though the parent shell's
 # TMPFILES copy never sees the additions.
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2034
 TMPFILES=()
-cleanup() {
-  rm -f "${TMPFILES[@]}" 2>/dev/null || true
-}
-trap cleanup EXIT
 
-# keep in sync with post-review.sh:291
-mktemp_tracked() {
-  local f
-  f=$(mktemp "$@")
-  TMPFILES+=("$f")
-  echo "$f"
-}
+# Shared helpers (severity_icon, format_source_tag, classify_risk,
+# mktemp_tracked, cleanup). truncate_body stays below — its message is
+# provider-specific.
+# shellcheck source=vcs/common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcs/common.sh"
+
+trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # bb_api — invoke the Bitbucket Cloud REST API with Basic auth.
@@ -259,39 +256,7 @@ truncate_body() {
   fi
 }
 
-# keep in sync with post-review.sh:672
-severity_icon() {
-  case "${1,,}" in
-    critical) echo "❌" ;;
-    high)     echo "🚨" ;;
-    medium)   echo "🔶" ;;
-    low)      echo "💬" ;;
-    *)        echo "⚪" ;;
-  esac
-}
 
-# keep in sync with post-review.sh:685
-format_source_tag() {
-  local finding_obj="$1"
-  local sources primary rest
-  sources=$(echo "$finding_obj" | jq -r '
-    if (.sources | type) == "array" and (.sources | length) > 0 then
-      .sources[]
-    else
-      (.source // "unknown")
-    end
-  ')
-
-  primary=$(echo "$sources" | head -1)
-  [[ -z "$primary" ]] && { echo "[unknown]"; return; }
-  rest=$(echo "$sources" | tail -n +2 | paste -sd ', ' -)
-
-  if [[ -n "$rest" ]]; then
-    echo "[${primary}] *(also flagged by: ${rest})*"
-  else
-    echo "[${primary}]"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # Render all findings as markdown bullets (no inline splitting for v0.2.0).
@@ -339,35 +304,6 @@ render_findings_markdown() {
   done <<< "$findings_ndjson"
 }
 
-# ---------------------------------------------------------------------------
-# Classify overall risk from the findings JSON. Prints "<risk>|<event>" where
-# risk ∈ {None, Low, Medium, High, Critical, Unknown} and event ∈ {APPROVE,
-# REQUEST_CHANGES, COMMENT}. event drives the body heading selection in
-# build_comment_body; the approve/request-changes API endpoints are not
-# called in v0.2.0.
-# ---------------------------------------------------------------------------
-classify_risk() {
-  local findings_json="$1"
-  local finding_total failed_agents_env
-  finding_total=$(echo "$findings_json" | jq 'length')
-  failed_agents_env="${AI_REVIEW_FAILED_AGENTS:-}"
-
-  if [[ "$finding_total" -eq 0 ]]; then
-    if [[ -n "$failed_agents_env" ]]; then
-      echo "Unknown|COMMENT"
-    else
-      echo "None|APPROVE"
-    fi
-  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "critical")' > /dev/null 2>&1; then
-    echo "Critical|REQUEST_CHANGES"
-  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "high")' > /dev/null 2>&1; then
-    echo "High|REQUEST_CHANGES"
-  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "medium")' > /dev/null 2>&1; then
-    echo "Medium|APPROVE"
-  else
-    echo "Low|APPROVE"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # Build the complete comment body: marker + summary + findings + tokens.

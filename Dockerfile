@@ -284,6 +284,7 @@ COPY analyzers/         /opt/ai-pr-review/analyzers/
 COPY config/            /opt/ai-pr-review/config/
 COPY prompts/           /opt/ai-pr-review/prompts/
 COPY language-profiles/ /opt/ai-pr-review/language-profiles/
+COPY vcs/               /opt/ai-pr-review/vcs/
 
 RUN chmod +x /opt/ai-pr-review/*.sh /opt/ai-pr-review/analyzers/*.sh
 

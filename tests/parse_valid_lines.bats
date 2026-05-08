@@ -5,8 +5,8 @@
 
 setup() {
   load test_helper
-  load_function "${PROJECT_ROOT}/post-review.sh" parse_valid_lines
-  load_function "${PROJECT_ROOT}/post-review.sh" parse_diff_new_lines
+  load_function "${PROJECT_ROOT}/vcs/common.sh" parse_valid_lines
+  load_function "${PROJECT_ROOT}/vcs/common.sh" parse_diff_new_lines
   DIFF_FILE=$(mktemp)
 }
 

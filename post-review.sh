@@ -317,19 +317,18 @@ MARKER_PREFIX="<!-- ai-pr-review-summary"
 # MARKER_PREFIX is embedded in comment bodies to identify our summary comments.
 # The full marker includes an optional sha= field: <!-- ai-pr-review-summary sha=<sha> -->
 
-# Temp files — cleaned up on exit
+# Temp files — cleaned up on exit. Used by mktemp_tracked/cleanup in vcs/common.sh.
+# shellcheck disable=SC2034
 TMPFILES=()
-cleanup() {
-  rm -f "${TMPFILES[@]}" 2>/dev/null || true
-}
-trap cleanup EXIT
 
-mktemp_tracked() {
-  local f
-  f=$(mktemp "$@")
-  TMPFILES+=("$f")
-  echo "$f"
-}
+# Shared helpers (severity_icon, mktemp_tracked, cleanup, format_source_tag,
+# format_body_finding, build_agent_prompt, classify_risk, parse_valid_lines,
+# parse_diff_new_lines). MAX_BODY_SIZE / truncate_body stay below because
+# their truncation message is provider-specific.
+# shellcheck source=vcs/common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcs/common.sh"
+
+trap cleanup EXIT
 
 # GitHub API rejects comment/review bodies exceeding 65,536 bytes (the limit
 # applies to the JSON-encoded UTF-8 request body, not character count).
@@ -658,182 +657,6 @@ _cleanup_duplicate_summary_comments() {
   done <<< "$duplicate_ids"
 }
 
-# ---------------------------------------------------------------------------
-# Parse diff hunks to determine valid inline comment lines
-# ---------------------------------------------------------------------------
-# Builds a lookup of file:line pairs that are valid targets for inline comments.
-# Only lines that appear in the "+" side of diff hunks are valid.
-parse_valid_lines() {
-  local diff_file="$1"
-  local current_file=""
-  local new_line=0
-
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^diff\ --git\ a/(.+)\ b/(.+) ]]; then
-      current_file="${BASH_REMATCH[2]}"
-      new_line=0
-    elif [[ "$line" =~ ^\+\+\+\  || "$line" =~ ^---\  ]]; then
-      # Skip diff file headers (+++ b/file, --- a/file) — never treat as content
-      continue
-    elif [[ "$line" =~ ^@@\ -[0-9]+(,[0-9]+)?\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
-      new_line="${BASH_REMATCH[2]}"
-    elif [[ -n "$current_file" && "$new_line" -gt 0 ]]; then
-      if [[ "$line" =~ ^\+ ]]; then
-        echo "${current_file}:${new_line}"
-        new_line=$((new_line + 1))
-      elif [[ "$line" =~ ^- ]]; then
-        : # deleted line — don't increment new_line
-      elif [[ "$line" =~ ^\\ ]]; then
-        : # "\ No newline at end of file" — don't increment new_line
-      else
-        new_line=$((new_line + 1))
-      fi
-    fi
-  done < "$diff_file"
-}
-
-# ---------------------------------------------------------------------------
-# Emit file:line for every line visible on the new-file side of the diff
-# (added lines AND context lines, NOT deleted lines). Used to validate
-# multi-line suggestion ranges where start_line may reference a context
-# line that is not a '+' line but IS visible inside a diff hunk.
-# ---------------------------------------------------------------------------
-parse_diff_new_lines() {
-  local diff_file="$1"
-  local current_file=""
-  local new_line=0
-
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^diff\ --git\ a/(.+)\ b/(.+) ]]; then
-      current_file="${BASH_REMATCH[2]}"
-      new_line=0
-    elif [[ "$line" =~ ^\+\+\+\  || "$line" =~ ^---\  ]]; then
-      continue
-    elif [[ "$line" =~ ^@@\ -[0-9]+(,[0-9]+)?\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
-      new_line="${BASH_REMATCH[2]}"
-    elif [[ -n "$current_file" && "$new_line" -gt 0 ]]; then
-      if [[ "$line" =~ ^\+ ]]; then
-        echo "${current_file}:${new_line}"
-        new_line=$((new_line + 1))
-      elif [[ "$line" =~ ^- ]]; then
-        : # deleted line — not in new file
-      elif [[ "$line" =~ ^\\ ]]; then
-        : # "\ No newline at end of file" marker
-      else
-        # Context line — present in new file at new_line
-        echo "${current_file}:${new_line}"
-        new_line=$((new_line + 1))
-      fi
-    fi
-  done < "$diff_file"
-}
-
-# ---------------------------------------------------------------------------
-# Map severity level to a color-coded icon for visual scanning.
-# Uses distinct shapes in addition to color for accessibility.
-# ---------------------------------------------------------------------------
-severity_icon() {
-  case "${1,,}" in
-    critical) echo "❌" ;;
-    high)     echo "🚨" ;;
-    medium)   echo "🔶" ;;
-    low)      echo "💬" ;;
-    *)        echo "⚪" ;;
-  esac
-}
-
-# Build the source attribution tag for a finding JSON object.
-# Single source → "[source]"
-# Multiple sources (cross-source dedup) → "[primary] *(also flagged by: other1, other2)*"
-format_source_tag() {
-  local finding_obj="$1"
-  local sources primary rest
-  # Prefer the deduplicated sources array (already unique+sorted by dedup jq);
-  # fall back to the scalar source field for findings that bypassed dedup.
-  sources=$(echo "$finding_obj" | jq -r '
-    if (.sources | type) == "array" and (.sources | length) > 0 then
-      .sources[]
-    else
-      (.source // "unknown")
-    end
-  ' 2>/dev/null)
-
-  primary=$(echo "$sources" | head -1)
-  [[ -z "$primary" ]] && { echo "[unknown]"; return; }
-  rest=$(echo "$sources" | tail -n +2 | paste -sd ', ' -)
-
-  if [[ -n "$rest" ]]; then
-    echo "[${primary}] *(also flagged by: ${rest})*"
-  else
-    echo "[${primary}]"
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# Format a single finding for the review body (non-inline).
-# Includes remediation and suggested_code in a collapsible <details> block
-# when present. suggested_code renders as a plain code fence (not a GitHub
-# ```suggestion fence, which only works in inline review comments).
-# Args: severity source_tag finding location loc_note remediation [suggested_code]
-# ---------------------------------------------------------------------------
-format_body_finding() {
-  local severity="$1" source_tag="$2" finding="$3" location="$4" loc_note="$5" remediation="$6"
-  local suggested_code="${7:-}"
-  local bullet
-  bullet="- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${location}\`${loc_note}"
-  if [[ -n "$remediation" || -n "$suggested_code" ]]; then
-    local details=""
-    if [[ -n "$remediation" ]]; then
-      details="**Remediation:** ${remediation}"
-    fi
-    if [[ -n "$suggested_code" && "$suggested_code" != *'```'* ]]; then
-      local indented_code
-      indented_code=$(printf '%s' "$suggested_code" | sed 's/^/  /')
-      if [[ -n "$details" ]]; then
-        details="${details}
-
-  "
-      fi
-      details="${details}**Suggested fix:**
-  \`\`\`
-${indented_code}
-  \`\`\`"
-    fi
-    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  %s\n\n  </details>' "$bullet" "$details"
-  else
-    printf '%s' "$bullet"
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# Build a collapsible "Prompt for AI agents" block from the findings JSON.
-# Groups findings by file and formats them as actionable instructions that
-# can be copy-pasted into an AI coding assistant. Returns empty string when
-# there are no findings.
-# Args: findings_json
-# ---------------------------------------------------------------------------
-build_agent_prompt() {
-  local findings_json="$1"
-  local count
-  count=$(echo "$findings_json" | jq 'length' 2>/dev/null || echo 0)
-  [[ "$count" -eq 0 ]] && return
-
-  local prompt_body
-  prompt_body=$(echo "$findings_json" | jq -r '
-    group_by(.file) | map(
-      "In `\(.[0].file)`:" as $header |
-      [$header] + [
-        .[] |
-        "- Around line \(.line // "?"): \(.finding)" +
-          if (.remediation // "") != "" then ". " + .remediation else "" end
-      ] | join("\n")
-    ) | join("\n\n")
-  ' 2>/dev/null)
-
-  [[ -z "$prompt_body" ]] && return
-
-  printf '<details>\n<summary>🤖 Prompt for AI agents</summary>\n\n```\nVerify each finding against the current code and only fix it if needed.\n\n%s\n```\n\n</details>' "$prompt_body"
-}
 
 # ---------------------------------------------------------------------------
 # Post Block B: Findings as a pull request review with inline comments
