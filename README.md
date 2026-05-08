@@ -111,7 +111,7 @@ Findings use shape-distinct icons for accessibility:
 
 **OpenAI-compatible** — For third-party endpoints (Azure OpenAI, Groq, Together, local models). Uses the legacy `max_tokens` field for broader compatibility. Requires `base-url` and explicit `model-standard`/`model-premium` inputs.
 
-**Google Gemini** — Supported but not yet production-tested. Uses `gemini-2.5-flash` (standard) and `gemini-2.5-pro` (premium). Gemini's implicit caching is not currently measured. See [issue #159](https://github.com/tag1consulting/ai-pr-review/issues/159) for the testing roadmap.
+**Google Gemini** — Fully supported. Uses `gemini-2.5-flash` (standard) and `gemini-2.5-pro` (premium). Gemini 2.5 models produce "thinking" tokens billed at the output rate — these are extracted, added to the output count for accurate cost estimation, and logged as `THINKING: N tokens` on stderr. On a 162-line benchmark, Gemini (Flash + Pro) cost $0.28 with 22 findings — 62% cheaper than Anthropic. The high output count is dominated by thinking tokens (79% of output). Implicit caching (`cachedContentTokenCount`) is extracted when present. `gemini-2.5-flash-lite` is also supported as a cheaper standard alternative ($0.10/$0.40 per MTok, no thinking tokens).
 
 ## Requirements
 

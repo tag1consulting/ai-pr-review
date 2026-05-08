@@ -32,7 +32,9 @@
 #   and cache_creation/cache_read are from the cache_control markers. For
 #   OpenAI, input is prompt_tokens minus cached_tokens (to match Anthropic's
 #   convention), cache_creation is always 0, and cache_read is the automatic
-#   prefix caching hit count. For Google, both cache fields are 0.
+#   prefix caching hit count. For Google, output includes thinking tokens
+#   (billed at output rate), cache_read is cachedContentTokenCount when
+#   present, and a separate "THINKING: N tokens" line is emitted to stderr.
 #   Exits non-zero on API errors.
 
 set -euo pipefail
@@ -524,16 +526,23 @@ call_openai() {
 call_google() {
   : "${GOOGLE_API_KEY:?GOOGLE_API_KEY is required for AI_PROVIDER=google}"
 
+  local temperature_val
+  if model_supports_temperature "$MODEL_ID"; then
+    temperature_val="$TEMPERATURE"
+  else
+    temperature_val="null"
+  fi
+
   local request_body
   request_body=$(jq -n \
     --rawfile system "$SYSTEM_PROMPT_FILE" \
     --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
-    --argjson temperature "$TEMPERATURE" \
+    --argjson temperature "$temperature_val" \
     '{
       system_instruction: {parts: [{text: $system}]},
       contents: [{role: "user", parts: [{text: $user}]}],
-      generationConfig: {maxOutputTokens: $max_tokens, temperature: $temperature}
+      generationConfig: ({maxOutputTokens: $max_tokens} + (if $temperature != null then {temperature: $temperature} else {} end))
     }') || {
     echo "ERROR: jq failed to build Google request body" >&2
     exit 1
@@ -551,11 +560,37 @@ call_google() {
     --data-binary @-
 
   local response_text input_tokens output_tokens stop_reason
+  local thinking_tokens cache_read
   response_text=$(jq -r '.candidates[0].content.parts[0].text // empty' "$RESPONSE_FILE" 2>/dev/null)
   input_tokens=$(jq -r '.usageMetadata.promptTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
   output_tokens=$(jq -r '.usageMetadata.candidatesTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  thinking_tokens=$(jq -r '.usageMetadata.thoughtsTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
+  cache_read=$(jq -r '.usageMetadata.cachedContentTokenCount // "0"' "$RESPONSE_FILE" 2>/dev/null)
   stop_reason=$(jq -r '.candidates[0].finishReason // empty' "$RESPONSE_FILE" 2>/dev/null)
-  emit_response "$response_text" "$input_tokens" "$output_tokens" "$stop_reason"
+
+  # Sanitize to integers before arithmetic.
+  input_tokens=$(( ${input_tokens%%.*} + 0 ))
+  output_tokens=$(( ${output_tokens%%.*} + 0 ))
+  thinking_tokens=$(( ${thinking_tokens%%.*} + 0 ))
+  cache_read=$(( ${cache_read%%.*} + 0 ))
+
+  # Gemini 2.5 models produce "thinking" tokens billed at the output rate.
+  # Add them to output_tokens so the cost formula (output * output_rate)
+  # reflects the actual bill. Log thinking overhead for transparency.
+  if (( thinking_tokens > 0 )); then
+    echo "THINKING: ${thinking_tokens} tokens (model=${MODEL_ID})" >&2
+    output_tokens=$(( output_tokens + thinking_tokens ))
+  fi
+
+  # Gemini's implicit caching reports cachedContentTokenCount as a subset of
+  # promptTokenCount. Subtract to match the convention used by other providers.
+  local uncached_input=$input_tokens
+  if (( cache_read > 0 )); then
+    uncached_input=$(( input_tokens - cache_read ))
+    if (( uncached_input < 0 )); then uncached_input=$input_tokens; cache_read=0; fi
+  fi
+
+  emit_response "$response_text" "$uncached_input" "$output_tokens" "$stop_reason" "0" "$cache_read"
 }
 
 # ---------------------------------------------------------------------------

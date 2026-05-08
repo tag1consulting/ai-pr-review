@@ -518,7 +518,7 @@ After all agents complete:
 
 ## Token usage and cost estimation
 
-`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N cache_creation=N cache_read=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr. The `cache_creation` and `cache_read` fields are 0 on providers where caching doesn't engage (OpenAI, Google) or runs where `LLM_PROMPT_CACHING=false` was set.
+`TOKEN_LOG` in `review.sh` accumulates `"agent: input=N output=N cache_creation=N cache_read=N model=ID"` entries from `TOKENS:` lines emitted by `llm-call.sh` on stderr. The `cache_creation` and `cache_read` fields are 0 on providers where caching doesn't engage or runs where `LLM_PROMPT_CACHING=false` was set. For Google Gemini, `cache_read` reports `cachedContentTokenCount` when present; thinking tokens (`thoughtsTokenCount`) are added to the output count since they are billed at the output rate. `call_google()` also emits `THINKING: N tokens` to stderr for transparency.
 
 `config/model-pricing.json` maps model ID patterns to display names and per-token rates. Each entry carries four rates: `input_rate`, `output_rate`, `cache_write_rate`, and `cache_read_rate` (all cost per 1M tokens, in units of `$1e-6 / 1M tokens`). The `model_pricing()` function returns all four rates as a space-separated tuple; `emit_token_table()` generates the markdown table with an adaptive column layout — 6 columns when no rows have cache activity, 8 columns (Input / Output / Cache Write / Cache Read / Total / Est. Cost) when any row does.
 

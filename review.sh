@@ -915,14 +915,21 @@ FINDINGS_FILE=$(mktemp_tracked /tmp/ai-review-findings-XXXXXXXX.md)
 
 # --- Configurable limits ---
 # Validate AI_MAX_TOKENS_PER_AGENT: must be a positive integer; clamp to [256, 65536].
-_raw_tokens="${AI_MAX_TOKENS_PER_AGENT:-8192}"
+# Gemini 2.5 models consume thinking tokens from the maxOutputTokens budget,
+# leaving less room for visible output. Default to 16384 for Google to avoid
+# truncation from thinking overhead (typically 3-14x the visible output).
+_default_tokens=8192
+if [[ "$AI_PROVIDER" == "google" ]]; then
+  _default_tokens=16384
+fi
+_raw_tokens="${AI_MAX_TOKENS_PER_AGENT:-$_default_tokens}"
 if [[ "$_raw_tokens" =~ ^[0-9]+$ ]] && [[ "$_raw_tokens" -ge 256 ]] && [[ "$_raw_tokens" -le 65536 ]]; then
   AI_MAX_TOKENS_PER_AGENT="$_raw_tokens"
 else
-  echo "WARNING: AI_MAX_TOKENS_PER_AGENT='${_raw_tokens}' is invalid; using default 8192." >&2
-  AI_MAX_TOKENS_PER_AGENT=8192
+  echo "WARNING: AI_MAX_TOKENS_PER_AGENT='${_raw_tokens}' is invalid; using default ${_default_tokens}." >&2
+  AI_MAX_TOKENS_PER_AGENT="$_default_tokens"
 fi
-unset _raw_tokens
+unset _raw_tokens _default_tokens
 
 # --- Agent roster ---
 AGENT_OUTPUTS=()

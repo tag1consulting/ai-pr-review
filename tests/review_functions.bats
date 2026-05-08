@@ -294,13 +294,19 @@ setup() {
 @test "model_pricing: gemini-2.5-flash returns correct rates" {
   run model_pricing "gemini-2.5-flash"
   [ "$status" -eq 0 ]
-  [ "$output" = "150000 3500000 0 0" ]
+  [ "$output" = "300000 2500000 0 30000" ]
+}
+
+@test "model_pricing: gemini-2.5-flash-lite is not shadowed by flash pattern" {
+  run model_pricing "gemini-2.5-flash-lite"
+  [ "$status" -eq 0 ]
+  [ "$output" = "100000 400000 0 10000" ]
 }
 
 @test "model_pricing: gemini-2.5-pro returns correct rates" {
   run model_pricing "gemini-2.5-pro"
   [ "$status" -eq 0 ]
-  [ "$output" = "1250000 10000000 0 0" ]
+  [ "$output" = "1250000 10000000 0 125000" ]
 }
 
 @test "model_pricing: unknown model returns zero rates" {
@@ -425,6 +431,12 @@ setup() {
   run model_display_name "gemini-2.5-flash"
   [ "$status" -eq 0 ]
   [ "$output" = "Gemini 2.5 Flash" ]
+}
+
+@test "model_display_name: gemini-2.5-flash-lite -> Gemini 2.5 Flash Lite" {
+  run model_display_name "gemini-2.5-flash-lite"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Gemini 2.5 Flash Lite" ]
 }
 
 @test "model_display_name: unknown model passes through unchanged" {
