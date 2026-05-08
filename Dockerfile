@@ -1,9 +1,24 @@
-FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
+# syntax=docker/dockerfile:1.7
+#
+# Multi-stage build.
+#   Stage 1 (builder): installs build-time tools (curl, unzip, xz-utils, pip,
+#   composer.phar), downloads every analyzer binary, pip-installs ruff/semgrep/
+#   checkov, composer-installs phpcs/phpstan, and fetches semgrep rulesets.
+#   Stage 2 (final):   slim runtime with only the libraries the analyzers need
+#   (bash, ca-certificates, git, jq, php-cli + ext, python3). Copies only the
+#   binaries, pip dist-packages, composer vendor tree, and semgrep rules from
+#   the builder. Action scripts are copied LAST so a source-only change does
+#   not invalidate any of the heavy builder layers.
+#
+# Why multi-stage: curl, unzip, xz-utils, python3-pip, and composer.phar are
+# build-time-only. Dropping them from the final image shrinks the per-run
+# docker pull and trims runtime attack surface.
 
-# TARGETARCH is set automatically by buildx (e.g. "amd64" or "arm64").
-# Each binary install below selects the matching URL and SHA256 via a
-# case "${TARGETARCH}" block. Adding a new arch requires extending each
-# case and supplying the corresponding _SHA256_<ARCH> ARG.
+# ==============================================================================
+# Stage 1: builder
+# ==============================================================================
+FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b AS builder
+
 ARG TARGETARCH
 
 ARG SHELLCHECK_VERSION=v0.11.0
@@ -25,11 +40,7 @@ ARG GOLANGCI_LINT_SHA256_ARM64=3bcfa2e6f3d32b2bf5cd75eaa876447507025e0303698633f
 ARG RUFF_VERSION=0.15.11
 ARG SEMGREP_VERSION=1.161.0
 
-# Semgrep rulesets to bake into the image. At runtime, run-semgrep.sh points
-# --config at /opt/ai-pr-review/semgrep-rules/ instead of the network-fetching
-# `--config=auto`. This saves 20–40s per run and removes a network dependency.
-# Bumping SEMGREP_RULESET_DATE (arbitrary cache-buster) forces a fresh pull
-# of the curated rule files on rebuild.
+# Cache-buster for semgrep ruleset downloads; bump to force fresh pull.
 ARG SEMGREP_RULESET_DATE=2026-05-07
 
 ARG HADOLINT_VERSION=v2.14.0
@@ -55,13 +66,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# hadolint ignore=DL3008
+# Build-time toolchain. None of these need to exist in the final stage.
+# hadolint ignore=DL3008,DL3015
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       bash \
       ca-certificates \
       curl \
-      git \
       jq \
       php-cli \
       php-xml \
@@ -162,34 +173,32 @@ RUN case "${TARGETARCH}" in \
     chmod +x /usr/local/bin/tflint && \
     rm /tmp/tflint.zip
 
-# ruff, semgrep, and checkov via pip
-# --break-system-packages required on Ubuntu 24.04 (PEP 668)
+# ruff, semgrep, and checkov via pip.
+# --break-system-packages required on Ubuntu 24.04 (PEP 668). Installs land in
+# /usr/local/lib/python3.12/dist-packages plus /usr/local/bin entry points; both
+# are COPYied into the final stage below.
 RUN pip3 install --no-cache-dir --break-system-packages \
       "ruff==${RUFF_VERSION}" \
       "semgrep==${SEMGREP_VERSION}" \
       "checkov==${CHECKOV_VERSION}"
 
-# Bake semgrep rulesets into the image so runtime scans don't hit the network.
-# Semgrep's registry serves each ruleset as a single concatenated YAML file at
-# https://semgrep.dev/c/p/<name>. We download p/ci (CI-appropriate security
-# rules) and p/security-audit (broader security coverage). run-semgrep.sh
-# points --config at this directory and falls back to --config=auto if the
-# directory is absent (e.g. when the script is invoked outside the container).
-#
-# SEMGREP_RULESET_DATE is an ARG used only to invalidate this layer's cache
-# so rebuilds pick up registry updates on a predictable cadence.
+# Bake semgrep rulesets so runtime scans skip the network.
+# run-semgrep.sh points --config at /opt/ai-pr-review/semgrep-rules/ and falls
+# back to --config=auto if the directory is absent (e.g. when invoked outside
+# the container). SEMGREP_RULESET_DATE above invalidates this layer's cache.
 RUN mkdir -p /opt/ai-pr-review/semgrep-rules && \
     echo "Fetching semgrep rulesets (cache-buster: ${SEMGREP_RULESET_DATE})" && \
     curl -fsSL -o /opt/ai-pr-review/semgrep-rules/ci.yml \
       "https://semgrep.dev/c/p/ci" && \
     curl -fsSL -o /opt/ai-pr-review/semgrep-rules/security-audit.yml \
       "https://semgrep.dev/c/p/security-audit" && \
-    # Smoke-test: both files should be valid semgrep rule YAML with a "rules:"
-    # top-level key. Fail the build if either download was corrupt.
     grep -q '^rules:' /opt/ai-pr-review/semgrep-rules/ci.yml && \
     grep -q '^rules:' /opt/ai-pr-review/semgrep-rules/security-audit.yml
 
-# phpcs with Drupal coding standards + phpstan with phpstan-drupal
+# phpcs with Drupal coding standards + phpstan with phpstan-drupal.
+# composer.phar itself is only needed at build time, so it stays in the builder
+# stage. The resulting /opt/composer vendor tree is COPYied to the final stage
+# and the phpcs/phpstan symlinks are recreated there.
 RUN curl -fsSL -o /usr/local/bin/composer \
       "https://getcomposer.org/download/latest-stable/composer.phar" && \
     chmod +x /usr/local/bin/composer && \
@@ -200,13 +209,64 @@ RUN curl -fsSL -o /usr/local/bin/composer \
       "squizlabs/php_codesniffer:${PHPCS_VERSION}" \
       "drupal/coder:${DRUPAL_CODER_VERSION}" \
       "phpstan/phpstan:${PHPSTAN_VERSION}" \
-      "mglaman/phpstan-drupal:${PHPSTAN_DRUPAL_VERSION}" && \
-    ln -s /opt/composer/vendor/bin/phpcs /usr/local/bin/phpcs && \
+      "mglaman/phpstan-drupal:${PHPSTAN_DRUPAL_VERSION}"
+
+# ==============================================================================
+# Stage 2: final
+# ==============================================================================
+FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Runtime-only dependencies. Notably absent vs builder: curl, unzip, xz-utils,
+# python3-pip (and its large dependency tree). git is runtime-only here (the
+# action scripts invoke `git` against the mounted workspace).
+# hadolint ignore=DL3008,DL3015
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+      bash \
+      ca-certificates \
+      git \
+      jq \
+      php-cli \
+      php-xml \
+      php-mbstring \
+      python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy analyzer binaries + pip dist-packages from the builder.
+#
+# /usr/local/bin is copied wholesale because pip-installed tools bring a web
+# of companion entry points (semgrep shells out to pysemgrep; checkov pulls
+# in cloudsplaining, detect-secrets, policy_sentry, etc). Enumerating them
+# individually is fragile — pip package updates silently add new ones.
+# Copying the whole dir is simpler and correct; composer.phar is removed
+# below since it's build-time-only.
+#
+# /usr/local/lib/python3.12/dist-packages carries the actual Python code for
+# ruff, semgrep, checkov and their transitive dependencies.
+COPY --from=builder /usr/local/bin                               /usr/local/bin
+COPY --from=builder /usr/local/lib/python3.12/dist-packages      /usr/local/lib/python3.12/dist-packages
+
+# Composer is build-time-only; drop its phar from the final image.
+RUN rm -f /usr/local/bin/composer
+
+# Copy the composer vendor tree and recreate the phpcs/phpstan bin symlinks.
+# (A COPY of the symlinks from builder would copy them as symlinks but we
+# recreate explicitly for clarity — the link target path is identical.)
+COPY --from=builder /opt/composer /opt/composer
+RUN ln -s /opt/composer/vendor/bin/phpcs   /usr/local/bin/phpcs && \
     ln -s /opt/composer/vendor/bin/phpstan /usr/local/bin/phpstan
 
-# Copy core scripts. Uses a glob for post-review*.sh so sibling provider
-# scripts (post-review-bitbucket.sh, post-review-gitlab.sh, and any future
-# providers) are picked up automatically without per-release Dockerfile churn.
+# Baked semgrep rulesets (pure data).
+COPY --from=builder /opt/ai-pr-review/semgrep-rules /opt/ai-pr-review/semgrep-rules
+
+# Action scripts are copied LAST so source-only changes don't invalidate any
+# of the heavy layers above. Uses a glob for post-review*.sh so sibling
+# provider scripts (post-review-bitbucket.sh, post-review-gitlab.sh, future
+# providers) are picked up automatically.
 COPY review.sh post-review*.sh llm-call.sh \
      /opt/ai-pr-review/
 
@@ -223,8 +283,8 @@ RUN groupadd -r app --gid 1001 && \
     chown -R app:app /opt/ai-pr-review
 
 # Allow git to operate on /workspace regardless of the host uid that owns it.
-# Needed when the mounted workspace uid differs from the container's app uid (1001),
-# which is common on self-hosted runners and local dev.
+# Needed when the mounted workspace uid differs from the container's app uid
+# (1001), which is common on self-hosted runners and local dev.
 RUN git config --system --add safe.directory /workspace
 
 USER 1001:1001

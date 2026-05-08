@@ -113,9 +113,37 @@ composer-installed tools (phpcs, phpstan) are arch-neutral. Adding a new
 architecture requires extending each `case` block and supplying the
 corresponding `_SHA256_<ARCH>` ARG.
 
+### Multi-stage layout
+
+`Dockerfile` uses two stages:
+
+- **`builder`** — installs build-time tooling (`curl`, `unzip`,
+  `xz-utils`, `python3-pip`, `composer.phar`), downloads every analyzer
+  binary, pip-installs ruff/semgrep/checkov, composer-installs
+  phpcs/phpstan, and fetches the semgrep rulesets.
+- **final stage** — slim runtime with only what the analyzers need at
+  execution time (`bash`, `ca-certificates`, `git`, `jq`, `php-cli` +
+  extensions, `python3`). Copies `/usr/local/bin` and
+  `/usr/local/lib/python3.12/dist-packages` wholesale from the builder
+  (pip-installed tools bring a web of companion entry points — e.g.
+  `semgrep` shells out to `pysemgrep`, `checkov` pulls in
+  `cloudsplaining`/`detect-secrets`/`policy_sentry` — that are fragile
+  to enumerate individually), then removes `composer.phar`. Also copies
+  `/opt/composer/` (vendor tree) and `/opt/ai-pr-review/semgrep-rules/`.
+
+Action scripts (`review.sh`, `post-review*.sh`, `analyzers/`, `prompts/`,
+etc.) are copied at the end of the final stage so source-only changes
+don't invalidate the heavy builder layers.
+
+Drops `curl`, `unzip`, `xz-utils`, `python3-pip`, and `composer.phar`
+from the runtime image, trimming attack surface and ~40 MB.
+
+Split slim vs full image (LLM-only vs with-analyzers) was considered but
+deferred — see issue #130 rationale.
+
 ### Dockerfile COPY glob
 
-`Dockerfile` uses `COPY post-review*.sh` (a glob) so future provider
+The final stage uses `COPY post-review*.sh` (a glob) so future provider
 scripts are picked up without per-release Dockerfile churn.
 
 ## Agent output schema
