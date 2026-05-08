@@ -475,7 +475,13 @@ When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, `llm-call.sh` uses Anthrop
 
 Anthropic's cache key is CUMULATIVE — a hash of the full prefix up to each `cache_control` marker. Two requests with different system prompts never share a cache entry if the marker is anywhere in or after the system prompt.
 
-Since our 5–8 agents per review have different per-agent system prompts but reuse the same `CODE_CONTEXT_MSG` / `FULL_CONTEXT_MSG`, we restructure the request when caching is enabled so the shared context becomes the FIRST system content block with a cache_control marker, and the per-agent prompt becomes the SECOND system block without a marker:
+Our 5–8 agents per review split into **two cache cohorts** by the user-message variant they use:
+- `CODE_CONTEXT_MSG` cohort — code-reviewer, silent-failure-hunter, security-reviewer, edge-case-hunter, adversarial-general
+- `FULL_CONTEXT_MSG` cohort — pr-summarizer, architecture-reviewer
+
+Within each cohort the agents share the same user-message bytes, so each cohort gets a single shared cache entry per run. `blind-hunter`'s `BLIND_MSG` is unique per run and stays on its own cache entry.
+
+To unlock cross-agent caching within a cohort, we restructure the request when caching is enabled so the shared context becomes the FIRST system content block with a cache_control marker, and the per-agent prompt becomes the SECOND system block without a marker:
 
 ```
 system: [
@@ -504,6 +510,8 @@ The shared-cache layout moves the diff/context from the user message into system
 ### Cache-minimum threshold
 
 Anthropic caches only prefixes ≥ 1024 tokens (Sonnet/Opus) or ≥ 2048 tokens (Haiku). Empirically the Sonnet floor on Bedrock is ~2048. Contexts below ~8KB may silently not cache — verify via `cache_creation_input_tokens` > 0 in the first response. Typical review runs far exceed this threshold.
+
+**Tiny-PR regression.** Because the shared-cache layout puts the (small) CODE_CONTEXT_MSG first and the (larger) per-agent system prompt second, PRs whose diff falls below the cache threshold silently get zero cache hits. Under the pre-#142 layout the larger per-agent system prompt was the cache anchor, so per-agent retries on tiny PRs could still hit cache within the 5-minute TTL. This PR trades that edge case for the far bigger win of cross-agent sharing on normal-to-large PRs. The delta on tiny PRs is a few cents at most since token volume is low there.
 
 ### What is NOT cached
 
