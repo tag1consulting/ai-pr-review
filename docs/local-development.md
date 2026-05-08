@@ -12,6 +12,7 @@ Run ai-pr-review locally against any open PR using the container image — no Gi
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-started/get-docker/) installed and running
+- [GitHub CLI](https://cli.github.com/) configured locally
 - A GitHub token (`gh auth token` or a classic PAT with `repo` scope)
 - An API key for one of the [supported LLM providers](configuration#supported-llm-providers)
 
