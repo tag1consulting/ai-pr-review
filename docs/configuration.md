@@ -16,19 +16,15 @@ nav_order: 2
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
-| `force-full-diff` | No | `false` | Bypass the SHA watermark; review the full PR diff for this run |
 | `review-target` | No | `pr` | `pr` (PR review) or `standalone` (GitHub issue) |
-| `standalone-depth` | No | `''` | Commits to diff when base and head resolve to the same SHA |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
-| `retry-count` | No | `3` | Retry attempts for transient LLM failures |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
-| `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
+| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set (thinking tokens consume the output budget). |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 
 ## Supported VCS providers
@@ -48,27 +44,35 @@ See [Bitbucket setup](bitbucket-setup), [GitLab setup](gitlab-setup), or the [Ge
 | Provider | provider value | Required secret | Default models (standard / premium) |
 |----------|-----------------|-----------------|--------------------------------------|
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` / `claude-opus-4-7` |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4o` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` / `gpt-5.4` |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
 | Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7` |
 
 ## Environment variables
 
-These variables are consumed by the scripts but not exposed as action inputs. Set them as workflow `env:` values or pass them via `docker run -e`.
+These variables are consumed by the scripts but not exposed as action inputs. Set them in
+your workflow `env:` block or pass them via `docker run -e`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
-| `AI_PARALLEL` | `true` | Tiered parallel agent execution; set to `false` to disable (mapped from `parallel` action input) |
-| `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings (mapped from `confidence-threshold` action input) |
-| `AI_MAX_INLINE` | `25` | Maximum inline review comments per run (mapped from `max-inline` action input) |
-| `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
-| `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). Supported on GitHub and GitLab; ignored on Bitbucket. |
 | `LLM_PROMPT_CACHING` | `auto` | Enable Anthropic/Bedrock prompt caching. `auto` enables for anthropic and bedrock-proxy; `true` force-enables; `false` force-disables. |
-| `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. |
 | `PHPSTAN_LEVEL` | `3` | PHPStan analysis depth level (0-9); ignored if the project has `phpstan.neon` or `phpstan.neon.dist` |
+
+### Advanced tuning (env-var only)
+
+These settings were previously action inputs. They still work as environment
+variables — set them in your workflow `env:` block. Most consumers never need
+to change them.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FORCE_FULL_DIFF` | `false` | Bypass the SHA watermark and review the full PR diff. Prefer the `ai-review-rescan` PR label instead — it sets this automatically. |
+| `STANDALONE_DEPTH` | `''` | In standalone mode, diff the last N commits when base and head resolve to the same SHA. If unset, diffs the entire tree. |
+| `LLM_RETRY_COUNT` | `3` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
+| `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings. Findings below this are dropped before suppressions. |
 
 ### Bitbucket-specific variables
 

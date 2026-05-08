@@ -25,7 +25,7 @@
 #   AI_REVIEW_MODE    — "quick" (default) or "full"
 #                       Add the "ai-review-full" label to a PR for full mode.
 #   FORCE_FULL_DIFF   — "true" to bypass SHA watermark and force full-PR diff.
-#                       Add the "ai-review-rescan" label to a PR to set this.
+#                       Prefer the "ai-review-rescan" PR label instead (env-var only).
 #   REVIEW_TARGET     — "pr" (default) or "standalone"
 #                       "standalone" skips SHA watermark, posts findings as a GitHub issue.
 #   AI_MODEL_STANDARD — Model for standard agents (pr-summarizer, code-reviewer, etc.)

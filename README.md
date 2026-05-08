@@ -138,13 +138,14 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
 
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
+  env:
+    FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
   with:
     image-tag: 'latest'            # or pin to a release tag, e.g. '0.7.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
     review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
-    force-full-diff: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') && 'true' || 'false' }}
     pr-number: ${{ github.event.pull_request.number }}
     base-ref: ${{ github.event.pull_request.base.ref }}
     head-sha: ${{ github.event.pull_request.head.sha }}
@@ -212,20 +213,18 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
-| `force-full-diff` | No | `false` | Bypass the SHA watermark; review the full PR diff for this run |
 | `review-target` | No | `pr` | `pr` (PR review) or `standalone` (GitHub issue) |
-| `standalone-depth` | No | `''` | Commits to diff when base and head resolve to the same SHA |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
-| `retry-count` | No | `3` | Retry attempts for transient LLM failures |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
-| `confidence-threshold` | No | `75` | Minimum finding confidence score (0–100); findings below this are dropped |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536) |
+| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
+
+Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).
 
 ## Review modes
 
@@ -269,7 +268,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
 
-**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl errors (connection refused, timeout, network failure) are retried with exponential backoff and jitter. Controlled by the `retry-count` input (default: 3).
+**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl errors (connection refused, timeout, network failure) are retried with exponential backoff and jitter. Controlled by the `LLM_RETRY_COUNT` env var (default: 3).
 
 **Parallel execution**: Agents run in a tiered fan-out by default — Tier 1 issues up to ~3 concurrent LLM calls alongside any triggered static analyzers; Tier 2 (full mode only) issues up to 5 concurrent LLM calls. The concurrency numbers apply to LLM calls only (for rate-limit planning); static analyzers run concurrently with them but do not consume LLM quota. If your provider's rate limits cannot sustain this throughput, set `parallel: false` to revert to sequential execution.
 

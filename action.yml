@@ -56,16 +56,6 @@ inputs:
     required: false
     default: 'quick'
 
-  force-full-diff:
-    description: >-
-      Force a full-PR diff, bypassing the SHA watermark that normally enables
-      incremental reviews. Set to 'true' to re-review the full diff
-      (origin/BASE_REF...HEAD_SHA). The watermark advances normally after the
-      run (one-shot per invocation). Typically set via the ai-review-rescan PR
-      label in the workflow.
-    required: false
-    default: 'false'
-
   review-target:
     description: >
       Review target: pr (post review on a pull request) or standalone
@@ -73,15 +63,6 @@ inputs:
       Default: pr.
     required: false
     default: 'pr'
-
-  standalone-depth:
-    description: >
-      In standalone mode, when base-ref resolves to the same commit as head-sha
-      (e.g. reviewing the tip of main against itself), diff the last N commits
-      instead. If not set, diffs the entire tree against the empty tree
-      (reviews all file content).
-    required: false
-    default: ''
 
   max-diff-lines:
     description: >
@@ -111,14 +92,6 @@ inputs:
       Needs pull-requests: write permission.
     required: true
 
-  # --- Resilience ---
-  retry-count:
-    description: >
-      Number of retry attempts for transient LLM API failures (429, 5xx, timeouts).
-      Set to 0 to disable retries. Uses exponential backoff with jitter.
-    required: false
-    default: '3'
-
   # --- Performance ---
   parallel:
     description: >
@@ -130,15 +103,6 @@ inputs:
       rate limits.
     required: false
     default: 'true'
-
-  # --- Filtering ---
-  confidence-threshold:
-    description: >
-      Minimum confidence score (0–100) a finding must have to be included in the review.
-      Findings below this threshold are dropped before suppressions are evaluated.
-      Lowering this value surfaces more findings; raising it reduces noise.
-    required: false
-    default: '75'
 
   # --- Output limits ---
   max-inline:
@@ -195,9 +159,7 @@ runs:
       env:
         AI_PROVIDER: ${{ inputs.provider }}
         AI_REVIEW_MODE: ${{ inputs.review-mode }}
-        FORCE_FULL_DIFF: ${{ inputs.force-full-diff }}
         REVIEW_TARGET: ${{ inputs.review-target }}
-        STANDALONE_DEPTH: ${{ inputs.standalone-depth }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         AI_MODEL_STANDARD: ${{ inputs.model-standard }}
         AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
@@ -215,9 +177,7 @@ runs:
         PR_NUMBER: ${{ inputs.pr-number }}
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_SHA: ${{ inputs.head-sha }}
-        LLM_RETRY_COUNT: ${{ inputs.retry-count }}
         AI_PARALLEL: ${{ inputs.parallel }}
-        AI_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}

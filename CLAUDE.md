@@ -203,7 +203,7 @@ The SHA of the last-reviewed commit is stored in an HTML comment embedded in the
 
 Each post-review script keeps at most one summary comment on the PR/MR by calling `_cleanup_duplicate_summary_comments()` after each upsert. Duplicates can accumulate when two runs fire concurrently. Cleanup is non-fatal: DELETE failures emit a WARNING, but the review never blocks on cleanup.
 
-To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. This sets the `force-full-diff` action input to `true`, which causes `review.sh` to skip the `--get-last-sha` call (leaving `LAST_REVIEWED_SHA=""`) and fall through to the full `origin/BASE_REF...HEAD_SHA` diff. The watermark still advances normally at the end of the run.
+To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. The workflow sets `FORCE_FULL_DIFF=true` via the `env:` block, which causes `review.sh` to skip the `--get-last-sha` call (leaving `LAST_REVIEWED_SHA=""`) and fall through to the full `origin/BASE_REF...HEAD_SHA` diff. The watermark still advances normally at the end of the run.
 
 ## Context message variants
 
@@ -471,7 +471,7 @@ Consuming repos can add **local suppressions** by placing a `suppressions.json` 
 | `LLM_RETRY_COUNT` | `3` | Number of retry attempts (set to 0 to disable) |
 | `LLM_RETRY_BASE_DELAY` | `2` | Base delay in seconds (doubles each retry) |
 
-The `retry-count` input in `action.yml` maps to `LLM_RETRY_COUNT`. The `parallel` input maps to `AI_PARALLEL`. The `confidence-threshold` input maps to `AI_CONFIDENCE_THRESHOLD`. The `max-inline` input maps to `AI_MAX_INLINE`. The `max-tokens-per-agent` input maps to `AI_MAX_TOKENS_PER_AGENT`. The `enable-suggestions` input maps to `AI_ENABLE_SUGGESTIONS`.
+The `parallel` input in `action.yml` maps to `AI_PARALLEL`. The `max-inline` input maps to `AI_MAX_INLINE`. The `max-tokens-per-agent` input maps to `AI_MAX_TOKENS_PER_AGENT`. The `enable-suggestions` input maps to `AI_ENABLE_SUGGESTIONS`.
 
 Additional env vars consumed by the scripts (not exposed as action inputs):
 
@@ -480,10 +480,18 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `MAX_DIFF_LINES` | `5000` | Maximum diff lines before skipping review (mapped from `max-diff-lines` action input) |
 | `AI_PARALLEL` | `true` | Tiered parallel agent execution; set to `false` to disable (mapped from `parallel` action input) |
-| `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings to be included (mapped from `confidence-threshold` action input) |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run; excess routed to summary body (mapped from `max-inline` action input) |
-| `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
+| `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input). Gemini defaults to `16384` when not set. |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). Supported on GitHub and GitLab; ignored on Bitbucket. |
+
+**Advanced tuning (env-var only — no action input):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FORCE_FULL_DIFF` | `false` | Bypass the SHA watermark and review the full PR diff. Prefer the `ai-review-rescan` PR label. |
+| `STANDALONE_DEPTH` | `''` | In standalone mode, diff the last N commits when base and head resolve to the same SHA. |
+| `LLM_RETRY_COUNT` | `3` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
+| `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings; below this threshold findings are dropped. |
 | `LLM_PROMPT_CACHING` | `auto` | Enable Anthropic/Bedrock prompt caching via `cache_control: ephemeral` markers. See [Prompt caching](#prompt-caching). Valid: `auto`, `true`, `false`. |
 | `AI_CACHE_PRIMING` | `false` | Opt-in. Serialize 1-2 cache-writing calls before Tier 1 fan-out so subsequent parallel agents hit the warm cache. Default off — live benchmarks showed no net cost win vs the unprimed baseline (opportunistic concurrent-start timing already captures the same cache hits). Enable (`true`) in environments where opportunistic hits don't happen (strict rate limiting, proxy serialization). Adds ~30s wall-clock when enabled. See [Cache priming](#cache-priming-issue-144--opt-in-tuning-knob). |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud--gitlab). |

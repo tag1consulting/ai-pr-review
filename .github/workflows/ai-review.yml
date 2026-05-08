@@ -85,6 +85,8 @@ jobs:
           echo "base_ref=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
 
       - uses: ./container-action
+        env:
+          FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
         with:
           image-tag: 'latest'
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
@@ -96,10 +98,6 @@ jobs:
               (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
               (startsWith(github.event.pull_request.head.ref, 'release/') && 'full') ||
               'quick'
-            }}
-          force-full-diff: >-
-            ${{
-              contains(github.event.pull_request.labels.*.name, 'ai-review-rescan')
             }}
           review-target: ${{ (github.event_name == 'workflow_dispatch' && inputs.pr_number == '') && 'standalone' || 'pr' }}
           pr-number: ${{ inputs.pr_number || github.event.pull_request.number || '' }}
