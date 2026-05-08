@@ -103,6 +103,16 @@ Findings use shape-distinct icons for accessibility:
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
 | Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7` |
 
+### Provider-specific notes
+
+**Anthropic** — The default and most-tested provider. Uses explicit prompt caching (`cache_control: ephemeral`) with a shared-cache layout that gives agents in the same cohort a single shared cache entry. Typical cold-run savings of ~47%, hot-run ~61%. Premium tier uses Opus for deeper reasoning on Tier 2 agents (architecture, security, edge-case).
+
+**OpenAI** — Fully supported. Uses `max_completion_tokens` (the modern field; `max_tokens` is kept for `openai-compatible`). Automatic prefix caching (50% discount on cached input tokens for prompts ≥1024 tokens) is measured and reported in the token usage table. Premium tier uses `gpt-4.1` for Tier 2 agents. OpenAI reasoning models (`o3`, `o4-mini`) are supported — temperature is automatically omitted for these models. In benchmarks on a 162-line diff, OpenAI (gpt-4o + gpt-4.1) was ~81% cheaper than Anthropic (Sonnet + Opus) with comparable finding quality (all critical/high issues caught, zero false positives).
+
+**OpenAI-compatible** — For third-party endpoints (Azure OpenAI, Groq, Together, local models). Uses the legacy `max_tokens` field for broader compatibility. Requires `base-url` and explicit `model-standard`/`model-premium` inputs.
+
+**Google Gemini** — Supported but not yet production-tested. Uses `gemini-2.5-flash` (standard) and `gemini-2.5-pro` (premium). Gemini's implicit caching is not currently measured. See [issue #159](https://github.com/tag1consulting/ai-pr-review/issues/159) for the testing roadmap.
+
 ## Requirements
 
 **The container action is the recommended way to run ai-pr-review.** It pulls a public multi-arch image from GHCR (linux/amd64 and linux/arm64) — no additional authentication or toolchain setup required. Most analyzer binaries (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, phpstan, kube-linter, tflint) ship pre-installed at pinned versions. ESLint is not bundled (it runs from the consumer's `node_modules` / `npx` via the project's own config); the review proceeds without ESLint findings if no JS toolchain is present.
@@ -368,18 +378,22 @@ CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, 
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
+After each review run, a collapsible **Token usage by agent** table is appended to the review comment. The table uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
 
 | Column | Description |
 |--------|-------------|
 | Agent | Agent name |
-| Model | Human-readable model name (e.g. "Sonnet 4.6") |
-| Input | Input tokens consumed |
+| Model | Human-readable model name (e.g. "Sonnet 4.6", "GPT-4.1") |
+| Input | Input tokens consumed (uncached) |
 | Output | Output tokens generated |
+| Cache Write | Tokens written to cache (Anthropic/Bedrock only; 0 for OpenAI) |
+| Cache Read | Tokens read from cache (Anthropic explicit cache or OpenAI automatic prefix cache) |
 | Total | Combined token count |
 | Est. Cost | Estimated cost at public list prices |
 
-Costs are calculated using public list prices as of April 2026 and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
+When no cache activity is detected, the Cache Write and Cache Read columns are omitted (6-column layout).
+
+Costs are calculated using rates from `config/model-pricing.json` and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
 
 ## Architecture
 
