@@ -299,18 +299,49 @@ emit_response() {
 # Build an Anthropic-shaped request body (shared by call_anthropic and
 # call_bedrock_proxy — bedrock-proxy wraps the same API with a version field).
 #
-# When prompt caching is enabled, both the system prompt and user message are
-# wrapped in a structured-content array with a cache_control: ephemeral marker
-# at the end. This makes the entire system prompt AND the entire user message
-# cacheable. Anthropic permits up to 4 cache_control markers per request;
-# we use 2 (system + user).
+# Caching strategy (issues #122 + #142):
 #
-# Per-agent caching works because:
-#   * The system prompt file is stable for a given agent+mode (retries hit
-#     the cache on the second+ attempt within the 5-minute TTL).
-#   * The user message (CODE_CONTEXT_MSG or FULL_CONTEXT_MSG) is re-used
-#     across 4-5 agents in a single run, so the 2nd+ agent in that group
-#     gets a cache hit on its input.
+# Anthropic's cache key is CUMULATIVE: a hash of the full prefix up to and
+# including each cache_control marker. Two requests with identical user-message
+# content but different system prompts will NOT share a cache entry if the
+# marker is anywhere in or after the differing system prompt — the preceding
+# bytes differ, so the hash differs.
+#
+# To unlock shared caching across agents that have different system prompts
+# but the same user context (CODE_CONTEXT_MSG reused across 4–5 agents per
+# review run), we restructure the request when caching is enabled:
+#
+#   system: [
+#     { "text": "<USER_MESSAGE_FILE contents>", "cache_control": ephemeral },
+#     { "text": "<SYSTEM_PROMPT_FILE contents>" }
+#   ]
+#   messages: [{ "role": "user", "content": "Please perform the review." }]
+#
+# Why this works:
+#   * Anthropic's cache hierarchy is `tools → system → messages`. The cache
+#     key at the end of system[0] covers only tools (empty) + system[0] —
+#     identical across every agent because USER_MESSAGE_FILE is the shared
+#     CODE_CONTEXT_MSG / FULL_CONTEXT_MSG.
+#   * Even when system[1] (the agent prompt) differs per agent, Anthropic
+#     walks backward looking for earlier cache entries. The cumulative hash
+#     at end of system[0] IS shared, so every agent after the first hits
+#     cache on the context bytes (typically the bulk of input tokens).
+#   * The agent-specific system[1] is always processed fresh (it was going
+#     to be per-agent anyway; no regression).
+#   * The messages array carries only a trivial sentinel turn. It's small
+#     enough that sending it uncached per request is negligible.
+#
+# This is a semantic change from the pre-#142 layout (where the diff lived
+# in messages[0].content and the agent prompt in system). Prompts in this
+# repo were written for the old layout — if any agent's behavior changes
+# meaningfully, that's a quality issue worth benchmarking. Empirically the
+# model treats late-system content as "additional instructions" and
+# early-system content as "context," which matches our goal.
+#
+# When caching is DISABLED, the request falls back to the legacy layout
+# (system: agent prompt as string, messages[0].content: user as string) —
+# bit-for-bit identical to pre-#122 for providers that don't support
+# prompt caching or when operators opt out via LLM_PROMPT_CACHING=false.
 #
 # Args:
 #   $1 — extra_fields_jq  (e.g. '{anthropic_version: "bedrock-2023-05-31"}' or '{}')
@@ -353,21 +384,32 @@ _build_anthropic_body() {
     {
       system: (
         if $caching then
-          [{type: "text", text: $system, cache_control: {type: "ephemeral"}}]
+          # Shared-cache layout: the reused user content (CODE_CONTEXT_MSG)
+          # becomes system[0] with a cache_control marker; the per-agent
+          # system prompt becomes system[1]. Anthropic walks backward and
+          # finds the shared hash at end of system[0] regardless of what
+          # system[1] says, so agents 2-N hit the cache on context.
+          [
+            {type: "text", text: $user, cache_control: {type: "ephemeral"}},
+            {type: "text", text: $system}
+          ]
         else
+          # Legacy layout (caching off): system is the agent prompt, full stop.
           $system
         end
       ),
-      messages: [{
-        role: "user",
-        content: (
-          if $caching then
-            [{type: "text", text: $user, cache_control: {type: "ephemeral"}}]
-          else
-            $user
-          end
-        )
-      }],
+      messages: (
+        if $caching then
+          # Sentinel user turn — the real context is in system[0] above.
+          # Keep this minimal and stable so it contributes nothing meaningful
+          # to the cache hash and doesn''t confuse the model about what to
+          # produce.
+          [{role: "user", content: "Please perform your review now."}]
+        else
+          # Legacy layout (caching off): user content goes in messages[0].
+          [{role: "user", content: $user}]
+        end
+      ),
       max_tokens: $max_tokens
     } +
     (if $temperature != null then {temperature: $temperature} else {} end)
