@@ -60,47 +60,6 @@ mktemp_tracked() {
   echo "$f"
 }
 
-detect_language() {
-  local ext="$1"
-  case "$ext" in
-    go) echo "Go" ;;
-    py) echo "Python" ;;
-    js|jsx) echo "JavaScript" ;;
-    ts|tsx) echo "TypeScript" ;;
-    php|module|theme|inc) echo "PHP" ;;
-    tf|tfvars) echo "Terraform" ;;
-    sh|bash) echo "Shell" ;;
-    yaml|yml) echo "YAML" ;;
-    rb|rake|gemspec) echo "Ruby" ;;
-    rs) echo "Rust" ;;
-    java) echo "Java" ;;
-    c|h|cpp|hpp|cc|cxx) echo "C++" ;;
-    *) echo "" ;;
-  esac
-}
-
-
-is_test_file() {
-  local file="$1"
-  [[ "$file" =~ _test\.go$ ]] ||
-  [[ "$file" =~ test_.*\.py$ ]] ||
-  [[ "$file" =~ _test\.py$ ]] ||
-  [[ "$file" =~ \.test\.[jt]sx?$ ]] ||
-  [[ "$file" =~ \.spec\.[jt]sx?$ ]] ||
-  [[ "$file" =~ _spec\.rb$ ]] ||
-  [[ "$file" =~ _test\.rb$ ]] ||
-  [[ "$file" =~ Test\.java$ ]] ||
-  [[ "$file" =~ TestBase\.php$ ]] ||
-  [[ "$file" =~ Test\.php$ ]] ||
-  [[ "$file" =~ _test\.cpp$ ]] ||
-  [[ "$file" =~ _test\.cc$ ]] ||
-  [[ "$file" =~ _test\.ts$ ]] ||
-  [[ "$file" =~ /tests/ ]] ||
-  [[ "$file" =~ /test/ ]] ||
-  [[ "$file" =~ /spec/ ]]
-}
-
-
 # --- Helper: call agent and handle failure ---
 # Intercepts TOKENS: lines from llm-call.sh stderr for usage tracking;
 # forwards all other stderr to the workflow log.
@@ -876,6 +835,8 @@ main() {
   # EOF guard).
   # shellcheck source=lib/pricing.sh
   source "${SCRIPT_DIR}/lib/pricing.sh"
+  # shellcheck source=lib/languages.sh
+  source "${SCRIPT_DIR}/lib/languages.sh"
 
   # Resolve the provider-specific post-review script. GitHub uses the canonical
   # post-review.sh; other providers use sibling scripts (e.g. post-review-bitbucket.sh).

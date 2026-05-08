@@ -5,7 +5,7 @@ bats_require_minimum_version 1.5.0
 
 setup() {
   load test_helper
-  load_function "${PROJECT_ROOT}/review.sh" is_test_file
+  load_function "${PROJECT_ROOT}/lib/languages.sh" is_test_file
 }
 
 # ---------------------------------------------------------------------------
