@@ -220,14 +220,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Runtime-only dependencies. Notably absent vs builder: curl, unzip, xz-utils,
-# python3-pip (and its large dependency tree). git is runtime-only here (the
-# action scripts invoke `git` against the mounted workspace).
+# Runtime-only dependencies. Notably absent vs builder: unzip, xz-utils,
+# python3-pip (and its large dependency tree).
+#
+# curl is required at runtime — it is invoked by llm-call.sh,
+# post-review-{github,bitbucket,gitlab}.sh (provider API calls), and
+# analyzers/run-cve-check.sh (OSV.dev queries). PR #160 initially dropped
+# curl from the final stage thinking it was build-time only; the regression
+# caused every LLM call and provider API call to fail with curl exit 127.
+# Keep curl in the runtime stage.
+#
+# git is runtime-only here (the action scripts invoke `git` against the
+# mounted workspace).
 # hadolint ignore=DL3008
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       bash \
       ca-certificates \
+      curl \
       git \
       jq \
       php-cli \
