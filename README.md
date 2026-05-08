@@ -98,7 +98,7 @@ Findings use shape-distinct icons for accessibility:
 | Provider | `provider` value | Required secret | Default models (standard / premium) |
 |----------|-----------------|-----------------|--------------------------------------|
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` / `claude-opus-4-7` |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` / `gpt-4.1` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` / `gpt-5.4` |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
 | Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7` |
@@ -107,7 +107,7 @@ Findings use shape-distinct icons for accessibility:
 
 **Anthropic** — The default and most-tested provider. Uses explicit prompt caching (`cache_control: ephemeral`) with a shared-cache layout that gives agents in the same cohort a single shared cache entry. Typical cold-run savings of ~47%, hot-run ~61%. Premium tier uses Opus for deeper reasoning on Tier 2 agents (architecture, security, edge-case).
 
-**OpenAI** — Fully supported. Uses `max_completion_tokens` (the modern field; `max_tokens` is kept for `openai-compatible`). Automatic prefix caching (50% discount on cached input tokens for prompts ≥1024 tokens) is measured and reported in the token usage table. Premium tier uses `gpt-4.1` for Tier 2 agents. OpenAI reasoning models (`o3`, `o4-mini`) are supported — temperature is automatically omitted for these models. In benchmarks on a 162-line diff, OpenAI (gpt-4o + gpt-4.1) was ~81% cheaper than Anthropic (Sonnet + Opus) with comparable finding quality (all critical/high issues caught, zero false positives).
+**OpenAI** — Fully supported. Default models are `gpt-5.4-mini` (standard, Tier 1) and `gpt-5.4` (premium, Tier 2). Uses `max_completion_tokens` (the modern field; `max_tokens` is kept for `openai-compatible`). Automatic prefix caching (50% discount on cached input tokens for prompts ≥1024 tokens) is measured and reported in the token usage table. OpenAI reasoning models (`o3`, `o4-mini`) and reasoning-capable models (`gpt-5`, `gpt-5.5`) are supported — temperature is automatically omitted for these models. In benchmarks on a 162-line diff, OpenAI (gpt-5.4-mini + gpt-5.4) was ~79% cheaper than Anthropic (Sonnet + Opus) with comparable finding quality (all critical/high issues caught, zero false positives). Override with `model-standard` / `model-premium` inputs — `gpt-4o`, `gpt-4.1`, and `gpt-5.5` are all supported.
 
 **OpenAI-compatible** — For third-party endpoints (Azure OpenAI, Groq, Together, local models). Uses the legacy `max_tokens` field for broader compatibility. Requires `base-url` and explicit `model-standard`/`model-premium` inputs.
 

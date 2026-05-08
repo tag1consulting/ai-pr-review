@@ -88,6 +88,46 @@
     "cache_read_rate": 275000
   },
   {
+    "patterns": ["gpt-5\\.4-nano"],
+    "display_name": "GPT-5.4 nano",
+    "input_rate": 200000,
+    "output_rate": 1250000,
+    "cache_write_rate": 0,
+    "cache_read_rate": 20000
+  },
+  {
+    "patterns": ["gpt-5\\.4-mini"],
+    "display_name": "GPT-5.4 mini",
+    "input_rate": 750000,
+    "output_rate": 4500000,
+    "cache_write_rate": 0,
+    "cache_read_rate": 75000
+  },
+  {
+    "patterns": ["gpt-5\\.4(?!-(mini|nano|pro))"],
+    "display_name": "GPT-5.4",
+    "input_rate": 2500000,
+    "output_rate": 15000000,
+    "cache_write_rate": 0,
+    "cache_read_rate": 250000
+  },
+  {
+    "patterns": ["gpt-5\\.5(?!-pro)"],
+    "display_name": "GPT-5.5",
+    "input_rate": 5000000,
+    "output_rate": 30000000,
+    "cache_write_rate": 0,
+    "cache_read_rate": 500000
+  },
+  {
+    "patterns": ["gpt-5(?!\\.)"],
+    "display_name": "GPT-5",
+    "input_rate": 1250000,
+    "output_rate": 10000000,
+    "cache_write_rate": 0,
+    "cache_read_rate": 125000
+  },
+  {
     "patterns": ["gemini-2\\.5-pro"],
     "display_name": "Gemini 2.5 Pro",
     "input_rate": 1250000,
