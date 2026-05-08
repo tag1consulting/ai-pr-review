@@ -67,21 +67,19 @@ GL_API="${GITLAB_API_URL:-https://gitlab.com/api/v4}"
 MARKER_PREFIX="<!-- ai-pr-review-summary"
 
 # ---------------------------------------------------------------------------
-# Temp file bookkeeping (keep in sync with post-review.sh:322).
+# Temp file bookkeeping.
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2034
 TMPFILES=()
-cleanup() {
-  rm -f "${TMPFILES[@]}" 2>/dev/null || true
-}
-trap cleanup EXIT
 
-# keep in sync with post-review.sh:327
-mktemp_tracked() {
-  local f
-  f=$(mktemp "$@")
-  TMPFILES+=("$f")
-  echo "$f"
-}
+# Shared helpers (severity_icon, format_source_tag, classify_risk,
+# format_body_finding, build_agent_prompt, parse_valid_lines,
+# parse_diff_new_lines, mktemp_tracked, cleanup). truncate_body stays
+# below — its "MR note size limit" message is provider-specific.
+# shellcheck source=vcs/common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcs/common.sh"
+
+trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # gl_api — invoke the GitLab REST API v4 with token auth.
@@ -187,39 +185,7 @@ truncate_body() {
   fi
 }
 
-# keep in sync with post-review.sh:735
-severity_icon() {
-  case "${1,,}" in
-    critical) echo "❌" ;;
-    high)     echo "🚨" ;;
-    medium)   echo "🔶" ;;
-    low)      echo "💬" ;;
-    *)        echo "⚪" ;;
-  esac
-}
 
-# keep in sync with post-review.sh:748
-format_source_tag() {
-  local finding_obj="$1"
-  local sources primary rest
-  sources=$(echo "$finding_obj" | jq -r '
-    if (.sources | type) == "array" and (.sources | length) > 0 then
-      .sources[]
-    else
-      (.source // "unknown")
-    end
-  ' 2>/dev/null)
-
-  primary=$(echo "$sources" | head -1)
-  [[ -z "$primary" ]] && { echo "[unknown]"; return; }
-  rest=$(echo "$sources" | tail -n +2 | paste -sd ', ' -)
-
-  if [[ -n "$rest" ]]; then
-    echo "[${primary}] *(also flagged by: ${rest})*"
-  else
-    echo "[${primary}]"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # --get-last-sha mode: must run before positional-arg validation so it can
@@ -464,168 +430,10 @@ fi
 
 resolve_project_id
 
-# ---------------------------------------------------------------------------
-# keep in sync with post-review.sh:662
-# Parse diff to emit file:line pairs for added (+) lines only.
-# These are valid targets for inline MR discussions.
-# ---------------------------------------------------------------------------
-parse_valid_lines() {
-  local diff_file="$1"
-  local current_file=""
-  local new_line=0
 
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^diff\ --git\ a/(.+)\ b/(.+) ]]; then
-      current_file="${BASH_REMATCH[2]}"
-      new_line=0
-    elif [[ "$line" =~ ^\+\+\+\  || "$line" =~ ^---\  ]]; then
-      continue
-    elif [[ "$line" =~ ^@@\ -[0-9]+(,[0-9]+)?\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
-      new_line="${BASH_REMATCH[2]}"
-    elif [[ -n "$current_file" && "$new_line" -gt 0 ]]; then
-      if [[ "$line" =~ ^\+ ]]; then
-        echo "${current_file}:${new_line}"
-        new_line=$((new_line + 1))
-      elif [[ "$line" =~ ^- ]]; then
-        :
-      elif [[ "$line" =~ ^\\ ]]; then
-        :
-      else
-        new_line=$((new_line + 1))
-      fi
-    fi
-  done < "$diff_file"
-}
 
-# ---------------------------------------------------------------------------
-# keep in sync with post-review.sh:701
-# Parse diff to emit file:line pairs for both added and context lines
-# (NOT deleted lines). Used to validate multi-line suggestion ranges.
-# ---------------------------------------------------------------------------
-parse_diff_new_lines() {
-  local diff_file="$1"
-  local current_file=""
-  local new_line=0
 
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^diff\ --git\ a/(.+)\ b/(.+) ]]; then
-      current_file="${BASH_REMATCH[2]}"
-      new_line=0
-    elif [[ "$line" =~ ^\+\+\+\  || "$line" =~ ^---\  ]]; then
-      continue
-    elif [[ "$line" =~ ^@@\ -[0-9]+(,[0-9]+)?\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
-      new_line="${BASH_REMATCH[2]}"
-    elif [[ -n "$current_file" && "$new_line" -gt 0 ]]; then
-      if [[ "$line" =~ ^\+ ]]; then
-        echo "${current_file}:${new_line}"
-        new_line=$((new_line + 1))
-      elif [[ "$line" =~ ^- ]]; then
-        :
-      elif [[ "$line" =~ ^\\ ]]; then
-        :
-      else
-        echo "${current_file}:${new_line}"
-        new_line=$((new_line + 1))
-      fi
-    fi
-  done < "$diff_file"
-}
 
-# ---------------------------------------------------------------------------
-# keep in sync with post-review.sh:779
-# Format a single finding for the review body (non-inline).
-# Includes remediation and suggested_code in a collapsible <details> block
-# when present. suggested_code renders as a plain code fence (not a
-# suggestion fence, which only works in inline MR discussions).
-# Args: severity source_tag finding location loc_note remediation [suggested_code]
-# ---------------------------------------------------------------------------
-format_body_finding() {
-  local severity="$1" source_tag="$2" finding="$3" location="$4" loc_note="$5" remediation="$6"
-  local suggested_code="${7:-}"
-  local bullet
-  bullet="- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${location}\`${loc_note}"
-  if [[ -n "$remediation" || -n "$suggested_code" ]]; then
-    local details=""
-    if [[ -n "$remediation" ]]; then
-      details="**Remediation:** ${remediation}"
-    fi
-    if [[ -n "$suggested_code" && "$suggested_code" != *'```'* ]]; then
-      local indented_code
-      indented_code=$(printf '%s' "$suggested_code" | sed 's/^/  /')
-      if [[ -n "$details" ]]; then
-        details="${details}
-
-  "
-      fi
-      details="${details}**Suggested fix:**
-  \`\`\`
-${indented_code}
-  \`\`\`"
-    fi
-    printf '%s\n  <details>\n  <summary>Details</summary>\n\n  %s\n\n  </details>' "$bullet" "$details"
-  else
-    printf '%s' "$bullet"
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# keep in sync with post-review.sh:815
-# Build a collapsible "Prompt for AI agents" block from the findings JSON.
-# ---------------------------------------------------------------------------
-build_agent_prompt() {
-  local findings_json="$1"
-  local count
-  count=$(echo "$findings_json" | jq 'length' 2>/dev/null || echo 0)
-  [[ "$count" -eq 0 ]] && return
-
-  local prompt_body
-  local jq_ok=true
-  prompt_body=$(echo "$findings_json" | jq -r '
-    group_by(.file) | map(
-      "In `\(.[0].file)`:" as $header |
-      [$header] + [
-        .[] |
-        "- Around line \(.line // "?"): \(.finding)" +
-          if (.remediation // "") != "" then ". " + .remediation else "" end
-      ] | join("\n")
-    ) | join("\n\n")
-  ' 2>/dev/null) || jq_ok=false
-  if [[ "$jq_ok" == "false" ]]; then
-    echo "WARNING: build_agent_prompt: jq failed; agent prompt block will be omitted." >&2
-    return
-  fi
-
-  [[ -z "$prompt_body" ]] && return
-
-  printf '<details>\n<summary>🤖 Prompt for AI agents</summary>\n\n```\nVerify each finding against the current code and only fix it if needed.\n\n%s\n```\n\n</details>' "$prompt_body"
-}
-
-# ---------------------------------------------------------------------------
-# Classify overall risk from the findings JSON. Prints "<risk>|<event>".
-# keep in sync with post-review-bitbucket.sh:349
-# ---------------------------------------------------------------------------
-classify_risk() {
-  local findings_json="$1"
-  local finding_total failed_agents_env
-  finding_total=$(echo "$findings_json" | jq 'length')
-  failed_agents_env="${AI_REVIEW_FAILED_AGENTS:-}"
-
-  if [[ "$finding_total" -eq 0 ]]; then
-    if [[ -n "$failed_agents_env" ]]; then
-      echo "Unknown|COMMENT"
-    else
-      echo "None|APPROVE"
-    fi
-  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "critical")' > /dev/null 2>&1; then
-    echo "Critical|REQUEST_CHANGES"
-  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "high")' > /dev/null 2>&1; then
-    echo "High|REQUEST_CHANGES"
-  elif echo "$findings_json" | jq -e '.[] | select((.severity | ascii_downcase) == "medium")' > /dev/null 2>&1; then
-    echo "Medium|APPROVE"
-  else
-    echo "Low|APPROVE"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # Build the complete summary comment body: marker + summary + body findings

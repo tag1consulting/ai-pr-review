@@ -5,7 +5,7 @@
 
 setup() {
   load test_helper
-  load_function "${PROJECT_ROOT}/post-review.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
 }
 
 # ---------------------------------------------------------------------------
@@ -547,8 +547,8 @@ _build_multi_line_comment() {
 
 setup_format_body_finding() {
   load test_helper
-  load_function "${PROJECT_ROOT}/post-review.sh" severity_icon
-  load_function "${PROJECT_ROOT}/post-review.sh" format_body_finding
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" format_body_finding
 }
 
 @test "format_body_finding: includes remediation in details block" {
@@ -633,7 +633,7 @@ setup_format_body_finding() {
 
 setup_build_agent_prompt() {
   load test_helper
-  load_function "${PROJECT_ROOT}/post-review.sh" build_agent_prompt
+  load_function "${PROJECT_ROOT}/vcs/common.sh" build_agent_prompt
 }
 
 @test "build_agent_prompt: groups findings by file with remediation" {

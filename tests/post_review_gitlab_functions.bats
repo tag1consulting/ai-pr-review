@@ -9,8 +9,8 @@
 
 setup() {
   load test_helper
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" severity_icon
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" format_source_tag
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" format_source_tag
 }
 
 # ---------------------------------------------------------------------------
@@ -130,8 +130,8 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "gitlab format_body_finding: basic finding with remediation" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" severity_icon
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" format_body_finding
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" format_body_finding
   run format_body_finding "High" "[code-reviewer]" "SQL injection risk" "app.py:42" "" "Use parameterized queries"
   [ "$status" -eq 0 ]
   [[ "$output" == *"🚨"* ]]
@@ -142,8 +142,8 @@ setup() {
 }
 
 @test "gitlab format_body_finding: finding without remediation" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" severity_icon
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" format_body_finding
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" format_body_finding
   run format_body_finding "Low" "[shellcheck]" "Unused variable" "script.sh:10" "" ""
   [ "$status" -eq 0 ]
   [[ "$output" == *"💬"* ]]
@@ -151,8 +151,8 @@ setup() {
 }
 
 @test "gitlab format_body_finding: suggested_code with triple backticks is rejected" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" severity_icon
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" format_body_finding
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" format_body_finding
   run format_body_finding "Medium" "[agent]" "Issue" "f.py:1" "" "Fix it" '```evil```'
   [ "$status" -eq 0 ]
   [[ "$output" != *'```evil```'* ]]
@@ -163,7 +163,7 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "gitlab build_agent_prompt: groups findings by file" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" build_agent_prompt
+  load_function "${PROJECT_ROOT}/vcs/common.sh" build_agent_prompt
   local json='[
     {"file":"a.py","line":1,"finding":"issue A","remediation":"fix A"},
     {"file":"a.py","line":5,"finding":"issue B","remediation":"fix B"},
@@ -177,7 +177,7 @@ setup() {
 }
 
 @test "gitlab build_agent_prompt: empty findings returns nothing" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" build_agent_prompt
+  load_function "${PROJECT_ROOT}/vcs/common.sh" build_agent_prompt
   run build_agent_prompt "[]"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -188,7 +188,7 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "gitlab parse_valid_lines: extracts added lines from unified diff" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" parse_valid_lines
+  load_function "${PROJECT_ROOT}/vcs/common.sh" parse_valid_lines
   local diff_file
   diff_file=$(mktemp)
   cat > "$diff_file" << 'DIFF'
@@ -216,14 +216,14 @@ DIFF
 # ---------------------------------------------------------------------------
 
 @test "gitlab classify_risk: no findings no failures -> None|APPROVE" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  load_function "${PROJECT_ROOT}/vcs/common.sh" classify_risk
   unset AI_REVIEW_FAILED_AGENTS
   run classify_risk "[]"
   [ "$output" = "None|APPROVE" ]
 }
 
 @test "gitlab classify_risk: no findings with failures -> Unknown|COMMENT" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  load_function "${PROJECT_ROOT}/vcs/common.sh" classify_risk
   AI_REVIEW_FAILED_AGENTS="agent-a:agent-b"
   run classify_risk "[]"
   [ "$output" = "Unknown|COMMENT" ]
@@ -231,25 +231,25 @@ DIFF
 }
 
 @test "gitlab classify_risk: critical finding -> Critical|REQUEST_CHANGES" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  load_function "${PROJECT_ROOT}/vcs/common.sh" classify_risk
   run classify_risk '[{"severity":"Critical","file":"a.py","line":1,"finding":"x"}]'
   [ "$output" = "Critical|REQUEST_CHANGES" ]
 }
 
 @test "gitlab classify_risk: high finding -> High|REQUEST_CHANGES" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  load_function "${PROJECT_ROOT}/vcs/common.sh" classify_risk
   run classify_risk '[{"severity":"High","file":"a.py","line":1,"finding":"x"}]'
   [ "$output" = "High|REQUEST_CHANGES" ]
 }
 
 @test "gitlab classify_risk: medium finding -> Medium|APPROVE" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  load_function "${PROJECT_ROOT}/vcs/common.sh" classify_risk
   run classify_risk '[{"severity":"Medium","file":"a.py","line":1,"finding":"x"}]'
   [ "$output" = "Medium|APPROVE" ]
 }
 
 @test "gitlab classify_risk: low finding -> Low|APPROVE" {
-  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" classify_risk
+  load_function "${PROJECT_ROOT}/vcs/common.sh" classify_risk
   run classify_risk '[{"severity":"Low","file":"a.py","line":1,"finding":"x"}]'
   [ "$output" = "Low|APPROVE" ]
 }
@@ -325,44 +325,7 @@ DIFF
 # 3-way parity tests: GitHub vs Bitbucket vs GitLab
 # ===========================================================================
 
-@test "parity: severity_icon identical across all three providers" {
-  local inputs=("critical" "Critical" "high" "HIGH" "medium" "Medium" "low" "LOW" "info" "")
-  local gh_fn bb_fn gl_fn
-  gh_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  bb_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  gl_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-  for input in "${inputs[@]}"; do
-    local gh_out bb_out gl_out
-    gh_out=$(bash -c "${gh_fn}"'; severity_icon "$1"' _ "$input")
-    bb_out=$(bash -c "${bb_fn}"'; severity_icon "$1"' _ "$input")
-    gl_out=$(bash -c "${gl_fn}"'; severity_icon "$1"' _ "$input")
-    [ "$gh_out" = "$bb_out" ] || { echo "drift gh/bb on input='${input}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
-    [ "$gh_out" = "$gl_out" ] || { echo "drift gh/gl on input='${input}': gh='${gh_out}' gl='${gl_out}'" >&2; return 1; }
-  done
-}
 
-@test "parity: format_source_tag identical across all three providers" {
-  local fixtures=(
-    '{"source":"code-reviewer"}'
-    '{"sources":["a","b","c"]}'
-    '{"sources":[]}'
-    '{}'
-    '{"source":"","sources":[]}'
-    '{"source":"agent-a","sources":["agent-a"]}'
-  )
-  local gh_fn bb_fn gl_fn
-  gh_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  bb_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  gl_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-  for fixture in "${fixtures[@]}"; do
-    local gh_out bb_out gl_out
-    gh_out=$(bash -c "${gh_fn}"'; format_source_tag "$1"' _ "$fixture")
-    bb_out=$(bash -c "${bb_fn}"'; format_source_tag "$1"' _ "$fixture")
-    gl_out=$(bash -c "${gl_fn}"'; format_source_tag "$1"' _ "$fixture")
-    [ "$gh_out" = "$bb_out" ] || { echo "drift gh/bb on fixture='${fixture}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
-    [ "$gh_out" = "$gl_out" ] || { echo "drift gh/gl on fixture='${fixture}': gh='${gh_out}' gl='${gl_out}'" >&2; return 1; }
-  done
-}
 
 @test "parity: truncate_body short inputs pass through unchanged in all three scripts" {
   local fixtures=(
@@ -429,165 +392,8 @@ DIFF
   [[ "$gl_out" != *"truncated"* ]] || { echo "GitLab should not truncate 65000 bytes" >&2; return 1; }
 }
 
-@test "parity: mktemp_tracked registers files for cleanup in all three scripts" {
-  local gh_fn bb_fn gl_fn
-  gh_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  bb_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  gl_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
 
-  local gh_path_file bb_path_file gl_path_file
-  gh_path_file=$(mktemp /tmp/parity-gh-pathfile-XXXXXXXX)
-  bb_path_file=$(mktemp /tmp/parity-bb-pathfile-XXXXXXXX)
-  gl_path_file=$(mktemp /tmp/parity-gl-pathfile-XXXXXXXX)
-  # shellcheck disable=SC2064
-  trap "rm -f '$gh_path_file' '$bb_path_file' '$gl_path_file'" EXIT
 
-  local gh_result bb_result gl_result
-  gh_result=$(bash -c '
-    TMPFILES=()
-    '"${gh_fn}"'
-    mktemp_tracked /tmp/parity-gh-XXXXXXXX > "$1"
-    f=$(cat "$1")
-    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ' _ "$gh_path_file")
-  bb_result=$(bash -c '
-    TMPFILES=()
-    '"${bb_fn}"'
-    mktemp_tracked /tmp/parity-bb-XXXXXXXX > "$1"
-    f=$(cat "$1")
-    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ' _ "$bb_path_file")
-  gl_result=$(bash -c '
-    TMPFILES=()
-    '"${gl_fn}"'
-    mktemp_tracked /tmp/parity-gl-XXXXXXXX > "$1"
-    f=$(cat "$1")
-    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ' _ "$gl_path_file")
 
-  [[ "$gh_result" == ok:* ]] || { echo "GitHub mktemp_tracked did not register: ${gh_result}" >&2; return 1; }
-  [[ "$bb_result" == ok:* ]] || { echo "Bitbucket mktemp_tracked did not register: ${bb_result}" >&2; return 1; }
-  [[ "$gl_result" == ok:* ]] || { echo "GitLab mktemp_tracked did not register: ${gl_result}" >&2; return 1; }
 
-  local gh_path bb_path gl_path
-  gh_path="${gh_result#ok:}"
-  bb_path="${bb_result#ok:}"
-  gl_path="${gl_result#ok:}"
-  rm -f "$gh_path" "$bb_path" "$gl_path"
-}
 
-@test "parity: format_body_finding identical between GitHub and GitLab" {
-  local gh_fn gl_fn
-  # Extract both severity_icon and format_body_finding from each script
-  local gh_si gl_si
-  gh_si=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  gl_si=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-  gh_fn=$(awk '/^format_body_finding\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  gl_fn=$(awk '/^format_body_finding\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-
-  local fixtures=(
-    'High|[agent]|SQL injection|app.py:42||Use params|'
-    'Low|[sc]|Unused var|s.sh:10|||'
-    'Medium|[cr]|Issue|f.py:1||Fix it|echo hello'
-  )
-  for fixture in "${fixtures[@]}"; do
-    IFS='|' read -r sev tag finding loc note rem code <<< "$fixture"
-    local gh_out gl_out
-    gh_out=$(bash -c "${gh_si}"$'\n'"${gh_fn}"'; format_body_finding "$@"' _ "$sev" "$tag" "$finding" "$loc" "$note" "$rem" "$code")
-    gl_out=$(bash -c "${gl_si}"$'\n'"${gl_fn}"'; format_body_finding "$@"' _ "$sev" "$tag" "$finding" "$loc" "$note" "$rem" "$code")
-    [ "$gh_out" = "$gl_out" ] || { echo "drift on fixture '${fixture}'" >&2; echo "GH: ${gh_out}" >&2; echo "GL: ${gl_out}" >&2; return 1; }
-  done
-}
-
-@test "parity: build_agent_prompt identical between GitHub and GitLab" {
-  local gh_fn gl_fn
-  gh_fn=$(awk '/^build_agent_prompt\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  gl_fn=$(awk '/^build_agent_prompt\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-
-  local json='[
-    {"file":"a.py","line":1,"finding":"issue A","remediation":"fix A"},
-    {"file":"b.py","line":10,"finding":"issue B","remediation":""}
-  ]'
-  local gh_out gl_out
-  gh_out=$(bash -c "${gh_fn}"'; build_agent_prompt "$1"' _ "$json")
-  gl_out=$(bash -c "${gl_fn}"'; build_agent_prompt "$1"' _ "$json")
-  [ "$gh_out" = "$gl_out" ] || { echo "drift in build_agent_prompt" >&2; return 1; }
-}
-
-@test "parity: parse_valid_lines identical between GitHub and GitLab" {
-  local gh_fn gl_fn
-  gh_fn=$(awk '/^parse_valid_lines\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  gl_fn=$(awk '/^parse_valid_lines\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-
-  local diff_file
-  diff_file=$(mktemp)
-  cat > "$diff_file" << 'DIFF'
-diff --git a/foo.py b/foo.py
---- a/foo.py
-+++ b/foo.py
-@@ -1,3 +1,5 @@
- context
-+added
- more context
-+another
- end
-DIFF
-
-  local gh_out gl_out
-  gh_out=$(bash -c "${gh_fn}"'; parse_valid_lines "$1"' _ "$diff_file")
-  gl_out=$(bash -c "${gl_fn}"'; parse_valid_lines "$1"' _ "$diff_file")
-  rm -f "$diff_file"
-  [ "$gh_out" = "$gl_out" ] || { echo "drift in parse_valid_lines: gh='${gh_out}' gl='${gl_out}'" >&2; return 1; }
-}
-
-@test "parity: parse_diff_new_lines identical between GitHub and GitLab" {
-  local gh_fn gl_fn
-  gh_fn=$(awk '/^parse_diff_new_lines\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  gl_fn=$(awk '/^parse_diff_new_lines\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-
-  local diff_file
-  diff_file=$(mktemp)
-  cat > "$diff_file" << 'DIFF'
-diff --git a/foo.py b/foo.py
---- a/foo.py
-+++ b/foo.py
-@@ -1,4 +1,5 @@
- context
-+added
- more context
--deleted
-+replaced
- end
-DIFF
-
-  local gh_out gl_out
-  gh_out=$(bash -c "${gh_fn}"'; parse_diff_new_lines "$1"' _ "$diff_file")
-  gl_out=$(bash -c "${gl_fn}"'; parse_diff_new_lines "$1"' _ "$diff_file")
-  rm -f "$diff_file"
-  [ "$gh_out" = "$gl_out" ] || { echo "drift in parse_diff_new_lines: gh='${gh_out}' gl='${gl_out}'" >&2; return 1; }
-}
-
-@test "parity: classify_risk identical between Bitbucket and GitLab" {
-  local bb_fn gl_fn
-  bb_fn=$(awk '/^classify_risk\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  gl_fn=$(awk '/^classify_risk\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-gitlab.sh")
-
-  local fixtures=(
-    '[]'
-    '[{"severity":"Critical","file":"a.py","line":1,"finding":"x"}]'
-    '[{"severity":"High","file":"a.py","line":1,"finding":"x"}]'
-    '[{"severity":"Medium","file":"a.py","line":1,"finding":"x"}]'
-    '[{"severity":"Low","file":"a.py","line":1,"finding":"x"}]'
-  )
-  for fixture in "${fixtures[@]}"; do
-    local bb_out gl_out
-    bb_out=$(bash -c 'AI_REVIEW_FAILED_AGENTS=""; '"${bb_fn}"'; classify_risk "$1"' _ "$fixture")
-    gl_out=$(bash -c 'AI_REVIEW_FAILED_AGENTS=""; '"${gl_fn}"'; classify_risk "$1"' _ "$fixture")
-    [ "$bb_out" = "$gl_out" ] || { echo "drift on fixture='${fixture}': bb='${bb_out}' gl='${gl_out}'" >&2; return 1; }
-  done
-  # Also test with failed agents
-  local bb_fail gl_fail
-  bb_fail=$(bash -c 'AI_REVIEW_FAILED_AGENTS="agent-x"; '"${bb_fn}"'; classify_risk "[]"' _)
-  gl_fail=$(bash -c 'AI_REVIEW_FAILED_AGENTS="agent-x"; '"${gl_fn}"'; classify_risk "[]"' _)
-  [ "$bb_fail" = "$gl_fail" ] || { echo "drift on failed-agents: bb='${bb_fail}' gl='${gl_fail}'" >&2; return 1; }
-}

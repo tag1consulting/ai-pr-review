@@ -13,7 +13,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `review.sh` | Main orchestrator: diff computation, manifest building, language detection, agent dispatch, findings merge/dedup/suppress, invokes the provider-specific post-review script |
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS: input=N output=N cache_creation=N cache_read=N model=M` line to stderr. Anthropic and Bedrock paths enable prompt caching via `cache_control: ephemeral` markers on the system prompt and user message (gated by `LLM_PROMPT_CACHING`; default `auto`). |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
-| `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Sibling-script pattern](#sibling-script-pattern)) |
+| `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark (no inline comments in v0.2.0; see [Shared helpers (vcs/common.sh)](#shared-helpers-vcscommonsh)) |
 | `post-review-gitlab.sh` | GitLab API layer: upserts summary note, posts inline MR discussions with suggestion fences, resolves stale bot discussions, advances SHA watermark |
 | `analyzers/run-shellcheck.sh` | Wraps shellcheck for changed `.sh`/`.bash` files; outputs findings in the same JSON schema as LLM agents |
 | `analyzers/run-cve-check.sh` | Queries [OSV.dev](https://osv.dev/) for known vulnerabilities in changed dependency manifests (`go.mod`, `package.json`, `requirements.txt`, `composer.json`); outputs findings in the same JSON schema as LLM agents |
@@ -48,32 +48,50 @@ values fail fast with a clear error. `REVIEW_TARGET=standalone` is rejected
 for Bitbucket (no Issues product); GitLab standalone mode posts findings as
 a GitLab Issue.
 
-### Sibling-script pattern
+### Shared helpers (`vcs/common.sh`)
 
-`post-review-bitbucket.sh` and `post-review-gitlab.sh` are **sibling
-scripts**, not refactors of `post-review.sh`. They duplicate pure helpers
-(`severity_icon`, `format_source_tag`, `truncate_body`, `mktemp_tracked`,
-`cleanup`, and for GitLab additionally `classify_risk`,
-`format_body_finding`, `build_agent_prompt`, `parse_valid_lines`,
-`parse_diff_new_lines`)
-because sourcing across providers would couple unrelated concerns.
+The three post-review scripts source `vcs/common.sh` for helpers that
+have no provider coupling. The file exports:
 
-**Drift mitigation:** every duplicated helper carries a
-`# keep in sync with post-review.sh:<line>` comment above it.
-`tests/post_review_bitbucket_functions.bats` and
-`tests/post_review_gitlab_functions.bats` contain 3-way parity tests that
-evaluate all three implementations against shared fixtures — the test
-fails if any copy drifts.
+- `severity_icon` — severity-to-emoji mapping
+- `format_source_tag` — renders `[agent] *(also flagged by: ...)*`
+  attribution from a finding's `sources[]` or `.source` field
+- `classify_risk` — maps findings JSON to `<label>|<review-event>`
+- `format_body_finding` — renders one body bullet with optional
+  `<details>` remediation / suggestion block (used by GitHub + GitLab;
+  Bitbucket uses `render_findings_markdown` because Bitbucket Cloud
+  does not render `<details>`)
+- `build_agent_prompt` — collapsible "🤖 Prompt for AI agents" block
+- `parse_valid_lines` — emits `file:line` for `+` diff lines (inline
+  comment anchors)
+- `parse_diff_new_lines` — emits `file:line` for `+` AND context lines
+  (multi-line suggestion range validation)
+- `mktemp_tracked`, `cleanup` — temp-file lifecycle; each script
+  declares `TMPFILES=()` and installs `trap cleanup EXIT` itself
 
-**Per-provider constants:** `MAX_BODY_SIZE` differs per provider
-(64000 for GitHub, 32000 for Bitbucket, 250000 for GitLab). These are
-defined inside each script, not shared.
+Each post-review script sources `vcs/common.sh` via a path derived from
+`BASH_SOURCE[0]` so it works whether invoked from the repo root or from
+`/opt/ai-pr-review/` inside the container.
 
-**Refactor trigger:** condition (a) from the original design (third VCS
-provider scoped) is now met with GitLab. The sibling pattern was retained
-for this release to reduce risk — the `vcs/<provider>.sh` abstraction
-refactor is planned as a separate follow-up when either script exceeds
-~500 LOC of provider-specific logic.
+**What stays per-script (genuinely divergent):**
+
+- `truncate_body` — error message is provider-specific
+  ("65,536 bytes" / "32,768 chars" / "MR note size limit")
+- `MAX_BODY_SIZE` — 64000 / 32000 / 250000 per provider
+- `_cleanup_duplicate_summary_comments`, `find_existing_summary_id`,
+  `build_comment_body`, `post_summary_with_findings`,
+  `update_sha_marker` — share names across scripts but differ in API
+  wrapper (`gh_api_retry` vs `bb_api` vs `gl_api`), return contract,
+  and formatting needs. Extracting them would require a unified
+  `vcs_api` abstraction outside the scope of `vcs/common.sh`.
+
+**Testing:** `tests/post_review_functions.bats`,
+`tests/post_review_bitbucket_functions.bats`, and
+`tests/post_review_gitlab_functions.bats` use `load_function` to extract
+the shared helpers from `vcs/common.sh` once. `truncate_body` still has
+3-way parity tests (since it remains per-script); the parity tests for
+the shared helpers were retired — there's now a single source of truth,
+so drift is impossible.
 
 ### Bitbucket-specific feature gaps (v0.2.0)
 
@@ -132,8 +150,8 @@ corresponding `_SHA256_<ARCH>` ARG.
   `/opt/composer/` (vendor tree) and `/opt/ai-pr-review/semgrep-rules/`.
 
 Action scripts (`review.sh`, `post-review*.sh`, `analyzers/`, `prompts/`,
-etc.) are copied at the end of the final stage so source-only changes
-don't invalidate the heavy builder layers.
+`vcs/`, etc.) are copied at the end of the final stage so source-only
+changes don't invalidate the heavy builder layers.
 
 Drops `unzip`, `xz-utils`, `python3-pip`, and `composer.phar` from the
 runtime image. `curl` stays — `llm-call.sh`, the provider post-review
@@ -654,7 +672,7 @@ bash review.sh
 Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because the scripts have no main guard (sourcing them triggers the full orchestration pipeline), `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell. This means:
 
 - No production script changes are needed to make functions testable
-- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), from `post-review.sh` (`gh_api_retry`, `severity_icon`, `parse_valid_lines`, `format_body_finding`, `build_agent_prompt`), and from `post-review-gitlab.sh` (`severity_icon`, `format_source_tag`, `classify_risk`, `resolve_project_id`, plus 3-way parity tests)
+- Tests cover pure functions from `review.sh` (`detect_language`, `is_test_file`, `model_pricing`, `model_display_name`, `format_cost`, `extract_findings`, `merge_findings`, `call_agent`, `call_agent_bg`, `collect_parallel_results`), from `llm-call.sh` (`is_transient_http`, `is_transient_curl`, `retry_curl`), from `vcs/common.sh` (`severity_icon`, `format_source_tag`, `classify_risk`, `format_body_finding`, `build_agent_prompt`, `parse_valid_lines`, `parse_diff_new_lines`), and from the provider-specific scripts (`gh_api_retry`, `resolve_project_id`, `truncate_body` — which still has 3-way parity tests since the truncation message differs per provider)
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.

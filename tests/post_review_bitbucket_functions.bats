@@ -8,8 +8,8 @@
 
 setup() {
   load test_helper
-  load_function "${PROJECT_ROOT}/post-review-bitbucket.sh" severity_icon
-  load_function "${PROJECT_ROOT}/post-review-bitbucket.sh" format_source_tag
+  load_function "${PROJECT_ROOT}/vcs/common.sh" severity_icon
+  load_function "${PROJECT_ROOT}/vcs/common.sh" format_source_tag
   # truncate_body depends on MAX_BODY_SIZE; load both under prefixed names
   # so we can exercise the Bitbucket cap (32000) separately from GitHub's.
 }
@@ -140,44 +140,7 @@ setup() {
 # the other.
 # ---------------------------------------------------------------------------
 
-@test "parity: severity_icon produces identical output in both scripts" {
-  # Fresh shell per run to avoid function collision.
-  # Fixtures are passed as positional args ($1), not interpolated into the
-  # bash -c script string, so embedded quotes / metacharacters cannot break
-  # quoting or execute unintended commands.
-  local inputs=("critical" "Critical" "high" "HIGH" "medium" "Medium" "low" "LOW" "info" "")
-  local gh_fn bb_fn
-  gh_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  bb_fn=$(awk '/^severity_icon\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  for input in "${inputs[@]}"; do
-    local gh_out bb_out
-    gh_out=$(bash -c "${gh_fn}"'; severity_icon "$1"' _ "$input")
-    bb_out=$(bash -c "${bb_fn}"'; severity_icon "$1"' _ "$input")
-    [ "$gh_out" = "$bb_out" ] || { echo "drift on input='${input}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
-  done
-}
 
-@test "parity: format_source_tag produces identical output in both scripts" {
-  # Fixtures are passed as positional args ($1), not interpolated (see note
-  # above). This matters because fixtures contain single quotes and braces.
-  local fixtures=(
-    '{"source":"code-reviewer"}'
-    '{"sources":["a","b","c"]}'
-    '{"sources":[]}'
-    '{}'
-    '{"source":"","sources":[]}'
-    '{"source":"agent-a","sources":["agent-a"]}'
-  )
-  local gh_fn bb_fn
-  gh_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  bb_fn=$(awk '/^format_source_tag\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-  for fixture in "${fixtures[@]}"; do
-    local gh_out bb_out
-    gh_out=$(bash -c "${gh_fn}"'; format_source_tag "$1"' _ "$fixture")
-    bb_out=$(bash -c "${bb_fn}"'; format_source_tag "$1"' _ "$fixture")
-    [ "$gh_out" = "$bb_out" ] || { echo "drift on fixture='${fixture}': gh='${gh_out}' bb='${bb_out}'" >&2; return 1; }
-  done
-}
 
 @test "parity: truncate_body short inputs pass through unchanged in both scripts" {
   # This test only covers inputs well under both caps (GitHub=64000, Bitbucket=32000).
@@ -228,52 +191,3 @@ setup() {
   [ "$bb_bytes" -lt 32500 ] || { echo "Bitbucket truncated output too large: ${bb_bytes} bytes" >&2; return 1; }
 }
 
-@test "parity: mktemp_tracked registers files for cleanup in both scripts" {
-  local gh_fn bb_fn
-  gh_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review.sh")
-  bb_fn=$(awk '/^mktemp_tracked\(\)/{f=1} f{print} f && /^}$/{exit}' "${PROJECT_ROOT}/post-review-bitbucket.sh")
-
-  # Verify the core contract: the created file is registered in TMPFILES so
-  # the EXIT trap can clean it up. A broken implementation that omits
-  # TMPFILES+=("$f") would still echo the path and pass a file-exists check.
-  #
-  # mktemp_tracked must be called directly (not in $()) so TMPFILES+=("$f")
-  # mutates the same shell's TMPFILES array — a $() subshell would get a copy
-  # and the parent would never see the registration.
-  #
-  # Use mktemp to pre-allocate path-passing files before the bash -c call.
-  # $$ inside bash -c expands to the subprocess PID, not the outer shell's PID,
-  # so /tmp/...$$ names would mismatch between writer and reader.
-  local gh_path_file bb_path_file
-  gh_path_file=$(mktemp /tmp/parity-gh-pathfile-XXXXXXXX)
-  bb_path_file=$(mktemp /tmp/parity-bb-pathfile-XXXXXXXX)
-  # Register for cleanup on any exit path (assertion failure, abort, etc.)
-  # shellcheck disable=SC2064  # intentional: expand vars now so the trap captures the paths
-  trap "rm -f '$gh_path_file' '$bb_path_file'" EXIT
-
-  local gh_result bb_result
-  gh_result=$(bash -c '
-    TMPFILES=()
-    '"${gh_fn}"'
-    mktemp_tracked /tmp/parity-gh-XXXXXXXX > "$1"
-    f=$(cat "$1")
-    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ' _ "$gh_path_file")
-  bb_result=$(bash -c '
-    TMPFILES=()
-    '"${bb_fn}"'
-    mktemp_tracked /tmp/parity-bb-XXXXXXXX > "$1"
-    f=$(cat "$1")
-    [[ "${TMPFILES[0]}" == "$f" ]] && echo "ok:$f" || echo "not-registered:$f"
-  ' _ "$bb_path_file")
-
-  [[ "$gh_result" == ok:* ]] || { echo "GitHub mktemp_tracked did not register in TMPFILES: ${gh_result}" >&2; return 1; }
-  [[ "$bb_result" == ok:* ]] || { echo "Bitbucket mktemp_tracked did not register in TMPFILES: ${bb_result}" >&2; return 1; }
-
-  # Clean up the temp files created by the subshells (EXIT trap fires inside
-  # each bash -c, but the paths are returned here so we can verify removal).
-  local gh_path bb_path
-  gh_path="${gh_result#ok:}"
-  bb_path="${bb_result#ok:}"
-  rm -f "$gh_path" "$bb_path"
-}
