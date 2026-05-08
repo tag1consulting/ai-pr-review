@@ -14,9 +14,12 @@
 #   AI_TEMPERATURE    — Optional: defaults to 0.3
 #   LLM_PROMPT_CACHING — Optional: auto (default) | true | false
 #       auto/true enables Anthropic/Bedrock prompt caching via cache_control
-#       markers on the system prompt and user message. No effect on OpenAI
-#       (automatic prefix caching is stable-prefix-based, no marker needed)
-#       or Google (Gemini uses a different caching API, currently unsupported).
+#       markers on the system prompt and user message. No effect on Google
+#       (Gemini uses a different caching API, currently unsupported).
+#       OpenAI's automatic prefix caching is always active for first-party
+#       OpenAI (AI_PROVIDER=openai) via the shared-cache layout (issue #164)
+#       — no marker needed, but the request is restructured to maximize the
+#       shared prefix across agents.
 #
 #   Provider credentials (one set required based on AI_PROVIDER):
 #     anthropic:          ANTHROPIC_API_KEY
@@ -456,37 +459,80 @@ call_anthropic() {
 }
 
 # ---------------------------------------------------------------------------
-# Provider: OpenAI (api.openai.com) or OpenAI-compatible endpoint
+# Build an OpenAI-shaped request body (used by call_openai).
+#
+# Shared-cache layout for first-party OpenAI (issue #164):
+#
+# OpenAI's automatic prefix caching matches the longest common prefix across
+# requests. Our agents share the same user context (CODE_CONTEXT_MSG /
+# FULL_CONTEXT_MSG) but have different per-agent system prompts. With the
+# legacy layout (system=agent prompt, user=shared context), every agent has
+# a different prefix from byte 0, defeating cross-agent cache sharing.
+#
+# The shared-cache layout puts the shared context FIRST in the system message,
+# followed by a separator and the per-agent prompt. The user message becomes
+# a minimal sentinel. This mirrors the Anthropic shared-cache layout (issue
+# #142) but uses string concatenation instead of a content-block array
+# (OpenAI doesn't support system arrays).
+#
+# Only applied to AI_PROVIDER=openai. openai-compatible endpoints may have
+# different prefix caching behavior or no caching at all, so they keep the
+# legacy layout.
 # ---------------------------------------------------------------------------
-call_openai() {
-  : "${OPENAI_API_KEY:?OPENAI_API_KEY is required for AI_PROVIDER=${AI_PROVIDER}}"
-  local base_url="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+_build_openai_body() {
+  local temperature_val token_field use_shared_cache
 
-  # OpenAI deprecated max_tokens in favor of max_completion_tokens for newer
-  # models (gpt-4.1, o3, o4-mini). gpt-4o accepts both. Use the new field
-  # for first-party OpenAI; keep the legacy field for openai-compatible
-  # endpoints where third-party providers may not support it yet.
-  local token_field="max_completion_tokens"
-  if [[ "$AI_PROVIDER" == "openai-compatible" ]]; then
-    token_field="max_tokens"
-  fi
-
-  local temperature_val
   if model_supports_temperature "$MODEL_ID"; then
     temperature_val="$TEMPERATURE"
   else
     temperature_val="null"
   fi
 
-  local request_body
-  request_body=$(jq -n \
+  token_field="max_completion_tokens"
+  if [[ "$AI_PROVIDER" == "openai-compatible" ]]; then
+    token_field="max_tokens"
+  fi
+
+  use_shared_cache="false"
+  if [[ "$AI_PROVIDER" == "openai" ]]; then
+    use_shared_cache="true"
+  fi
+
+  jq -n \
     --arg model "$MODEL_ID" \
     --rawfile system "$SYSTEM_PROMPT_FILE" \
     --rawfile user "$USER_MESSAGE_FILE" \
     --argjson max_tokens "$MAX_TOKENS" \
     --argjson temperature "$temperature_val" \
     --arg token_field "$token_field" \
-    '{model: $model, messages: [{role: "system", content: $system}, {role: "user", content: $user}], ($token_field): $max_tokens} + (if $temperature != null then {temperature: $temperature} else {} end)') || {
+    --argjson shared_cache "$use_shared_cache" \
+    '
+    {model: $model} +
+    (if $shared_cache then
+      {messages: [
+        {role: "system", content: ($user + "\n\n---\n\nYou are a specialized review agent. Follow these instructions:\n\n" + $system)},
+        {role: "user", content: "Please perform your review now."}
+      ]}
+    else
+      {messages: [
+        {role: "system", content: $system},
+        {role: "user", content: $user}
+      ]}
+    end) +
+    {($token_field): $max_tokens} +
+    (if $temperature != null then {temperature: $temperature} else {} end)
+    '
+}
+
+# ---------------------------------------------------------------------------
+# Provider: OpenAI (api.openai.com) or OpenAI-compatible endpoint
+# ---------------------------------------------------------------------------
+call_openai() {
+  : "${OPENAI_API_KEY:?OPENAI_API_KEY is required for AI_PROVIDER=${AI_PROVIDER}}"
+  local base_url="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+
+  local request_body
+  request_body=$(_build_openai_body) || {
     echo "ERROR: jq failed to build OpenAI request body" >&2
     exit 1
   }
