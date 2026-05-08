@@ -427,6 +427,7 @@ Additional env vars consumed by the scripts (not exposed as action inputs):
 | `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] (mapped from `max-tokens-per-agent` action input) |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline review comments (mapped from `enable-suggestions` action input). See [Code suggestions](#code-suggestions). Supported on GitHub and GitLab; ignored on Bitbucket. |
 | `LLM_PROMPT_CACHING` | `auto` | Enable Anthropic/Bedrock prompt caching via `cache_control: ephemeral` markers. See [Prompt caching](#prompt-caching). Valid: `auto`, `true`, `false`. |
+| `AI_CACHE_PRIMING` | `false` | Opt-in. Serialize 1-2 cache-writing calls before Tier 1 fan-out so subsequent parallel agents hit the warm cache. Default off — live benchmarks showed no net cost win vs the unprimed baseline (opportunistic concurrent-start timing already captures the same cache hits). Enable (`true`) in environments where opportunistic hits don't happen (strict rate limiting, proxy serialization). Adds ~30s wall-clock when enabled. See [Cache priming](#cache-priming-issue-144--opt-in-tuning-knob). |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. See [Multi-provider support](#multi-provider-support-github--bitbucket-cloud--gitlab). |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Atlassian account email of the bot user (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. Atlassian API token (Basic-auth password) |
@@ -502,6 +503,31 @@ Anthropic's "walk backward" lookup finds the matching prefix hash at the end of 
 | C (hot cache, re-run within 5 min) | 13,722 | 0 | 42,965 | $0.073 | **−61%** |
 
 Weighted across typical PR traffic (70% cold / 25% hot): **~47% cheaper on average**. This replaces the pre-#142 layout which had cold runs ~23% MORE expensive (per-agent cache entries, no cross-agent sharing).
+
+### Cache priming (issue #144) — opt-in tuning knob
+
+Anthropic's docs say a cache entry only becomes visible **after the first response begins**, implying 5 concurrent Tier 2 agents would all miss the cache on first fan-out. In practice this turned out to be weaker than expected: live benchmarks against Bedrock showed parallel Tier 2 agents were already getting opportunistic cache hits via natural start-up staggering (different agent prompts, Opus+Sonnet TTFT differences, HTTP connection pooling).
+
+**Priming** serializes 1-2 cache-writing calls before Tier 1 fan-out so remaining agents hit a guaranteed-warm cache. When `AI_CACHE_PRIMING=true`, `review.sh`:
+
+1. Runs `code-reviewer` (Sonnet primer for CODE_CONTEXT_MSG cohort) concurrently with
+2. `security-reviewer` (Opus primer for CODE_CONTEXT_MSG cohort, pulled forward from Tier 2 in full mode)
+
+Both primer calls run in parallel with each other (different models → no mutual cache dependency) and complete before any other agent starts. The remaining Tier 1 agents and Tier 2 agents then fan out, every CODE_CONTEXT_MSG user seeing a warm cache on its first call.
+
+**Default is `false`.** A single-sample live benchmark on a realistic full-mode review showed priming was cost-neutral vs the unprimed baseline (same 2-of-5 cache hits either way — the baseline's opportunistic hits matched priming's guaranteed hits) and added +30s of wall-clock latency. Not worth the default. Further investigation tracked in issue #153 to collect multi-sample data before committing to a final default.
+
+Left in as an opt-in knob for environments where opportunistic hits fail:
+- Strict per-request rate limits that serialize concurrent calls
+- Proxy layers that queue rather than parallelize
+- Shorter-than-expected cache-visibility windows on non-Bedrock deployments
+- Cases where reducing variance matters more than median wall-clock time
+
+`AI_CACHE_PRIMING=true` enables it. `AI_CACHE_PRIMING=false` (default) is pre-#144 full-parallel behavior.
+
+No priming is applied to:
+- `FULL_CONTEXT_MSG` cohort (`pr-summarizer` + `architecture-reviewer`) — pr-summarizer already runs in Tier 1 before the tier barrier, so architecture-reviewer in Tier 2 naturally sees the warm cache when both run.
+- `BLIND_MSG` — single-agent cohort, no sharing possible.
 
 ### Semantic change
 

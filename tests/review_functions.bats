@@ -584,3 +584,85 @@ _token_table_setup() {
   header_line=$(echo "$output" | head -1)
   [[ "$header_line" != *"Cache Write"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# cache_priming_effective — gate resolution for the sync-prime code path
+# ---------------------------------------------------------------------------
+
+_cp_setup() {
+  load_function "${PROJECT_ROOT}/review.sh" cache_priming_effective
+}
+
+@test "cache_priming_effective: default is opt-out (returns false)" {
+  # Priming is an opt-in tuning knob — default-off, even on anthropic.
+  # Live benchmarks showed no net cost win over the unprimed baseline
+  # due to opportunistic concurrent-timing cache hits, so we don't
+  # impose the +30s wall-clock penalty on the common case.
+  _cp_setup
+  unset AI_CACHE_PRIMING LLM_PROMPT_CACHING
+  AI_PROVIDER=anthropic run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=true + anthropic → true" {
+  _cp_setup
+  unset LLM_PROMPT_CACHING
+  AI_CACHE_PRIMING=true AI_PROVIDER=anthropic run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=true + bedrock-proxy → true" {
+  _cp_setup
+  unset LLM_PROMPT_CACHING
+  AI_CACHE_PRIMING=true AI_PROVIDER=bedrock-proxy run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=true + openai → false (caching not auto-on)" {
+  _cp_setup
+  unset LLM_PROMPT_CACHING
+  AI_CACHE_PRIMING=true AI_PROVIDER=openai run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=true + explicit LLM_PROMPT_CACHING=true on openai → true" {
+  _cp_setup
+  AI_CACHE_PRIMING=true LLM_PROMPT_CACHING=true AI_PROVIDER=openai run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=true but LLM_PROMPT_CACHING=false → false" {
+  # Priming without caching is pointless — we gate it on caching being
+  # effective to avoid wasted serial latency.
+  _cp_setup
+  AI_CACHE_PRIMING=true LLM_PROMPT_CACHING=false AI_PROVIDER=anthropic run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=false explicitly opts out" {
+  _cp_setup
+  AI_CACHE_PRIMING=false AI_PROVIDER=anthropic run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
+}
+
+@test "cache_priming_effective: AI_CACHE_PRIMING=1 accepted as enabled" {
+  _cp_setup
+  AI_CACHE_PRIMING=1 AI_PROVIDER=anthropic run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ]
+}
+
+@test "cache_priming_effective: AI_PROVIDER unset returns false (no caching possible)" {
+  _cp_setup
+  unset AI_CACHE_PRIMING LLM_PROMPT_CACHING AI_PROVIDER
+  run cache_priming_effective
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
+}
