@@ -526,7 +526,7 @@ After all agents complete:
 
 When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, `llm-call.sh` uses Anthropic's ephemeral cache (5-minute TTL) via `cache_control: {type: "ephemeral"}` markers. Enabled by `LLM_PROMPT_CACHING` (default: `auto`):
 
-- `auto` — enabled for `anthropic` and `bedrock-proxy`; no-op for OpenAI (automatic prefix caching; no marker needed) and Google Gemini (different caching API, unsupported).
+- `auto` — enabled for `anthropic` and `bedrock-proxy`; no-op for OpenAI (uses shared-cache layout for prefix caching without markers; see [OpenAI automatic prefix caching](#openai-automatic-prefix-caching)) and Google Gemini (different caching API, unsupported).
 - `true` — force-enable markers.
 - `false` — force-disable; falls back to the legacy request layout (system = agent prompt, messages[0] = user content).
 
@@ -607,7 +607,9 @@ OpenAI provides automatic prefix caching (50% discount on cached input tokens) f
 
 OpenAI's cache_write_rate is 0 (no write premium — unlike Anthropic's 1.25x write cost). The discount is applied only on reads via `cache_read_rate` in `model-pricing.json`.
 
-**Current limitation:** Our request layout puts the agent-specific system prompt first, so agents with different prompts have different prefixes, defeating cross-agent cache sharing within a review run. A follow-up optimization could restructure the OpenAI request to mirror the Anthropic shared-cache layout (shared context first, agent prompt second).
+**Shared-cache layout (issue #164).** `_build_openai_body()` restructures the request for first-party OpenAI (`AI_PROVIDER=openai`) to maximize the shared prefix across agents in the same cohort. The shared context (CODE_CONTEXT_MSG / FULL_CONTEXT_MSG) is placed first in the system message, followed by a separator and the per-agent prompt. The user message becomes a minimal sentinel (`"Please perform your review now."`). This mirrors the Anthropic shared-cache layout (issue #142) but uses string concatenation instead of a content-block array (OpenAI doesn't support system arrays).
+
+`openai-compatible` endpoints keep the legacy layout (system = agent prompt, user = shared context) because third-party providers may have different caching behavior or no prefix caching at all.
 
 ### Live benchmarks
 
