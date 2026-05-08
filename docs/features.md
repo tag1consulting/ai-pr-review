@@ -92,7 +92,7 @@ The table layout adapts based on cache activity:
 | Cache Write | Tokens written to prompt cache | When any row has cache activity |
 | Cache Read | Tokens read from prompt cache | When any row has cache activity |
 | Total | Combined token count | Always |
-| Est. Cost | Estimated cost at public list prices (April 2026) | Always |
+| Est. Cost | Estimated cost at public list prices | Always |
 
 When `LLM_PROMPT_CACHING` is active (default `auto` for Anthropic/Bedrock), the table expands to 8 columns showing Cache Write and Cache Read alongside the standard columns.
 

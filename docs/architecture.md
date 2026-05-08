@@ -102,3 +102,7 @@ ai-pr-review/
 The action requires `bash`, `curl`, `jq`, `git`, and `gh` — all pre-installed on standard GitHub-hosted runners. `shellcheck` is installed automatically if not already present.
 
 The **container action** (recommended) ships all static analyzer binaries pre-installed at pinned versions — no runner setup needed. The **direct action reference** and **git submodule** paths do not install analyzer binaries; see [runtime dependencies](installation-direct-action#runtime-dependencies) for the optional install-in-workflow snippet.
+
+## Deep reference
+
+For implementation internals — findings pipeline phases, parallel agent execution, prompt caching, code suggestion validation, test architecture, Dockerfile multi-stage layout — see the [internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/ARCHITECTURE.md) (ARCHITECTURE.md).
