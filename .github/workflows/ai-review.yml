@@ -1,7 +1,10 @@
 name: AI PR Review
 
 on:
-  pull_request:
+  # pull_request_target runs the workflow from the BASE branch, not the fork.
+  # This gives fork PRs access to secrets (API keys) while keeping the workflow
+  # and container-action code trusted — forks cannot modify either.
+  pull_request_target:
     types: [opened, synchronize, ready_for_review, labeled]
   workflow_dispatch:
     inputs:
@@ -32,7 +35,7 @@ jobs:
       cancel-in-progress: true
     if: >-
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'pull_request' &&
+      (github.event_name == 'pull_request_target' &&
        github.event.pull_request.draft == false &&
        !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
        (github.event.action != 'labeled' ||
@@ -40,10 +43,22 @@ jobs:
         github.event.label.name == 'ai-review-rescan'))
     runs-on: ubuntu-latest
     steps:
+      # Check out the PR head commit for diff content, but with persist-credentials
+      # disabled so the fork cannot abuse the GITHUB_TOKEN.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      # Restore trusted container-action from the base branch so a fork PR
+      # cannot substitute a malicious action.yml.
+      - name: Restore trusted container-action
+        if: github.event_name == 'pull_request_target'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git checkout "$BASE_SHA" -- container-action/
 
       # For workflow_dispatch (PR mode): look up base ref and head SHA from the given PR number.
       - name: Resolve PR refs
