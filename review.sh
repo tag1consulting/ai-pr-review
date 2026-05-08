@@ -744,7 +744,6 @@ collect_parallel_results() {
 }
 
 # --- Build effective prompt path (composes shared trailers with the base) ---
-# Called from 10 agent dispatch sites via $(effective_prompt <agent> <base_prompt>).
 #
 # Composes three shared blocks onto the base agent prompt depending on agent
 # eligibility:
@@ -842,10 +841,10 @@ effective_prompt() {
   fi
   if [[ "$want_suggestion" -eq 1 ]]; then
     if [[ ! -f "$sa" ]]; then
-      echo "WARNING: Suggestion addendum missing at ${sa}; using base prompt for ${agent_name}." >&2
-      echo "$base_prompt"; return
+      echo "WARNING: Suggestion addendum missing at ${sa}; composing without it for ${agent_name}." >&2
+    else
+      parts+=("$sa")
     fi
-    parts+=("$sa")
   fi
 
   local combined

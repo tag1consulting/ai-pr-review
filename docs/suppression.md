@@ -103,11 +103,12 @@ it may incorrectly flag the version as "unreleased", "invalid", or
 
 The action hardens against this in two layers:
 
-1. **Prompt-level guard.** The `code-reviewer`, `security-reviewer`, and
-   `adversarial-general` prompts each include a hard constraint forbidding
-   "unreleased version" findings based on training-data recall. The model is
-   instructed to omit such findings entirely unless the version string is
-   malformed, explicitly downgraded, or covered by a cited CVE.
+1. **Prompt-level guard.** All 7 finding-producing agents receive the
+   `_knowledge-cutoff.md` shared trailer via `effective_prompt()` in
+   `review.sh`. This hard constraint forbids "unreleased version" findings
+   based on training-data recall. The model is instructed to omit such
+   findings entirely unless the version string is malformed, explicitly
+   downgraded, or covered by a cited CVE.
 2. **Verify-gated suppression.** If a repeat hallucination slips through, add a
    suppression rule with a `verify` field (table above). The rule fires only
    if the authoritative registry confirms the version exists. This is

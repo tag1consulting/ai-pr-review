@@ -123,11 +123,11 @@ inputs:
   parallel:
     description: >
       Run agents in parallel (tiered fan-out) to reduce wall-clock time.
-      Tier 1 (pr-summarizer, code-reviewer, silent-failure-hunter) and the static
-      analyzers (shellcheck, CVE check) run concurrently; Tier 2 full-mode agents
-      (architecture, security, blind, edge-case, adversarial) run as a second
-      concurrent batch after Tier 1 completes.
-      Set to false to revert to sequential execution if you hit provider rate limits.
+      Tier 1 (pr-summarizer, code-reviewer, silent-failure-hunter) and all static
+      analyzers run concurrently; Tier 2 full-mode agents (architecture, security,
+      blind, edge-case, adversarial) run as a second concurrent batch after Tier 1
+      completes. Set to false to revert to sequential execution if you hit provider
+      rate limits.
     required: false
     default: 'true'
 
@@ -164,7 +164,7 @@ inputs:
       eligible LLM agents (code-reviewer, edge-case-hunter, security-reviewer,
       silent-failure-hunter, blind-hunter) are instructed to generate concrete code
       replacement suggestions that PR authors can accept with one click.
-      Increases output token usage. GitHub-only — has no effect on Bitbucket.
+      Increases output token usage. Supported on GitHub and GitLab; ignored on Bitbucket.
     required: false
     default: 'true'
 

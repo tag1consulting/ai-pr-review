@@ -103,6 +103,16 @@ rules, bot-is-author) are non-fatal warnings.
 
 See [docs/gitlab-setup.md](docs/gitlab-setup.md) for the full list.
 
+### Multi-arch container image
+
+The `Dockerfile` builds for linux/amd64 and linux/arm64. Each binary
+download uses a `case "${TARGETARCH}"` block with per-arch SHA256
+checksums (shellcheck, gh, trufflehog, golangci-lint, hadolint,
+kube-linter, tflint). pip-installed tools (ruff, semgrep, checkov) and
+composer-installed tools (phpcs, phpstan) are arch-neutral. Adding a new
+architecture requires extending each `case` block and supplying the
+corresponding `_SHA256_<ARCH>` ARG.
+
 ### Dockerfile COPY glob
 
 `Dockerfile` uses `COPY post-review*.sh` (a glob) so future provider

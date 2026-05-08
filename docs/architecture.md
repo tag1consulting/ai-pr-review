@@ -32,6 +32,9 @@ ai-pr-review/
 │   ├── model-pricing.json  # Per-model token pricing for cost estimation
 │   └── suppressions.json   # Declarative false-positive suppression rules
 ├── prompts/                # System prompts for each review agent
+│   ├── _knowledge-cutoff.md    # Shared trailer: version-existence hallucination guard
+│   ├── _trailer-findings.md    # Shared trailer: json-findings output schema
+│   ├── suggestion-addendum.md  # Shared trailer: "Apply suggestion" formatting (gated)
 │   ├── pr-summarizer.md
 │   ├── code-reviewer.md
 │   ├── silent-failure-hunter.md
