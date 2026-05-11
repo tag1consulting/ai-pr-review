@@ -164,12 +164,17 @@ build_file_manifest() {
     MANIFEST+=$'\n'"Docs: $(set +o pipefail; printf '%s' "$DOC_FILES" | head -10 | tr '\n' ', ' | sed 's/,$//')"
   fi
 
-  # Commit log — scoped to the same range as the diff
+  # Commit log — scoped to the same range as the diff.
+  # Uses short hash + full subject + body (separated by blank lines) so agents
+  # can see the author's intent. Capped at 20 commits and 4000 chars total.
+  local _cl_range
   if [[ -n "$DIFF_BASE" ]]; then
-    COMMIT_LOG=$(set +o pipefail; git log --oneline "${DIFF_BASE}..${HEAD_SHA}" 2>/dev/null | head -20)
+    _cl_range="${DIFF_BASE}..${HEAD_SHA}"
   else
-    COMMIT_LOG=$(set +o pipefail; git log --oneline "origin/${BASE_REF}..${HEAD_SHA}" 2>/dev/null | head -20)
+    _cl_range="origin/${BASE_REF}..${HEAD_SHA}"
   fi
+  COMMIT_LOG=$(set +o pipefail; git log --format='%h %s%n%b' --max-count=20 "$_cl_range" 2>/dev/null \
+    | head -c 4000) || true
 
   # Compute diff size for informational logging (and large-diff warning).
   # grep fails when the pattern is absent (pure adds have no deletions, etc.),
