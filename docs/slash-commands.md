@@ -15,9 +15,32 @@ nav_order: 99
 
 AI PR Review supports commands posted as PR comments. Most commands are processed by a workflow that reacts to `issue_comment` events; the `dismiss` command listens on `pull_request_review_comment` events since it operates on inline review threads.
 
-## Setup
+## Quick start
 
-Copy `examples/workflows/comment-triggers.yml` into your repo's `.github/workflows/` directory and merge it to your default branch. See [examples/README.md](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/README.md) for prerequisites.
+### 1. Copy the starter workflow
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/tag1consulting/ai-pr-review/main/examples/workflows/comment-triggers.yml \
+  -o .github/workflows/ai-pr-review-commands.yml
+```
+
+This is a thin wrapper (~70 lines) that delegates to a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in the ai-pr-review repository. All command-parsing, review-dispatch, and dismiss/thread-resolution logic lives upstream — you don't need to maintain it.
+
+### 2. Verify your API key secret
+
+The starter template references `secrets.ANTHROPIC_API_KEY`. If you use a different provider, update the `api-key` line and optionally uncomment the `provider` input.
+
+### 3. Merge to your default branch
+
+> **This step is required before commands will work.** GitHub runs
+> `issue_comment` and `pull_request_review_comment` workflows from the
+> **default branch** only. If you add slash commands in the same PR as
+> the main review workflow, the review will start working immediately
+> (it uses `pull_request` events), but slash commands won't respond
+> until that PR merges.
+
+Commit and merge the workflow file. Once it lands on your default branch, post `/ai-pr-review help` in any PR to verify.
 
 ## Commands
 
@@ -51,7 +74,7 @@ Posts the command list as a reply comment.
 
 ## Access control
 
-Commands can only be triggered by users with `OWNER`, `MEMBER`, or `COLLABORATOR` association on the repository. This is enforced via an `author_association` guard on the job's `if:` condition in `comment-triggers.yml`. GitHub does **not** enforce this automatically — without the guard, any authenticated user who can comment on a PR could trigger reviews.
+Commands can only be triggered by users with `OWNER`, `MEMBER`, or `COLLABORATOR` association on the repository. This is enforced via an `author_association` guard on the job's `if:` condition in the consumer workflow. GitHub does **not** enforce this automatically — without the guard, any authenticated user who can comment on a PR could trigger reviews.
 
 ## Feedback via emoji reactions
 
@@ -70,8 +93,49 @@ The comment-trigger workflow runs from the **default branch** of your repository
 
 **What this means in practice:**
 - Changes to the comment-trigger workflow only take effect after they are merged to your default branch.
-- A PR that modifies `comment-triggers.yml` will not use its own updated version of the workflow while that PR is open — it uses the version already on the default branch.
+- A PR that modifies `ai-pr-review-commands.yml` will not use its own updated version of the workflow while that PR is open — it uses the version already on the default branch.
+
+## Customizing
+
+The starter template exposes commented-out inputs for common customizations:
+
+```yaml
+# provider: 'anthropic'        # LLM provider
+# base-url: ''                  # For openai-compatible/bedrock-proxy
+# image-tag: 'latest'           # Pin to a specific container version
+# review-mode-default: 'quick'  # Default mode for rescan command
+```
+
+Uncomment and modify as needed. The complete list of inputs is documented in the reusable workflow file (`.github/workflows/slash-commands.yml` in this repository).
+
+## Architecture: reusable workflow
+
+The slash command system is implemented as a GitHub Actions [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows):
+
+```
+Consumer repo                          ai-pr-review repo
+┌─────────────────────┐                ┌────────────────────────────────┐
+│ ai-pr-review-       │  workflow_call │ .github/workflows/             │
+│   commands.yml      │ ──────────────>│   slash-commands.yml           │
+│ (~70 lines)         │   forwards     │ (handle-command + dismiss jobs)│
+│                     │   event data   │                                │
+│ • on: issue_comment │   + secrets    │ • command parsing              │
+│ • on: pr_review_    │                │ • help / skip / rescan /       │
+│     comment         │                │   review-full dispatch         │
+└─────────────────────┘                │ • dismiss: GraphQL thread      │
+                                       │   resolution + review dismiss  │
+                                       └────────────────────────────────┘
+```
+
+**Benefits:**
+- Consumers copy ~70 lines instead of ~455
+- Bug fixes and new commands ship upstream — consumers get them automatically on their next run
+- The dismiss job's complex GraphQL logic never needs to be understood or maintained by consumers
+- Review action invocation stays in sync — no risk of consumers' rescan inputs drifting from their main review workflow
 
 ## Extending the command surface
 
-To add custom commands, edit your copy of `comment-triggers.yml`. The parsing block is a simple `case` statement — add new entries there and corresponding steps below. The action itself only needs different inputs/env vars (`FORCE_FULL_DIFF`, `review-mode`, labels); no changes to the action scripts are required.
+To add custom commands that only apply to your repository, you have two options:
+
+1. **Add a separate job** in your consumer workflow that handles your custom commands before or after calling the reusable workflow.
+2. **Open an issue** on the ai-pr-review repo to propose adding the command upstream if it would benefit other consumers.

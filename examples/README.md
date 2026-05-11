@@ -7,7 +7,7 @@ Copy these files into your repository to enable AI PR/MR reviews.
 | File | Purpose |
 |---|---|
 | `workflows/pr-review.yml` | GitHub Actions: automatic review on PR open/sync |
-| `workflows/comment-triggers.yml` | GitHub Actions: slash command support (`/ai-pr-review rescan`, etc.) |
+| `workflows/comment-triggers.yml` | GitHub Actions: slash command support — thin wrapper that calls the reusable workflow (`/ai-pr-review rescan`, etc.) |
 | `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
 | `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
 
@@ -51,7 +51,9 @@ The example workflow auto-selects full review mode when the source branch starts
 
 ## Slash commands
 
-Once `comment-triggers.yml` is merged to your default branch, post these commands in any PR comment:
+The `comment-triggers.yml` starter is a thin wrapper (~70 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in this repository. All command parsing, review dispatch, and dismiss logic lives upstream — consumers don't need to maintain it.
+
+Once the file is merged to your default branch, post these commands in any PR comment:
 
 | Command | Effect |
 |---|---|
@@ -65,12 +67,12 @@ Only users with `OWNER`, `MEMBER`, or `COLLABORATOR` association can trigger com
 
 See [docs/slash-commands.md](../docs/slash-commands.md) for full details.
 
-## Important: issue_comment dispatch behavior
+## Important: default-branch dispatch
 
-The `comment-triggers.yml` workflow runs from the **default branch** of your repository, not from the PR branch. This means:
+Both `issue_comment` and `pull_request_review_comment` workflows run from the **default branch** of your repository, not from the PR branch. This means:
 
-- Changes to the comment-trigger workflow only take effect **after they are merged** to your default branch.
-- If a PR modifies `comment-triggers.yml`, those changes won't be active until the PR is merged.
+- Slash commands only work **after `comment-triggers.yml` is merged** to your default branch.
+- If you add slash commands in the same PR as the main review workflow, the review will start working immediately (it uses `pull_request` events), but slash commands won't respond until that PR merges.
 
 This is a GitHub Actions platform behavior, not a limitation of this action.
 
