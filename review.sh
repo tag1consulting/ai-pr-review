@@ -70,8 +70,6 @@ mktemp_tracked() {
   echo "$f"
 }
 
-# --- Helper: call agent and handle failure ---
-
 
 main() {
 
@@ -309,7 +307,9 @@ main() {
 
   echo "Diff: ${DIFF_LINES} lines (${DIFF_LABEL})" >&2
 
-  # Build file manifest (same range as diff)
+  # Build file manifest (same range as diff).
+  # CHANGED_FILES and DIFF_STAT are consumed by build_file_manifest() in lib/diff.sh.
+  # shellcheck disable=SC2034
   if [[ -n "$DIFF_BASE" ]]; then
     CHANGED_FILES=$(git diff --name-only -z "${DIFF_BASE}${local_diff_sep}${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tr '\0' '\n' || true)
     DIFF_STAT=$(git diff --stat "${DIFF_BASE}${local_diff_sep}${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tail -1)
@@ -318,7 +318,7 @@ main() {
     DIFF_STAT=$(git diff --stat "origin/${BASE_REF}...${HEAD_SHA}" -- "${EXCL[@]}" 2>/dev/null | tail -1)
   fi
 
-  build_file_manifest
+  build_file_manifest || exit 0
 
   # Validate and log review mode
   if [[ "$REVIEW_MODE" != "quick" && "$REVIEW_MODE" != "full" ]]; then

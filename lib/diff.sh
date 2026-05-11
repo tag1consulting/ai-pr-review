@@ -92,13 +92,15 @@ To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR i
 #   TOTAL_LINES, LANGUAGE_CONTEXT, PROJECT_CONTEXT, COMMIT_LOG
 #
 # Reads: CHANGED_FILES, DIFF_STAT, DIFF_LABEL, DIFF_BASE, BASE_REF,
-#        HEAD_SHA, local_diff_sep, SCRIPT_DIR, REVIEW_TARGET
+#        HEAD_SHA, SCRIPT_DIR
+#
+# Returns 1 if CHANGED_FILES is empty (caller should exit 0).
 #
 # shellcheck disable=SC2034  # many globals are set here, read by the caller
 build_file_manifest() {
   if [[ -z "$CHANGED_FILES" ]]; then
     echo "No changed files after exclusions. Skipping review." >&2
-    exit 0
+    return 1
   fi
   FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
 
