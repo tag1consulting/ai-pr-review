@@ -37,13 +37,14 @@ permissions:
 
 jobs:
   slash-commands:
-    # Gate: only fire on /ai-pr-review comments from authorized users
+    # Gate: only fire on /ai-pr-review comments from authorized users on PRs
     if: >-
       startsWith(github.event.comment.body, '/ai-pr-review') &&
       contains(
         fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
         github.event.comment.author_association
-      )
+      ) &&
+      (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request)
     uses: tag1consulting/ai-pr-review/.github/workflows/slash-commands.yml@main
     with:
       event-name: ${{ github.event_name }}
