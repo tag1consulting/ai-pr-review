@@ -1,14 +1,13 @@
 #!/usr/bin/env bats
-# Tests for the sequential call_agent function in review.sh.
+# Tests for the sequential call_agent function in lib/agents.sh.
 # A mock llm-call.sh is written into a temp SCRIPT_DIR to control
 # provider behavior without real API calls.
 bats_require_minimum_version 1.5.0
 
 setup() {
   load test_helper
-  load_function "${PROJECT_ROOT}/review.sh" call_agent
   load_function "${PROJECT_ROOT}/review.sh" mktemp_tracked
-  load_function "${PROJECT_ROOT}/review.sh" effective_prompt
+  source "${PROJECT_ROOT}/lib/agents.sh"
 
   MOCK_DIR=$(mktemp -d)
   export SCRIPT_DIR="$MOCK_DIR"

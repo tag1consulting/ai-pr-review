@@ -482,8 +482,7 @@ setup() {
 # written inside subshells are visible after wait.
 
 _parallel_setup() {
-  load_function "${PROJECT_ROOT}/review.sh" call_agent_bg
-  load_function "${PROJECT_ROOT}/review.sh" collect_parallel_results
+  source "${PROJECT_ROOT}/lib/agents.sh"
 
   # Temp dir acts as SCRIPT_DIR with a stub llm-call.sh
   MOCK_DIR=$(mktemp -d)
@@ -752,7 +751,7 @@ _token_table_setup() {
 # ---------------------------------------------------------------------------
 
 _cp_setup() {
-  load_function "${PROJECT_ROOT}/review.sh" cache_priming_effective
+  source "${PROJECT_ROOT}/lib/agents.sh"
 }
 
 @test "cache_priming_effective: default is opt-out (returns false)" {
@@ -846,6 +845,11 @@ _cp_setup() {
 
 @test "lib/findings.sh: sources standalone without error" {
   run bash -c "source '${PROJECT_ROOT}/lib/findings.sh'"
+  [ "$status" -eq 0 ]
+}
+
+@test "lib/agents.sh: sources standalone without error" {
+  run bash -c "source '${PROJECT_ROOT}/lib/agents.sh'"
   [ "$status" -eq 0 ]
 }
 
