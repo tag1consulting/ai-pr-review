@@ -1,10 +1,8 @@
 #!/usr/bin/env bats
-# Tests for the apply_suppressions() pipeline in review.sh.
+# Tests for the apply_suppressions() pipeline in lib/findings.sh.
 #
-# apply_suppressions() contains nested sub-functions and jq heredocs that
-# defeat load_function's awk brace-tracker. Instead, each test invokes a
-# harness script (written once per test run) that stubs all globals and
-# runs the function in a subprocess.
+# Each test invokes a harness script (written once per test run) that stubs
+# all globals and runs the function in a subprocess.
 
 bats_require_minimum_version 1.5.0
 
@@ -26,11 +24,7 @@ FINDINGS_JSON_FILE="\${2}"
 TMPFILES=()
 GITHUB_WORKSPACE=""
 SUPPRESSED_COUNT=0
-mktemp_tracked() { local f; f=\$(mktemp "\$@"); TMPFILES+=("\$f"); echo "\$f"; }
-# Source only the apply_suppressions function and helpers from review.sh by
-# scanning for the function block with bash's own parser.
-source <(sed -n '/^mktemp_tracked()/,/^}/p' "${PROJECT_ROOT}/review.sh" 2>/dev/null || true)
-source <(sed -n '/^apply_suppressions()/,/^}/{ /^apply_suppressions()/,/^}/ p }' "${PROJECT_ROOT}/review.sh" 2>/dev/null || true)
+source "${PROJECT_ROOT}/lib/findings.sh"
 apply_suppressions
 cat "\${FINDINGS_JSON_FILE}"
 HARNESS_EOF

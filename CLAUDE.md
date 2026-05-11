@@ -10,7 +10,12 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 
 | Script | Role |
 |--------|------|
-| `review.sh` | Main orchestrator: diff computation, manifest building, language detection, agent dispatch, findings merge/dedup/suppress, invokes the provider-specific post-review script |
+| `review.sh` | Main orchestrator: diff computation, phase sequencing, agent dispatch (parallel tiers), context assembly, invokes the provider-specific post-review script |
+| `lib/agents.sh` | LLM agent dispatch: `call_agent`, `call_agent_bg`, `wait_tier_pids`, `collect_parallel_results`, `cache_priming_effective`, `effective_prompt` |
+| `lib/findings.sh` | Findings pipeline: `extract_findings`, `merge_findings`, `apply_suppressions` (with verify-type handlers for npm, PyPI, Go, Cargo, Docker Hub, GitHub releases, ruby-lang.org) |
+| `lib/diff.sh` | Diff helpers: `post_skip_comment` (VCS-provider skip comment), `build_file_manifest` (language detection, file categorization, manifest building, language profiles, project context) |
+| `lib/pricing.sh` | Token pricing and cost estimation: `model_pricing`, `model_display_name`, `format_cost`, `emit_token_table` |
+| `lib/languages.sh` | Language detection: `detect_language`, `is_test_file` |
 | `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr. Anthropic and Bedrock paths enable prompt caching via `cache_control: ephemeral` markers (gated by `LLM_PROMPT_CACHING`; default `auto`). |
 | `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
 | `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark |
@@ -40,7 +45,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes.
 
 ## Adding a language profile
 
-Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `review.sh`).
+Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `lib/languages.sh`).
 
 | Extension(s) | Language key | Profile file |
 |---|---|---|
@@ -59,7 +64,7 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 ## Test-file detection
 
-`is_test_file()` in `review.sh` classifies changed files as test files for the manifest:
+`is_test_file()` in `lib/languages.sh` classifies changed files as test files for the manifest:
 
 | Pattern | Language |
 |---|---|

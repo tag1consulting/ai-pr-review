@@ -230,7 +230,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 _setup_merge() {
-  load_function "${PROJECT_ROOT}/review.sh" merge_findings
+  source "${PROJECT_ROOT}/lib/findings.sh"
   FINDINGS_JSON_FILE=$(mktemp)
   echo '[]' > "$FINDINGS_JSON_FILE"
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Tests for the ruby-org verify type added in review.sh's apply_suppressions().
+# Tests for the ruby-org verify type in lib/findings.sh's apply_suppressions().
 #
 # The verify case block is embedded inside apply_suppressions() and reached via
 # a nested while-loop that processes suppressed findings with a `verify` field.
@@ -30,7 +30,7 @@ setup() {
     /^      ruby-org\)/ { inblock=1; next }
     inblock && /^        ;;/ { exit }
     inblock { print }
-  ' "${PROJECT_ROOT}/review.sh")
+  ' "${PROJECT_ROOT}/lib/findings.sh")
 
   [[ -n "$RUBY_ORG_BODY" ]] || { echo "failed to extract ruby-org block"; return 1; }
 }

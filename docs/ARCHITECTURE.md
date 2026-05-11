@@ -127,7 +127,7 @@ When `enable-suggestions` is `true` (the default), eligible LLM agents emit an o
 
 Not eligible: `architecture-reviewer`, `adversarial-general`, `pr-summarizer`. Static analyzers never emit suggestions.
 
-**Prompt composition.** `effective_prompt()` in `review.sh` composes the base prompt with up to three shared trailers at runtime:
+**Prompt composition.** `effective_prompt()` in `lib/agents.sh` composes the base prompt with up to three shared trailers at runtime:
 - `prompts/_knowledge-cutoff.md` — HARD CONSTRAINT block against version-existence hallucinations. Applied to all 7 finding-producing agents (not `pr-summarizer`).
 - `prompts/_trailer-findings.md` — `json-findings` schema instruction. Applied to all 7 finding-producing agents.
 - `prompts/suggestion-addendum.md` — "Apply suggestion" formatting. Gated by `AI_ENABLE_SUGGESTIONS`; applied only to the 5 eligible agents.
@@ -262,7 +262,7 @@ Exit codes from `llm-call.sh`:
 
 ## Graceful failure handling
 
-When an agent call fails, `call_agent()` in `review.sh`:
+When an agent call fails, `call_agent()` in `lib/agents.sh`:
 1. Logs a WARNING with the failure type and last error message
 2. Appends the agent name to the `FAILED_AGENTS` array
 3. Writes empty output and continues to the next agent
