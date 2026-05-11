@@ -53,6 +53,10 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
       - uses: tag1consulting/ai-pr-review/container-action@main
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
