@@ -177,6 +177,7 @@ jobs:
           repository: ${{ inputs.repository }}
           ref: refs/pull/${{ inputs.issue-number }}/head
           fetch-depth: 0
+          token: ${{ secrets.github-token }}
 
       - name: Get PR metadata
         if: |
