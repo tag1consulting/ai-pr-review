@@ -10,7 +10,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   command -v jq >/dev/null 2>&1 || skip "jq not available"
   load test_helper
-  load_function "${PROJECT_ROOT}/review.sh" extract_findings
+  source "${PROJECT_ROOT}/lib/findings.sh"
 }
 
 teardown() {
