@@ -154,11 +154,11 @@ Also add the sequential `call_agent` in the `else` branch.
 
 ### 4. Enable suggestions (optional)
 
-If your agent produces concrete line-level fixes, add your agent name to the `agents_with_suggestion_addendum` pattern string inside `effective_prompt()` in `review.sh` so it appends `prompts/suggestion-addendum.md` to its system prompt.
+If your agent produces concrete line-level fixes, add your agent name to the `agents_with_suggestion_addendum` pattern string inside `effective_prompt()` in `lib/agents.sh` so it appends `prompts/suggestion-addendum.md` to its system prompt.
 
 ## Adding a language profile
 
-1. Create `language-profiles/<language>.md` — the filename (without `.md`) must match the lowercase language key from `detect_language()` in `review.sh`.
+1. Create `language-profiles/<language>.md` — the filename (without `.md`) must match the lowercase language key from `detect_language()` in `lib/languages.sh`.
 2. The file content is injected verbatim into `FULL_CONTEXT_MSG` and `CODE_CONTEXT_MSG` when that language is detected in the diff.
 3. See [CLAUDE.md](CLAUDE.md#adding-a-language-profile) for the full extension-to-language mapping.
 
