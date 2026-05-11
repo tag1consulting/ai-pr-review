@@ -24,7 +24,8 @@ jobs:
         fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
         github.event.comment.author_association
       ) &&
-      (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request)
+      (github.event_name == 'pull_request_review_comment' ||
+       (github.event_name == 'issue_comment' && github.event.issue.pull_request))
     uses: ./.github/workflows/slash-commands.yml
     with:
       event-name: ${{ github.event_name }}
