@@ -853,6 +853,11 @@ _cp_setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "lib/diff.sh: sources standalone without error" {
+  run bash -c "source '${PROJECT_ROOT}/lib/diff.sh'"
+  [ "$status" -eq 0 ]
+}
+
 @test "cache_priming_effective: AI_PROVIDER unset returns false (no caching possible)" {
   _cp_setup
   unset AI_CACHE_PRIMING LLM_PROMPT_CACHING AI_PROVIDER
