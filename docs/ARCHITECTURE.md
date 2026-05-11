@@ -29,7 +29,7 @@ The `source` field is optional in agent output — `extract_findings()` stamps t
 
 ## Findings pipeline (review.sh phases)
 
-1. **Phase 0** — Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
+1. **Phase 0** — Fetch PR/MR description from VCS API. Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
 2. **Phase 1** — Build shared message files (full context, code context, blind/no-context). Call agents via `call_agent()` (sequential, default) or `call_agent_bg()` (parallel, opt-in). See [Parallel agent execution](#parallel-agent-execution) below.
 3. **Phase 2** — Extract `json-findings` from each agent output. Merge with static analyzer findings. Filter by confidence >= 75. Apply `config/suppressions.json`. Deduplicate using proximity-based matching (findings within 3 lines in the same file are merged).
 4. **Phase 3** — Format findings as markdown. Call the provider-specific post-review script to post everything. Findings whose line is in the diff go inline (up to `AI_MAX_INLINE`); the rest go into the review body via `format_body_finding()`, which wraps remediation in a collapsible `<details>` accordion.
@@ -46,9 +46,11 @@ To force a full-PR diff for a single run, add the `ai-review-rescan` label to th
 
 Three message files are built and passed selectively to agents:
 
-- **`FULL_CONTEXT_MSG`** — manifest + commit log + CLAUDE.md excerpt (first 2000 chars) + language profiles + diff
-- **`CODE_CONTEXT_MSG`** — manifest + language profiles + diff (no commit log or project context)
+- **`FULL_CONTEXT_MSG`** — manifest + PR description (title + body) + commit log + CLAUDE.md excerpt (first 2000 chars) + language profiles + diff
+- **`CODE_CONTEXT_MSG`** — manifest + PR description (title + body) + language profiles + diff (no commit log or project context)
 - **`BLIND_MSG`** — raw diff only (intentional zero context for `blind-hunter`)
+
+The PR description is fetched from the VCS provider API (`fetch_pr_description()`) early in Phase 0. It includes the PR/MR title and body (truncated to 4000 chars). HTML comment lines from PR templates are stripped. The section is omitted entirely when the title and body are both empty (e.g., standalone reviews or PRs with no description). This gives agents visibility into the author's stated intent, reducing false positives on intentional changes.
 
 ## Parallel agent execution
 

@@ -70,6 +70,115 @@ mktemp_tracked() {
   echo "$f"
 }
 
+# --- Fetch PR/MR title and description from the VCS provider ---
+# Outputs: sets PR_TITLE and PR_BODY globals. Both default to empty string
+# on failure (non-fatal — reviews proceed without PR context).
+# Truncates PR_BODY to 4000 chars to bound token cost.
+fetch_pr_description() {
+  local pr_number="$1"
+  local vcs_provider="$2"
+  local max_body_chars=4000
+
+  PR_TITLE=""
+  PR_BODY=""
+
+  case "$vcs_provider" in
+    github)
+      local owner repo pr_json
+      if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
+        echo "WARNING: GITHUB_REPOSITORY is not set; cannot fetch PR description." >&2
+        return 0
+      fi
+      owner="${GITHUB_REPOSITORY%%/*}"
+      repo="${GITHUB_REPOSITORY##*/}"
+      pr_json=$(gh api "repos/${owner}/${repo}/pulls/${pr_number}" \
+        --jq '{title: .title, body: (.body // "")}' 2>/dev/null) || {
+        echo "WARNING: Could not fetch PR description from GitHub API; proceeding without it." >&2
+        return 0
+      }
+      PR_TITLE=$(echo "$pr_json" | jq -r '.title // ""' 2>/dev/null) || true
+      PR_BODY=$(echo "$pr_json" | jq -r '.body // ""' 2>/dev/null) || true
+      ;;
+    gitlab)
+      local gl_api gl_auth gl_project_id mr_json
+      gl_api="${GITLAB_API_URL:-https://gitlab.com/api/v4}"
+      gl_auth=""
+      if [[ -n "${GITLAB_TOKEN:-}" ]]; then
+        if [[ "$GITLAB_TOKEN" == glpat-* ]]; then
+          gl_auth="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+        elif [[ "$GITLAB_TOKEN" == glcbt-* ]]; then
+          gl_auth="JOB-TOKEN: ${GITLAB_TOKEN}"
+        else
+          gl_auth="Authorization: Bearer ${GITLAB_TOKEN}"
+        fi
+      elif [[ -n "${CI_JOB_TOKEN:-}" ]]; then
+        gl_auth="JOB-TOKEN: ${CI_JOB_TOKEN}"
+      fi
+      if [[ -z "$gl_auth" ]]; then
+        echo "WARNING: No GitLab token available; cannot fetch MR description." >&2
+        return 0
+      fi
+      gl_project_id="${GITLAB_PROJECT_ID:-${CI_PROJECT_ID:-}}"
+      if [[ -z "$gl_project_id" ]]; then
+        gl_project_id=$(printf '%s' "${CI_PROJECT_PATH:-${GITHUB_REPOSITORY:-}}" | sed 's|/|%2F|g')
+      fi
+      if [[ -z "$gl_project_id" ]]; then
+        echo "WARNING: Cannot determine GitLab project ID; skipping MR description fetch." >&2
+        return 0
+      fi
+      mr_json=$(curl -sS -H "$gl_auth" \
+        "${gl_api}/projects/${gl_project_id}/merge_requests/${pr_number}" 2>/dev/null) || {
+        echo "WARNING: Could not fetch MR description from GitLab API; proceeding without it." >&2
+        return 0
+      }
+      PR_TITLE=$(echo "$mr_json" | jq -r '.title // ""' 2>/dev/null) || true
+      PR_BODY=$(echo "$mr_json" | jq -r '.description // ""' 2>/dev/null) || true
+      ;;
+    bitbucket)
+      local bb_workspace bb_repo_slug bb_json
+      if [[ -n "${BITBUCKET_WORKSPACE:-}" && -n "${BITBUCKET_REPO_SLUG:-}" ]]; then
+        bb_workspace="$BITBUCKET_WORKSPACE"
+        bb_repo_slug="$BITBUCKET_REPO_SLUG"
+      elif [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+        bb_workspace="${GITHUB_REPOSITORY%%/*}"
+        bb_repo_slug="${GITHUB_REPOSITORY##*/}"
+      else
+        echo "WARNING: Cannot determine Bitbucket workspace/repo; skipping PR description fetch." >&2
+        return 0
+      fi
+      if [[ -z "${BITBUCKET_API_TOKEN:-}" ]]; then
+        echo "WARNING: BITBUCKET_API_TOKEN is not set; cannot fetch PR description from Bitbucket." >&2
+        return 0
+      fi
+      bb_json=$(curl -sS -u "${BITBUCKET_EMAIL:-}:${BITBUCKET_API_TOKEN}" \
+        "https://api.bitbucket.org/2.0/repositories/${bb_workspace}/${bb_repo_slug}/pullrequests/${pr_number}" 2>/dev/null) || {
+        echo "WARNING: Could not fetch PR description from Bitbucket API; proceeding without it." >&2
+        return 0
+      }
+      PR_TITLE=$(echo "$bb_json" | jq -r '.title // ""' 2>/dev/null) || true
+      PR_BODY=$(echo "$bb_json" | jq -r '.description // ""' 2>/dev/null) || true
+      ;;
+    *)
+      echo "WARNING: Unknown VCS provider '${vcs_provider}' for PR description fetch." >&2
+      return 0
+      ;;
+  esac
+
+  # Strip PR template boilerplate before truncation so agents get meaningful content
+  if [[ -n "$PR_BODY" ]]; then
+    local stripped
+    stripped=$(printf '%s' "$PR_BODY" | sed '/^<!-- .* -->/d')
+    if [[ -n "$stripped" ]]; then
+      PR_BODY="$stripped"
+    fi
+  fi
+
+  # Truncate body to bound token cost
+  if [[ ${#PR_BODY} -gt $max_body_chars ]]; then
+    PR_BODY="${PR_BODY:0:$max_body_chars}…[truncated]"
+  fi
+}
+
 
 main() {
 
@@ -185,11 +294,21 @@ main() {
     : "${PR_NUMBER:?PR_NUMBER is required for pr review-target}"
   fi
 
+  # Fetch PR/MR title and description for agent context
+  PR_TITLE=""
+  PR_BODY=""
+  if [[ "$REVIEW_TARGET" != "standalone" && -n "$PR_NUMBER" ]]; then
+    fetch_pr_description "$PR_NUMBER" "$VCS_PROVIDER"
+  fi
+
   echo "=== AI PR Review ===" >&2
   if [[ "$REVIEW_TARGET" == "standalone" ]]; then
     echo "Standalone review | Base: ${BASE_REF} | Head: ${HEAD_SHA}" >&2
   else
     echo "PR: #${PR_NUMBER} | Base: ${BASE_REF} | Head: ${HEAD_SHA}" >&2
+    if [[ -n "$PR_TITLE" ]]; then
+      echo "Title: ${PR_TITLE}" >&2
+    fi
   fi
   echo "Mode: ${REVIEW_MODE}" >&2
 
@@ -333,12 +452,23 @@ main() {
 
   # --- Build shared message files ---
 
-  # Full context message: manifest + commit log + project context + language context + diff
+  # Full context message: manifest + PR description + commit log + project context + language context + diff
   FULL_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-full-ctx-XXXXXXXX.md)
   {
     echo "## File Manifest"
     printf '%s\n' "$MANIFEST"
     echo ""
+    if [[ -n "$PR_TITLE" || -n "$PR_BODY" ]]; then
+      echo "## PR Description"
+      if [[ -n "$PR_TITLE" ]]; then
+        echo "Title: ${PR_TITLE}"
+      fi
+      if [[ -n "$PR_BODY" ]]; then
+        echo ""
+        echo "$PR_BODY"
+      fi
+      echo ""
+    fi
     echo "## Commit Log"
     echo "$COMMIT_LOG"
     echo ""
@@ -359,12 +489,23 @@ main() {
     cat "$DIFF_FILE"
   } > "$FULL_CONTEXT_MSG"
 
-  # Code context message: manifest + language context + diff (no commit log/project context)
+  # Code context message: manifest + PR description + language context + diff (no commit log/project context)
   CODE_CONTEXT_MSG=$(mktemp_tracked /tmp/ai-review-code-ctx-XXXXXXXX.md)
   {
     echo "## File Manifest"
     printf '%s\n' "$MANIFEST"
     echo ""
+    if [[ -n "$PR_TITLE" || -n "$PR_BODY" ]]; then
+      echo "## PR Description"
+      if [[ -n "$PR_TITLE" ]]; then
+        echo "Title: ${PR_TITLE}"
+      fi
+      if [[ -n "$PR_BODY" ]]; then
+        echo ""
+        echo "$PR_BODY"
+      fi
+      echo ""
+    fi
     if [[ -n "$LANGUAGE_CONTEXT" ]]; then
       printf '%s\n' "$LANGUAGE_CONTEXT"
       echo ""
