@@ -213,6 +213,7 @@ build_file_manifest() {
 }
 
 # Computes conditional-agent dispatch flags from $DIFF_FILE and $CHANGED_FILES globals.
+# Reads:  DIFF_FILE (full unified diff), CHANGED_FILES (newline-separated file paths)
 # Sets four globals consumed by review.sh dispatch sites:
 #   HAS_ERROR_PATTERNS         — 0|1; controls silent-failure-hunter
 #   RUN_ARCHITECTURE_REVIEWER  — true|false; default true
@@ -222,9 +223,17 @@ build_file_manifest() {
 # Conservative: each RUN_* defaults true. A gate only flips to false when
 # (a) its kill switch is unset/false AND (b) the heuristic says skip.
 # Kill switches (env-var-only, no action.yml input):
-#   AI_DISABLE_GATE_ARCHITECTURE=true — always run architecture-reviewer
-#   AI_DISABLE_GATE_SECURITY=true     — always run security-reviewer
-#   AI_DISABLE_GATE_EDGE_CASE=true    — always run edge-case-hunter
+#   AI_DISABLE_GATE_ARCHITECTURE=true — disables the docs-only heuristic; architecture-reviewer always runs
+#   AI_DISABLE_GATE_SECURITY=true     — disables the keyword/path heuristic; security-reviewer always runs
+#   AI_DISABLE_GATE_EDGE_CASE=true    — disables the control-flow heuristic; edge-case-hunter always runs
+#
+# Note: gates evaluate against $DIFF_FILE, which for incremental reviews is the
+# watermark-to-HEAD diff rather than the full base..HEAD PR diff. A trivial follow-up
+# commit (e.g., docs tweak) can suppress Tier-2 agents even if the PR overall
+# contains security-relevant code. Use AI_DISABLE_GATE_* to override when needed.
+#
+# TODO(#129): RUN_* globals and dispatch-site guards should be replaced by per-entry
+# condition callbacks in the declarative agent roster when that feature lands.
 # shellcheck disable=SC2034  # globals (HAS_ERROR_PATTERNS, RUN_*) are read by review.sh callers
 detect_conditional_agent_triggers() {
   HAS_ERROR_PATTERNS=0
@@ -259,7 +268,7 @@ detect_conditional_agent_triggers() {
   if [[ "${AI_DISABLE_GATE_SECURITY:-false}" != "true" ]]; then
     local has_sec_keyword=0 has_sec_path=0
     if grep -qiE \
-        'auth|token|secret|password|crypt|hash|sign|verify|exec|eval|sql|sanitize|escape|xss|csrf|cors|header|redirect|deserialize|cookie|session|jwt|oauth|ldap|saml|rbac|acl|permission|privilege|sudo|chmod|chown|setuid|x509|tls|ssl|cert|certificate|keystore|nonce|salt|hmac|aes|rsa|ecdsa|pbkdf2|bcrypt|scrypt' \
+        'auth|token|secret|password|crypt|hash|\bsign\b|verify|exec|eval|sql|sanitize|escape|xss|csrf|cors|header|redirect|deserialize|cookie|session|jwt|oauth|ldap|saml|rbac|acl|permission|privilege|sudo|chmod|chown|setuid|x509|tls|ssl|cert|certificate|keystore|nonce|salt|hmac|aes|rsa|ecdsa|pbkdf2|bcrypt|scrypt|curl|wget|\bsource\b|\bIFS\b|LD_PRELOAD|\$\{\{' \
         "$DIFF_FILE" 2>/dev/null; then
       has_sec_keyword=1
     fi
@@ -270,6 +279,8 @@ detect_conditional_agent_triggers() {
         -e '(^|/)\.env' \
         -e '(^|/)settings\.(py|ya?ml|json|toml)$' \
         -e '(^|/)Dockerfile' \
+        -e '(^|/)Containerfile' \
+        -e '\.(sh|bash)$' \
         -e '(^|/)\.github/workflows/' 2>/dev/null; then
       has_sec_path=1
     fi

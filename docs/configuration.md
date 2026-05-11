@@ -74,9 +74,11 @@ to change them.
 | `STANDALONE_DEPTH` | `''` | In standalone mode, diff the last N commits when base and head resolve to the same SHA. If unset, diffs the entire tree. |
 | `LLM_RETRY_COUNT` | `3` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings. Findings below this are dropped before suppressions. |
-| `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Set to `true` to force `architecture-reviewer` to run even when the diff-heuristic gate would skip it (e.g., docs-only diffs). |
-| `AI_DISABLE_GATE_SECURITY` | `false` | Set to `true` to force `security-reviewer` to run even when the diff-heuristic gate would skip it (e.g., diffs with no auth/crypto patterns or security-sensitive paths). |
-| `AI_DISABLE_GATE_EDGE_CASE` | `false` | Set to `true` to force `edge-case-hunter` to run even when the diff-heuristic gate would skip it (e.g., diffs with no control-flow additions). |
+| `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Disables the docs-only heuristic gate; `architecture-reviewer` always runs regardless of diff content. |
+| `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
+| `AI_DISABLE_GATE_EDGE_CASE` | `false` | Disables the control-flow heuristic gate; `edge-case-hunter` always runs regardless of diff content. |
+
+> **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
 
 ### Bitbucket-specific variables
 

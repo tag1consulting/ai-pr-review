@@ -744,6 +744,8 @@ main() {
       TIER2_OUTPUTS=()
       TIER2_WAIT_ARGS=()
 
+      # TODO(#129): replace RUN_* flag checks with per-entry condition callbacks
+      # when the declarative agent roster lands.
       if [[ "$RUN_ARCHITECTURE_REVIEWER" == "true" ]]; then
         ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
         TIER2_OUTPUTS+=("$ARCH_FILE")
