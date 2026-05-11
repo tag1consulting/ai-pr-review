@@ -4,3 +4,5 @@ _site/
 .jekyll-cache/
 .jekyll-metadata
 docs/Gemfile.lock
+memory-bank/
+_bmad/
