@@ -1,0 +1,13 @@
+diff --git a/src/user.js b/src/user.js
+index abc1234..def5678 100644
+--- a/src/user.js
++++ b/src/user.js
+@@ -10,6 +10,8 @@ function createUser(data) {
+   const user = {
+     name: data.name,
+     email: data.email,
++    password: hashPassword(data.password),
++    token: generateToken(),
+   };
+   return saveUser(user);
+ }

@@ -528,10 +528,7 @@ main() {
   TOKEN_LOG=()  # entries: "agent_name input=N output=N"
 
   # --- Detect conditional agent triggers ---
-  HAS_ERROR_PATTERNS=0
-  if grep -qE '(catch|if err|try \{|rescue|Result<|unwrap|except|\.catch\()' "$DIFF_FILE" 2>/dev/null; then
-    HAS_ERROR_PATTERNS=1
-  fi
+  detect_conditional_agent_triggers
 
   # --- Output files ---
   SUMMARY_FILE=$(mktemp_tracked /tmp/ai-review-summary-XXXXXXXX.md)
@@ -639,7 +636,8 @@ main() {
 
       # Opus primer: security-reviewer (full mode only). Pulled forward from
       # Tier 2 so the cache entry is warm before Tier 2's parallel fan-out.
-      if [[ "$REVIEW_MODE" == "full" ]]; then
+      # Gated: if security-reviewer will be skipped by its diff gate, skip priming too.
+      if [[ "$REVIEW_MODE" == "full" ]] && [[ "$RUN_SECURITY_REVIEWER" == "true" ]]; then
         echo "Cache priming: warming Opus CODE_CONTEXT_MSG via security-reviewer (pulled forward from Tier 2)." >&2
         SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
         PRIMER_OUTPUTS+=("$SEC_FILE")
@@ -746,13 +744,19 @@ main() {
       TIER2_OUTPUTS=()
       TIER2_WAIT_ARGS=()
 
-      ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
-      TIER2_OUTPUTS+=("$ARCH_FILE")
-      call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-        "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
-      TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
+      # TODO(#129): replace RUN_* flag checks with per-entry condition callbacks
+      # when the declarative agent roster lands.
+      if [[ "$RUN_ARCHITECTURE_REVIEWER" == "true" ]]; then
+        ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
+        TIER2_OUTPUTS+=("$ARCH_FILE")
+        call_agent_bg "architecture-reviewer" "$AI_MODEL_PREMIUM" \
+          "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+        TIER2_WAIT_ARGS+=($! "$ARCH_FILE")
+      else
+        echo "Skipping architecture-reviewer (gate: no code/infra files in diff; set AI_DISABLE_GATE_ARCHITECTURE=true to override)." >&2
+      fi
 
-      # security-reviewer: skip if already primed synchronously above.
+      # security-reviewer: skip if already primed synchronously above, or gated by diff heuristic.
       #
       # Invariant note for future maintainers: when primed, SEC_FILE is NOT
       # added to TIER2_OUTPUTS. Its output and token accounting already flow
@@ -763,11 +767,15 @@ main() {
       # agents bypass it intentionally to avoid double-collection of their
       # .name / .tokens / .failed sidecar files.
       if [[ "$SECURITY_REVIEWER_PRIMED" != "true" ]]; then
-        SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
-        TIER2_OUTPUTS+=("$SEC_FILE")
-        call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
-          "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
-        TIER2_WAIT_ARGS+=($! "$SEC_FILE")
+        if [[ "$RUN_SECURITY_REVIEWER" == "true" ]]; then
+          SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
+          TIER2_OUTPUTS+=("$SEC_FILE")
+          call_agent_bg "security-reviewer" "$AI_MODEL_PREMIUM" \
+            "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+          TIER2_WAIT_ARGS+=($! "$SEC_FILE")
+        else
+          echo "Skipping security-reviewer (gate: no auth/crypto patterns or security-sensitive paths in diff; set AI_DISABLE_GATE_SECURITY=true to override)." >&2
+        fi
       fi
 
       BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
@@ -776,11 +784,15 @@ main() {
         "$(effective_prompt blind-hunter "${SCRIPT_DIR}/prompts/blind-hunter.md")" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
       TIER2_WAIT_ARGS+=($! "$BLIND_FILE")
 
-      EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
-      TIER2_OUTPUTS+=("$EDGE_FILE")
-      call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-        "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
-      TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
+      if [[ "$RUN_EDGE_CASE_HUNTER" == "true" ]]; then
+        EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
+        TIER2_OUTPUTS+=("$EDGE_FILE")
+        call_agent_bg "edge-case-hunter" "$AI_MODEL_PREMIUM" \
+          "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT" &
+        TIER2_WAIT_ARGS+=($! "$EDGE_FILE")
+      else
+        echo "Skipping edge-case-hunter (gate: no control flow in diff additions; set AI_DISABLE_GATE_EDGE_CASE=true to override)." >&2
+      fi
 
       ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
       TIER2_OUTPUTS+=("$ADV_FILE")
@@ -969,25 +981,37 @@ main() {
 
     # Tier 2: Full mode only
     if [[ "$REVIEW_MODE" == "full" ]]; then
-      ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
-      call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
-        "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
-      AGENT_OUTPUTS+=("$ARCH_FILE")
+      if [[ "$RUN_ARCHITECTURE_REVIEWER" == "true" ]]; then
+        ARCH_FILE=$(mktemp_tracked /tmp/ai-review-arch-XXXXXXXX.md)
+        call_agent "architecture-reviewer" "$AI_MODEL_PREMIUM" \
+          "$(effective_prompt architecture-reviewer "${SCRIPT_DIR}/prompts/architecture-reviewer.md")" "$FULL_CONTEXT_MSG" "$ARCH_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+        AGENT_OUTPUTS+=("$ARCH_FILE")
+      else
+        echo "Skipping architecture-reviewer (gate: no code/infra files in diff; set AI_DISABLE_GATE_ARCHITECTURE=true to override)." >&2
+      fi
 
-      SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
-      call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
-        "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
-      AGENT_OUTPUTS+=("$SEC_FILE")
+      if [[ "$RUN_SECURITY_REVIEWER" == "true" ]]; then
+        SEC_FILE=$(mktemp_tracked /tmp/ai-review-sec-XXXXXXXX.md)
+        call_agent "security-reviewer" "$AI_MODEL_PREMIUM" \
+          "$(effective_prompt security-reviewer "${SCRIPT_DIR}/prompts/security-reviewer.md")" "$CODE_CONTEXT_MSG" "$SEC_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+        AGENT_OUTPUTS+=("$SEC_FILE")
+      else
+        echo "Skipping security-reviewer (gate: no auth/crypto patterns or security-sensitive paths in diff; set AI_DISABLE_GATE_SECURITY=true to override)." >&2
+      fi
 
       BLIND_FILE=$(mktemp_tracked /tmp/ai-review-blind-XXXXXXXX.md)
       call_agent "blind-hunter" "$AI_MODEL_STANDARD" \
         "$(effective_prompt blind-hunter "${SCRIPT_DIR}/prompts/blind-hunter.md")" "$BLIND_MSG" "$BLIND_FILE" "$AI_MAX_TOKENS_PER_AGENT"
       AGENT_OUTPUTS+=("$BLIND_FILE")
 
-      EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
-      call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
-        "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
-      AGENT_OUTPUTS+=("$EDGE_FILE")
+      if [[ "$RUN_EDGE_CASE_HUNTER" == "true" ]]; then
+        EDGE_FILE=$(mktemp_tracked /tmp/ai-review-edge-XXXXXXXX.md)
+        call_agent "edge-case-hunter" "$AI_MODEL_PREMIUM" \
+          "$(effective_prompt edge-case-hunter "${SCRIPT_DIR}/prompts/edge-case-hunter.md")" "$CODE_CONTEXT_MSG" "$EDGE_FILE" "$AI_MAX_TOKENS_PER_AGENT"
+        AGENT_OUTPUTS+=("$EDGE_FILE")
+      else
+        echo "Skipping edge-case-hunter (gate: no control flow in diff additions; set AI_DISABLE_GATE_EDGE_CASE=true to override)." >&2
+      fi
 
       ADV_FILE=$(mktemp_tracked /tmp/ai-review-adv-XXXXXXXX.md)
       call_agent "adversarial-general" "$AI_MODEL_STANDARD" \

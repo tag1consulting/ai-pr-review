@@ -1,0 +1,12 @@
+diff --git a/config/settings.go b/config/settings.go
+index abc1234..def5678 100644
+--- a/config/settings.go
++++ b/config/settings.go
+@@ -3,5 +3,7 @@ package config
+
+ var (
+   MaxRetries = 3
++  Timeout    = 30
++  BaseURL    = "https://api.example.com"
++  Version    = "1.0.0"
+ )

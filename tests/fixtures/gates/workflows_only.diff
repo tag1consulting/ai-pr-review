@@ -1,0 +1,12 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index abc1234..def5678 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -10,6 +10,8 @@ jobs:
+   build:
+     runs-on: ubuntu-latest
+     steps:
++      - name: Cache dependencies
++        uses: actions/cache@v3
+       - name: Checkout
+         uses: actions/checkout@v3
