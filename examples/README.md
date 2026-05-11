@@ -51,7 +51,7 @@ The example workflow auto-selects full review mode when the source branch starts
 
 ## Slash commands
 
-The `comment-triggers.yml` starter is a thin wrapper (~55 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in this repository. All command parsing, review dispatch, and dismiss logic lives upstream — consumers don't need to maintain it.
+The `comment-triggers.yml` starter is a thin wrapper (~70 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in this repository. All command parsing, review dispatch, and dismiss logic lives upstream — consumers don't need to maintain it.
 
 Once the file is merged to your default branch, post these commands in any PR comment:
 

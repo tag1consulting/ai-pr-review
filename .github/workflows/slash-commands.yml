@@ -137,18 +137,22 @@ jobs:
         if: steps.cmd.outputs.valid == 'true'
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes
 
       - name: Reply with help text
         if: steps.cmd.outputs.command == 'help'
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
-          gh pr comment "${{ inputs.issue-number }}" \
-            --repo "${{ inputs.repository }}" \
+          gh pr comment "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
             --body "$(cat <<'HELP'
           **AI PR Review commands:**
           - `/ai-pr-review rescan` — force full diff re-review
@@ -163,16 +167,18 @@ jobs:
         if: steps.cmd.outputs.command == 'skip'
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
-          gh pr edit "${{ inputs.issue-number }}" \
-            --repo "${{ inputs.repository }}" \
+          gh pr edit "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
             --add-label skip-ai-review
 
       - name: Checkout PR head
         if: |
           steps.cmd.outputs.command == 'rescan' ||
           steps.cmd.outputs.command == 'review-full'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ inputs.repository }}
           ref: refs/pull/${{ inputs.issue-number }}/head
@@ -186,9 +192,11 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
-          pr_json=$(gh pr view "${{ inputs.issue-number }}" \
-            --repo "${{ inputs.repository }}" \
+          pr_json=$(gh pr view "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
             --json baseRefName,headRefOid)
           echo "base=$(echo "$pr_json" | jq -r .baseRefName)" >> "$GITHUB_OUTPUT"
           echo "sha=$(echo  "$pr_json" | jq -r .headRefOid)"  >> "$GITHUB_OUTPUT"
@@ -199,9 +207,11 @@ jobs:
           steps.cmd.outputs.command == 'review-full'
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=rocket
 
       - name: Run review (rescan)
@@ -244,9 +254,11 @@ jobs:
           )
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content="+1"
 
       - name: React — failed
@@ -257,9 +269,11 @@ jobs:
           )
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=confused
 
   # ---------------------------------------------------------------------------
@@ -280,17 +294,21 @@ jobs:
       - name: React — seen
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}/reactions" \
             -f content=eyes
 
       - name: Validate parent comment is from the bot
         id: validate
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
         run: |
-          parent_id="${{ inputs.in-reply-to-id }}"
+          parent_id="${IN_REPLY_TO_ID}"
           if [[ -z "$parent_id" || "$parent_id" == "0" ]]; then
             echo "::error::This command must be used as a reply to an AI review finding."
             echo "valid=false" >> "$GITHUB_OUTPUT"
@@ -298,7 +316,7 @@ jobs:
           fi
 
           parent_json=$(gh api \
-            "repos/${{ inputs.repository }}/pulls/comments/${parent_id}" \
+            "repos/${REPOSITORY}/pulls/comments/${parent_id}" \
             --jq '{login: .user.login, review_id: .pull_request_review_id}' 2>/dev/null) || {
             echo "::error::Could not fetch parent comment."
             echo "valid=false" >> "$GITHUB_OUTPUT"
@@ -506,25 +524,31 @@ jobs:
         if: steps.validate.outputs.valid == 'true' && success()
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}/reactions" \
             -f content="+1"
 
       - name: React — not applicable
         if: steps.validate.outputs.valid == 'false'
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}/reactions" \
             -f content=confused
 
       - name: React — failed
         if: steps.validate.outputs.valid == 'true' && failure()
         env:
           GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
         run: |
           gh api \
-            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}/reactions" \
             -f content=confused

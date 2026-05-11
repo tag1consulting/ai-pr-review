@@ -25,7 +25,7 @@ curl -fsSL \
   -o .github/workflows/ai-pr-review-commands.yml
 ```
 
-This is a thin wrapper (~55 lines) that delegates to a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in the ai-pr-review repository. All command-parsing, review-dispatch, and dismiss/thread-resolution logic lives upstream — you don't need to maintain it.
+This is a thin wrapper (~70 lines) that delegates to a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in the ai-pr-review repository. All command-parsing, review-dispatch, and dismiss/thread-resolution logic lives upstream — you don't need to maintain it.
 
 ### 2. Verify your API key secret
 
@@ -117,7 +117,7 @@ Consumer repo                          ai-pr-review repo
 ┌─────────────────────┐                ┌────────────────────────────────┐
 │ ai-pr-review-       │  workflow_call │ .github/workflows/             │
 │   commands.yml      │ ──────────────>│   slash-commands.yml           │
-│ (~55 lines)         │   forwards     │ (handle-command + dismiss jobs)│
+│ (~70 lines)         │   forwards     │ (handle-command + dismiss jobs)│
 │                     │   event data   │                                │
 │ • on: issue_comment │   + secrets    │ • command parsing              │
 │ • on: pr_review_    │                │ • help / skip / rescan /       │
@@ -128,7 +128,7 @@ Consumer repo                          ai-pr-review repo
 ```
 
 **Benefits:**
-- Consumers copy ~55 lines instead of ~455
+- Consumers copy ~70 lines instead of ~455
 - Bug fixes and new commands ship upstream — consumers get them automatically on their next run
 - The dismiss job's complex GraphQL logic never needs to be understood or maintained by consumers
 - Review action invocation stays in sync — no risk of consumers' rescan inputs drifting from their main review workflow

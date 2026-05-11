@@ -203,7 +203,7 @@ Once the comment-trigger workflow is merged to your default branch, users with w
 | `/ai-pr-review help` | Post command list as reply |
 | `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive; dismisses the `CHANGES_REQUESTED` review when every thread is resolved |
 
-Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo — it's a thin wrapper (~55 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted here, so all command logic is maintained upstream. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch requirement.
+Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo — it's a thin wrapper (~70 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted here, so all command logic is maintained upstream. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch requirement.
 
 ## Action inputs
 
