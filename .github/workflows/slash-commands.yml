@@ -1,0 +1,529 @@
+# Reusable workflow: AI PR Review slash commands
+#
+# Call this from a thin consumer workflow instead of copying 450+ lines
+# of command-handling YAML. See examples/workflows/comment-triggers.yml
+# for a ready-to-use consumer template.
+#
+# Supported commands (post as a PR comment):
+#   /ai-pr-review rescan       — force full diff, re-run review
+#   /ai-pr-review review-full  — run in full mode (all agents)
+#   /ai-pr-review skip         — add skip-ai-review label
+#   /ai-pr-review dismiss      — reply to a finding to mark it as a false positive
+#   /ai-pr-review help         — post the command list
+#
+# IMPORTANT: issue_comment and pull_request_review_comment workflows run
+# from the default branch only. The consumer workflow that calls this must
+# be merged to the default branch before commands will work.
+
+name: AI PR Review — slash commands (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: 'LLM provider: anthropic | openai | openai-compatible | google | bedrock-proxy'
+        type: string
+        required: false
+        default: 'anthropic'
+      base-url:
+        description: 'Base URL for openai-compatible or bedrock-proxy endpoints'
+        type: string
+        required: false
+        default: ''
+      image-tag:
+        description: 'Container image tag (e.g. latest, 0.7.0)'
+        type: string
+        required: false
+        default: 'latest'
+      review-mode-default:
+        description: 'Default review mode for rescan command (quick or full)'
+        type: string
+        required: false
+        default: 'quick'
+      # GitHub context — the caller must forward these from the event payload.
+      # workflow_call does not propagate github.event to the callee.
+      event-name:
+        description: 'github.event_name from the caller'
+        type: string
+        required: true
+      comment-body:
+        description: 'The comment body text'
+        type: string
+        required: true
+      comment-id:
+        description: 'The comment database ID'
+        type: string
+        required: true
+      comment-author-association:
+        description: 'author_association of the commenter'
+        type: string
+        required: true
+      issue-number:
+        description: 'PR/issue number (from issue_comment events)'
+        type: string
+        required: false
+        default: ''
+      pr-number:
+        description: 'PR number (from pull_request_review_comment events)'
+        type: string
+        required: false
+        default: ''
+      in-reply-to-id:
+        description: 'Parent comment ID for dismiss (pull_request_review_comment only)'
+        type: string
+        required: false
+        default: ''
+      is-pull-request:
+        description: 'Whether the issue_comment is on a PR (true/false)'
+        type: string
+        required: false
+        default: 'false'
+      repository:
+        description: 'owner/repo string'
+        type: string
+        required: true
+      repository-owner:
+        description: 'Repository owner'
+        type: string
+        required: true
+      repository-name:
+        description: 'Repository name (without owner)'
+        type: string
+        required: true
+      actor-login:
+        description: 'Login of the user who posted the command'
+        type: string
+        required: false
+        default: ''
+    secrets:
+      api-key:
+        description: 'API key for the LLM provider'
+        required: true
+      github-token:
+        description: 'GitHub token with pull-requests:write and issues:write'
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  handle-command:
+    if: |
+      inputs.event-name == 'issue_comment' &&
+      inputs.is-pull-request == 'true' &&
+      startsWith(inputs.comment-body, '/ai-pr-review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse command
+        id: cmd
+        env:
+          COMMENT: ${{ inputs.comment-body }}
+        run: |
+          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          case "$command" in
+            rescan|review-full|skip|help)
+              echo "command=$command" >> "$GITHUB_OUTPUT"
+              echo "valid=true"       >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "valid=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: React — seen
+        if: steps.cmd.outputs.valid == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            -f content=eyes
+
+      - name: Reply with help text
+        if: steps.cmd.outputs.command == 'help'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh pr comment "${{ inputs.issue-number }}" \
+            --repo "${{ inputs.repository }}" \
+            --body "$(cat <<'HELP'
+          **AI PR Review commands:**
+          - `/ai-pr-review rescan` — force full diff re-review
+          - `/ai-pr-review review-full` — run all agents (full mode)
+          - `/ai-pr-review skip` — suppress the next automated review
+          - `/ai-pr-review dismiss` — reply to a finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved)
+          - `/ai-pr-review help` — show this message
+          HELP
+          )"
+
+      - name: Add skip label
+        if: steps.cmd.outputs.command == 'skip'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh pr edit "${{ inputs.issue-number }}" \
+            --repo "${{ inputs.repository }}" \
+            --add-label skip-ai-review
+
+      - name: Checkout PR head
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: refs/pull/${{ inputs.issue-number }}/head
+          fetch-depth: 0
+
+      - name: Get PR metadata
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          pr_json=$(gh pr view "${{ inputs.issue-number }}" \
+            --repo "${{ inputs.repository }}" \
+            --json baseRefName,headRefOid)
+          echo "base=$(echo "$pr_json" | jq -r .baseRefName)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo  "$pr_json" | jq -r .headRefOid)"  >> "$GITHUB_OUTPUT"
+
+      - name: React — launching
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            -f content=rocket
+
+      - name: Run review (rescan)
+        if: steps.cmd.outputs.command == 'rescan'
+        uses: tag1consulting/ai-pr-review/container-action@main
+        env:
+          FORCE_FULL_DIFF: 'true'
+        with:
+          image-tag: ${{ inputs.image-tag }}
+          provider: ${{ inputs.provider }}
+          api-key: ${{ secrets.api-key }}
+          base-url: ${{ inputs.base-url }}
+          github-token: ${{ secrets.github-token }}
+          pr-number: ${{ inputs.issue-number }}
+          base-ref: ${{ steps.pr.outputs.base }}
+          head-sha: ${{ steps.pr.outputs.sha }}
+          review-mode: ${{ inputs.review-mode-default }}
+
+      - name: Run review (review-full)
+        if: steps.cmd.outputs.command == 'review-full'
+        uses: tag1consulting/ai-pr-review/container-action@main
+        env:
+          FORCE_FULL_DIFF: 'true'
+        with:
+          image-tag: ${{ inputs.image-tag }}
+          provider: ${{ inputs.provider }}
+          api-key: ${{ secrets.api-key }}
+          base-url: ${{ inputs.base-url }}
+          github-token: ${{ secrets.github-token }}
+          pr-number: ${{ inputs.issue-number }}
+          base-ref: ${{ steps.pr.outputs.base }}
+          head-sha: ${{ steps.pr.outputs.sha }}
+          review-mode: 'full'
+
+      - name: React — done
+        if: |
+          success() && (
+            steps.cmd.outputs.command == 'rescan' ||
+            steps.cmd.outputs.command == 'review-full'
+          )
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            -f content="+1"
+
+      - name: React — failed
+        if: |
+          failure() && (
+            steps.cmd.outputs.command == 'rescan' ||
+            steps.cmd.outputs.command == 'review-full'
+          )
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/issues/comments/${{ inputs.comment-id }}/reactions" \
+            -f content=confused
+
+  # ---------------------------------------------------------------------------
+  # Dismiss a single false-positive finding.
+  #
+  # Triggered by replying to an inline review comment with
+  # "/ai-pr-review dismiss". Resolves only the thread the user replied to.
+  # If that was the last unresolved thread on the review, the
+  # CHANGES_REQUESTED review is dismissed automatically.
+  # ---------------------------------------------------------------------------
+  dismiss-finding:
+    if: |
+      inputs.event-name == 'pull_request_review_comment' &&
+      startsWith(inputs.comment-body, '/ai-pr-review dismiss') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: React — seen
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            -f content=eyes
+
+      - name: Validate parent comment is from the bot
+        id: validate
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          parent_id="${{ inputs.in-reply-to-id }}"
+          if [[ -z "$parent_id" || "$parent_id" == "0" ]]; then
+            echo "::error::This command must be used as a reply to an AI review finding."
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          parent_json=$(gh api \
+            "repos/${{ inputs.repository }}/pulls/comments/${parent_id}" \
+            --jq '{login: .user.login, review_id: .pull_request_review_id}' 2>/dev/null) || {
+            echo "::error::Could not fetch parent comment."
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          parent_author=$(echo "$parent_json" | jq -r '.login')
+          review_id=$(echo "$parent_json" | jq -r '.review_id')
+
+          if [[ "$parent_author" != "github-actions[bot]" ]]; then
+            echo "::error::The parent comment is not from the AI reviewer (author: ${parent_author})."
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "parent_id=${parent_id}" >> "$GITHUB_OUTPUT"
+          echo "review_id=${review_id}" >> "$GITHUB_OUTPUT"
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+
+      - name: Find and resolve the review thread
+        if: steps.validate.outputs.valid == 'true'
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          OWNER: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository-name }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PARENT_COMMENT_ID: ${{ steps.validate.outputs.parent_id }}
+        run: |
+          cursor=""
+          has_next=true
+          thread_id=""
+
+          while [[ "$has_next" == "true" && -z "$thread_id" ]]; do
+            api_err=$(mktemp)
+            result=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        id
+                        isResolved
+                        comments(first: 100) {
+                          nodes { databaseId }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' \
+              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
+              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
+              echo "::error::Could not fetch review threads: $(cat "$api_err")"
+              rm -f "$api_err"
+              exit 1
+            }
+            rm -f "$api_err"
+
+            if echo "$result" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL returned errors: $(echo "$result" | jq -c '.errors')"
+              exit 1
+            fi
+
+            thread_id=$(echo "$result" | jq -r \
+              --argjson cid "$PARENT_COMMENT_ID" \
+              '.data.repository.pullRequest.reviewThreads.nodes[]
+               | select(.comments.nodes | map(.databaseId) | index($cid))
+               | .id' | head -1)
+
+            has_next=$(echo "$result" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+            cursor=$(echo "$result" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
+          done
+
+          if [[ -z "$thread_id" ]]; then
+            echo "::error::Could not locate the review thread for this comment."
+            exit 1
+          fi
+
+          echo "thread_id=${thread_id}" >> "$GITHUB_OUTPUT"
+
+          mut_err=$(mktemp)
+          mut_result=$(gh api graphql -f query='
+            mutation($threadId: ID!) {
+              resolveReviewThread(input: {threadId: $threadId}) {
+                thread { id isResolved }
+              }
+            }' \
+            -f threadId="$thread_id" 2>"$mut_err") || {
+            echo "::error::Failed to resolve review thread: $(cat "$mut_err")"
+            rm -f "$mut_err"
+            exit 1
+          }
+          rm -f "$mut_err"
+
+          if echo "$mut_result" | jq -e '.errors' >/dev/null 2>&1; then
+            echo "::error::GraphQL errors resolving thread: $(echo "$mut_result" | jq -c '.errors')"
+            exit 1
+          fi
+
+          echo "Thread ${thread_id} resolved." >&2
+
+      - name: Dismiss review if all threads resolved
+        if: steps.validate.outputs.valid == 'true' && steps.resolve.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          OWNER: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository-name }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          REVIEW_ID: ${{ steps.validate.outputs.review_id }}
+          ACTOR: ${{ inputs.actor-login }}
+        run: |
+          review_state=$(gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}" \
+            --jq '.state' 2>/dev/null) || {
+            echo "Review ${REVIEW_ID} not found or not accessible; skipping dismissal." >&2
+            exit 0
+          }
+
+          if [[ "$review_state" != "CHANGES_REQUESTED" ]]; then
+            echo "Review state is ${review_state}, not CHANGES_REQUESTED; no dismissal needed." >&2
+            exit 0
+          fi
+
+          all_threads="[]"
+          cursor=""
+          has_next=true
+
+          while [[ "$has_next" == "true" ]]; do
+            api_err=$(mktemp)
+            page=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        isResolved
+                        comments(first: 1) {
+                          nodes { pullRequestReview { databaseId } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' \
+              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
+              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
+              echo "::error::Could not fetch threads for dismissal check: $(cat "$api_err")"
+              rm -f "$api_err"
+              exit 1
+            }
+            rm -f "$api_err"
+
+            if echo "$page" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL returned errors while fetching threads: $(echo "$page" | jq -c '.errors')"
+              exit 1
+            fi
+
+            page_nodes=$(echo "$page" | jq '.data.repository.pullRequest.reviewThreads.nodes')
+            if [[ "$page_nodes" == "null" || -z "$page_nodes" ]]; then
+              echo "::error::Malformed threads response (no nodes field)."
+              exit 1
+            fi
+            all_threads=$(echo "$all_threads" "$page_nodes" | jq -s '.[0] + .[1]')
+            has_next=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+            cursor=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
+          done
+
+          unresolved=$(echo "$all_threads" | jq \
+            --argjson rid "$REVIEW_ID" \
+            '[.[] | select(
+              .comments.nodes[0].pullRequestReview.databaseId == $rid and
+              .isResolved == false
+            )] | length')
+
+          if [[ "$unresolved" -gt 0 ]]; then
+            echo "${unresolved} unresolved thread(s) remain on review #${REVIEW_ID}; keeping CHANGES_REQUESTED." >&2
+            exit 0
+          fi
+
+          if ! [[ "$ACTOR" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}(\[bot\])?$ ]]; then
+            echo "::error::Refusing to dismiss: unexpected actor login '${ACTOR}'."
+            exit 1
+          fi
+          dismiss_msg="All findings resolved as false positives — dismissed by @${ACTOR}."
+          dismiss_err=$(mktemp)
+          if gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}/dismissals" \
+            --method PUT \
+            --field "message=${dismiss_msg}" \
+            >/dev/null 2>"$dismiss_err"; then
+            echo "Dismissed review #${REVIEW_ID}." >&2
+          else
+            echo "::error::Failed to dismiss review #${REVIEW_ID}: $(cat "$dismiss_err")"
+            rm -f "$dismiss_err"
+            exit 1
+          fi
+          rm -f "$dismiss_err"
+
+      - name: React — done
+        if: steps.validate.outputs.valid == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            -f content="+1"
+
+      - name: React — not applicable
+        if: steps.validate.outputs.valid == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            -f content=confused
+
+      - name: React — failed
+        if: steps.validate.outputs.valid == 'true' && failure()
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+        run: |
+          gh api \
+            "repos/${{ inputs.repository }}/pulls/comments/${{ inputs.comment-id }}/reactions" \
+            -f content=confused
