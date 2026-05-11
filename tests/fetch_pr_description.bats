@@ -110,9 +110,9 @@ setup() {
 }
 
 @test "fetch_pr_description: GitHub — strips HTML comment lines" {
-  # Use escaped newlines in JSON (as gh api would produce)
+  # gh api returns JSON with \n as literal two-char escape; jq -r converts to real newlines
   gh() {
-    echo '{"title":"Templated","body":"<!-- template marker -->\nActual description\n<!-- end -->"}'
+    printf '{"title":"Templated","body":"<!-- template marker -->\\nActual description\\n<!-- end -->"}'
   }
   export -f gh
   GITHUB_REPOSITORY="owner/repo"

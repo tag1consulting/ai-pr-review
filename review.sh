@@ -91,13 +91,12 @@ fetch_pr_description() {
       fi
       owner="${GITHUB_REPOSITORY%%/*}"
       repo="${GITHUB_REPOSITORY##*/}"
-      pr_json=$(gh api "repos/${owner}/${repo}/pulls/${pr_number}" \
-        --jq '{title: .title, body: (.body // "")}' 2>/dev/null) || {
+      pr_json=$(gh api "repos/${owner}/${repo}/pulls/${pr_number}" 2>/dev/null) || {
         echo "WARNING: Could not fetch PR description from GitHub API; proceeding without it." >&2
         return 0
       }
-      PR_TITLE=$(echo "$pr_json" | jq -r '.title // ""' 2>/dev/null) || true
-      PR_BODY=$(echo "$pr_json" | jq -r '.body // ""' 2>/dev/null) || true
+      PR_TITLE=$(printf '%s' "$pr_json" | jq -r '.title // ""' 2>/dev/null) || true
+      PR_BODY=$(printf '%s' "$pr_json" | jq -r '.body // ""' 2>/dev/null) || true
       ;;
     gitlab)
       local gl_api gl_auth gl_project_id mr_json
@@ -150,7 +149,9 @@ fetch_pr_description() {
         echo "WARNING: BITBUCKET_API_TOKEN is not set; cannot fetch PR description from Bitbucket." >&2
         return 0
       fi
-      bb_json=$(curl -sS -u "${BITBUCKET_EMAIL:-}:${BITBUCKET_API_TOKEN}" \
+      local bb_auth
+      bb_auth=$(printf '%s:%s' "${BITBUCKET_EMAIL:-}" "$BITBUCKET_API_TOKEN" | base64 | tr -d '\n')
+      bb_json=$(curl -sS -H "Authorization: Basic ${bb_auth}" \
         "https://api.bitbucket.org/2.0/repositories/${bb_workspace}/${bb_repo_slug}/pullrequests/${pr_number}" 2>/dev/null) || {
         echo "WARNING: Could not fetch PR description from Bitbucket API; proceeding without it." >&2
         return 0
@@ -167,7 +168,7 @@ fetch_pr_description() {
   # Strip PR template boilerplate before truncation so agents get meaningful content
   if [[ -n "$PR_BODY" ]]; then
     local stripped
-    stripped=$(printf '%s' "$PR_BODY" | sed '/^<!-- .* -->/d')
+    stripped=$(printf '%s\n' "$PR_BODY" | sed '/^<!--.*-->/d')
     if [[ -n "$stripped" ]]; then
       PR_BODY="$stripped"
     fi
