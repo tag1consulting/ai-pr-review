@@ -211,3 +211,79 @@ build_file_manifest() {
     fi
   fi
 }
+
+# Computes conditional-agent dispatch flags from $DIFF_FILE and $CHANGED_FILES globals.
+# Sets four globals consumed by review.sh dispatch sites:
+#   HAS_ERROR_PATTERNS         — 0|1; controls silent-failure-hunter
+#   RUN_ARCHITECTURE_REVIEWER  — true|false; default true
+#   RUN_SECURITY_REVIEWER      — true|false; default true
+#   RUN_EDGE_CASE_HUNTER       — true|false; default true
+#
+# Conservative: each RUN_* defaults true. A gate only flips to false when
+# (a) its kill switch is unset/false AND (b) the heuristic says skip.
+# Kill switches (env-var-only, no action.yml input):
+#   AI_DISABLE_GATE_ARCHITECTURE=true — always run architecture-reviewer
+#   AI_DISABLE_GATE_SECURITY=true     — always run security-reviewer
+#   AI_DISABLE_GATE_EDGE_CASE=true    — always run edge-case-hunter
+# shellcheck disable=SC2034  # globals (HAS_ERROR_PATTERNS, RUN_*) are read by review.sh callers
+detect_conditional_agent_triggers() {
+  HAS_ERROR_PATTERNS=0
+  if grep -qE '(catch|if err|try \{|rescue|Result<|unwrap|except|\.catch\()' "$DIFF_FILE" 2>/dev/null; then
+    HAS_ERROR_PATTERNS=1
+  fi
+
+  RUN_ARCHITECTURE_REVIEWER=true
+  RUN_SECURITY_REVIEWER=true
+  RUN_EDGE_CASE_HUNTER=true
+
+  # Architecture gate: skip when all changes are docs/meta only.
+  # .github/workflows/ files are treated as infra (architectural); other .github/
+  # paths (ISSUE_TEMPLATE, CODEOWNERS, etc.) are treated as docs.
+  if [[ "${AI_DISABLE_GATE_ARCHITECTURE:-false}" != "true" ]] && [[ -n "$CHANGED_FILES" ]]; then
+    local workflow_count nondocs_count
+    workflow_count=$(printf '%s\n' "$CHANGED_FILES" | grep -cE '(^|/)\.github/workflows/' || true)
+    nondocs_count=$(printf '%s\n' "$CHANGED_FILES" \
+      | grep -vE '(^|/)\.github/workflows/' \
+      | grep -vE '\.(md|markdown|txt|rst|adoc)$' \
+      | grep -vE '(^|/)(docs|memory-bank|\.github|\.claude)/' \
+      | grep -vE '(^|/)(CHANGELOG|README|LICENSE|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS|CODE_OF_CONDUCT)(\..*)?$' \
+      | grep -cv '^$' || true)
+    if [[ "$workflow_count" -eq 0 ]] && [[ "$nondocs_count" -eq 0 ]]; then
+      RUN_ARCHITECTURE_REVIEWER=false
+    fi
+  fi
+
+  # Security gate: skip when diff contains no security-adjacent keywords AND no
+  # security-sensitive file paths. Intentionally broad — false positives cost one
+  # extra agent run; false negatives cost a missed vulnerability.
+  if [[ "${AI_DISABLE_GATE_SECURITY:-false}" != "true" ]]; then
+    local has_sec_keyword=0 has_sec_path=0
+    if grep -qiE \
+        'auth|token|secret|password|crypt|hash|sign|verify|exec|eval|sql|sanitize|escape|xss|csrf|cors|header|redirect|deserialize|cookie|session|jwt|oauth|ldap|saml|rbac|acl|permission|privilege|sudo|chmod|chown|setuid|x509|tls|ssl|cert|certificate|keystore|nonce|salt|hmac|aes|rsa|ecdsa|pbkdf2|bcrypt|scrypt' \
+        "$DIFF_FILE" 2>/dev/null; then
+      has_sec_keyword=1
+    fi
+    if [[ -n "$CHANGED_FILES" ]] && printf '%s\n' "$CHANGED_FILES" | grep -qE \
+        -e '(auth|passwords?|credentials?|tokens?|secrets?)' \
+        -e '(^|/)(api|routes?)/' \
+        -e '(^|/)(package\.json|package-lock\.json|go\.mod|go\.sum|composer\.json|composer\.lock|requirements[^/]*\.txt|pyproject\.toml|Pipfile|Pipfile\.lock|Gemfile|Gemfile\.lock|[Cc]argo\.toml|[Cc]argo\.lock|yarn\.lock|pnpm-lock\.yaml)$' \
+        -e '(^|/)\.env' \
+        -e '(^|/)settings\.(py|ya?ml|json|toml)$' \
+        -e '(^|/)Dockerfile' \
+        -e '(^|/)\.github/workflows/' 2>/dev/null; then
+      has_sec_path=1
+    fi
+    if [[ "$has_sec_keyword" -eq 0 ]] && [[ "$has_sec_path" -eq 0 ]]; then
+      RUN_SECURITY_REVIEWER=false
+    fi
+  fi
+
+  # Edge-case gate: skip when diff additions contain no control-flow keywords.
+  # Checks only added lines (+ prefix) — removed control flow is not a concern.
+  if [[ "${AI_DISABLE_GATE_EDGE_CASE:-false}" != "true" ]]; then
+    if ! grep -E '^\+[^+]' "$DIFF_FILE" 2>/dev/null \
+        | grep -qE '\b(if|elif|else|for|while|do|case|switch|match|try|catch|except|rescue|unless|when|loop|break|continue|return|goto|defer|finally)\b'; then
+      RUN_EDGE_CASE_HUNTER=false
+    fi
+  fi
+}
