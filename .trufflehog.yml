@@ -1,0 +1,10 @@
+# TruffleHog configuration — allowlist for known false positives.
+# See: https://github.com/trufflesecurity/trufflehog#configuration
+
+allowlist:
+  description: "Known false positives"
+  paths:
+    # ai_pr_review/config.py reads credential names as os.environ.get("GITLAB_TOKEN", "")
+    # strings — no token values are present. TruffleHog's GitLab detector fires on the
+    # proximity of "GITLAB_TOKEN" and "gitlab_project_id" field names.
+    - "ai_pr_review/config.py"

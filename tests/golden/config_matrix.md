@@ -96,10 +96,10 @@ These are set by GitLab CI automatically and consumed as fallbacks:
 
 ## Coverage Summary
 
-- **Total variables:** 41
+- **Total variables:** 43 (41 original + 2 Epic 1 engine flags)
 - **Fixture-covered:** 12 (all fixtures use a subset of vars; VCS and LLM provider selection covered across 3 providers each)
 - **Manual-test-only:** 29 (secrets, live API behavior, timing/parallelism, rarely-changed tuning)
-- **Python-parity-proven:** 0 (pending Epics 1–2)
+- **Python-parity-proven:** 2 (Epic 1: `AI_PR_REVIEW_ENGINE`, `AI_PR_REVIEW_COMPUTE_OUTPUT` — covered by `ai_pr_review/config.py` + `tests/python/test_config.py`)
 
 ### Manual-test-only rationale categories
 

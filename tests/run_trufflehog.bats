@@ -136,3 +136,39 @@ teardown() {
   echo "$output" | jq -e '.[0].confidence == 85' > /dev/null
   echo "$output" | jq -e '.[0].finding | test("test file") | not' > /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# Allowlist path filtering — findings from .trufflehog.yml allowlisted paths
+# are suppressed in the post-processing transform.
+# ---------------------------------------------------------------------------
+
+@test "trufflehog: finding from allowlisted path is suppressed" {
+  # Run from a temp dir containing a .trufflehog.yml that allowlists config.py
+  touch "$WORK/config.py"
+  cat > "$WORK/.trufflehog.yml" << 'YAML'
+allowlist:
+  description: "test allowlist"
+  paths:
+    - "ai_pr_review/config.py"
+YAML
+  cd "$WORK"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-allowlisted-path.json" run --separate-stderr \
+    "$SCRIPT" "$WORK/config.py"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "trufflehog: finding from non-allowlisted path is not suppressed" {
+  touch "$WORK/config.py"
+  cat > "$WORK/.trufflehog.yml" << 'YAML'
+allowlist:
+  description: "test allowlist"
+  paths:
+    - "ai_pr_review/config.py"
+YAML
+  cd "$WORK"
+  TRUFFLEHOG_MOCK_FILE="$FIXTURES/trufflehog-unverified.json" run --separate-stderr \
+    "$SCRIPT" "$WORK/config.py"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'length > 0' > /dev/null
+}

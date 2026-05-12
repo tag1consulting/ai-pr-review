@@ -78,6 +78,15 @@ to change them.
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_EDGE_CASE` | `false` | Disables the control-flow heuristic gate; `edge-case-hunter` always runs regardless of diff content. |
 
+### Feature flags (experimental)
+
+These variables control in-development features gated behind explicit opt-in.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_PR_REVIEW_ENGINE` | `bash` | Select the compute engine. `bash` (default) uses the existing shell pipeline. `python` dispatches compute to the Python engine (Epic 1+); posting remains in bash. This flag is experimental — the Python engine is feature-incomplete until Epic 2 (#196). |
+| `AI_PR_REVIEW_COMPUTE_OUTPUT` | `''` | Path where the Python engine writes its compute-phase JSON payload. The bash post-review scripts read this file when `AI_PR_REVIEW_ENGINE=python`. See [docs/compute-output-schema.md](compute-output-schema.md). |
+
 > **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
 
 ### Bitbucket-specific variables

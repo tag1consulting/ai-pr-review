@@ -289,6 +289,27 @@ main() {
   trap cleanup EXIT
 
   # ---------------------------------------------------------------------------
+  # Engine dispatch — AI_PR_REVIEW_ENGINE=python hands compute off to the
+  # Python engine (Epic 1). Posting continues via the bash post-review scripts,
+  # which read the JSON payload at AI_PR_REVIEW_COMPUTE_OUTPUT (Epic 1 S9).
+  # Default engine is "bash"; no behavior change for existing consumers.
+  # Epic 2 (#196) will route posting through Python and remove this shim.
+  # ---------------------------------------------------------------------------
+  AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+  if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]]; then
+    echo "Engine: python (Epic 1 mode — compute via Python, posting via bash)" >&2
+    if ! python3 -m ai_pr_review compute; then
+      log_error "Python compute engine failed."
+      exit 1
+    fi
+    # Python compute phase complete. The payload is at AI_PR_REVIEW_COMPUTE_OUTPUT.
+    # Full bash posting integration is implemented in Epic 2 (#196).
+    # TODO(#196): remove this early-exit shim when Epic 2 ports posting to Python.
+    echo "Python compute complete. Posting via Python not yet implemented (Epic 2 #196)." >&2
+    exit 0
+  fi
+
+  # ---------------------------------------------------------------------------
   # Phase 0: Pre-flight — compute diff, build manifest
   # ---------------------------------------------------------------------------
   if [[ "$REVIEW_TARGET" != "standalone" ]]; then
