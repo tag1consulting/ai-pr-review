@@ -20,6 +20,9 @@ permissions:
 
 jobs:
   build-push:
+    concurrency:
+      group: publish-image-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
