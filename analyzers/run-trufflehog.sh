@@ -51,15 +51,40 @@ fi
 # *.test.ts, *.spec.ts, *.bats), and example/sample directories.
 _TEST_FILE_PATTERN='(^|/)(tests?|__tests__|spec|fixtures?|testdata|test_data|mocks?|stubs?|fakes?|examples?|samples?)/|_test\.[a-z]+$|\.test\.[a-z]+$|\.spec\.[a-z]+$|\.bats$|^test_[^/]+\.[a-z]+$|(^|/)test_[^/]+\.[a-z]+$'
 
+# Build an allowlist path regex from .trufflehog.yml if present.
+# Trufflehog's --config allowlist only applies when scanning git history, not
+# filesystem mode, so we post-filter findings by file path here.
+_build_allowlist_regex() {
+  if [[ ! -f ".trufflehog.yml" ]]; then
+    echo ""
+    return
+  fi
+  # Extract quoted strings under the "paths:" key (simple YAML — one path per line)
+  local paths
+  paths=$(grep -A 999 'paths:' ".trufflehog.yml" 2>/dev/null \
+    | grep -E '^\s*-\s+"' \
+    | sed 's/^\s*-\s*"//; s/"\s*$//' \
+    | grep -v '^#')
+  if [[ -z "$paths" ]]; then
+    echo ""
+    return
+  fi
+  # Join paths with | for a jq regex alternation
+  echo "$paths" | paste -sd '|' -
+}
+
 # jq filter to convert trufflehog NDJSON into findings array
 _th_transform() {
   local test_pattern="${_TEST_FILE_PATTERN}"
-  jq -Rs --arg test_pat "$test_pattern" '
+  local allowlist_regex
+  allowlist_regex=$(_build_allowlist_regex)
+  jq -Rs --arg test_pat "$test_pattern" --arg allowlist "$allowlist_regex" '
     split("\n") | map(select(length > 0)) |
     map(
       (. | fromjson? // null) |
       select(. != null) |
       (.SourceMetadata.Data.Filesystem.file? // "unknown") as $file |
+      select($allowlist == "" or ($file | test($allowlist; "i") | not)) |
       (.Verified) as $verified |
       (if ($verified | not) and ($file | test($test_pat)) then true else false end) as $is_test_fp |
       {
