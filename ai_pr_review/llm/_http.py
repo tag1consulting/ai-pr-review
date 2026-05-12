@@ -101,7 +101,11 @@ async def retry_post(
             try:
                 print(response.text, file=sys.stderr)
             except Exception as log_exc:
-                print(f"WARNING: could not read error response body: {log_exc}", file=sys.stderr)
+                print(
+                    f"WARNING: could not read error response body: {log_exc}; "
+                    f"raw bytes: {response.content[:200]!r}",
+                    file=sys.stderr,
+                )
             raise LLMError(
                 f"{provider_label} returned HTTP {response.status_code}: {response.text[:500]}"
             )

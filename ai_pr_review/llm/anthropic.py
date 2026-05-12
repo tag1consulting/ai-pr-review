@@ -85,7 +85,7 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
     try:
         data = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"Anthropic returned non-JSON response: {response_text[:200]}") from exc
+        raise LLMError(f"Anthropic returned non-JSON response ({exc}): {response_text[:200]}") from exc
     stop_reason = data.get("stop_reason", "")
 
     # Check content filter stop reasons before checking for empty text.

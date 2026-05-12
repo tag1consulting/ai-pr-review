@@ -64,7 +64,7 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
     try:
         data = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"Google returned non-JSON response: {response_text[:200]}") from exc
+        raise LLMError(f"Google returned non-JSON response ({exc}): {response_text[:200]}") from exc
     candidates = data.get("candidates", [])
     if not candidates:
         raise LLMError(f"Google returned no candidates: {response_text[:500]}")
