@@ -51,40 +51,41 @@ fi
 # *.test.ts, *.spec.ts, *.bats), and example/sample directories.
 _TEST_FILE_PATTERN='(^|/)(tests?|__tests__|spec|fixtures?|testdata|test_data|mocks?|stubs?|fakes?|examples?|samples?)/|_test\.[a-z]+$|\.test\.[a-z]+$|\.spec\.[a-z]+$|\.bats$|^test_[^/]+\.[a-z]+$|(^|/)test_[^/]+\.[a-z]+$'
 
-# Build an allowlist path regex from .trufflehog.yml if present.
+# Build a JSON array of allowlisted paths from .trufflehog.yml if present.
 # Trufflehog's --config allowlist only applies when scanning git history, not
-# filesystem mode, so we post-filter findings by file path here.
-_build_allowlist_regex() {
+# filesystem mode, so we post-filter findings by exact file path here.
+_build_allowlist_json() {
   if [[ ! -f ".trufflehog.yml" ]]; then
-    echo ""
+    echo "[]"
     return
   fi
-  # Extract quoted strings under the "paths:" key (simple YAML — one path per line)
+  # Extract only the paths: block (stop at next top-level YAML key).
+  # Use POSIX character classes ([[:space:]]) for BSD/macOS sed compatibility.
   local paths
-  paths=$(grep -A 999 'paths:' ".trufflehog.yml" 2>/dev/null \
-    | grep -E '^\s*-\s+"' \
-    | sed 's/^\s*-\s*"//; s/"\s*$//' \
+  paths=$(awk '/^[[:space:]]*paths:/{p=1;next} /^[a-zA-Z]/{p=0} p{print}' ".trufflehog.yml" \
+    | grep -E '^[[:space:]]*-[[:space:]]+"' \
+    | sed 's/^[[:space:]]*-[[:space:]]*"//; s/"[[:space:]]*$//' \
     | grep -v '^#')
   if [[ -z "$paths" ]]; then
-    echo ""
+    echo "[]"
     return
   fi
-  # Join paths with | for a jq regex alternation
-  echo "$paths" | paste -sd '|' -
+  # Emit a JSON array of exact path strings (jq -R/-s handles quoting/escaping)
+  echo "$paths" | jq -Rs 'split("\n") | map(select(length > 0))'
 }
 
 # jq filter to convert trufflehog NDJSON into findings array
 _th_transform() {
   local test_pattern="${_TEST_FILE_PATTERN}"
-  local allowlist_regex
-  allowlist_regex=$(_build_allowlist_regex)
-  jq -Rs --arg test_pat "$test_pattern" --arg allowlist "$allowlist_regex" '
+  local allowlist_json
+  allowlist_json=$(_build_allowlist_json)
+  jq -Rs --arg test_pat "$test_pattern" --argjson allowlist "$allowlist_json" '
     split("\n") | map(select(length > 0)) |
     map(
       (. | fromjson? // null) |
       select(. != null) |
       (.SourceMetadata.Data.Filesystem.file? // "unknown") as $file |
-      select($allowlist == "" or ($file | test($allowlist; "i") | not)) |
+      select($allowlist | map(. == $file) | any | not) |
       (.Verified) as $verified |
       (if ($verified | not) and ($file | test($test_pat)) then true else false end) as $is_test_fp |
       {
