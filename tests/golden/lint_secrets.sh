@@ -41,7 +41,7 @@ for pattern in "${PATTERNS[@]}"; do
   while IFS= read -r match; do
     echo "SECRET LEAK: ${match}"
     found=1
-  done < <(grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" 2>/dev/null || true)
+  done < <(grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" 2>/dev/null; rc=$?; [[ $rc -eq 0 || $rc -eq 1 ]] || { echo "ERROR: grep failed scanning for pattern: ${pattern}" >&2; exit 1; })
 done
 
 if [[ "$found" -ne 0 ]]; then

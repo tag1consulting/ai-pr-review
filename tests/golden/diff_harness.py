@@ -292,7 +292,7 @@ def run_fixture(fixture_dir: Path) -> FixtureResult:
         result.assertion_result = ar
         result.passed = ar.ok
 
-    except Exception as e:
+    except (ValueError, json.JSONDecodeError, OSError) as e:
         result.error = str(e)
 
     return result

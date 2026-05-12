@@ -96,7 +96,8 @@ gh_api_retry() {
         done
         local _resp_file; _resp_file=$(mktemp /tmp/gh-tape-resp-XXXXXXXX)
         printf '%s' "$result" > "$_resp_file"
-        record_tape "github" "$_tape_method" "${_tape_url:-unknown}" "$stdin_file" "$_resp_file"
+        [[ -z "${_tape_url:-}" ]] && echo "WARNING: could not extract tape URL from gh api args; tape URL will be empty" >&2
+        record_tape "github" "$_tape_method" "${_tape_url:-}" "$stdin_file" "$_resp_file"
         rm -f "$_resp_file"
       fi
       return 0

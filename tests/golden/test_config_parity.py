@@ -100,7 +100,7 @@ def test_config_matrix_covers_required_vars() -> None:
     matrix_vars = extract_vars_from_matrix(CONFIG_MATRIX)
     missing = REQUIRED_VARS - matrix_vars
     assert not missing, (
-        f"config_matrix.md is missing these vars from the required set:\n"
+        "config_matrix.md is missing these vars from the required set:\n"
         + "\n".join(f"  - {v}" for v in sorted(missing))
     )
 
@@ -121,7 +121,7 @@ def test_config_matrix_covers_docs_configuration() -> None:
     docs_required = docs_vars & REQUIRED_VARS
     missing_from_matrix = docs_required - matrix_vars
     assert not missing_from_matrix, (
-        f"These vars from docs/configuration.md are missing from config_matrix.md:\n"
+        "These vars from docs/configuration.md are missing from config_matrix.md:\n"
         + "\n".join(f"  - {v}" for v in sorted(missing_from_matrix))
     )
 
