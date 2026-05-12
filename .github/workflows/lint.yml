@@ -3,9 +3,9 @@ name: Lint & Test
 on:
   push:
     branches: [main]
-    paths: ['**.sh', '**.py', 'tests/**']
+    paths: ['**.sh', '**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
   pull_request:
-    paths: ['**.sh', '**.py', 'tests/**']
+    paths: ['**.sh', '**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
 
 permissions:
   contents: read
@@ -41,3 +41,31 @@ jobs:
 
       - name: Run tests
         run: bats tests/*.bats
+
+  python:
+    name: Python (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and dev dependencies
+        run: |
+          pip install --quiet ".[dev]" || pip install --quiet -e . pytest ruff mypy pydantic httpx click
+
+      - name: ruff check
+        run: ruff check ai_pr_review/
+
+      - name: mypy
+        run: mypy --strict ai_pr_review/
+
+      - name: pytest
+        run: python -m pytest tests/python/ -v --tb=short

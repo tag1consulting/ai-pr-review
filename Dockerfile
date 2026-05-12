@@ -205,6 +205,13 @@ COPY prompts/           /opt/ai-pr-review/prompts/
 COPY language-profiles/ /opt/ai-pr-review/language-profiles/
 COPY vcs/               /opt/ai-pr-review/vcs/
 
+# Python engine (Epic 1). Installed into the system site-packages so the
+# non-root app user can run `python3 -m ai_pr_review` without a venv.
+# --break-system-packages is required on Ubuntu 24.04 (PEP 668).
+COPY ai_pr_review/      /opt/ai-pr-review/ai_pr_review/
+COPY pyproject.toml     /opt/ai-pr-review/pyproject.toml
+RUN pip3 install --no-cache-dir --break-system-packages /opt/ai-pr-review
+
 RUN chmod +x /opt/ai-pr-review/*.sh /opt/ai-pr-review/analyzers/*.sh
 
 # Run as non-root
