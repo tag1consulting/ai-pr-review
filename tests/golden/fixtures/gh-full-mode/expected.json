@@ -1,0 +1,44 @@
+{
+  "fixture": "gh-full-mode",
+  "description": "Full-mode review with premium model agents running",
+  "scenario": "full-mode",
+  "vcs_provider": "github",
+  "llm_provider": "anthropic",
+  "findings": [
+    {
+      "severity": "Medium",
+      "confidence": 82,
+      "file": "src/database.py",
+      "line": 13,
+      "finding": "N+1 insert pattern: bulk_insert commits one row at a time; use executemany or bulk_insert_mappings",
+      "remediation": "Use conn.execute(insert_stmt, records) for bulk insert in a single statement",
+      "source": "architecture-reviewer"
+    }
+  ],
+  "outcome": {
+    "risk": "Medium",
+    "review_event": "APPROVE",
+    "finding_count": 1
+  },
+  "outbound_calls": [
+    {
+      "provider": "github",
+      "method": "POST",
+      "url_pattern": "repos/example-org/example-repo/issues/99/comments",
+      "body_contains": [
+        "ai-pr-review-summary"
+      ]
+    }
+  ],
+  "inline_comments": [
+    {
+      "file": "src/database.py",
+      "line": 13,
+      "side": "RIGHT"
+    }
+  ],
+  "watermark": {
+    "sha_before": null,
+    "sha_after": "eee555fff666aaa111bbb222ccc333ddd444eee5"
+  }
+}

@@ -33,12 +33,15 @@ PATTERNS=(
   'Bearer [A-Za-z0-9_.~+/-]{30,}'
 )
 
+# diff.patch files are excluded: they may intentionally contain test/example
+# secret patterns to exercise the secret-finding and suppression-hit scenarios.
+# API tape files (llm-tapes/ and vcs-tapes/) must never contain real secrets.
 found=0
 for pattern in "${PATTERNS[@]}"; do
   while IFS= read -r match; do
     echo "SECRET LEAK: ${match}"
     found=1
-  done < <(grep -rEn "$pattern" "$FIXTURE_DIR" 2>/dev/null || true)
+  done < <(grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" 2>/dev/null || true)
 done
 
 if [[ "$found" -ne 0 ]]; then

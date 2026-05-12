@@ -1,0 +1,8 @@
+{
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "request_body": "{\"model\":\"claude-sonnet-4-6\",\"system\":[{\"type\":\"text\",\"text\":\"<diff>...\",\"cache_control\":{\"type\":\"ephemeral\"}},{\"type\":\"text\",\"text\":\"You are a code reviewer.\"}],\"messages\":[{\"role\":\"user\",\"content\":\"Please perform your review now.\"}],\"max_tokens\":8192,\"temperature\":0.3}",
+  "response_body": "{\"id\":\"msg_010XyZ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"# Code Review\\n\\n```json-findings\\n[{\"severity\": \"High\", \"confidence\": 90, \"file\": \"src/App.jsx\", \"line\": 8, \"finding\": \"XSS via dangerouslySetInnerHTML with unsanitized user input\", \"remediation\": \"Sanitize name with DOMPurify.sanitize() before rendering or render as text content\", \"source\": \"security-reviewer\"}]\\n```\"}],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":300,\"output_tokens\":120}}",
+  "timestamp": "2026-05-11T20:02:00Z"
+}

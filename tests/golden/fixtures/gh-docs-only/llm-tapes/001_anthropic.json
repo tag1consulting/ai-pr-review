@@ -1,0 +1,8 @@
+{
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "request_body": "{\"model\":\"claude-sonnet-4-6\",\"system\":[{\"type\":\"text\",\"text\":\"<diff>diff --git a/README.md b/README.md\\n...\",\"cache_control\":{\"type\":\"ephemeral\"}},{\"type\":\"text\",\"text\":\"You are a code reviewer agent.\"}],\"messages\":[{\"role\":\"user\",\"content\":\"Please perform your review now.\"}],\"max_tokens\":8192,\"temperature\":0.3}",
+  "response_body": "{\"id\":\"msg_01XyZ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"# Code Review\\n\\nThis PR updates documentation only. No code changes detected.\\n\\n```json-findings\\n[]\\n```\"}],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":120,\"output_tokens\":45}}",
+  "timestamp": "2026-05-11T20:00:00Z"
+}

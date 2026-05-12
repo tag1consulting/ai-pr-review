@@ -1,0 +1,8 @@
+{
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "request_body": "",
+  "response_body": "{\"error\": \"timeout\", \"detail\": \"LLM call timed out after 180s\"}",
+  "timestamp": "2026-05-11T20:02:00Z"
+}
