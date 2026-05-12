@@ -155,7 +155,7 @@ def _verify_version(finding: Finding, verify_type: str) -> bool:
             return _verify_ruby(text)
     except Exception as exc:  # noqa: BLE001
         print(
-            f"WARNING: suppression verify ({verify_type}) error ({type(exc).__name__}); keeping finding. {exc}",
+            f"WARNING: suppression verify ({verify_type}) error ({type(exc).__name__}: {exc!r}); keeping finding.",
             file=sys.stderr,
         )
     return False
@@ -230,6 +230,11 @@ def _verify_docker_hub(text: str) -> bool:
         r"([a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)?):([a-zA-Z0-9._-]+)", text
     )
     if not m:
+        print(
+            "WARNING: docker-hub suppression verify: no 'image:tag' pattern found in finding text; "
+            "suppression rule will not be applied. Add an explicit tag to the suppression rule.",
+            file=sys.stderr,
+        )
         return False
     image, tag = m.group(1), m.group(2)
     parts = image.split("/")

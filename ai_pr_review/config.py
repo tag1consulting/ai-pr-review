@@ -188,7 +188,7 @@ class ReviewConfig(BaseModel):
                 return int(raw)
             except ValueError:
                 print(
-                    f"WARNING: {key}={raw!r} is not a valid integer; using default {default}.",
+                    f"WARNING: {key}={raw!r} is not a valid integer; using default {default}. Review will proceed with this default.",
                     file=sys.stderr,
                 )
                 return default

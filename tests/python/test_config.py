@@ -94,3 +94,4 @@ def test_int_env_var_parse_failure_warns(
     captured = capsys.readouterr()
     assert "WARNING" in captured.err
     assert "not-a-number" in captured.err
+    assert "proceed with" in captured.err

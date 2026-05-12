@@ -297,6 +297,25 @@ class TestVerifyVersion:
             result = _verify_version(f, "docker-hub")
         assert result is True
 
+    def test_docker_hub_no_tag_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
+        f = _finding(finding="nginx has CVE")  # no explicit :tag
+        result = _verify_version(f, "docker-hub")
+        assert result is False
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "image:tag" in captured.err
+
+    def test_exception_warning_includes_repr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        f = _finding(finding="owner/repo@v1.0.0")
+        with patch(
+            "ai_pr_review.findings.suppress._verify_github_release",
+            side_effect=RuntimeError(""),  # empty str(exc) — repr should still show type
+        ):
+            result = _verify_version(f, "github-releases")
+        assert result is False
+        captured = capsys.readouterr()
+        assert "RuntimeError" in captured.err
+
     def test_ruby_verified(self) -> None:
         f = _finding(finding="nokogiri 1.15.0 has security issue")
         body = [{"number": "1.15.0"}, {"number": "1.14.0"}]
