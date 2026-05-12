@@ -132,6 +132,13 @@ inputs:
     required: false
     default: 'true'
 
+  engine:
+    description: >
+      Compute engine to use. 'bash' (default) uses the original shell pipeline;
+      'python' routes compute through the Epic 1 Python engine (AI_PR_REVIEW_ENGINE=python).
+    required: false
+    default: 'bash'
+
 runs:
   using: composite
   steps:
@@ -181,4 +188,5 @@ runs:
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
+        AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
       run: bash "${{ github.action_path }}/review.sh"
