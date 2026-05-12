@@ -16,6 +16,9 @@
 #
 # Requirements:
 #   - ANTHROPIC_API_KEY secret (or your provider's key)
+#   - GH_TOKEN secret: a PAT with repo scope (classic) or pull_requests:write +
+#     metadata:read (fine-grained). GITHUB_TOKEN cannot resolve review threads
+#     from pull_request_review_comment events — the dismiss command requires a PAT.
 #   - Only users with write access to this repo can trigger commands
 #
 # IMPORTANT: issue_comment and pull_request_review_comment workflows run from
@@ -67,6 +70,8 @@ jobs:
       # review-mode-default: 'quick'
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-      # Must use secrets.GITHUB_TOKEN here — github.token does not propagate
-      # correctly through a reusable workflow's named secrets: map.
-      github-token: ${{ secrets.GITHUB_TOKEN }}
+      # GH_TOKEN must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.
+      # GITHUB_TOKEN from pull_request_review_comment events cannot call the
+      # resolveReviewThread GraphQL mutation used by /ai-pr-review dismiss.
+      # See: docs/slash-commands.md#pat-requirement
+      github-token: ${{ secrets.GH_TOKEN }}
