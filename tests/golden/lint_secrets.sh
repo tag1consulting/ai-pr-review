@@ -37,12 +37,20 @@ PATTERNS=(
 # secret patterns to exercise the secret-finding and suppression-hit scenarios.
 # API tape files (llm-tapes/ and vcs-tapes/) must never contain real secrets.
 found=0
+tmpfile=$(mktemp)
 for pattern in "${PATTERNS[@]}"; do
+  grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" > "$tmpfile" 2>/dev/null; rc=$?
+  if [[ $rc -ne 0 && $rc -ne 1 ]]; then
+    echo "ERROR: grep failed scanning for pattern: ${pattern}" >&2
+    rm -f "$tmpfile"
+    exit 1
+  fi
   while IFS= read -r match; do
     echo "SECRET LEAK: ${match}"
     found=1
-  done < <(grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" 2>/dev/null; rc=$?; [[ $rc -eq 0 || $rc -eq 1 ]] || { echo "ERROR: grep failed scanning for pattern: ${pattern}" >&2; exit 1; })
+  done < "$tmpfile"
 done
+rm -f "$tmpfile"
 
 if [[ "$found" -ne 0 ]]; then
   echo "ERROR: Secret patterns detected in fixture corpus. Redact before committing." >&2

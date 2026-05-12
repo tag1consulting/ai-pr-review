@@ -49,7 +49,7 @@ _record_seq_next() {
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
     seq=$(( seq + 1 ))
     printf '%d' "$seq" > "$seq_file"
-  } 9>"${seq_file}.lock"
+  } 9>>"${seq_file}.lock"
   printf '%03d' "$seq"
 }
 
@@ -76,7 +76,7 @@ record_tape() {
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{type:"vcs", provider:$provider, method:$method, url:$url,
       request_body:$req, response_body:$resp, timestamp:$ts}' \
-    > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write VCS tape ${tape_file}" >&2; }
+    > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write VCS tape ${tape_file}" >&2; _TAPE_WRITE_FAILED=1; }
 }
 
 # --- Temp-file lifecycle ---------------------------------------------------

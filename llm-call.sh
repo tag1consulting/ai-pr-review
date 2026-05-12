@@ -169,7 +169,7 @@ _record_llm_tape() {
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{type:"llm", provider:$provider, model:$model,
       request_body:$req, response_body:$resp, timestamp:$ts}' \
-    > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write LLM tape ${tape_file}" >&2; }
+    > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write LLM tape ${tape_file}" >&2; _TAPE_WRITE_FAILED=1; }
   unset _LLM_TAPE_REQ_FILE
 }
 
@@ -314,8 +314,8 @@ retry_curl() {
 emit_response() {
   local response_text="$1" input_tokens="$2" output_tokens="$3" stop_reason="${4:-}"
   local cache_creation_tokens="${5:-0}" cache_read_tokens="${6:-0}"
-  # Guard against stale value from a prior call if a provider function did not run
-  _LLM_TAPE_REQ_FILE="${_LLM_TAPE_REQ_FILE:-}"
+  # Clear any stale value from a prior call if a provider function did not run
+  _LLM_TAPE_REQ_FILE=""
 
   # Check provider-specific content filter reasons before the empty-response check
   # so error messages are specific rather than generic "Could not extract response text"
