@@ -170,6 +170,8 @@ _record_llm_tape() {
     '{type:"llm", provider:$provider, model:$model,
       request_body:$req, response_body:$resp, timestamp:$ts}' \
     > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write LLM tape ${tape_file}" >&2; _TAPE_WRITE_FAILED=1; }
+  # _TAPE_WRITE_FAILED is intentionally not checked here: tape-write failures
+  # are advisory during fixture capture and must not abort a live review run.
   unset _LLM_TAPE_REQ_FILE
 }
 

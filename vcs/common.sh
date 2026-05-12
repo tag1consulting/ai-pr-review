@@ -49,7 +49,7 @@ _record_seq_next() {
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
     seq=$(( seq + 1 ))
     printf '%d' "$seq" > "$seq_file"
-  } 9>>"${seq_file}.lock"
+  } 9>>"${seq_file}.lock"  # >> preserves the inode so concurrent openers all flock the same file
   printf '%03d' "$seq"
 }
 
