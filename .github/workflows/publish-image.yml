@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*.*.*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       dry-run:
@@ -32,7 +34,8 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref, '-') && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Log in to GHCR
         if: ${{ github.event.inputs.dry-run != 'true' }}
@@ -43,6 +46,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
+        if: startsWith(github.ref, 'refs/tags/')
         uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
@@ -55,7 +59,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ github.event.inputs.dry-run != 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -63,11 +67,11 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Install cosign
-        if: ${{ github.event.inputs.dry-run != 'true' }}
+        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
         uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign image
-        if: ${{ github.event.inputs.dry-run != 'true' }}
+        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
