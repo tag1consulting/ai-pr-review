@@ -5,9 +5,9 @@
 user_name: Greg
 communication_language: English
 document_output_language: English
-output_folder: /home/gchaix/worktrees/ai-pr-review-rework-epic-0/memory-bank/bmad
+output_folder: memory-bank/bmad
 project_name: ai-pr-review
 user_skill_level: expert
-planning_artifacts: /home/gchaix/worktrees/ai-pr-review-rework-epic-0/memory-bank/bmad/planning-artifacts
-implementation_artifacts: /home/gchaix/worktrees/ai-pr-review-rework-epic-0/memory-bank/bmad/implementation-artifacts
-project_knowledge: /home/gchaix/worktrees/ai-pr-review-rework-epic-0/docs
+planning_artifacts: memory-bank/bmad/planning-artifacts
+implementation_artifacts: memory-bank/bmad/implementation-artifacts
+project_knowledge: docs
