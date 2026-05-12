@@ -1,0 +1,93 @@
+name: Golden Parity Harness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/golden/**'
+      - 'llm-call.sh'
+      - 'post-review.sh'
+      - 'post-review-gitlab.sh'
+      - 'post-review-bitbucket.sh'
+      - 'vcs/common.sh'
+      - 'lib/**'
+      - 'review.sh'
+  pull_request:
+    paths:
+      - 'tests/golden/**'
+      - 'llm-call.sh'
+      - 'post-review.sh'
+      - 'post-review-gitlab.sh'
+      - 'post-review-bitbucket.sh'
+      - 'vcs/common.sh'
+      - 'lib/**'
+      - 'review.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Parity harness (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: pip install pytest --quiet
+
+      - name: Scan fixtures for leaked secrets
+        run: bash tests/golden/lint_secrets.sh
+
+      - name: Run golden parity harness (pytest)
+        run: |
+          python -m pytest tests/golden/ -v \
+            --tb=short \
+            --timeout=30 \
+            -q
+        env:
+          # Ensure no live API credentials are present — harness is purely
+          # replay-based and must never hit real endpoints.
+          AI_PR_REVIEW_RECORD_DIR: ""
+
+      - name: Emit structured summary
+        if: always()
+        run: |
+          echo "## Golden Parity Harness" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          python tests/golden/diff_harness.py --all --json | python3 -c "
+          import json, sys
+          results = json.load(sys.stdin)
+          passed = sum(1 for r in results if r['status'] == 'pass')
+          failed = [r for r in results if r['status'] != 'pass']
+          print(f'**{passed}/{len(results)} fixtures passed**')
+          if failed:
+              print()
+              print('### Failures')
+              for r in failed:
+                  print(f'- ❌ \`{r[\"fixture\"]}\`')
+                  for f in r.get('failures', []):
+                      print(f'  - {f}')
+          else:
+              print()
+              print('✅ All fixtures passed — bash-vs-bash self-consistency verified.')
+          " >> "$GITHUB_STEP_SUMMARY"
+
+  secret-lint:
+    name: Fixture secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Scan fixture tapes for leaked secrets
+        run: bash tests/golden/lint_secrets.sh

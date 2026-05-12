@@ -3,9 +3,9 @@ name: Lint & Test
 on:
   push:
     branches: [main]
-    paths: ['**.sh', 'tests/**']
+    paths: ['**.sh', '**.py', 'tests/**']
   pull_request:
-    paths: ['**.sh', 'tests/**']
+    paths: ['**.sh', '**.py', 'tests/**']
 
 permissions:
   contents: read
