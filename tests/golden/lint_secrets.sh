@@ -39,7 +39,7 @@ PATTERNS=(
 found=0
 tmpfile=$(mktemp)
 for pattern in "${PATTERNS[@]}"; do
-  grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" > "$tmpfile" 2>/dev/null; rc=$?
+  rc=0; grep -rEn --include="*.json" "$pattern" "$FIXTURE_DIR" > "$tmpfile" 2>/dev/null || rc=$?
   if [[ $rc -ne 0 && $rc -ne 1 ]]; then
     echo "ERROR: grep failed scanning for pattern: ${pattern}" >&2
     rm -f "$tmpfile"
