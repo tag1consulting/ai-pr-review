@@ -102,6 +102,11 @@ inputs:
     required: false
     default: 'true'
 
+  engine:
+    description: "Compute engine: 'bash' (default) or 'python' (Epic 1 Python engine)"
+    required: false
+    default: 'bash'
+
 runs:
   using: composite
   steps:
@@ -149,6 +154,7 @@ runs:
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
+        AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
       run: |
         docker pull "$IMAGE"
         # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
