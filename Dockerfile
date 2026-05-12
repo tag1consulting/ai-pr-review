@@ -21,19 +21,19 @@
 # ==============================================================================
 
 # hadolint ignore=DL3029
-FROM koalaman/shellcheck:v0.11.0 AS shellcheck
+FROM koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d AS shellcheck
 # hadolint ignore=DL3029
-FROM trufflesecurity/trufflehog:3.95.2 AS trufflehog
+FROM trufflesecurity/trufflehog:3.95.2@sha256:49d1c4fbbc580aac487ac7cb0517bb085826bd352d7578d62bb4c0c6b7205075 AS trufflehog
 # hadolint ignore=DL3029
-FROM golangci/golangci-lint:v2.11.4 AS golangci-lint
+FROM golangci/golangci-lint:v2.11.4@sha256:67dfc9eeeb0eb13fc1a36329c2c378197dc561f1edf1a7792e3f771606bb0e15 AS golangci-lint
 # hadolint ignore=DL3029
-FROM hadolint/hadolint:v2.14.0 AS hadolint
+FROM hadolint/hadolint:v2.14.0@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e AS hadolint
 # hadolint ignore=DL3029
-FROM ghcr.io/stackrox/kube-linter:v0.8.3 AS kube-linter
+FROM ghcr.io/stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f916643f54ca291ac38cf7d01ef591ff3f9 AS kube-linter
 # hadolint ignore=DL3029
-FROM ghcr.io/terraform-linters/tflint:v0.62.0 AS tflint
+FROM ghcr.io/terraform-linters/tflint:v0.62.0@sha256:80979608a412232a918a0178765b98149bdc43181276cee6612ad1cf4cdf35e1 AS tflint
 # hadolint ignore=DL3029
-FROM ghcr.io/astral-sh/ruff:0.15.11 AS ruff
+FROM ghcr.io/astral-sh/ruff:0.15.11@sha256:47a54ef25b2891ca523357090e50921044a57bd4bb9561fa28983344cd815fbb AS ruff
 
 # ==============================================================================
 # Builder stage — pip packages, composer packages, gh CLI, semgrep rulesets
