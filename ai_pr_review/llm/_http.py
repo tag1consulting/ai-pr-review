@@ -7,7 +7,6 @@ httpx exceptions (ConnectError, TimeoutException, NetworkError).
 
 from __future__ import annotations
 
-import contextlib
 import random
 import sys
 from typing import Any
@@ -55,13 +54,11 @@ async def retry_post(
     are exhausted, LLMError on permanent failures.
     """
     attempt = 0
-    last_exc: Exception | None = None
 
     while True:
         try:
             response = await client.post(url, headers=headers, json=json)
         except _TRANSIENT_EXCEPTIONS as exc:
-            last_exc = exc
             if attempt < retry_count:
                 attempt += 1
                 delay = retry_base_delay * (2 ** (attempt - 1))
@@ -101,11 +98,12 @@ async def retry_post(
                 f"ERROR: {provider_label} API returned HTTP {response.status_code}",
                 file=sys.stderr,
             )
-            with contextlib.suppress(Exception):
+            try:
                 print(response.text, file=sys.stderr)
+            except Exception as log_exc:
+                print(f"WARNING: could not read error response body: {log_exc}", file=sys.stderr)
             raise LLMError(
                 f"{provider_label} returned HTTP {response.status_code}: {response.text[:500]}"
             )
 
-        _ = last_exc  # suppress "set but never used" in some linters
         return response

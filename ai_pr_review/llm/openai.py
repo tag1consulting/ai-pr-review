@@ -1,10 +1,14 @@
 """OpenAI and openai-compatible provider.
 
-Shared-cache layout (AI_PROVIDER=openai only, issue #164):
+Shared-cache message layout (AI_PROVIDER=openai only):
   Puts the shared user context FIRST in the system message so OpenAI's
   automatic prefix caching sees a common prefix across all agents.
   system: "<user_message>\\n\\n===AGENT_INSTRUCTIONS===\\n\\n...\\n\\n<system_prompt>"
   messages: [{role:"user", content:"Please perform your review now."}]
+
+  OpenAI's prefix caching is automatic (no per-request opt-in), so the layout
+  switch is controlled by LLM_PROMPT_CACHING only (default "auto" = enabled).
+  This is independent of the cache_control headers used by Anthropic/Bedrock.
 
 openai-compatible endpoints keep the legacy layout (system=prompt, user=context)
 and use max_tokens instead of max_completion_tokens.
@@ -25,8 +29,14 @@ from .base import LLMRequest, LLMResponse
 _OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
 
-def _use_shared_cache(provider: str) -> bool:
-    """Shared-cache layout only for first-party openai, unless caching disabled."""
+def _use_shared_layout(provider: str) -> bool:
+    """Use the shared-cache message layout for first-party openai, unless disabled.
+
+    OpenAI's prefix caching is automatic (no per-request opt-in), so this flag
+    controls only the *message layout* — it is intentionally independent of
+    resolve_prompt_caching(), which governs explicit cache_control headers for
+    Anthropic/Bedrock. "auto" enables the layout for openai; "false"/"0" disables it.
+    """
     if provider != "openai":
         return False
     raw = os.environ.get("LLM_PROMPT_CACHING", "auto").strip().lower()
@@ -35,7 +45,7 @@ def _use_shared_cache(provider: str) -> bool:
 
 def _build_body(req: LLMRequest, *, provider: str) -> dict[str, Any]:
     temperature = resolve_temperature(req.temperature, req.model_id)
-    shared = _use_shared_cache(provider)
+    shared = _use_shared_layout(provider)
     # openai-compatible uses max_tokens; first-party openai uses max_completion_tokens.
     token_field = "max_tokens" if provider == "openai-compatible" else "max_completion_tokens"
 
@@ -95,7 +105,10 @@ async def call(req: LLMRequest, *, provider: str) -> LLMResponse:
 
 
 def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResponse:
-    data = json.loads(response_text)
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"OpenAI returned non-JSON response: {response_text[:200]}") from exc
     choices = data.get("choices", [])
     if not choices:
         raise LLMError(f"OpenAI returned no choices: {response_text[:500]}")

@@ -57,11 +57,14 @@ async def call(req: LLMRequest) -> LLMResponse:
             retry_base_delay=get_retry_base_delay(),
         )
 
-    return _parse_response(response.text, body, req.model_id)
+    return _parse_response(response.text, body)
 
 
-def _parse_response(response_text: str, request_body: dict[str, Any], model_id: str) -> LLMResponse:
-    data = json.loads(response_text)
+def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResponse:
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"Google returned non-JSON response: {response_text[:200]}") from exc
     candidates = data.get("candidates", [])
     if not candidates:
         raise LLMError(f"Google returned no candidates: {response_text[:500]}")

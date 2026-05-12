@@ -22,7 +22,7 @@ API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_ID}:g
 # ---------------------------------------------------------------------------
 
 def test_parse_happy_path():
-    resp = _parse_response(fixture_text("google_happy.json"), {}, MODEL_ID)
+    resp = _parse_response(fixture_text("google_happy.json"), {})
     assert resp.text == "Here is my Gemini review."
     assert resp.input_tokens == 1024
     assert resp.output_tokens == 256
@@ -31,7 +31,7 @@ def test_parse_happy_path():
 
 
 def test_parse_thinking_tokens():
-    resp = _parse_response(fixture_text("google_thinking.json"), {}, MODEL_ID)
+    resp = _parse_response(fixture_text("google_thinking.json"), {})
     # output = candidatesTokenCount + thoughtsTokenCount = 200 + 150 = 350
     assert resp.output_tokens == 350
     assert resp.thinking_tokens == 150
@@ -43,7 +43,7 @@ def test_parse_safety_filter_raises():
         "usageMetadata": {},
     }
     with pytest.raises(LLMContentError, match="SAFETY"):
-        _parse_response(json.dumps(data), {}, MODEL_ID)
+        _parse_response(json.dumps(data), {})
 
 
 def test_parse_empty_text_raises():
@@ -54,7 +54,7 @@ def test_parse_empty_text_raises():
     from ai_pr_review.llm._http import LLMError
 
     with pytest.raises(LLMError, match="Could not extract"):
-        _parse_response(json.dumps(data), {}, MODEL_ID)
+        _parse_response(json.dumps(data), {})
 
 
 # ---------------------------------------------------------------------------

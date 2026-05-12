@@ -22,7 +22,13 @@ def _clamp_int(env_var: str, default: int, min_val: int, max_val: int) -> int:
             file=sys.stderr,
         )
         return max_val
-    return max(val, min_val)
+    if val < min_val:
+        print(
+            f"WARNING: {env_var} '{val}' is below minimum ({min_val}); clamping.",
+            file=sys.stderr,
+        )
+        return min_val
+    return val
 
 
 def get_retry_count() -> int:

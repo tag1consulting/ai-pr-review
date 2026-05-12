@@ -51,7 +51,10 @@ async def call(req: LLMRequest) -> LLMResponse:
 
 
 def _parse_response(response_text: str, request_body: dict[str, object]) -> LLMResponse:
-    data = json.loads(response_text)
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"Bedrock returned non-JSON response: {response_text[:200]}") from exc
     stop_reason = data.get("stop_reason", "")
 
     if stop_reason in ("SAFETY", "RECITATION", "refusal"):
