@@ -304,6 +304,7 @@ class TestVerifyVersion:
         captured = capsys.readouterr()
         assert "WARNING" in captured.err
         assert "image:tag" in captured.err
+        assert "nginx" in captured.err  # finding text excerpt included
 
     def test_exception_warning_includes_repr(self, capsys: pytest.CaptureFixture[str]) -> None:
         f = _finding(finding="owner/repo@v1.0.0")

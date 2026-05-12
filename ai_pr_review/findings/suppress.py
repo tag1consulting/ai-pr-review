@@ -231,8 +231,9 @@ def _verify_docker_hub(text: str) -> bool:
     )
     if not m:
         print(
-            "WARNING: docker-hub suppression verify: no 'image:tag' pattern found in finding text; "
-            "suppression rule will not be applied. Add an explicit tag to the suppression rule.",
+            f"WARNING: docker-hub suppression verify: no 'image:tag' pattern found in finding text "
+            f"({text[:120]!r}); suppression rule will not be applied. "
+            "Add an explicit tag to the suppression rule.",
             file=sys.stderr,
         )
         return False
