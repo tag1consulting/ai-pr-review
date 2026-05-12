@@ -125,6 +125,8 @@ def test_agents_prompt_paths_exist() -> None:
         if os.path.isdir(os.path.join(repo_root, "prompts")):
             break
         repo_root = os.path.dirname(repo_root)
+    else:
+        pytest.fail("Could not locate repo root containing 'prompts/' directory")
 
     for spec in AGENTS:
         full = os.path.join(repo_root, spec.prompt_path)

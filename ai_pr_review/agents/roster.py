@@ -128,6 +128,15 @@ AGENTS: list[AgentSpec] = [
 
 _AGENTS_BY_NAME: dict[str, AgentSpec] = {a.name: a for a in AGENTS}
 
+if len(_AGENTS_BY_NAME) != len(AGENTS):
+    _seen: set[str] = set()
+    _dups: list[str] = []
+    for _a in AGENTS:
+        if _a.name in _seen:
+            _dups.append(_a.name)
+        _seen.add(_a.name)
+    raise ValueError(f"Duplicate agent names in AGENTS roster: {_dups}")
+
 
 def get_agent(name: str) -> AgentSpec:
     """Return the AgentSpec for the given name, raising KeyError if not found."""
