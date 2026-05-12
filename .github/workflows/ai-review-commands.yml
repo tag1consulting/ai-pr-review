@@ -44,6 +44,7 @@ jobs:
       base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
     secrets:
       api-key: ${{ secrets.AI_REVIEW_API_KEY }}
-      # Must use secrets.GITHUB_TOKEN here — github.token does not propagate
-      # correctly through a reusable workflow's named secrets: map.
-      github-token: ${{ secrets.GITHUB_TOKEN }}
+      # Must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.
+      # GITHUB_TOKEN from pull_request_review_comment events cannot call the
+      # resolveReviewThread GraphQL mutation used by /ai-pr-review dismiss.
+      github-token: ${{ secrets.GH_TOKEN }}

@@ -27,11 +27,25 @@ curl -fsSL \
 
 This is a thin wrapper (~70 lines) that delegates to a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in the ai-pr-review repository. All command-parsing, review-dispatch, and dismiss/thread-resolution logic lives upstream — you don't need to maintain it.
 
-### 2. Verify your API key secret
+### 2. Add a `GH_TOKEN` secret {#pat-requirement}
+
+The starter template passes `secrets.GH_TOKEN` as the GitHub token. This **must** be a Personal Access Token (PAT) or GitHub App token — the built-in `GITHUB_TOKEN` does not work for the `dismiss` command.
+
+**Why:** GitHub restricts the `GITHUB_TOKEN` in `pull_request_review_comment`-triggered workflows from calling the `resolveReviewThread` GraphQL mutation. The token technically has `pull-requests: write` permission, but GitHub's integration security model blocks this specific mutation unless the token is a PAT or App token.
+
+**Create a PAT:**
+- Classic PAT: go to Settings → Developer settings → Personal access tokens → Tokens (classic). Grant the `repo` scope.
+- Fine-grained PAT: grant **Read and write** access to **Pull requests** and **Read** access to **Metadata** on the target repository.
+
+Then add it as a repository secret named `GH_TOKEN` (Settings → Secrets and variables → Actions → New repository secret).
+
+> **Note:** The `rescan`, `review-full`, `skip`, and `help` commands work with `GITHUB_TOKEN`. Only `dismiss` requires a PAT. If you don't use the `dismiss` command, you can pass `github.token` instead — but the dismiss command will fail.
+
+### 3. Verify your API key secret
 
 The starter template references `secrets.ANTHROPIC_API_KEY`. If you use a different provider, update the `api-key` line and optionally uncomment the `provider` input.
 
-### 3. Merge to your default branch
+### 4. Merge to your default branch
 
 > **This step is required before commands will work.** GitHub runs
 > `issue_comment` and `pull_request_review_comment` workflows from the
@@ -41,6 +55,8 @@ The starter template references `secrets.ANTHROPIC_API_KEY`. If you use a differ
 > until that PR merges.
 
 Commit and merge the workflow file. Once it lands on your default branch, post `/ai-pr-review help` in any PR to verify.
+
+> **Tip:** If slash commands were already working before you added the `GH_TOKEN` secret, the `dismiss` command was silently failing. Post `/ai-pr-review help` to confirm the workflow runs after the merge.
 
 ## Commands
 

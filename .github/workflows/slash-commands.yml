@@ -100,7 +100,11 @@ on:
         description: 'API key for the LLM provider'
         required: true
       github-token:
-        description: 'GitHub token with pull-requests:write and issues:write'
+        description: >
+          PAT (classic: repo scope, or fine-grained: pull_requests:write) or GitHub App
+          token. GITHUB_TOKEN from pull_request_review_comment events cannot call the
+          resolveReviewThread GraphQL mutation — the dismiss command will fail if a plain
+          GITHUB_TOKEN is passed here. See docs/slash-commands.md for setup instructions.
         required: true
 
 permissions:
