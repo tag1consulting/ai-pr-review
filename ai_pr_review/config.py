@@ -237,7 +237,7 @@ class ReviewConfig(BaseModel):
             bitbucket_api_token=os.environ.get("BITBUCKET_API_TOKEN", ""),
             bitbucket_workspace=os.environ.get("BITBUCKET_WORKSPACE", ""),
             bitbucket_repo_slug=os.environ.get("BITBUCKET_REPO_SLUG", ""),
-            gitlab_token=os.environ.get("GITLAB_TOKEN", ""),
+            gitlab_token=os.environ.get("GITLAB_TOKEN", ""),  # trufflehog:ignore
             gitlab_api_url=os.environ.get("GITLAB_API_URL", "https://gitlab.com"),
             gitlab_project_id=os.environ.get("GITLAB_PROJECT_ID", ""),
             gitlab_mr_diff_base_sha=os.environ.get("GITLAB_MR_DIFF_BASE_SHA", ""),
