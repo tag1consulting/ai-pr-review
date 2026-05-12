@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from pydantic import ValidationError
+
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -138,7 +140,7 @@ def _normalise_output(output: str, source: str) -> list[Finding]:
             item["source"] = source
         try:
             findings.append(Finding.model_validate(item))
-        except Exception as exc:  # noqa: BLE001
+        except ValidationError as exc:
             print(f"WARNING: {source} dropped malformed finding: {exc}", file=sys.stderr)
 
     return findings

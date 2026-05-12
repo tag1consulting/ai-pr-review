@@ -1,7 +1,5 @@
 """Tests for ai_pr_review.diff — position math, eligibility oracle."""
 
-import pytest
-
 from ai_pr_review.diff.eligibility import eligible_inline_lines, is_eligible
 from ai_pr_review.diff.linemap import LineRef, parse_added_lines, parse_new_file_lines
 

@@ -1,10 +1,13 @@
 """Tests for ai_pr_review.config (S3 — typed config)."""
 
 import os
+import re
+from pathlib import Path
 
 import pytest
 
-from ai_pr_review.config import ConfigError, ReviewConfig
+import ai_pr_review.config as _config_module
+from ai_pr_review.config import _KNOWN_AI_VARS, ConfigError, ReviewConfig
 
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,15 +54,43 @@ def test_unknown_ai_var_typo_suggestion(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_invalid_review_mode() -> None:
-    with pytest.raises(Exception):
-        ReviewConfig(review_mode="invalid")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        ReviewConfig.model_validate({"review_mode": "invalid"})
 
 
 def test_invalid_engine() -> None:
-    with pytest.raises(Exception):
-        ReviewConfig(engine="ruby")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        ReviewConfig.model_validate({"engine": "ruby"})
 
 
 def test_invalid_confidence_threshold() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         ReviewConfig(confidence_threshold=150)
+
+
+def test_all_ai_vars_read_in_from_env_are_known() -> None:
+    """Every AI_* var consumed in from_env() must appear in _KNOWN_AI_VARS.
+
+    Prevents the silent ConfigError trap: a new AI_* var added to from_env()
+    but forgotten in _KNOWN_AI_VARS would raise ConfigError for any user who
+    sets that var.
+    """
+    source = Path(_config_module.__file__).read_text()
+    # Extract all "AI_..." string literals from the source
+    ai_vars_in_source = set(re.findall(r'"(AI_[A-Z_]+)"', source))
+    # _KNOWN_AI_VARS must be a superset (internal vars like AI_AGENT are allowed extras)
+    missing = ai_vars_in_source - _KNOWN_AI_VARS
+    assert not missing, (
+        f"AI_* vars referenced in config.py but missing from _KNOWN_AI_VARS: {missing}"
+    )
+
+
+def test_int_env_var_parse_failure_warns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("AI_CONFIDENCE_THRESHOLD", "not-a-number")
+    cfg = ReviewConfig.from_env()
+    assert cfg.confidence_threshold == 75  # falls back to default
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "not-a-number" in captured.err

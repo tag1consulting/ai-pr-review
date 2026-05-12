@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import sys
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -182,9 +183,14 @@ class ReviewConfig(BaseModel):
             )
 
         def _int(key: str, default: int) -> int:
+            raw = os.environ.get(key, str(default))
             try:
-                return int(os.environ.get(key, str(default)))
+                return int(raw)
             except ValueError:
+                print(
+                    f"WARNING: {key}={raw!r} is not a valid integer; using default {default}.",
+                    file=sys.stderr,
+                )
                 return default
 
         def _float(key: str, default: float) -> float:

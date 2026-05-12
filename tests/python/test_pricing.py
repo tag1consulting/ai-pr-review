@@ -1,7 +1,6 @@
 """Tests for ai_pr_review.pricing."""
 
 from ai_pr_review.pricing import (
-    ModelRates,
     TokenEntry,
     emit_token_table,
     format_cost,

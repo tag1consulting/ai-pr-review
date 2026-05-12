@@ -79,10 +79,13 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
     for f in sorted_fs:
         placed = False
         for cluster in clusters:
-            rep = cluster[0]
-            rep_line = rep.line or 0
+            # Compare against the last (nearest) finding in the cluster so that
+            # a chain of findings within PROXIMITY_LINES all merge together,
+            # even if the first finding is outside the window.
+            tail = cluster[-1]
+            tail_line = tail.line or 0
             f_line = f.line or 0
-            if abs(rep_line - f_line) <= PROXIMITY_LINES:
+            if abs(tail_line - f_line) <= PROXIMITY_LINES:
                 cluster.append(f)
                 placed = True
                 break

@@ -18,7 +18,7 @@ def _make_finding(**kw: object) -> Finding:
         "file": "foo.py",
         "line": 10,
     }
-    return Finding(**(defaults | kw))
+    return Finding.model_validate(defaults | kw)
 
 
 # ---------------------------------------------------------------------------
@@ -140,18 +140,35 @@ def test_merge_empty_input() -> None:
     assert merge_findings([]) == []
 
 
+def test_merge_proximity_chaining() -> None:
+    """Findings at lines 1, 3, 6 should all merge when PROXIMITY_LINES=3.
+
+    Line 1 and 3 are within 3 (merged). Line 3 and 6 are within 3 (also
+    merged). Without tail-comparison, line 6 would incorrectly be compared
+    against line 1 (distance 5 > 3) and start a new cluster.
+    """
+    findings = [
+        _make_finding(file="a.py", line=1, source="s1"),
+        _make_finding(file="a.py", line=3, source="s2"),
+        _make_finding(file="a.py", line=6, source="s3"),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert sorted(result[0].sources) == ["s1", "s2", "s3"]
+
+
 # ---------------------------------------------------------------------------
 # Finding model validation
 # ---------------------------------------------------------------------------
 
 
 def test_finding_rejects_invalid_severity() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         Finding(severity="Extreme", confidence=80, finding="x")  # type: ignore[arg-type]
 
 
 def test_finding_rejects_confidence_out_of_range() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         Finding(severity="High", confidence=101, finding="x")
 
 

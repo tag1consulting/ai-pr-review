@@ -171,7 +171,7 @@ def emit_token_table(
     return "\n".join(lines)
 
 
-def parse_token_log_entry(entry: str) -> TokenEntry | None:
+def parse_token_log_entry(entry: str) -> TokenEntry:
     """Parse a bash TOKEN_LOG entry string into a TokenEntry."""
 
     def _extract(pattern: str, text: str, default: int = 0) -> int:
