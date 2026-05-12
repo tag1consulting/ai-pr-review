@@ -1,0 +1,24 @@
+{
+  "id": "chatcmpl-abc124",
+  "object": "chat.completion",
+  "created": 1714012900,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "OpenAI review with cache hit."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1024,
+    "completion_tokens": 128,
+    "total_tokens": 1152,
+    "prompt_tokens_details": {
+      "cached_tokens": 768
+    }
+  }
+}

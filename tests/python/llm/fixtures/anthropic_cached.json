@@ -1,0 +1,20 @@
+{
+  "id": "msg_02XFDUDYJgAACzvnptvVoYEL",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Review with cache hit."
+    }
+  ],
+  "model": "claude-sonnet-4-6",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 128,
+    "output_tokens": 64,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 896
+  }
+}

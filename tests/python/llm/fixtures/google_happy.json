@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Here is my Gemini review."
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 1024,
+    "candidatesTokenCount": 256,
+    "thoughtsTokenCount": 0,
+    "totalTokenCount": 1280
+  }
+}
