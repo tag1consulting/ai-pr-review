@@ -1,0 +1,44 @@
+{
+  "fixture": "gl-basic",
+  "description": "GitLab MR with Ruby SQL injection finding \u2014 at least one GitLab fixture required",
+  "scenario": "gitlab-basic",
+  "vcs_provider": "gitlab",
+  "llm_provider": "anthropic",
+  "findings": [
+    {
+      "severity": "Critical",
+      "confidence": 95,
+      "file": "app/models.rb",
+      "line": 11,
+      "finding": "SQL injection: string interpolation in ActiveRecord where clause",
+      "remediation": "Use parameterized query: where(email: email).first",
+      "source": "security-reviewer"
+    }
+  ],
+  "outcome": {
+    "risk": "Critical",
+    "review_event": "REQUEST_CHANGES",
+    "finding_count": 1
+  },
+  "outbound_calls": [
+    {
+      "provider": "gitlab",
+      "method": "POST",
+      "url_pattern": "projects/9876/merge_requests/5/notes",
+      "body_contains": [
+        "ai-pr-review-summary"
+      ]
+    }
+  ],
+  "inline_comments": [
+    {
+      "file": "app/models.rb",
+      "line": 11,
+      "side": "RIGHT"
+    }
+  ],
+  "watermark": {
+    "sha_before": null,
+    "sha_after": "444ddd555eee666fff111aaa222bbb333ccc4445"
+  }
+}

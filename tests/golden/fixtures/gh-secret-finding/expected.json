@@ -1,0 +1,44 @@
+{
+  "fixture": "gh-secret-finding",
+  "description": "Trufflehog-detected hardcoded AWS credentials in Python config",
+  "scenario": "secret-finding",
+  "vcs_provider": "github",
+  "llm_provider": "anthropic",
+  "findings": [
+    {
+      "severity": "Critical",
+      "confidence": 95,
+      "file": "config/settings.py",
+      "line": 4,
+      "finding": "Hardcoded AWS Access Key ID detected",
+      "remediation": "Remove immediately and rotate the key. Use environment variables or a secrets manager.",
+      "source": "trufflehog"
+    }
+  ],
+  "outcome": {
+    "risk": "Critical",
+    "review_event": "REQUEST_CHANGES",
+    "finding_count": 1
+  },
+  "outbound_calls": [
+    {
+      "provider": "github",
+      "method": "POST",
+      "url_pattern": "repos/example-org/example-repo/issues/55/comments",
+      "body_contains": [
+        "ai-pr-review-summary"
+      ]
+    }
+  ],
+  "inline_comments": [
+    {
+      "file": "config/settings.py",
+      "line": 4,
+      "side": "RIGHT"
+    }
+  ],
+  "watermark": {
+    "sha_before": null,
+    "sha_after": "aaa111bbb222ccc333ddd444eee555fff666aaa1"
+  }
+}

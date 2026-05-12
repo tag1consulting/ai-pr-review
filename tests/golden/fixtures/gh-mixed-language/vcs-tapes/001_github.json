@@ -1,0 +1,9 @@
+{
+  "type": "vcs",
+  "provider": "github",
+  "method": "POST",
+  "url": "https://api.github.com/repos/example-org/example-repo/pulls/42/reviews",
+  "request_body": "{\"commit_id\":\"def4567890abcdef1234567890abcdef12345678\",\"event\":\"REQUEST_CHANGES\",\"comments\":[{\"path\":\"src/processor.py\",\"line\":15,\"side\":\"RIGHT\",\"body\":\"❌ **[Critical]** [security-reviewer] SQL injection vulnerability...\"}]}",
+  "response_body": "{\"id\":55001,\"state\":\"CHANGES_REQUESTED\",\"html_url\":\"https://github.com/example-org/example-repo/pull/42#pullrequestreview-55001\"}",
+  "timestamp": "2026-05-11T20:01:05Z"
+}

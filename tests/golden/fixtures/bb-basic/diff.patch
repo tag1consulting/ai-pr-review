@@ -1,0 +1,8 @@
+diff --git a/src/App.jsx b/src/App.jsx
+index 0000013..0000014 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -5,3 +5,7 @@ import React from 'react';
++function UserProfile({ name }) {
++  return <div dangerouslySetInnerHTML={{ __html: name }} />;
++}

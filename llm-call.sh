@@ -126,7 +126,54 @@ prompt_caching_enabled() {
 # All provider functions use --rawfile to let jq read the files directly.
 
 RESPONSE_FILE=$(mktemp /tmp/llm-response-XXXXXXXX.json)
-trap 'rm -f "$RESPONSE_FILE"' EXIT
+trap 'rm -f "$RESPONSE_FILE" "${_LLM_TAPE_REQ_FILE:-}"' EXIT
+
+# _record_llm_tape: write an LLM tape entry under AI_PR_REVIEW_RECORD_DIR.
+# Called from emit_response() after a successful provider call.
+# Each tape is named llm-tapes/<seq>_<provider>.json.
+_redact_llm_secrets() {
+  sed -E \
+    -e 's/(ghp|ghs|gho|ghr|github_pat)_[A-Za-z0-9_]{20,}/<redacted>/g' \
+    -e 's/glpat-[A-Za-z0-9_-]{20,}/<redacted>/g' \
+    -e 's/(sk-|sk-proj-)[A-Za-z0-9_-]{20,}/<redacted>/g' \
+    -e 's/AKIA[A-Z0-9]{16}/<redacted>/g' \
+    -e 's/"(api[_-]?key|token|secret|password|api_token)"\s*:\s*"[^"]{8,}"/"\\1": "<redacted>"/gI'
+}
+
+_record_llm_tape() {
+  [[ -z "${AI_PR_REVIEW_RECORD_DIR:-}" ]] && return 0
+  local tape_dir="${AI_PR_REVIEW_RECORD_DIR}/llm-tapes"
+  mkdir -p "$tape_dir"
+
+  local seq_file="${AI_PR_REVIEW_RECORD_DIR}/llm-tapes/.seq"
+  local seq=1
+  if [[ -f "$seq_file" ]]; then
+    seq=$(cat "$seq_file" 2>/dev/null || echo 0)
+    seq=$(( seq + 1 ))
+  fi
+  printf '%d' "$seq" > "$seq_file"
+  local seq_str; seq_str=$(printf '%03d' "$seq")
+
+  local req_body="" resp_body=""
+  [[ -n "${_LLM_TAPE_REQ_FILE:-}" && -f "$_LLM_TAPE_REQ_FILE" ]] && \
+    req_body=$(cat "$_LLM_TAPE_REQ_FILE" | _redact_llm_secrets)
+  [[ -f "$RESPONSE_FILE" && -s "$RESPONSE_FILE" ]] && \
+    resp_body=$(cat "$RESPONSE_FILE" | _redact_llm_secrets)
+
+  local tape_file="${tape_dir}/${seq_str}_${AI_PROVIDER}.json"
+  jq -n \
+    --arg provider "$AI_PROVIDER" \
+    --arg model "$MODEL_ID" \
+    --arg req "$req_body" \
+    --arg resp "$resp_body" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{type:"llm", provider:$provider, model:$model,
+      request_body:$req, response_body:$resp, timestamp:$ts}' \
+    > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write LLM tape ${tape_file}" >&2; _TAPE_WRITE_FAILED=1; }
+  # _TAPE_WRITE_FAILED is intentionally not checked here: tape-write failures
+  # are advisory during fixture capture and must not abort a live review run.
+  unset _LLM_TAPE_REQ_FILE
+}
 
 # ---------------------------------------------------------------------------
 # Exit codes:
@@ -269,6 +316,8 @@ retry_curl() {
 emit_response() {
   local response_text="$1" input_tokens="$2" output_tokens="$3" stop_reason="${4:-}"
   local cache_creation_tokens="${5:-0}" cache_read_tokens="${6:-0}"
+  # Clear any stale value from a prior call if a provider function did not run
+  _LLM_TAPE_REQ_FILE=""
 
   # Check provider-specific content filter reasons before the empty-response check
   # so error messages are specific rather than generic "Could not extract response text"
@@ -304,6 +353,7 @@ emit_response() {
     echo "WARNING: response truncated (stop_reason=${stop_reason}); output may be incomplete" >&2
     echo "TRUNCATED:true" >&2
   fi
+  _record_llm_tape
   printf '%s\n' "$response_text"
 }
 
@@ -439,6 +489,11 @@ call_anthropic() {
     exit 1
   }
 
+  if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+    _LLM_TAPE_REQ_FILE=$(mktemp /tmp/llm-tape-req-XXXXXXXX.json)
+    printf '%s' "$request_body" > "$_LLM_TAPE_REQ_FILE"
+  fi
+
   echo "$request_body" | retry_curl "Anthropic" \
     -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
@@ -543,6 +598,11 @@ call_openai() {
     exit 1
   }
 
+  if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+    _LLM_TAPE_REQ_FILE=$(mktemp /tmp/llm-tape-req-XXXXXXXX.json)
+    printf '%s' "$request_body" > "$_LLM_TAPE_REQ_FILE"
+  fi
+
   echo "$request_body" | retry_curl "OpenAI" \
     -s -w "%{http_code}" -o "$RESPONSE_FILE" \
     --max-time 180 \
@@ -599,6 +659,11 @@ call_google() {
     echo "ERROR: jq failed to build Google request body" >&2
     exit 1
   }
+
+  if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+    _LLM_TAPE_REQ_FILE=$(mktemp /tmp/llm-tape-req-XXXXXXXX.json)
+    printf '%s' "$request_body" > "$_LLM_TAPE_REQ_FILE"
+  fi
 
   local encoded_model_id
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)
@@ -659,6 +724,11 @@ call_bedrock_proxy() {
     echo "ERROR: jq failed to build Bedrock request body" >&2
     exit 1
   }
+
+  if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+    _LLM_TAPE_REQ_FILE=$(mktemp /tmp/llm-tape-req-XXXXXXXX.json)
+    printf '%s' "$request_body" > "$_LLM_TAPE_REQ_FILE"
+  fi
 
   local encoded_model_id
   encoded_model_id=$(printf '%s' "$MODEL_ID" | jq -sRr @uri)

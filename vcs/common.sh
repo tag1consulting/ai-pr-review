@@ -13,6 +13,72 @@
 # is declared here — an unguarded `TMPFILES=("${TMPFILES[@]:-}")` would
 # create a `[0]=""` entry when TMPFILES is unset, which is incorrect.
 
+# --- Recording helper -------------------------------------------------------
+#
+# record_tape: write a VCS API tape entry under AI_PR_REVIEW_RECORD_DIR when
+# that variable is set. Each call appends one JSON object to a file named
+# vcs-tapes/<sequence>_<provider>.json. The sequence counter is a shared
+# counter file so tapes from parallel subshells are ordered globally.
+#
+# Usage: record_tape <provider> <method> <url> <request_body_file> <response_body_file>
+#   provider:           github | gitlab | bitbucket
+#   method:             GET | POST | PUT | PATCH | DELETE
+#   url:                full request URL (secrets will be redacted)
+#   request_body_file:  path to file containing request body (may be empty)
+#   response_body_file: path to file containing response body (may be empty)
+#
+# Secrets redacted: Authorization/PRIVATE-TOKEN/x-api-key/x-goog-api-key header
+# values are not in the URL/body — the tape stores sanitised fields only.
+# Known token patterns in body values are replaced with "<redacted>".
+_redact_secrets() {
+  sed -E \
+    -e 's/(ghp|ghs|gho|ghr|github_pat)_[A-Za-z0-9_]{20,}/<redacted>/g' \
+    -e 's/glpat-[A-Za-z0-9_-]{20,}/<redacted>/g' \
+    -e 's/glcbt-[A-Za-z0-9_-]{20,}/<redacted>/g' \
+    -e 's/(sk-|sk-proj-)[A-Za-z0-9_-]{20,}/<redacted>/g' \
+    -e 's/AKIA[A-Z0-9]{16}/<redacted>/g' \
+    -e 's/"(api[_-]?key|token|secret|password|api_token)"\s*:\s*"[^"]{8,}"/"\\1": "<redacted>"/gI'
+}
+
+_record_seq_next() {
+  local dir="$1/vcs-tapes"
+  local seq_file="$dir/.seq"
+  mkdir -p "$dir"
+  local seq
+  { flock 9
+    seq=$(cat "$seq_file" 2>/dev/null || echo 0)
+    seq=$(( seq + 1 ))
+    printf '%d' "$seq" > "$seq_file"
+  } 9>>"${seq_file}.lock"  # >> preserves the inode so concurrent openers all flock the same file
+  printf '%03d' "$seq"
+}
+
+record_tape() {
+  [[ -z "${AI_PR_REVIEW_RECORD_DIR:-}" ]] && return 0
+  local provider="$1" method="$2" url="$3" req_file="$4" resp_file="$5"
+  local tape_dir="${AI_PR_REVIEW_RECORD_DIR}/vcs-tapes"
+  mkdir -p "$tape_dir"
+
+  local seq
+  seq=$(_record_seq_next "$AI_PR_REVIEW_RECORD_DIR")
+
+  local req_body="" resp_body=""
+  [[ -f "$req_file" && -s "$req_file" ]] && req_body=$(cat "$req_file" | _redact_secrets)
+  [[ -f "$resp_file" && -s "$resp_file" ]] && resp_body=$(cat "$resp_file" | _redact_secrets)
+
+  local tape_file="${tape_dir}/${seq}_${provider}.json"
+  jq -n \
+    --arg provider "$provider" \
+    --arg method "$method" \
+    --arg url "$url" \
+    --arg req "$req_body" \
+    --arg resp "$resp_body" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{type:"vcs", provider:$provider, method:$method, url:$url,
+      request_body:$req, response_body:$resp, timestamp:$ts}' \
+    > "$tape_file" 2>/dev/null || { echo "WARNING: failed to write VCS tape ${tape_file}" >&2; _TAPE_WRITE_FAILED=1; }
+}
+
 # --- Temp-file lifecycle ---------------------------------------------------
 
 mktemp_tracked() {
