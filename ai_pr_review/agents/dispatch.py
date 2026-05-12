@@ -111,18 +111,17 @@ def effective_prompt(
             "this file is required for agents that emit json-findings blocks"
         )
 
-    parts = [base_prompt_path.read_text()]
-
-    if cutoff_path.exists():
-        parts.append(cutoff_path.read_text())
-    else:
-        print(
-            f"WARNING: knowledge-cutoff fragment not found: {cutoff_path}; "
-            "agents may incorrectly flag recently-released versions",
-            file=sys.stderr,
+    if not cutoff_path.exists():
+        raise FileNotFoundError(
+            f"knowledge-cutoff fragment not found: {cutoff_path}; "
+            "this file is required for agents that produce findings"
         )
 
-    parts.append(trailer_path.read_text())
+    parts = [
+        base_prompt_path.read_text(),
+        cutoff_path.read_text(),
+        trailer_path.read_text(),
+    ]
 
     if (
         enable_suggestions
@@ -135,8 +134,13 @@ def effective_prompt(
         suffix=".md",
         prefix=f"effective-prompt-{agent_name}-",
     )
-    with open(fd, "w") as fh:
-        fh.write("\n".join(parts))
+    try:
+        with open(fd, "w") as fh:
+            fh.write("\n".join(parts))
+    except Exception:
+        with contextlib.suppress(OSError):
+            Path(tmp_path).unlink(missing_ok=True)
+        raise
     return Path(tmp_path)
 
 
@@ -186,7 +190,8 @@ async def _run_single_agent(
         if prompt_path != base_path:
             tmp_prompt = prompt_path
 
-        model_id = context.standard_model
+        use_premium = spec.tier == 2 and context.mode == "full" and bool(context.premium_model)
+        model_id = context.premium_model if use_premium else context.standard_model
         request = LLMRequest(
             model_id=model_id,
             system_prompt=prompt_path.read_text(),
@@ -211,14 +216,9 @@ async def _run_single_agent(
         ))
     except Exception as exc:
         elapsed = int((time.monotonic() - start) * 1000)
-        print(
-            f"ERROR: agent '{spec.name}' failed after {elapsed}ms: "
-            f"{type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
         results.append(FailedAgent(
             name=spec.name,
-            reason=str(exc),
+            reason=f"{type(exc).__name__}: {exc}",
             exit_code=1,
             elapsed_ms=elapsed,
         ))
@@ -239,7 +239,7 @@ async def run_tier(
         diff_text = context.diff_path.read_text()
     except OSError as exc:
         raise RuntimeError(
-            f"Cannot read diff file '{context.diff_path}': {exc}"
+            f"Cannot read diff file '{context.diff_path}': {type(exc).__name__}: {exc}"
         ) from exc
 
     limiter = anyio.CapacityLimiter(semaphore_size)

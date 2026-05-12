@@ -27,7 +27,7 @@ and `effective_prompt` from `lib/agents.sh`. Failed agents are tracked in a type
 - [ ] AC2: `AgentResult` carries `name`, `output` (str), `token_log` (TokenUsage), `truncated` (bool).
 - [ ] AC3: `FailedAgent` carries `name`, `reason` (str), `exit_code` (int), `elapsed_ms` (int).
 - [ ] AC4: Failed agents (non-zero exit from LLM client) are caught, recorded in `FailedAgent`, and do NOT raise — dispatch continues with remaining agents.
-- [ ] AC5: `effective_prompt(agent_name, base_prompt_path, script_dir) -> Path` composes `_knowledge-cutoff.md` + `_trailer-findings.md` onto finding-producing agents; optionally appends `suggestion-addendum.md` when `AI_ENABLE_SUGGESTIONS != false`. pr-summarizer passes through unchanged.
+- [ ] AC5: `effective_prompt(agent_name, base_prompt_path, script_dir) -> Path` composes `_knowledge-cutoff.md` + `_trailer-findings.md` onto finding-producing agents; optionally appends `suggestion-addendum.md` when `AI_ENABLE_SUGGESTIONS != false`. pr-summarizer passes through unchanged. Missing base prompt, findings trailer, or knowledge-cutoff fragment raises `FileNotFoundError` (these are required files; no silent fallback).
 - [ ] AC6: `cache_priming_effective() -> bool` returns `True` only when `AI_CACHE_PRIMING=true` AND provider is `anthropic` or `bedrock-proxy` AND `LLM_PROMPT_CACHING != false`.
 - [ ] AC7: `mypy --strict` and `ruff check` clean on all new code.
 - [ ] AC8: Unit tests cover: happy-path tier run, partial failure (one agent fails, others succeed), `effective_prompt` composition for each agent class, `cache_priming_effective` for all env-var combinations.

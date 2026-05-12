@@ -176,6 +176,30 @@ async def test_run_tier_all_fail(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_run_tier_uses_premium_model_for_tier2_full(tmp_path: Path) -> None:
+    """Tier-2 agents in full mode use premium_model; tier-1 always use standard_model."""
+    ctx = _make_context(tmp_path)
+    ctx.mode = "full"
+    ctx.premium_model = "claude-premium"
+    seen_models: list[str] = []
+
+    async def mock_llm(request: object) -> LLMResponse:
+        from ai_pr_review.llm.base import LLMRequest
+        assert isinstance(request, LLMRequest)
+        seen_models.append(request.model_id)
+        return _make_response("ok")
+
+    tier1 = [get_agent("code-reviewer")]      # tier 1
+    tier2 = [get_agent("architecture-reviewer")]  # tier 2, full_mode_only
+
+    await run_tier(agents=tier1, llm_call=mock_llm, context=ctx, semaphore_size=3)
+    await run_tier(agents=tier2, llm_call=mock_llm, context=ctx, semaphore_size=3)
+
+    assert seen_models[0] == "claude-test"    # tier 1 always standard
+    assert seen_models[1] == "claude-premium"  # tier 2 full → premium
+
+
+@pytest.mark.anyio
 async def test_run_tier_respects_semaphore(tmp_path: Path) -> None:
     """Concurrent count never exceeds semaphore_size."""
     ctx = _make_context(tmp_path)
@@ -258,6 +282,14 @@ def test_effective_prompt_missing_trailer_raises(tmp_path: Path) -> None:
     script_dir, base = _make_prompt_dir(tmp_path)
     (script_dir / "prompts" / "_trailer-findings.md").unlink()
     with pytest.raises(FileNotFoundError, match="findings trailer"):
+        effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
+
+
+def test_effective_prompt_missing_cutoff_raises(tmp_path: Path) -> None:
+    """Missing knowledge-cutoff fragment raises FileNotFoundError — it's a required file."""
+    script_dir, base = _make_prompt_dir(tmp_path)
+    (script_dir / "prompts" / "_knowledge-cutoff.md").unlink()
+    with pytest.raises(FileNotFoundError, match="knowledge-cutoff"):
         effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
 
 
