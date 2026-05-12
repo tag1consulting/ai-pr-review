@@ -80,6 +80,25 @@ gh_api_retry() {
     if [[ "$exit_code" -eq 0 ]]; then
       rm -f "$stdin_file"
       printf '%s' "$result"
+      # Record VCS tape when AI_PR_REVIEW_RECORD_DIR is set.
+      if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+        local _tape_url _tape_method _tape_arg _tape_saw_method=false
+        _tape_url="" _tape_method="GET"
+        for _tape_arg in "${gh_args[@]}"; do
+          if [[ "$_tape_saw_method" == "true" ]]; then
+            _tape_method="$_tape_arg"
+            _tape_saw_method=false
+          elif [[ "$_tape_arg" == "-X" || "$_tape_arg" == "--method" ]]; then
+            _tape_saw_method=true
+          elif [[ "$_tape_arg" =~ ^repos/ || "$_tape_arg" =~ ^orgs/ || "$_tape_arg" =~ ^graphql ]]; then
+            _tape_url="https://api.github.com/$_tape_arg"
+          fi
+        done
+        local _resp_file; _resp_file=$(mktemp /tmp/gh-tape-resp-XXXXXXXX)
+        printf '%s' "$result" > "$_resp_file"
+        record_tape "github" "$_tape_method" "${_tape_url:-unknown}" "$stdin_file" "$_resp_file"
+        rm -f "$_resp_file"
+      fi
       return 0
     fi
     # Check if the error looks transient

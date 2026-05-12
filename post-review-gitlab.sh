@@ -135,6 +135,19 @@ gl_api() {
 
     if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
       cat "$body_file"
+      # Record VCS tape when AI_PR_REVIEW_RECORD_DIR is set.
+      if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+        local _req_file=""
+        local _prev_arg=""
+        for _gl_arg in "$@"; do
+          if [[ "$_prev_arg" == "--data-binary" || "$_prev_arg" == "--data" || "$_prev_arg" == "-d" ]]; then
+            local _stripped="${_gl_arg#@}"
+            [[ -f "$_stripped" ]] && _req_file="$_stripped"
+          fi
+          _prev_arg="$_gl_arg"
+        done
+        record_tape "gitlab" "$method" "${GL_API}${path}" "${_req_file:-}" "$body_file"
+      fi
       return 0
     fi
 

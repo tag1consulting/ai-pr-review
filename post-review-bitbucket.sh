@@ -127,6 +127,19 @@ bb_api() {
 
     if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
       cat "$body_file"
+      # Record VCS tape when AI_PR_REVIEW_RECORD_DIR is set.
+      if [[ -n "${AI_PR_REVIEW_RECORD_DIR:-}" ]]; then
+        local _req_file=""
+        local _prev_arg=""
+        for _bb_arg in "$@"; do
+          if [[ "$_prev_arg" == "--data-binary" || "$_prev_arg" == "--data" || "$_prev_arg" == "-d" ]]; then
+            local _stripped="${_bb_arg#@}"
+            [[ -f "$_stripped" ]] && _req_file="$_stripped"
+          fi
+          _prev_arg="$_bb_arg"
+        done
+        record_tape "bitbucket" "$method" "${BB_API}${path}" "${_req_file:-}" "$body_file"
+      fi
       return 0
     fi
 
