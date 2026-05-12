@@ -239,7 +239,7 @@ async def run_tier(
         diff_text = context.diff_path.read_text()
     except OSError as exc:
         raise RuntimeError(
-            f"Cannot read diff file '{context.diff_path}': {type(exc).__name__}: {exc}"
+            f"Cannot read diff file '{context.diff_path}': {exc}"
         ) from exc
 
     limiter = anyio.CapacityLimiter(semaphore_size)
