@@ -130,7 +130,7 @@ def test_agents_prompt_paths_exist() -> None:
 
     for spec in AGENTS:
         full = os.path.join(repo_root, spec.prompt_path)
-        assert os.path.isfile(full), f"Prompt file missing: {spec.prompt_path}"
+        assert os.path.isfile(full), f"Prompt file missing: {spec.prompt_path} (resolved: {full})"
 
 
 def test_blind_hunter_not_context_enrichment_eligible() -> None:
