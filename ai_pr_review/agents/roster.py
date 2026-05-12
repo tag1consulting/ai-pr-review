@@ -15,6 +15,17 @@ conditional_trigger values (consumed by dispatch/gates layers):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+ConditionalTrigger = Literal[
+    "has_error_patterns",
+    "has_code_or_infra",
+    "has_security_patterns",
+    "has_control_flow",
+    "no_prior_summary",
+]
+
+_VALID_TRIGGERS: frozenset[str] = frozenset(ConditionalTrigger.__args__)  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True)
@@ -24,7 +35,7 @@ class AgentSpec:
     name: str
     prompt_path: str
     tier: int
-    conditional_trigger: str | None
+    conditional_trigger: ConditionalTrigger | None
     max_output_tokens: int
     full_mode_only: bool
     context_enrichment_eligible: bool
@@ -38,6 +49,11 @@ class AgentSpec:
             raise ValueError(
                 f"AgentSpec.max_output_tokens must be in [256, 65536], "
                 f"got {self.max_output_tokens}"
+            )
+        if self.conditional_trigger is not None and self.conditional_trigger not in _VALID_TRIGGERS:
+            raise ValueError(
+                f"AgentSpec.conditional_trigger {self.conditional_trigger!r} is not a known gate key. "
+                f"Valid values: {sorted(_VALID_TRIGGERS)}"
             )
 
 

@@ -91,6 +91,19 @@ def test_agentspec_rejects_tokens_above_max() -> None:
         )
 
 
+def test_agentspec_rejects_unknown_conditional_trigger() -> None:
+    with pytest.raises(ValueError, match="conditional_trigger"):
+        AgentSpec(
+            name="x",
+            prompt_path="prompts/x.md",
+            tier=1,
+            conditional_trigger="typo_trigger",  # type: ignore[arg-type]
+            max_output_tokens=8192,
+            full_mode_only=False,
+            context_enrichment_eligible=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # AGENTS list integrity
 # ---------------------------------------------------------------------------
