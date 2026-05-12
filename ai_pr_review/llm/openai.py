@@ -103,7 +103,7 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
     choice = choices[0]
     stop_reason = choice.get("finish_reason", "")
 
-    if stop_reason in ("SAFETY", "RECITATION", "refusal"):
+    if stop_reason in ("content_filter", "refusal"):
         raise LLMContentError(f"Response blocked by provider filter (finish_reason={stop_reason})")
 
     content = choice.get("message", {}).get("content") or ""

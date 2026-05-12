@@ -34,6 +34,19 @@ def test_parse_with_cache():
     assert resp.cache_read_tokens == 768
 
 
+def test_parse_content_filter_raises():
+    import json
+
+    from ai_pr_review.llm._http import LLMContentError
+
+    data = {
+        "choices": [{"message": {"content": None}, "finish_reason": "content_filter"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 0, "prompt_tokens_details": {}},
+    }
+    with pytest.raises(LLMContentError, match="content_filter"):
+        _parse_response(json.dumps(data), {})
+
+
 # ---------------------------------------------------------------------------
 # Request body construction
 # ---------------------------------------------------------------------------
