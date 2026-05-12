@@ -44,4 +44,6 @@ jobs:
       base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
     secrets:
       api-key: ${{ secrets.AI_REVIEW_API_KEY }}
-      github-token: ${{ github.token }}
+      # Must use secrets.GITHUB_TOKEN here — github.token does not propagate
+      # correctly through a reusable workflow's named secrets: map.
+      github-token: ${{ secrets.GITHUB_TOKEN }}
