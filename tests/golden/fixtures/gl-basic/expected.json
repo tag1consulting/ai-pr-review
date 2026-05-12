@@ -9,7 +9,7 @@
       "severity": "Critical",
       "confidence": 95,
       "file": "app/models.rb",
-      "line": 13,
+      "line": 11,
       "finding": "SQL injection: string interpolation in ActiveRecord where clause",
       "remediation": "Use parameterized query: where(email: email).first",
       "source": "security-reviewer"
@@ -33,7 +33,7 @@
   "inline_comments": [
     {
       "file": "app/models.rb",
-      "line": 13,
+      "line": 11,
       "side": "RIGHT"
     }
   ],
