@@ -1,11 +1,10 @@
 .claude/
 claude/
+memory-bank/.obsidian/
 _site/
 .jekyll-cache/
 .jekyll-metadata
 docs/Gemfile.lock
-memory-bank/
-_bmad/
 .venv-golden/
 __pycache__/
 *.pyc
