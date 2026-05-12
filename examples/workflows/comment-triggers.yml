@@ -67,4 +67,6 @@ jobs:
       # review-mode-default: 'quick'
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-      github-token: ${{ github.token }}
+      # Must use secrets.GITHUB_TOKEN here — github.token does not propagate
+      # correctly through a reusable workflow's named secrets: map.
+      github-token: ${{ secrets.GITHUB_TOKEN }}
