@@ -15,7 +15,7 @@ conditional_trigger values (consumed by dispatch/gates layers):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 ConditionalTrigger = Literal[
     "has_error_patterns",
@@ -25,7 +25,7 @@ ConditionalTrigger = Literal[
     "no_prior_summary",
 ]
 
-_VALID_TRIGGERS: frozenset[str] = frozenset(ConditionalTrigger.__args__)  # type: ignore[attr-defined]
+_VALID_TRIGGERS: frozenset[str] = frozenset(get_args(ConditionalTrigger))
 
 
 @dataclass(frozen=True)

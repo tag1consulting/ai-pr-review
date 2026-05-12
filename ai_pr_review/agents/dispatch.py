@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import tempfile
 import time
@@ -49,6 +50,8 @@ class DispatchContext:
     mode: str
     diff_path: Path
     provider: str
+    standard_model: str = ""
+    premium_model: str = ""
     enable_suggestions: bool = True
     cache_priming_env: str = "false"
     prompt_caching_env: str = "auto"
@@ -87,17 +90,15 @@ def effective_prompt(
 
     Finding-producing agents get knowledge-cutoff + findings trailer appended.
     pr-summarizer passes through unchanged.
-    Missing base or trailer: return base path with a WARNING to stderr.
+    Raises FileNotFoundError if a required file (base or findings trailer) is missing.
     """
     if agent_name not in _AGENTS_WITH_FINDINGS_TRAILER:
         return base_prompt_path
 
     if not base_prompt_path.exists():
-        print(
-            f"WARNING: base prompt not found: {base_prompt_path}",
-            file=sys.stderr,
+        raise FileNotFoundError(
+            f"base prompt not found for agent '{agent_name}': {base_prompt_path}"
         )
-        return base_prompt_path
 
     prompts_dir = script_dir / "prompts"
     cutoff_path = prompts_dir / "_knowledge-cutoff.md"
@@ -105,16 +106,21 @@ def effective_prompt(
     suggestion_path = prompts_dir / "suggestion-addendum.md"
 
     if not trailer_path.exists():
-        print(
-            f"WARNING: findings trailer not found: {trailer_path}",
-            file=sys.stderr,
+        raise FileNotFoundError(
+            f"findings trailer not found: {trailer_path}; "
+            "this file is required for agents that emit json-findings blocks"
         )
-        return base_prompt_path
 
     parts = [base_prompt_path.read_text()]
 
     if cutoff_path.exists():
         parts.append(cutoff_path.read_text())
+    else:
+        print(
+            f"WARNING: knowledge-cutoff fragment not found: {cutoff_path}; "
+            "agents may incorrectly flag recently-released versions",
+            file=sys.stderr,
+        )
 
     parts.append(trailer_path.read_text())
 
@@ -162,31 +168,39 @@ async def _run_single_agent(
     spec: AgentSpec,
     llm_call: LLMCall,
     context: DispatchContext,
-    semaphore: anyio.abc.CapacityLimiter,
+    limiter: anyio.abc.CapacityLimiter,
+    diff_text: str,
     results: list[AgentResult | FailedAgent],
 ) -> None:
     start = time.monotonic()
+    tmp_prompt: Path | None = None
     try:
+        base_path = context.script_dir / spec.prompt_path
         prompt_path = effective_prompt(
             spec.name,
-            context.script_dir / spec.prompt_path,
+            base_path,
             context.script_dir,
             context.enable_suggestions,
         )
+        # Track temp files created by effective_prompt for cleanup.
+        if prompt_path != base_path:
+            tmp_prompt = prompt_path
+
+        model_id = context.standard_model
         request = LLMRequest(
-            model_id="",
-            system_prompt=prompt_path.read_text() if prompt_path.exists() else "",
-            user_message=context.diff_path.read_text(),
+            model_id=model_id,
+            system_prompt=prompt_path.read_text(),
+            user_message=diff_text,
             max_tokens=spec.max_output_tokens,
         )
-        async with semaphore:
+        async with limiter:
             response = await llm_call(request)
         usage = TokenUsage(
             input=response.input_tokens,
             output=response.output_tokens,
             cache_creation=response.cache_creation_tokens,
             cache_read=response.cache_read_tokens,
-            model=request.model_id,
+            model=model_id,
         )
         truncated = response.stop_reason in ("max_tokens", "length", "MAX_TOKENS")
         results.append(AgentResult(
@@ -197,12 +211,21 @@ async def _run_single_agent(
         ))
     except Exception as exc:
         elapsed = int((time.monotonic() - start) * 1000)
+        print(
+            f"ERROR: agent '{spec.name}' failed after {elapsed}ms: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         results.append(FailedAgent(
             name=spec.name,
             reason=str(exc),
             exit_code=1,
             elapsed_ms=elapsed,
         ))
+    finally:
+        if tmp_prompt is not None:
+            with contextlib.suppress(OSError):
+                tmp_prompt.unlink(missing_ok=True)
 
 
 async def run_tier(
@@ -212,12 +235,21 @@ async def run_tier(
     semaphore_size: int,
 ) -> tuple[list[AgentResult], list[FailedAgent]]:
     """Run a tier of agents concurrently, returning (successes, failures)."""
+    try:
+        diff_text = context.diff_path.read_text()
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot read diff file '{context.diff_path}': {exc}"
+        ) from exc
+
     limiter = anyio.CapacityLimiter(semaphore_size)
     results: list[AgentResult | FailedAgent] = []
 
     async with anyio.create_task_group() as tg:
         for spec in agents:
-            tg.start_soon(_run_single_agent, spec, llm_call, context, limiter, results)
+            tg.start_soon(
+                _run_single_agent, spec, llm_call, context, limiter, diff_text, results
+            )
 
     successes: list[AgentResult] = []
     failures: list[FailedAgent] = []
@@ -226,4 +258,13 @@ async def run_tier(
             successes.append(outcome)
         else:
             failures.append(outcome)
+
+    for failure in failures:
+        print(
+            f"WARNING: agent '{failure.name}' failed "
+            f"(exit_code={failure.exit_code}, elapsed={failure.elapsed_ms}ms): "
+            f"{failure.reason}",
+            file=sys.stderr,
+        )
+
     return successes, failures

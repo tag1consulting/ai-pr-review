@@ -37,11 +37,24 @@ def _make_response(text: str = "NONE", stop_reason: str = "end_turn") -> LLMResp
 def _make_context(tmp_path: Path) -> DispatchContext:
     diff = tmp_path / "diff.txt"
     diff.write_text("diff content")
+    # Create minimal prompts directory so effective_prompt() can resolve files.
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(exist_ok=True)
+    (prompts / "_knowledge-cutoff.md").write_text("## cutoff\n")
+    (prompts / "_trailer-findings.md").write_text("## trailer\n")
+    (prompts / "suggestion-addendum.md").write_text("## suggestions\n")
+    for agent_name in (
+        "code-reviewer", "silent-failure-hunter", "architecture-reviewer",
+        "security-reviewer", "blind-hunter", "edge-case-hunter",
+        "adversarial-general", "pr-summarizer",
+    ):
+        (prompts / f"{agent_name}.md").write_text(f"## {agent_name} prompt\n")
     return DispatchContext(
         script_dir=tmp_path,
         mode="full",
         diff_path=diff,
         provider="anthropic",
+        standard_model="claude-test",
     )
 
 
@@ -240,24 +253,20 @@ def test_effective_prompt_no_suggestion_for_architecture_reviewer(tmp_path: Path
     assert "suggestion addendum" not in content
 
 
-def test_effective_prompt_missing_trailer_falls_back(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Missing trailer falls back to base prompt with a WARNING."""
+def test_effective_prompt_missing_trailer_raises(tmp_path: Path) -> None:
+    """Missing findings trailer raises FileNotFoundError — it's a required file."""
     script_dir, base = _make_prompt_dir(tmp_path)
     (script_dir / "prompts" / "_trailer-findings.md").unlink()
-    result = effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
-    assert result == base
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.err
+    with pytest.raises(FileNotFoundError, match="findings trailer"):
+        effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
 
 
-def test_effective_prompt_missing_base_returns_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Missing base prompt echoes path back with a WARNING (matches bash fallback)."""
+def test_effective_prompt_missing_base_raises(tmp_path: Path) -> None:
+    """Missing base prompt raises FileNotFoundError."""
     script_dir, _ = _make_prompt_dir(tmp_path)
     missing = script_dir / "prompts" / "nonexistent.md"
-    result = effective_prompt("code-reviewer", missing, script_dir, enable_suggestions=False)
-    assert result == missing
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.err
+    with pytest.raises(FileNotFoundError, match="base prompt not found"):
+        effective_prompt("code-reviewer", missing, script_dir, enable_suggestions=False)
 
 
 # ---------------------------------------------------------------------------
