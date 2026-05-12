@@ -6,3 +6,7 @@ _site/
 docs/Gemfile.lock
 memory-bank/
 _bmad/
+.venv-golden/
+__pycache__/
+*.pyc
+.pytest_cache/
