@@ -105,8 +105,10 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
             the first 80 chars of `body` are included instead.
     """
     if not _is_valid_sha(new_sha):
+        hint = context_hint or body[:80].replace("\n", " ")
         print(
-            f"WARNING: refusing to replace summary SHA with invalid value {new_sha!r}",
+            f"WARNING: refusing to replace summary SHA with invalid value {new_sha!r} "
+            f"({hint!r})",
             file=sys.stderr,
         )
         return body

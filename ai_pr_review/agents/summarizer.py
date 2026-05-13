@@ -388,7 +388,7 @@ def _parse_walkthrough(
         _warn(
             f"summarizer walkthrough: dropped {dropped} malformed row(s)",
             warnings,
-            f"walkthrough-rows-dropped={dropped}",
+            "walkthrough-rows-dropped",
         )
     return tuple(rows)
 

@@ -85,6 +85,17 @@ def test_replace_summary_sha_context_hint_included_in_warning(
     assert "pr=274" in captured.err
 
 
+def test_replace_summary_sha_invalid_sha_warning_includes_hint(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    body = "<!-- ai-pr-review-summary sha=abc1234 -->"
+    replace_summary_sha(body, "not-a-sha", context_hint="pr=999")
+    captured = capsys.readouterr()
+    # Both pieces of context should be in the warning
+    assert "not-a-sha" in captured.err
+    assert "pr=999" in captured.err
+
+
 # ---------------------------------------------------------------------------
 # extract_summary_sha
 # ---------------------------------------------------------------------------

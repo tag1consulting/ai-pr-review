@@ -489,7 +489,8 @@ x
 | b.py | Added | ok |
 """
     result = parse_summarizer_output(raw, include_diagram=False)
-    assert any("dropped=1" in w or "dropped=1" in w.replace(" ", "=") for w in result.parse_warnings) or any("walkthrough-rows-dropped" in w for w in result.parse_warnings)
+    # Static tag — callers can use `in result.parse_warnings` directly
+    assert "walkthrough-rows-dropped" in result.parse_warnings
 
 
 def test_parse_ignores_section_heading_inside_fenced_code() -> None:
