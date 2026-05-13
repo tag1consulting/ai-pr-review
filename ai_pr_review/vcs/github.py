@@ -15,13 +15,18 @@ import httpx
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import truncate_body
+from ai_pr_review.vcs._inline import (
+    is_inline_eligible,
+    is_suggestion_range_valid,
+    is_suggestion_safe,
+)
+from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
     build_summary_marker,
     extract_summary_sha,
-    has_inline_marker,
     replace_summary_sha,
 )
 from ai_pr_review.vcs.protocol import (
@@ -408,13 +413,8 @@ class GitHubProvider:
             if thread.get("isResolved"):
                 continue
             body = _first_comment_body(thread)
-            author = _first_comment_author_login(thread)
-            if not has_inline_marker(body):
-                # Non-ownership: another bot or human — leave alone
-                skipped_no_marker += 1
-                continue
-            if author and author != self.config.bot_login:
-                # Body has our marker but author differs — defensive skip
+            author = _first_comment_author_login(thread) or None
+            if not is_owned_by_us(body, author, self.config.bot_login, kind="inline"):
                 skipped_no_marker += 1
                 continue
             thread_id = thread.get("id")
@@ -514,7 +514,8 @@ class GitHubProvider:
             if t.get("isResolved"):
                 continue
             body = _first_comment_body(t)
-            if not has_inline_marker(body):
+            author = _first_comment_author_login(t) or None
+            if not is_owned_by_us(body, author, self.config.bot_login, kind="inline"):
                 continue
             rid = _first_comment_review_id(t)
             if rid is None:
@@ -651,13 +652,10 @@ def _build_inline_comment_payload(
 ) -> dict[str, Any] | None:
     """Return a GitHub reviews-API inline-comment dict, or None if ineligible.
 
-    Only (file, line) pairs present in `eligible_new` are anchorable. For a
-    multi-line suggestion, every line in start_line..line must be in
-    `eligible_context` (added OR context).
+    Eligibility logic delegated to ai_pr_review.vcs._inline so all providers
+    share identical diff-anchor / suggestion-range / fence-escape rules.
     """
-    if not f.file or f.line is None:
-        return None
-    if (f.file, f.line) not in eligible_new:
+    if not is_inline_eligible(f, eligible_new):
         return None
 
     body = _build_inline_comment_body(f)
@@ -665,17 +663,11 @@ def _build_inline_comment_payload(
 
     if (
         enable_suggestions
+        and is_suggestion_safe(f)
+        and is_suggestion_range_valid(f, eligible_context=eligible_context)
         and f.start_line is not None
-        and f.start_line != f.line
-        and f.start_line >= 1
-        and f.start_line <= f.line
-        and (f.line - f.start_line + 1) <= 100
     ):
-        valid = all(
-            (f.file, ln) in eligible_context for ln in range(f.start_line, f.line + 1)
-        )
-        if valid:
-            payload["start_line"] = f.start_line
+        payload["start_line"] = f.start_line
 
     return payload
 
