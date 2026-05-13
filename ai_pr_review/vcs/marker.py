@@ -38,13 +38,19 @@ def build_summary_marker(head_sha: str) -> str:
     return "<!-- ai-pr-review-summary -->"
 
 
-def extract_summary_sha(body: str) -> str | None:
+def extract_summary_sha(body: str, context_hint: str = "") -> str | None:
     """Return the SHA from a summary marker, or None if missing/malformed.
 
     Logs a warning to stderr when a marker is present but the embedded SHA
     fails validation — that indicates corruption (marker was tampered with
     or written by a buggy caller) and the next incremental review will
     re-process from the PR base instead of the last watermark.
+
+    Args:
+        body: Comment body to scan.
+        context_hint: Optional caller-supplied string (e.g., comment URL,
+            comment id) included in any warning to aid debugging. When empty,
+            the first 80 chars of `body` are included instead.
     """
     match = _SUMMARY_MARKER_RE.search(body)
     if not match:
@@ -53,9 +59,10 @@ def extract_summary_sha(body: str) -> str | None:
     if not sha:
         return None
     if not _is_valid_sha(sha):
+        hint = context_hint or body[:80].replace("\n", " ")
         print(
-            f"WARNING: ai-pr-review summary marker contains invalid SHA {sha!r}; "
-            "ignoring (next review will fall back to full diff)",
+            f"WARNING: ai-pr-review summary marker contains invalid SHA {sha!r} "
+            f"in {hint!r}; ignoring (next review will fall back to full diff)",
             file=sys.stderr,
         )
         return None
@@ -82,13 +89,20 @@ def append_inline_marker(body: str) -> str:
     return f"{body}{separator}{INLINE_MARKER}"
 
 
-def replace_summary_sha(body: str, new_sha: str) -> str:
+def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
     """Replace the sha= field inside an existing summary marker.
 
     No-op when the body contains no summary marker or when new_sha is invalid.
     Only touches the match — surrounding text (including any unrelated
     `sha=...` substrings) is preserved. Logs a warning on each no-op so
     watermark-advance failures are observable.
+
+    Args:
+        body: Comment body to modify.
+        new_sha: SHA to write into the marker's sha= field.
+        context_hint: Optional caller-supplied string (e.g., comment URL,
+            comment id) included in any warning to aid debugging. When empty,
+            the first 80 chars of `body` are included instead.
     """
     if not _is_valid_sha(new_sha):
         print(
@@ -97,9 +111,10 @@ def replace_summary_sha(body: str, new_sha: str) -> str:
         )
         return body
     if not _SUMMARY_MARKER_RE.search(body):
+        hint = context_hint or body[:80].replace("\n", " ")
         print(
-            "WARNING: replace_summary_sha called on body with no summary marker; "
-            "returning body unchanged",
+            f"WARNING: replace_summary_sha called on body with no summary marker "
+            f"({hint!r}); returning body unchanged",
             file=sys.stderr,
         )
         return body

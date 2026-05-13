@@ -72,6 +72,7 @@ class SummarizerOutput:
     effort: int
     walkthrough: tuple[WalkthroughRow, ...]
     sequence_diagram: str | None
+    parse_warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.pr_type not in _VALID_PR_TYPES:
@@ -83,6 +84,11 @@ class SummarizerOutput:
             raise ValueError(
                 f"SummarizerOutput.effort must be in [1, 5], got {self.effort}"
             )
+
+    @property
+    def is_degraded(self) -> bool:
+        """True when any parse fallback fired (defaults substituted)."""
+        return bool(self.parse_warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +136,32 @@ def build_summarizer_user_message(
 # ---------------------------------------------------------------------------
 
 def parse_summarizer_output(raw: str, include_diagram: bool) -> SummarizerOutput:
-    """Parse the LLM's markdown output into a typed SummarizerOutput."""
+    """Parse the LLM's markdown output into a typed SummarizerOutput.
+
+    When parsing falls back to defaults (missing heading, unparseable effort,
+    dropped walkthrough rows, malformed Mermaid), the reason is both logged
+    to stderr AND recorded in the returned `parse_warnings` tuple. Callers
+    can check `output.is_degraded` to decide whether to surface the
+    degradation (e.g., skip posting, warn the user).
+    """
+    warnings: list[str] = []
     sections = _split_top_level_sections(raw)
     summary_section = sections.get("summary", "")
     walkthrough_section = sections.get("walkthrough", "")
     diagram_section = sections.get("sequence diagrams", "") if include_diagram else ""
 
+    if not summary_section:
+        warnings.append("missing-summary-section")
+    if not walkthrough_section:
+        warnings.append("missing-walkthrough-section")
+
     summary_md = _extract_summary_text(summary_section)
-    pr_type = _parse_pr_type(summary_section)
-    effort = _parse_effort(summary_section)
-    walkthrough = _parse_walkthrough(walkthrough_section)
-    sequence_diagram = _parse_diagram(diagram_section) if include_diagram else None
+    pr_type = _parse_pr_type(summary_section, warnings)
+    effort = _parse_effort(summary_section, warnings)
+    walkthrough = _parse_walkthrough(walkthrough_section, warnings)
+    sequence_diagram = (
+        _parse_diagram(diagram_section, warnings) if include_diagram else None
+    )
 
     return SummarizerOutput(
         summary_md=summary_md,
@@ -148,6 +169,7 @@ def parse_summarizer_output(raw: str, include_diagram: bool) -> SummarizerOutput
         effort=effort,
         walkthrough=walkthrough,
         sequence_diagram=sequence_diagram,
+        parse_warnings=tuple(warnings),
     )
 
 
@@ -155,13 +177,38 @@ _SECTION_HEADING = re.compile(r"^##\s+(?P<name>.+?)\s*$", re.MULTILINE)
 _CODE_FENCE = re.compile(r"^(?P<indent>\s*)(?P<fence>`{3,}|~{3,})", re.MULTILINE)
 
 
+def _is_closing_fence(line_body: str, opener: str) -> bool:
+    """Return True if line_body closes a fence opened with `opener`.
+
+    CommonMark: the closing fence must use the same fence character as the
+    opener, be at least as long, be indented at most 3 spaces, and have
+    nothing but optional trailing whitespace after the fence run.
+    """
+    char = opener[0]
+    min_len = len(opener)
+    stripped = line_body.lstrip()
+    if not stripped.startswith(char):
+        return False
+    run_len = 0
+    while run_len < len(stripped) and stripped[run_len] == char:
+        run_len += 1
+    if run_len < min_len:
+        return False
+    return stripped[run_len:].strip() == ""
+
+
 def _strip_fenced_code(raw: str) -> str:
     """Mask content inside fenced code blocks, preserving byte offsets.
 
     Each masked character is replaced with a space (newlines preserved) so
-    that regex positions computed on the masked string map 1:1 to positions
-    in `raw`. This lets `_split_top_level_sections` safely slice `raw` using
+    regex positions computed on the masked string map 1:1 to positions in
+    `raw`. This lets `_split_top_level_sections` safely slice `raw` using
     offsets derived from the masked scan.
+
+    CommonMark: a fenced block is closed by a line of the same fence
+    character whose length is at least the opener's length. We preserve
+    the full opener so a ````markdown`-opened block doesn't get closed
+    by a triple-backtick line used inside it.
     """
     out: list[str] = []
     fence: str | None = None
@@ -171,16 +218,15 @@ def _strip_fenced_code(raw: str) -> str:
         if fence is None:
             match = _CODE_FENCE.match(line)
             if match:
-                fence = match.group("fence")[:3]
-                out.append(line)  # keep the fence-opening line visible
-                continue
+                fence = match.group("fence")
+                out.append(line)
+            else:
+                out.append(line)
+        elif _is_closing_fence(body, fence):
+            fence = None
             out.append(line)
         else:
-            if body.lstrip().startswith(fence):
-                fence = None
-                out.append(line)  # keep the fence-closing line visible
-            else:
-                out.append(" " * len(body) + newline)
+            out.append(" " * len(body) + newline)
     return "".join(out)
 
 
@@ -218,45 +264,54 @@ _TYPE_LINE = re.compile(r"^\*\*Type:\*\*\s*(\S+)", re.MULTILINE)
 _EFFORT_LINE = re.compile(r"^\*\*Effort:\*\*\s*(\d+)\s*/\s*5", re.MULTILINE)
 
 
-def _parse_pr_type(section: str) -> PRType:
+def _warn(msg: str, warnings: list[str], tag: str) -> None:
+    print(f"WARNING: {msg}", file=sys.stderr)
+    warnings.append(tag)
+
+
+def _parse_pr_type(section: str, warnings: list[str]) -> PRType:
     match = _TYPE_LINE.search(section)
     if not match:
-        print(
-            "WARNING: summarizer output missing `**Type:**` line; defaulting to 'mixed'",
-            file=sys.stderr,
+        _warn(
+            "summarizer output missing `**Type:**` line; defaulting to 'mixed'",
+            warnings,
+            "missing-type-line",
         )
         return "mixed"
     pr_type = match.group(1).strip().lower()
     if pr_type not in _VALID_PR_TYPES:
-        print(
-            f"WARNING: summarizer pr_type {pr_type!r} not in allowed set; "
-            "defaulting to 'mixed'",
-            file=sys.stderr,
+        _warn(
+            f"summarizer pr_type {pr_type!r} not in allowed set; defaulting to 'mixed'",
+            warnings,
+            "unknown-pr-type",
         )
         return "mixed"
     return pr_type  # type: ignore[return-value]
 
 
-def _parse_effort(section: str) -> int:
+def _parse_effort(section: str, warnings: list[str]) -> int:
     match = _EFFORT_LINE.search(section)
     if not match:
-        print(
-            "WARNING: summarizer output missing `**Effort:** N/5` line; defaulting to 3",
-            file=sys.stderr,
+        _warn(
+            "summarizer output missing `**Effort:** N/5` line; defaulting to 3",
+            warnings,
+            "missing-effort-line",
         )
         return 3
     try:
         value = int(match.group(1))
     except ValueError:
-        print(
-            f"WARNING: summarizer effort {match.group(1)!r} unparseable; defaulting to 3",
-            file=sys.stderr,
+        _warn(
+            f"summarizer effort {match.group(1)!r} unparseable; defaulting to 3",
+            warnings,
+            "unparseable-effort",
         )
         return 3
     if not 1 <= value <= 5:
-        print(
-            f"WARNING: summarizer effort {value} out of range [1,5]; defaulting to 3",
-            file=sys.stderr,
+        _warn(
+            f"summarizer effort {value} out of range [1,5]; defaulting to 3",
+            warnings,
+            "effort-out-of-range",
         )
         return 3
     return value
@@ -290,7 +345,9 @@ def _split_table_row(stripped: str) -> list[str]:
     return cells
 
 
-def _parse_walkthrough(section: str) -> tuple[WalkthroughRow, ...]:
+def _parse_walkthrough(
+    section: str, warnings: list[str]
+) -> tuple[WalkthroughRow, ...]:
     """Parse the pipe-delimited walkthrough table.
 
     Tolerates `\\|` escapes inside cell content. Merges extra cells (index ≥ 3)
@@ -313,8 +370,6 @@ def _parse_walkthrough(section: str) -> tuple[WalkthroughRow, ...]:
         if all(set(c) <= {"-", ":", " "} for c in cells):
             continue
         file_, change = cells[0], cells[1]
-        # Rejoin any overflow cells (len > 3) into the summary so
-        # unescaped pipes in summary prose don't truncate the row.
         summary = " | ".join(cells[2:]).strip()
         if not file_ or not change or not summary:
             dropped += 1
@@ -330,9 +385,10 @@ def _parse_walkthrough(section: str) -> tuple[WalkthroughRow, ...]:
             )
         )
     if dropped:
-        print(
-            f"WARNING: summarizer walkthrough: dropped {dropped} malformed row(s)",
-            file=sys.stderr,
+        _warn(
+            f"summarizer walkthrough: dropped {dropped} malformed row(s)",
+            warnings,
+            f"walkthrough-rows-dropped={dropped}",
         )
     return tuple(rows)
 
@@ -340,7 +396,7 @@ def _parse_walkthrough(section: str) -> tuple[WalkthroughRow, ...]:
 _MERMAID_FENCE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
 
 
-def _parse_diagram(section: str) -> str | None:
+def _parse_diagram(section: str, warnings: list[str]) -> str | None:
     """Extract and validate the Mermaid block from the sequence-diagram section."""
     if not section:
         return None
@@ -349,9 +405,10 @@ def _parse_diagram(section: str) -> str | None:
         return None
     block = match.group(1).rstrip()
     if not is_valid_mermaid(block):
-        print(
-            "WARNING: summarizer produced malformed Mermaid block; dropping",
-            file=sys.stderr,
+        _warn(
+            "summarizer produced malformed Mermaid block; dropping",
+            warnings,
+            "malformed-mermaid",
         )
         return None
     return block

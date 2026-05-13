@@ -145,6 +145,29 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_run_tier_propagates_prompt_degraded(tmp_path: Path) -> None:
+    """AgentResult.prompt_degraded reflects missing suggestion-addendum."""
+    ctx = _make_context(tmp_path)
+    # Remove the addendum so code-reviewer (suggestion-eligible) is degraded
+    (tmp_path / "prompts" / "suggestion-addendum.md").unlink()
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("ok")
+
+    successes, failures = await run_tier(
+        agents=[get_agent("code-reviewer"), get_agent("architecture-reviewer")],
+        llm_call=mock_llm,
+        context=ctx,
+        semaphore_size=2,
+    )
+    assert len(successes) == 2
+    by_name = {r.name: r for r in successes}
+    assert by_name["code-reviewer"].prompt_degraded is True
+    # architecture-reviewer isn't in the suggestion set → not degraded
+    assert by_name["architecture-reviewer"].prompt_degraded is False
+
+
+@pytest.mark.anyio
 async def test_run_tier_rejects_pr_summarizer(tmp_path: Path) -> None:
     """pr-summarizer must not be dispatched via run_tier — it needs
     its own prompt/message composition via the summarizer module."""
@@ -275,31 +298,39 @@ def _make_prompt_dir(tmp_path: Path) -> tuple[Path, Path]:
 def test_effective_prompt_finding_agent_gets_trailers(tmp_path: Path) -> None:
     """Finding-producing agents get knowledge-cutoff + findings-trailer appended."""
     script_dir, base = _make_prompt_dir(tmp_path)
-    result = effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
-    content = result.read_text()
+    path, degraded = effective_prompt(
+        "code-reviewer", base, script_dir, enable_suggestions=False
+    )
+    content = path.read_text()
     assert "code reviewer base" in content
     assert "knowledge cutoff" in content
     assert "findings trailer" in content
     assert "suggestion addendum" not in content
+    assert degraded is False
 
 
 def test_effective_prompt_summarizer_passthrough(tmp_path: Path) -> None:
-    """pr-summarizer passes through unchanged — no trailers."""
+    """pr-summarizer passes through unchanged — no trailers, not degraded."""
     script_dir, _ = _make_prompt_dir(tmp_path)
     base = script_dir / "prompts" / "pr-summarizer.md"
     base.write_text("## summarizer base\n")
-    result = effective_prompt("pr-summarizer", base, script_dir, enable_suggestions=False)
-    # Should return the original path unchanged
-    assert result == base
-    assert result.read_text() == "## summarizer base\n"
+    path, degraded = effective_prompt(
+        "pr-summarizer", base, script_dir, enable_suggestions=False
+    )
+    assert path == base
+    assert path.read_text() == "## summarizer base\n"
+    assert degraded is False
 
 
 def test_effective_prompt_suggestion_addendum_when_enabled(tmp_path: Path) -> None:
     """Suggestion-eligible agents get addendum when enable_suggestions=True."""
     script_dir, base = _make_prompt_dir(tmp_path)
-    result = effective_prompt("code-reviewer", base, script_dir, enable_suggestions=True)
-    content = result.read_text()
+    path, degraded = effective_prompt(
+        "code-reviewer", base, script_dir, enable_suggestions=True
+    )
+    content = path.read_text()
     assert "suggestion addendum" in content
+    assert degraded is False
 
 
 def test_effective_prompt_no_suggestion_for_architecture_reviewer(tmp_path: Path) -> None:
@@ -307,9 +338,26 @@ def test_effective_prompt_no_suggestion_for_architecture_reviewer(tmp_path: Path
     script_dir, _ = _make_prompt_dir(tmp_path)
     base = script_dir / "prompts" / "architecture-reviewer.md"
     base.write_text("## arch base\n")
-    result = effective_prompt("architecture-reviewer", base, script_dir, enable_suggestions=True)
-    content = result.read_text()
+    path, degraded = effective_prompt(
+        "architecture-reviewer", base, script_dir, enable_suggestions=True
+    )
+    content = path.read_text()
     assert "findings trailer" in content
+    assert "suggestion addendum" not in content
+    # architecture-reviewer isn't in the suggestion set, so missing addendum
+    # doesn't count as degraded
+    assert degraded is False
+
+
+def test_effective_prompt_degraded_when_addendum_missing(tmp_path: Path) -> None:
+    """Missing suggestion-addendum sets degraded=True for eligible agents."""
+    script_dir, base = _make_prompt_dir(tmp_path)
+    (script_dir / "prompts" / "suggestion-addendum.md").unlink()
+    path, degraded = effective_prompt(
+        "code-reviewer", base, script_dir, enable_suggestions=True
+    )
+    assert degraded is True
+    content = path.read_text()
     assert "suggestion addendum" not in content
 
 

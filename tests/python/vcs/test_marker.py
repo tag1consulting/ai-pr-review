@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ai_pr_review.vcs.marker import (
     INLINE_MARKER,
     SUMMARY_MARKER_PREFIX,
@@ -52,6 +54,35 @@ def test_replace_summary_sha_trailing_newline_is_noop() -> None:
     body = "<!-- ai-pr-review-summary sha=abc1234 -->"
     result = replace_summary_sha(body, _VALID_SHA + "\n")
     assert result == body  # invalid new_sha: no change
+
+
+def test_extract_summary_sha_context_hint_included_in_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Use a too-short hex SHA (6 chars) — matches the regex capture but fails
+    # the length check in _is_valid_sha, triggering the warning path.
+    body = "<!-- ai-pr-review-summary sha=abcdef -->"
+    result = extract_summary_sha(body, context_hint="comment-id=12345")
+    assert result is None
+    captured = capsys.readouterr()
+    assert "comment-id=12345" in captured.err
+
+
+def test_extract_summary_sha_falls_back_to_body_excerpt(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    body = "some long body with\nnewlines <!-- ai-pr-review-summary sha=abcdef -->"
+    extract_summary_sha(body)
+    captured = capsys.readouterr()
+    assert "some long body with" in captured.err
+
+
+def test_replace_summary_sha_context_hint_included_in_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    replace_summary_sha("no marker", _VALID_SHA, context_hint="pr=274")
+    captured = capsys.readouterr()
+    assert "pr=274" in captured.err
 
 
 # ---------------------------------------------------------------------------

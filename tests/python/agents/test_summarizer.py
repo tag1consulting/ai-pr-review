@@ -416,6 +416,82 @@ x
     assert result.walkthrough[0].summary == "literal | pipe inside"
 
 
+def test_parse_warnings_empty_on_happy_path() -> None:
+    raw = """\
+## Summary
+
+x
+
+**Type:** feature
+**Effort:** 3/5 — medium
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Added | new file |
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert result.parse_warnings == ()
+    assert result.is_degraded is False
+
+
+def test_parse_warnings_populated_on_missing_type() -> None:
+    raw = """\
+## Summary
+
+x
+
+**Effort:** 3/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert "missing-type-line" in result.parse_warnings
+    assert result.is_degraded is True
+
+
+def test_parse_warnings_populated_on_unknown_type() -> None:
+    raw = """\
+## Summary
+
+x
+
+**Type:** wibble
+**Effort:** 3/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert "unknown-pr-type" in result.parse_warnings
+
+
+def test_parse_warnings_populated_on_dropped_walkthrough_rows() -> None:
+    raw = """\
+## Summary
+
+x
+
+**Type:** feature
+**Effort:** 3/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Wibble | bad change verb |
+| b.py | Added | ok |
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert any("dropped=1" in w or "dropped=1" in w.replace(" ", "=") for w in result.parse_warnings) or any("walkthrough-rows-dropped" in w for w in result.parse_warnings)
+
+
 def test_parse_ignores_section_heading_inside_fenced_code() -> None:
     # A `## Heading` inside a fenced code block must NOT carve a new section
     raw = """\
@@ -439,3 +515,31 @@ Example of a heading inside a fence:
     result = parse_summarizer_output(raw, include_diagram=False)
     assert result.pr_type == "feature"
     assert result.effort == 4
+
+
+def test_parse_fence_longer_than_three_ticks() -> None:
+    # CommonMark: a fence opened with ````` (4 ticks) is NOT closed by ``` (3 ticks).
+    # Previously the fence-matcher truncated openers to [:3], causing premature close.
+    raw = """\
+## Summary
+
+Example showing an embedded fence:
+
+````markdown
+```python
+## not a section header — indentation example
+```
+````
+
+**Type:** refactor
+**Effort:** 2/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Added | x |
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert result.pr_type == "refactor"
+    assert result.effort == 2

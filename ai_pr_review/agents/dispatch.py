@@ -34,6 +34,12 @@ class AgentResult:
     output: str
     token_log: TokenUsage | None
     truncated: bool
+    prompt_degraded: bool = False
+    """True when a non-fatal prompt fragment was missing (e.g.
+    suggestion-addendum.md). The agent still ran to completion, but its
+    prompt was incomplete — callers may want to surface this to the user
+    or exclude the output from downstream consumers that require the
+    missing capability."""
 
 
 @dataclass(frozen=True)
@@ -92,15 +98,18 @@ def effective_prompt(
     base_prompt_path: Path,
     script_dir: Path,
     enable_suggestions: bool,
-) -> Path:
-    """Return the effective prompt path for an agent.
+) -> tuple[Path, bool]:
+    """Compose the effective prompt path and a degraded-flag for an agent.
 
-    Finding-producing agents get knowledge-cutoff + findings trailer appended.
-    pr-summarizer passes through unchanged.
-    Raises FileNotFoundError if a required file (base or findings trailer) is missing.
+    Returns ``(path, degraded)``. ``degraded=True`` signals that a non-fatal
+    prompt fragment was skipped — currently only the suggestion-addendum. The
+    agent can still run; callers may want to surface this to operators.
+
+    Raises ``FileNotFoundError`` when a required fragment is missing (base
+    prompt, knowledge-cutoff, or findings trailer).
     """
     if agent_name not in _AGENTS_WITH_FINDINGS_TRAILER:
-        return base_prompt_path
+        return base_prompt_path, False
 
     if not base_prompt_path.exists():
         raise FileNotFoundError(
@@ -130,10 +139,12 @@ def effective_prompt(
         trailer_path.read_text(),
     ]
 
+    degraded = False
     if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
         if suggestion_path.exists():
             parts.append(suggestion_path.read_text())
         else:
+            degraded = True
             print(
                 f"WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
                 f"agent '{agent_name}' will run without suggestion instructions",
@@ -151,7 +162,7 @@ def effective_prompt(
         with contextlib.suppress(OSError):
             Path(tmp_path).unlink(missing_ok=True)
         raise
-    return Path(tmp_path)
+    return Path(tmp_path), degraded
 
 
 # ---------------------------------------------------------------------------
@@ -203,13 +214,12 @@ async def _run_single_agent(
             )
 
         base_path = context.script_dir / spec.prompt_path
-        prompt_path = effective_prompt(
+        prompt_path, prompt_degraded = effective_prompt(
             spec.name,
             base_path,
             context.script_dir,
             context.enable_suggestions,
         )
-        # Track temp files created by effective_prompt for cleanup.
         if prompt_path != base_path:
             tmp_prompt = prompt_path
 
@@ -236,6 +246,7 @@ async def _run_single_agent(
             output=response.text,
             token_log=usage,
             truncated=truncated,
+            prompt_degraded=prompt_degraded,
         ))
     except Exception as exc:
         elapsed = int((time.monotonic() - start) * 1000)
