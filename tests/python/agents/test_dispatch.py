@@ -234,6 +234,33 @@ async def test_run_tier_all_fail(tmp_path: Path) -> None:
     assert len(failures) == 1
 
 
+def test_format_exception_chain_marks_cycles() -> None:
+    from ai_pr_review.agents.dispatch import _format_exception_chain
+    a = RuntimeError("outer")
+    b = ValueError("inner")
+    # Build a cycle: a.__cause__ is b, b.__cause__ is a
+    a.__cause__ = b
+    b.__cause__ = a
+    rendered = _format_exception_chain(a)
+    assert "RuntimeError: outer" in rendered
+    assert "ValueError: inner" in rendered
+    assert "<cycle detected>" in rendered
+
+
+def test_format_exception_chain_marks_deep_truncation() -> None:
+    from ai_pr_review.agents.dispatch import _format_exception_chain
+    # Build a chain of 20 exceptions — depth cap is 16
+    chain: list[BaseException] = [RuntimeError(f"level-{i}") for i in range(20)]
+    for i in range(len(chain) - 1):
+        chain[i].__cause__ = chain[i + 1]
+    rendered = _format_exception_chain(chain[0])
+    assert "<truncated after 16 links>" in rendered
+    # First 16 should be present, level-16 and beyond should not
+    assert "level-0" in rendered
+    assert "level-15" in rendered
+    assert "level-16" not in rendered
+
+
 @pytest.mark.anyio
 async def test_run_tier_captures_exception_chain(tmp_path: Path) -> None:
     """FailedAgent.reason preserves __cause__ chain for nested exceptions."""

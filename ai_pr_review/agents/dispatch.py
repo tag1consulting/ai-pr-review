@@ -207,11 +207,23 @@ def _format_exception_chain(exc: BaseException) -> str:
     FailedAgent.reason stores this so root-cause context is preserved when an
     agent wraps an upstream error (e.g. `httpx.HTTPStatusError` raised from
     inside a custom `RuntimeError`).
+
+    If the chain is cyclic or deeper than 16 links, an explicit marker is
+    appended so callers can distinguish a truncated chain from a naturally
+    terminated one.
     """
     parts: list[str] = []
     seen: set[int] = set()
     current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    max_depth = 16
+    truncated_reason: str | None = None
+    while current is not None:
+        if id(current) in seen:
+            truncated_reason = "<cycle detected>"
+            break
+        if len(parts) >= max_depth:
+            truncated_reason = f"<truncated after {max_depth} links>"
+            break
         seen.add(id(current))
         parts.append(f"{type(current).__name__}: {current}")
         # __cause__ (explicit `raise X from Y`) takes precedence over __context__
@@ -221,7 +233,10 @@ def _format_exception_chain(exc: BaseException) -> str:
         if nxt is None and not getattr(current, "__suppress_context__", False):
             nxt = current.__context__
         current = nxt
-    return " | caused by ".join(parts)
+    rendered = " | caused by ".join(parts)
+    if truncated_reason is not None:
+        rendered += f" | {truncated_reason}"
+    return rendered
 
 
 # ---------------------------------------------------------------------------
