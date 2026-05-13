@@ -6,7 +6,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 WalkthroughChange = Literal["Added", "Modified", "Deleted", "Renamed"]
 PRType = Literal["feature", "bugfix", "refactor", "docs", "config", "test", "mixed"]
@@ -286,7 +286,7 @@ def _parse_pr_type(section: str, warnings: list[str]) -> PRType:
             "unknown-pr-type",
         )
         return "mixed"
-    return pr_type  # type: ignore[return-value]
+    return cast("PRType", pr_type)
 
 
 def _parse_effort(section: str, warnings: list[str]) -> int:

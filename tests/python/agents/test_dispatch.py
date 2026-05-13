@@ -235,11 +235,44 @@ async def test_run_tier_all_fail(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_run_tier_captures_exception_chain(tmp_path: Path) -> None:
+    """FailedAgent.reason preserves __cause__ chain for nested exceptions."""
+    ctx = _make_context(tmp_path)
+    agents = [get_agent("code-reviewer")]
+
+    async def mock_llm(request: object) -> LLMResponse:
+        try:
+            raise ValueError("upstream problem")
+        except ValueError as ve:
+            raise RuntimeError("wrapper failed") from ve
+
+    successes, failures = await run_tier(
+        agents=agents,
+        llm_call=mock_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(failures) == 1
+    reason = failures[0].reason
+    assert "RuntimeError: wrapper failed" in reason
+    assert "ValueError: upstream problem" in reason
+    assert "caused by" in reason
+
+
+@pytest.mark.anyio
 async def test_run_tier_uses_premium_model_for_tier2_full(tmp_path: Path) -> None:
     """Tier-2 agents in full mode use premium_model; tier-1 always use standard_model."""
-    ctx = _make_context(tmp_path)
-    ctx.mode = "full"
-    ctx.premium_model = "claude-premium"
+    # Construct directly with the intended values — mutating the context
+    # after construction would silently break if DispatchContext is frozen.
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-test",
+        premium_model="claude-premium",
+    )
     seen_models: list[str] = []
 
     async def mock_llm(request: object) -> LLMResponse:
@@ -425,3 +458,22 @@ def test_cache_priming_truthy_variants() -> None:
 def test_cache_priming_falsy_variants() -> None:
     for falsy in ("false", "FALSE", "False", "0", ""):
         assert cache_priming_effective("anthropic", falsy, "auto") is False, f"failed for {falsy!r}"
+
+
+def test_cache_priming_warns_on_unsupported_provider(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Truthy priming with an unsupported provider should warn, not silently skip
+    assert cache_priming_effective("antrhopic", "true", "auto") is False
+    captured = capsys.readouterr()
+    assert "cache priming requested" in captured.err
+    assert "antrhopic" in captured.err
+
+
+def test_cache_priming_silent_when_priming_disabled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Priming not requested → no warning even on unsupported provider
+    assert cache_priming_effective("openai", "false", "auto") is False
+    captured = capsys.readouterr()
+    assert captured.err == ""

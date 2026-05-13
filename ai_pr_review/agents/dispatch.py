@@ -107,6 +107,13 @@ def effective_prompt(
 
     Raises ``FileNotFoundError`` when a required fragment is missing (base
     prompt, knowledge-cutoff, or findings trailer).
+
+    Tempfile ownership: when the returned path differs from ``base_prompt_path``,
+    it is a caller-owned tempfile created under ``/tmp``. The caller is
+    responsible for unlinking it after use. Inside ``run_tier`` this is handled
+    by the ``finally`` block in ``_run_single_agent``; external callers must
+    perform their own cleanup (``Path(p).unlink(missing_ok=True)``) to avoid
+    leaks.
     """
     if agent_name not in _AGENTS_WITH_FINDINGS_TRAILER:
         return base_prompt_path, False
@@ -174,12 +181,47 @@ def cache_priming_effective(
     cache_priming_env: str,
     prompt_caching_env: str,
 ) -> bool:
-    """Return True only when conditions for cache priming are all met."""
+    """Return True only when conditions for cache priming are all met.
+
+    Logs a warning to stderr when cache priming is requested
+    (``cache_priming_env`` is truthy) but the provider does not support it —
+    this surfaces typos in ``AI_PROVIDER`` (e.g. ``"antrhopic"``) that would
+    otherwise silently disable priming.
+    """
     if cache_priming_env.lower() not in ("true", "1"):
         return False
     if provider not in ("anthropic", "bedrock-proxy"):
+        print(
+            f"WARNING: cache priming requested but provider {provider!r} does not "
+            "support it (expected 'anthropic' or 'bedrock-proxy'); "
+            "cache priming will not run",
+            file=sys.stderr,
+        )
         return False
     return prompt_caching_env.lower() not in ("false", "0")
+
+
+def _format_exception_chain(exc: BaseException) -> str:
+    """Render an exception and its __cause__/__context__ chain into one string.
+
+    FailedAgent.reason stores this so root-cause context is preserved when an
+    agent wraps an upstream error (e.g. `httpx.HTTPStatusError` raised from
+    inside a custom `RuntimeError`).
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(f"{type(current).__name__}: {current}")
+        # __cause__ (explicit `raise X from Y`) takes precedence over __context__
+        # (implicit during-handling chain). Only follow __context__ when
+        # __suppress_context__ is False (the default).
+        nxt = current.__cause__
+        if nxt is None and not getattr(current, "__suppress_context__", False):
+            nxt = current.__context__
+        current = nxt
+    return " | caused by ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +294,7 @@ async def _run_single_agent(
         elapsed = int((time.monotonic() - start) * 1000)
         results.append(FailedAgent(
             name=spec.name,
-            reason=f"{type(exc).__name__}: {exc}",
+            reason=_format_exception_chain(exc),
             exit_code=1,
             elapsed_ms=elapsed,
         ))
