@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-_SHA_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+_SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
 _HELD_MESSAGE = (
     "Watermark held at previous SHA — the following agents did not complete: {agents}. "
@@ -20,6 +20,18 @@ class WatermarkPolicy:
     new_global_sha: str | None
     per_agent: Mapping[str, str]
     body_explanation: str
+
+    def __post_init__(self) -> None:
+        # advance_global=True requires a non-None SHA to advance to;
+        # advance_global=False requires new_global_sha to be None.
+        if self.advance_global and self.new_global_sha is None:
+            raise ValueError(
+                "WatermarkPolicy.advance_global=True requires non-None new_global_sha"
+            )
+        if not self.advance_global and self.new_global_sha is not None:
+            raise ValueError(
+                "WatermarkPolicy.advance_global=False requires new_global_sha=None"
+            )
 
 
 def _is_valid_sha(sha: str) -> bool:

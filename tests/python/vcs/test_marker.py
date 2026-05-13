@@ -41,6 +41,19 @@ def test_build_summary_marker_invalid_sha_drops_field() -> None:
     assert marker == "<!-- ai-pr-review-summary -->"
 
 
+def test_build_summary_marker_trailing_newline_rejected() -> None:
+    # `$` regex anchor allows trailing \n by default; \A...\Z rejects it.
+    marker = build_summary_marker(_VALID_SHA + "\n")
+    assert "\n" not in marker
+    assert marker == "<!-- ai-pr-review-summary -->"
+
+
+def test_replace_summary_sha_trailing_newline_is_noop() -> None:
+    body = "<!-- ai-pr-review-summary sha=abc1234 -->"
+    result = replace_summary_sha(body, _VALID_SHA + "\n")
+    assert result == body  # invalid new_sha: no change
+
+
 # ---------------------------------------------------------------------------
 # extract_summary_sha
 # ---------------------------------------------------------------------------

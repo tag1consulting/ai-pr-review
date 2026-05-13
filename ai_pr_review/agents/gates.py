@@ -1,4 +1,17 @@
-"""Conditional gate evaluation — ports detect_conditional_agent_triggers from lib/diff.sh."""
+"""Conditional gate evaluation for selective agent dispatch.
+
+Gates inspect diff text and file paths to determine which agents run for a
+given PR — cheap heuristic filters that keep expensive agents (security,
+architecture, edge-case) off diffs that can't benefit from them (e.g.,
+docs-only or pure-comment changes).
+
+Kill-switch env vars have inverted semantics from what the names suggest:
+setting `AI_DISABLE_GATE_ARCHITECTURE=true` does NOT skip the
+architecture-reviewer agent — it DISABLES the gate check itself, so the
+gate always fires and the gated agent always runs. This is a debugging /
+testing override. There is no built-in switch to *skip* a gated agent;
+for that, remove the agent from the roster.
+"""
 
 from __future__ import annotations
 
@@ -64,12 +77,16 @@ def _has_error_patterns(diff_text: str) -> bool:
 
 
 def _has_code_or_infra(changed_files: ChangedFiles) -> bool:
+    """Fire when any changed file is code, config, or infra (single-pass).
+
+    Workflow files under `.github/workflows/` count as infra. Docs-only
+    (`.md`, `.rst`, `.txt`, `.adoc`), meta directories (`docs/`, `memory-bank/`,
+    non-workflow `.github/`, `.claude/`), and meta filenames (CHANGELOG,
+    README, LICENSE, etc.) are excluded.
+    """
     for f in changed_files.all_files:
         if _WORKFLOW_PATH.search(f):
             return True
-    for f in changed_files.all_files:
-        if _WORKFLOW_PATH.search(f):
-            continue
         if _DOC_EXT.search(f):
             continue
         if _META_DIR.search(f):

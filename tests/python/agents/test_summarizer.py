@@ -168,7 +168,7 @@ x
 **Effort:** 1/5 — trivial
 """
     result = parse_summarizer_output(raw, include_diagram=False)
-    assert result.walkthrough == []
+    assert result.walkthrough == ()
 
 
 def test_parse_effort_out_of_range_defaults_to_3() -> None:
@@ -326,7 +326,7 @@ def test_summarizer_output_is_frozen() -> None:
         summary_md="x",
         pr_type="feature",
         effort=2,
-        walkthrough=[],
+        walkthrough=(),
         sequence_diagram=None,
     )
     with pytest.raises(FrozenInstanceError):
@@ -337,3 +337,105 @@ def test_walkthrough_row_is_frozen() -> None:
     row = WalkthroughRow(file="a.py", change="Added", summary="x")
     with pytest.raises(FrozenInstanceError):
         row.file = "b.py"  # type: ignore[misc]
+
+
+def test_walkthrough_row_rejects_empty_file() -> None:
+    with pytest.raises(ValueError, match="file must be non-empty"):
+        WalkthroughRow(file="", change="Added", summary="x")
+
+
+def test_walkthrough_row_rejects_empty_summary() -> None:
+    with pytest.raises(ValueError, match="summary must be non-empty"):
+        WalkthroughRow(file="a.py", change="Added", summary="")
+
+
+def test_walkthrough_row_rejects_invalid_change() -> None:
+    with pytest.raises(ValueError, match="change must be one of"):
+        WalkthroughRow(file="a.py", change="Wibble", summary="x")  # type: ignore[arg-type]
+
+
+def test_summarizer_output_rejects_invalid_pr_type() -> None:
+    with pytest.raises(ValueError, match="pr_type must be one of"):
+        SummarizerOutput(
+            summary_md="",
+            pr_type="wibble",  # type: ignore[arg-type]
+            effort=2,
+            walkthrough=(),
+            sequence_diagram=None,
+        )
+
+
+def test_summarizer_output_rejects_out_of_range_effort() -> None:
+    with pytest.raises(ValueError, match="effort must be in"):
+        SummarizerOutput(
+            summary_md="",
+            pr_type="feature",
+            effort=0,
+            walkthrough=(),
+            sequence_diagram=None,
+        )
+
+
+def test_parse_walkthrough_preserves_pipes_in_summary() -> None:
+    raw = """\
+## Summary
+
+x
+
+**Type:** feature
+**Effort:** 2/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| src/re.py | Modified | Adds regex for foo | bar matching |
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert len(result.walkthrough) == 1
+    assert "foo | bar matching" in result.walkthrough[0].summary
+
+
+def test_parse_walkthrough_handles_escaped_pipe() -> None:
+    raw = """\
+## Summary
+
+x
+
+**Type:** feature
+**Effort:** 2/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| src/re.py | Modified | literal \\| pipe inside |
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert len(result.walkthrough) == 1
+    assert result.walkthrough[0].summary == "literal | pipe inside"
+
+
+def test_parse_ignores_section_heading_inside_fenced_code() -> None:
+    # A `## Heading` inside a fenced code block must NOT carve a new section
+    raw = """\
+## Summary
+
+Example of a heading inside a fence:
+
+```markdown
+## This is not a real heading
+```
+
+**Type:** feature
+**Effort:** 4/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Added | x |
+"""
+    result = parse_summarizer_output(raw, include_diagram=False)
+    assert result.pr_type == "feature"
+    assert result.effort == 4

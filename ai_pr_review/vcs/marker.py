@@ -11,12 +11,13 @@ by bash are still recognized by the Python engine during the transition.
 from __future__ import annotations
 
 import re
+import sys
 from typing import Final
 
 INLINE_MARKER: Final[str] = "<!-- ai-pr-review-inline -->"
 SUMMARY_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-summary"
 
-_SHA_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+_SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
 # Matches a summary marker with optional sha= field, e.g.:
 #   <!-- ai-pr-review-summary -->
@@ -38,7 +39,13 @@ def build_summary_marker(head_sha: str) -> str:
 
 
 def extract_summary_sha(body: str) -> str | None:
-    """Return the SHA from a summary marker, or None if missing/malformed."""
+    """Return the SHA from a summary marker, or None if missing/malformed.
+
+    Logs a warning to stderr when a marker is present but the embedded SHA
+    fails validation — that indicates corruption (marker was tampered with
+    or written by a buggy caller) and the next incremental review will
+    re-process from the PR base instead of the last watermark.
+    """
     match = _SUMMARY_MARKER_RE.search(body)
     if not match:
         return None
@@ -46,6 +53,11 @@ def extract_summary_sha(body: str) -> str | None:
     if not sha:
         return None
     if not _is_valid_sha(sha):
+        print(
+            f"WARNING: ai-pr-review summary marker contains invalid SHA {sha!r}; "
+            "ignoring (next review will fall back to full diff)",
+            file=sys.stderr,
+        )
         return None
     return sha
 
@@ -75,11 +87,21 @@ def replace_summary_sha(body: str, new_sha: str) -> str:
 
     No-op when the body contains no summary marker or when new_sha is invalid.
     Only touches the match — surrounding text (including any unrelated
-    `sha=...` substrings) is preserved.
+    `sha=...` substrings) is preserved. Logs a warning on each no-op so
+    watermark-advance failures are observable.
     """
     if not _is_valid_sha(new_sha):
+        print(
+            f"WARNING: refusing to replace summary SHA with invalid value {new_sha!r}",
+            file=sys.stderr,
+        )
         return body
     if not _SUMMARY_MARKER_RE.search(body):
+        print(
+            "WARNING: replace_summary_sha called on body with no summary marker; "
+            "returning body unchanged",
+            file=sys.stderr,
+        )
         return body
     replacement = f"<!-- ai-pr-review-summary sha={new_sha} -->"
     return _SUMMARY_MARKER_RE.sub(replacement, body, count=1)

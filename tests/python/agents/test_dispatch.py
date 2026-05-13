@@ -34,6 +34,18 @@ def _make_response(text: str = "NONE", stop_reason: str = "end_turn") -> LLMResp
     )
 
 
+def test_dispatch_context_rejects_empty_standard_model(tmp_path: Path) -> None:
+    diff = tmp_path / "diff.txt"
+    diff.write_text("")
+    with pytest.raises(ValueError, match="standard_model must be non-empty"):
+        DispatchContext(
+            script_dir=tmp_path,
+            mode="full",
+            diff_path=diff,
+            provider="anthropic",
+        )
+
+
 def _make_context(tmp_path: Path) -> DispatchContext:
     diff = tmp_path / "diff.txt"
     diff.write_text("diff content")
@@ -113,7 +125,9 @@ def test_token_usage_fields() -> None:
 async def test_run_tier_happy_path(tmp_path: Path) -> None:
     """All agents succeed — results returned, no failures."""
     ctx = _make_context(tmp_path)
-    agents = [get_agent("code-reviewer"), get_agent("pr-summarizer")]
+    # pr-summarizer is intentionally excluded; it composes its own prompt
+    # via ai_pr_review.agents.summarizer and must not be dispatched here.
+    agents = [get_agent("code-reviewer"), get_agent("silent-failure-hunter")]
 
     async def mock_llm(request: object) -> LLMResponse:
         return _make_response("findings from agent")
@@ -127,7 +141,29 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
     assert len(successes) == 2
     assert len(failures) == 0
     names = {r.name for r in successes}
-    assert names == {"code-reviewer", "pr-summarizer"}
+    assert names == {"code-reviewer", "silent-failure-hunter"}
+
+
+@pytest.mark.anyio
+async def test_run_tier_rejects_pr_summarizer(tmp_path: Path) -> None:
+    """pr-summarizer must not be dispatched via run_tier — it needs
+    its own prompt/message composition via the summarizer module."""
+    ctx = _make_context(tmp_path)
+    agents = [get_agent("pr-summarizer")]
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("should not be called")
+
+    successes, failures = await run_tier(
+        agents=agents,
+        llm_call=mock_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(successes) == 0
+    assert len(failures) == 1
+    assert failures[0].name == "pr-summarizer"
+    assert "summarizer" in failures[0].reason.lower()
 
 
 @pytest.mark.anyio

@@ -56,6 +56,13 @@ class DispatchContext:
     cache_priming_env: str = "false"
     prompt_caching_env: str = "auto"
 
+    def __post_init__(self) -> None:
+        if not self.standard_model:
+            raise ValueError(
+                "DispatchContext.standard_model must be non-empty "
+                "(empty premium_model is acceptable; dispatch falls back to standard)"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Prompt composition
@@ -123,12 +130,15 @@ def effective_prompt(
         trailer_path.read_text(),
     ]
 
-    if (
-        enable_suggestions
-        and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM
-        and suggestion_path.exists()
-    ):
-        parts.append(suggestion_path.read_text())
+    if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
+        if suggestion_path.exists():
+            parts.append(suggestion_path.read_text())
+        else:
+            print(
+                f"WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
+                f"agent '{agent_name}' will run without suggestion instructions",
+                file=sys.stderr,
+            )
 
     fd, tmp_path = tempfile.mkstemp(
         suffix=".md",
@@ -179,6 +189,19 @@ async def _run_single_agent(
     start = time.monotonic()
     tmp_prompt: Path | None = None
     try:
+        # pr-summarizer composes its own prompt + user message (manifest +
+        # commit log + diff) via ai_pr_review.agents.summarizer.*. The generic
+        # dispatch path here only passes the raw diff as user_message, which
+        # would silently degrade summarizer output. Callers dispatching
+        # pr-summarizer must use the summarizer module directly; until a
+        # per-agent builder hook lands on AgentSpec, refuse the mismatch.
+        if spec.name == "pr-summarizer":
+            raise RuntimeError(
+                "pr-summarizer must not be dispatched via run_tier; "
+                "use ai_pr_review.agents.summarizer.build_summarizer_* helpers "
+                "to compose prompt and user message, then call llm_call directly"
+            )
+
         base_path = context.script_dir / spec.prompt_path
         prompt_path = effective_prompt(
             spec.name,

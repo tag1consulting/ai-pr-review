@@ -179,6 +179,34 @@ def test_long_sha_rejected() -> None:
     assert policy.advance_global is False
 
 
+def test_sha_with_trailing_newline_rejected() -> None:
+    # Python's `$` allows trailing \n by default; we use \A...\Z to reject it.
+    policy = decide_watermark_advance(
+        head_sha=_HEAD + "\n",
+        succeeded_agents=[],
+        failed_agents=[],
+    )
+    assert policy.advance_global is False
+
+
+def test_sha_with_uppercase_hex_rejected() -> None:
+    policy = decide_watermark_advance(
+        head_sha="ABCDEF1234567890",
+        succeeded_agents=[],
+        failed_agents=[],
+    )
+    assert policy.advance_global is False
+
+
+def test_sha_with_leading_whitespace_rejected() -> None:
+    policy = decide_watermark_advance(
+        head_sha=" " + _HEAD,
+        succeeded_agents=[],
+        failed_agents=[],
+    )
+    assert policy.advance_global is False
+
+
 # ---------------------------------------------------------------------------
 # WatermarkPolicy is frozen
 # ---------------------------------------------------------------------------
@@ -190,3 +218,25 @@ def test_watermark_policy_is_frozen() -> None:
     from dataclasses import FrozenInstanceError
     with pytest.raises(FrozenInstanceError):
         policy.advance_global = False  # type: ignore[misc]
+
+
+def test_watermark_policy_rejects_advance_with_none_sha() -> None:
+    from ai_pr_review.review.watermark import WatermarkPolicy
+    with pytest.raises(ValueError, match="advance_global=True requires non-None"):
+        WatermarkPolicy(
+            advance_global=True,
+            new_global_sha=None,
+            per_agent={},
+            body_explanation="",
+        )
+
+
+def test_watermark_policy_rejects_blocked_with_sha() -> None:
+    from ai_pr_review.review.watermark import WatermarkPolicy
+    with pytest.raises(ValueError, match="advance_global=False requires new_global_sha=None"):
+        WatermarkPolicy(
+            advance_global=False,
+            new_global_sha=_HEAD,
+            per_agent={},
+            body_explanation="",
+        )

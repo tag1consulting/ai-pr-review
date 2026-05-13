@@ -18,6 +18,9 @@ from typing import Literal, Protocol
 
 Risk = Literal["None", "Low", "Medium", "High", "Critical", "Unknown"]
 ReviewEvent = Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"]
+ReviewMode = Literal["full", "quick", "summary-only", "security-only"]
+
+_VALID_MODES: frozenset[str] = frozenset({"full", "quick", "summary-only", "security-only"})
 
 
 class _FindingLike(Protocol):
@@ -43,15 +46,21 @@ def _has_severity(findings: Sequence[_FindingLike], target: str) -> bool:
 def classify_review_outcome(
     findings: Sequence[_FindingLike],
     failed_agents: Sequence[str],
-    mode: str,  # noqa: ARG001 — reserved for future policy (quick/security-only)
+    mode: ReviewMode,
 ) -> ReviewOutcome:
     """Classify a review outcome from findings and failed-agent tracking.
 
     Args:
         findings: Sequence of findings; only `.severity` is inspected.
         failed_agents: Names of agents that failed during dispatch.
-        mode: Review mode (currently logging-only; reserved).
+        mode: Review mode (currently logging-only; reserved for future policy
+            like quick-mode approval thresholds). Must be one of the ReviewMode
+            literal values; passing another string raises ValueError.
     """
+    if mode not in _VALID_MODES:
+        raise ValueError(
+            f"Invalid review mode {mode!r}; must be one of {sorted(_VALID_MODES)}"
+        )
     finding_total = len(findings)
     any_failed = len(failed_agents) > 0
 

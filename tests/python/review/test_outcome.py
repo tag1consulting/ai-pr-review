@@ -179,8 +179,14 @@ def test_unknown_severity_mixed_with_critical_still_critical() -> None:
 
 @pytest.mark.parametrize("mode", ["full", "quick", "summary-only", "security-only"])
 def test_mode_passes_through(mode: str) -> None:
-    outcome = classify_review_outcome([_low()], [], mode=mode)
+    outcome = classify_review_outcome([_low()], [], mode=mode)  # type: ignore[arg-type]
     assert outcome.event == "APPROVE"
+
+
+@pytest.mark.parametrize("bad_mode", ["", "FULL", "quck", "nope", "None"])
+def test_invalid_mode_raises(bad_mode: str) -> None:
+    with pytest.raises(ValueError, match="Invalid review mode"):
+        classify_review_outcome([], [], mode=bad_mode)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
