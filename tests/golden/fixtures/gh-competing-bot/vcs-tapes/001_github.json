@@ -1,0 +1,10 @@
+{
+  "type": "vcs",
+  "provider": "github",
+  "method": "GET",
+  "url": "https://api.github.com/repos/example-org/example-repo/issues/144/comments",
+  "request_body": "",
+  "response_body": "[]",
+  "timestamp": "2026-05-13T20:00:00Z",
+  "note": "List existing summary comments — empty (first run)"
+}

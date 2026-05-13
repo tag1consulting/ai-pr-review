@@ -1,0 +1,8 @@
+{
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "request_body": "",
+  "response_body": "{\"content\":[{\"type\":\"text\",\"text\":\"No findings.\\n\\n```json-findings\\n[]\\n```\"}],\"usage\":{\"input_tokens\":120,\"output_tokens\":10},\"stop_reason\":\"end_turn\"}",
+  "timestamp": "2026-05-13T20:00:00Z"
+}

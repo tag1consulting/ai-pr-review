@@ -1,0 +1,10 @@
+{
+  "type": "vcs",
+  "provider": "gitlab",
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/9876/merge_requests/21/notes",
+  "request_body": "",
+  "response_body": "[]",
+  "timestamp": "2026-05-13T20:00:00Z",
+  "note": "List existing summary notes — empty (first run)"
+}

@@ -1,0 +1,10 @@
+{
+  "type": "vcs",
+  "provider": "gitlab",
+  "method": "GET",
+  "url": "https://gitlab.com/api/v4/projects/9876/merge_requests/22/notes",
+  "request_body": "",
+  "response_body": "[{\"id\":77100,\"body\":\"<!-- ai-pr-review-summary sha=prev111s -->\\n## AI Review: Approved\\nFirst-run summary.\"}]",
+  "timestamp": "2026-05-13T20:00:00Z",
+  "note": "Existing summary note from previous push — carries old SHA"
+}

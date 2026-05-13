@@ -1,0 +1,10 @@
+{
+  "type": "vcs",
+  "provider": "bitbucket",
+  "method": "GET",
+  "url": "https://api.bitbucket.org/2.0/repositories/example-workspace/example-repo/pullrequests/33/comments",
+  "request_body": "",
+  "response_body": "{\"values\":[{\"id\":55001,\"content\":{\"raw\":\"This dependency update bumps lodash from 4.17.20 to 4.17.21.\"}},{\"id\":55002,\"content\":{\"raw\":\"Renovate detected a vulnerable dependency.\"}}]}",
+  "timestamp": "2026-05-13T20:00:00Z",
+  "note": "Two competing-bot comments present, neither carries our summary marker — both must be ignored by cleanup."
+}

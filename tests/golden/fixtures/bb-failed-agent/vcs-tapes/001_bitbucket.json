@@ -1,0 +1,9 @@
+{
+  "type": "vcs",
+  "provider": "bitbucket",
+  "method": "GET",
+  "url": "https://api.bitbucket.org/2.0/repositories/example-workspace/example-repo/pullrequests/31/comments",
+  "request_body": "",
+  "response_body": "{\"values\":[]}",
+  "timestamp": "2026-05-13T20:00:00Z"
+}
