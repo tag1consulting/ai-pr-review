@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 
 import pytest
@@ -13,7 +12,6 @@ from ai_pr_review.feedback.store import (
     UnsupportedVcsStore,
     make_store,
 )
-
 
 # ---------------------------------------------------------------------------
 # make_store factory — guards against the make_store() critical bug
@@ -156,3 +154,64 @@ def test_fetch_file_meta_raises_on_oversize_file_omitting_content() -> None:
     )
     with pytest.raises(RuntimeError, match="may exceed 1 MB"):
         store._fetch_file_meta()
+
+
+# ---------------------------------------------------------------------------
+# _branch_exists — tri-state
+# ---------------------------------------------------------------------------
+
+def test_branch_exists_returns_true_on_200() -> None:
+    import httpx
+
+    class _FakeClient:
+        def get(self, url: str, headers: dict) -> httpx.Response:
+            return httpx.Response(200, request=httpx.Request("GET", url))
+
+    store = GitBranchStore(
+        repo="o/r", branch="b", token="t", client=_FakeClient(),  # type: ignore[arg-type]
+    )
+    assert store._branch_exists() is True
+
+
+def test_branch_exists_returns_false_on_404() -> None:
+    import httpx
+
+    class _FakeClient:
+        def get(self, url: str, headers: dict) -> httpx.Response:
+            return httpx.Response(404, request=httpx.Request("GET", url))
+
+    store = GitBranchStore(
+        repo="o/r", branch="b", token="t", client=_FakeClient(),  # type: ignore[arg-type]
+    )
+    assert store._branch_exists() is False
+
+
+def test_branch_exists_returns_none_on_transport_error() -> None:
+    """Regression: transient transport errors must NOT be misclassified as 404.
+
+    Returning False on a network blip would trigger an unnecessary bootstrap
+    attempt and produce a misleading 'branch missing' log message."""
+    import httpx
+
+    class _FakeClient:
+        def get(self, url: str, headers: dict) -> None:
+            raise httpx.ConnectError("network down")
+
+    store = GitBranchStore(
+        repo="o/r", branch="b", token="t", client=_FakeClient(),  # type: ignore[arg-type]
+    )
+    assert store._branch_exists() is None
+
+
+def test_branch_exists_returns_none_on_unexpected_status() -> None:
+    """403 (auth failure) or 5xx must surface as None (unknown), not False."""
+    import httpx
+
+    class _FakeClient:
+        def get(self, url: str, headers: dict) -> httpx.Response:
+            return httpx.Response(403, request=httpx.Request("GET", url))
+
+    store = GitBranchStore(
+        repo="o/r", branch="b", token="t", client=_FakeClient(),  # type: ignore[arg-type]
+    )
+    assert store._branch_exists() is None

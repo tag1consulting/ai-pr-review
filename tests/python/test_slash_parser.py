@@ -1,6 +1,5 @@
 """Tests for ai_pr_review.slash.parser — E3.S7."""
 
-import pytest
 
 from ai_pr_review.slash.parser import (
     KNOWN_COMMANDS,
@@ -9,7 +8,6 @@ from ai_pr_review.slash.parser import (
     _sanitize_reason,
     parse_command,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_command happy paths
@@ -213,4 +211,4 @@ def test_sanitize_nfc_normalizes() -> None:
 
 def test_known_commands_contains_all() -> None:
     expected = {"false-positive", "wont-fix", "explain", "revise", "feedback", "dismiss"}
-    assert KNOWN_COMMANDS == expected
+    assert expected == KNOWN_COMMANDS

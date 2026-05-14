@@ -25,7 +25,7 @@ import datetime
 import logging
 
 from ai_pr_review.feedback.models import FeedbackEntry
-from ai_pr_review.feedback.store import FeedbackStore, UnsupportedVcsStore
+from ai_pr_review.feedback.store import FeedbackStore
 from ai_pr_review.slash.parser import SlashCommand
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def build_entry(
 ) -> FeedbackEntry:
     """Build a ``FeedbackEntry`` from a parsed ``SlashCommand``."""
     return FeedbackEntry(
-        ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ts=datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         command=command.canonical_name,
         reason=command.reason,
         source=source,

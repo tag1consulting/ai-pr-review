@@ -17,7 +17,6 @@ feedback is silently dropped with a WARNING log).
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import random
 import time
@@ -153,6 +152,17 @@ class GitBranchStore:
                     attempt, exc,
                 )
                 return False
+            except RuntimeError as exc:
+                # _fetch_file_meta raises RuntimeError for files >1 MB.
+                # Catch it explicitly so the WARNING mentions the actual cause
+                # rather than masquerading as a generic "unexpected error".
+                logger.warning(
+                    "feedback store: cannot append — %s. "
+                    "Consider lowering AI_FEEDBACK_RETENTION_COUNT or trimming "
+                    "the feedback file manually.",
+                    exc,
+                )
+                return False
             except Exception:
                 logger.error(
                     "feedback store: unexpected error in append (entry dropped)",
@@ -170,6 +180,14 @@ class GitBranchStore:
             return self._parse_jsonl(content)
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             logger.warning("feedback store: HTTP error loading entries: %s", exc)
+            return []
+        except RuntimeError as exc:
+            # _fetch_file_meta raises RuntimeError for files >1 MB.
+            logger.warning(
+                "feedback store: cannot load entries — %s. "
+                "Consider lowering AI_FEEDBACK_RETENTION_COUNT.",
+                exc,
+            )
             return []
         except Exception:
             logger.error("feedback store: unexpected error in load_recent", exc_info=True)
@@ -269,8 +287,11 @@ class GitBranchStore:
         if resp.status_code == 422:
             # 422 can mean either "branch not found" (bootstrap needed) or a
             # genuine validation error. Probe the branch endpoint to tell them
-            # apart instead of retrying blindly.
-            if not self._branch_exists():
+            # apart instead of retrying blindly.  _branch_exists is tri-state:
+            # only treat a definitive False as "branch missing"; None (transient
+            # error) must surface as a validation error rather than triggering
+            # an unnecessary branch-creation attempt.
+            if self._branch_exists() is False:
                 raise _MissingBranchError(self.branch)
             raise RuntimeError(
                 f"GitHub Contents API returned 422 Unprocessable Entity: "
@@ -306,63 +327,124 @@ class GitBranchStore:
     # Branch bootstrap (one-time, on first write to a fresh repo)
     # ------------------------------------------------------------------
 
-    def _branch_exists(self) -> bool:
-        """Return True if ``self.branch`` exists on the remote."""
+    def _branch_exists(self) -> bool | None:
+        """Tri-state branch existence check.
+
+        Returns:
+            True  — branch exists (HTTP 200)
+            False — branch confirmed missing (HTTP 404)
+            None  — unknown (transient transport error, auth failure, or
+                    unexpected status); caller should NOT proceed with
+                    bootstrap on None, to avoid creating a branch from a
+                    misdiagnosed network blip.
+        """
         url = f"https://api.github.com/repos/{self.repo}/branches/{self.branch}"
         try:
             resp = self.client.get(url, headers=self._headers())
-        except httpx.HTTPError:
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: branch existence check transport error: %s", exc,
+            )
+            return None
+        if resp.status_code == 200:
+            return True
+        if resp.status_code == 404:
             return False
-        return resp.status_code == 200
+        logger.warning(
+            "feedback store: branch existence check returned unexpected status %d: %s",
+            resp.status_code, resp.text[:200],
+        )
+        return None
 
     def _bootstrap_branch(self) -> bool:
         """Create ``self.branch`` from the repo's default branch HEAD.
 
-        Returns True on success, False on failure (logs a WARNING).  Called
-        from ``append()`` when ``_append_once`` raises ``_MissingBranchError``.
+        Returns True on success, False on failure (logs a WARNING with the
+        HTTP status code distinguishing 401/403 auth failures from 404 missing-
+        repo from transient transport errors).  Called from ``append()`` when
+        ``_append_once`` raises ``_MissingBranchError``.
         """
-        # Fetch the default branch name + its current HEAD sha
         try:
             repo_resp = self.client.get(
                 f"https://api.github.com/repos/{self.repo}",
                 headers=self._headers(),
             )
-            repo_resp.raise_for_status()
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: bootstrap aborted — transport error fetching repo: %s",
+                exc,
+            )
+            return False
+        if repo_resp.status_code != 200:
+            logger.warning(
+                "feedback store: bootstrap aborted — GET /repos/%s returned %d: %s",
+                self.repo, repo_resp.status_code, repo_resp.text[:200],
+            )
+            return False
+        try:
             default_branch = repo_resp.json().get("default_branch") or "main"
+        except ValueError as exc:
+            logger.warning(
+                "feedback store: bootstrap aborted — bad JSON from /repos: %s", exc,
+            )
+            return False
 
+        try:
             head_resp = self.client.get(
                 f"https://api.github.com/repos/{self.repo}/git/ref/heads/{default_branch}",
                 headers=self._headers(),
             )
-            head_resp.raise_for_status()
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: bootstrap aborted — transport error fetching default HEAD: %s",
+                exc,
+            )
+            return False
+        if head_resp.status_code != 200:
+            logger.warning(
+                "feedback store: bootstrap aborted — GET refs/heads/%s returned %d: %s",
+                default_branch, head_resp.status_code, head_resp.text[:200],
+            )
+            return False
+        try:
             head_sha = head_resp.json().get("object", {}).get("sha")
-            if not head_sha:
-                logger.warning(
-                    "feedback store: could not resolve %r HEAD sha for bootstrap",
-                    default_branch,
-                )
-                return False
+        except ValueError as exc:
+            logger.warning(
+                "feedback store: bootstrap aborted — bad JSON from refs/heads: %s", exc,
+            )
+            return False
+        if not head_sha:
+            logger.warning(
+                "feedback store: bootstrap aborted — could not resolve %r HEAD sha",
+                default_branch,
+            )
+            return False
 
+        try:
             create_resp = self.client.post(
                 f"https://api.github.com/repos/{self.repo}/git/refs",
                 headers=self._headers(),
                 json={"ref": f"refs/heads/{self.branch}", "sha": head_sha},
             )
-            # 201 = created; 422 = already exists (race with concurrent run) — both OK
-            if create_resp.status_code not in (201, 422):
-                logger.warning(
-                    "feedback store: branch create returned %d: %s",
-                    create_resp.status_code, create_resp.text[:200],
-                )
-                return False
-            logger.info(
-                "feedback store: bootstrapped branch %r from %r@%s",
-                self.branch, default_branch, head_sha[:7],
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: bootstrap aborted — transport error creating ref: %s",
+                exc,
             )
-            return True
-        except (httpx.HTTPError, ValueError, KeyError) as exc:
-            logger.warning("feedback store: branch bootstrap failed: %s", exc)
             return False
+        # 201 = created; 422 = already exists (race with concurrent run) — both OK
+        if create_resp.status_code not in (201, 422):
+            logger.warning(
+                "feedback store: branch create returned %d: %s "
+                "(401/403 = token lacks contents:write; 404 = repo missing)",
+                create_resp.status_code, create_resp.text[:200],
+            )
+            return False
+        logger.info(
+            "feedback store: bootstrapped branch %r from %r@%s",
+            self.branch, default_branch, head_sha[:7],
+        )
+        return True
 
 
 class _ConflictError(Exception):

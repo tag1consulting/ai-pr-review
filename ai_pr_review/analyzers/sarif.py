@@ -58,10 +58,17 @@ def _sanitize_sarif_path(uri: str) -> str:
         return ""
     path = unquote(parsed.path or uri)
 
-    # Strip leading slash if it was an absolute file:// URI (file:///x → /x → x).
+    # For file:// URIs, urlparse leaves a single leading slash on the path
+    # (file:///x → "/x").  Strip exactly one — lstrip("/") would also accept
+    # "file:////etc/passwd" → "etc/passwd", bypassing the absolute-path check.
     # An absolute path with no scheme (e.g. /etc/passwd) is rejected outright.
     if parsed.scheme == "file":
-        path = path.lstrip("/")
+        path = path.removeprefix("/")
+        # A remaining leading slash means the original URI was an attempt to
+        # smuggle an absolute path through extra slashes — reject it.
+        if path.startswith("/"):
+            logger.warning("SARIF: rejecting file URI with extra leading slashes: %r", uri)
+            return ""
     elif path.startswith("/"):
         logger.warning("SARIF: rejecting absolute path %r", uri)
         return ""
@@ -199,9 +206,11 @@ def _convert_result(
         # ValueError covers pydantic validator failures; TypeError covers
         # genuine arg mismatches (which would indicate a Finding refactor
         # the SARIF parser hasn't caught up with — log loudly).
+        # Include a truncated repr of the offending result dict so the
+        # failure is reproducible without the original SARIF file.
         logger.warning(
-            "SARIF: could not construct Finding from %r: %s (%s)",
-            source_tag, exc, type(exc).__name__,
+            "SARIF: could not construct Finding from %r: %s (%s); result=%r",
+            source_tag, exc, type(exc).__name__, repr(result)[:300],
         )
         return None
 

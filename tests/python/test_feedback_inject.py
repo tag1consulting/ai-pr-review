@@ -4,6 +4,7 @@ from ai_pr_review.feedback.inject import (
     _extract_changed_paths,
     _rank,
     _render_entry,
+    _strip_instructions,
     build_feedback_addendum,
 )
 from ai_pr_review.feedback.models import FeedbackEntry
@@ -94,8 +95,6 @@ def test_render_entry_escapes_reason() -> None:
 # ---------------------------------------------------------------------------
 # Prompt-injection defense — instruction-pattern stripping
 # ---------------------------------------------------------------------------
-
-from ai_pr_review.feedback.inject import _strip_instructions
 
 
 def test_strip_instructions_redacts_ignore_previous() -> None:

@@ -2,11 +2,10 @@
 
 from ai_pr_review.context.treesitter import (
     SymbolRef,
+    _strip_diff_markers,
     extract_symbol_refs,
     extract_symbol_refs_fallback,
-    _strip_diff_markers,
 )
-
 
 _PY_HUNK = """\
 +def my_function(x, y):

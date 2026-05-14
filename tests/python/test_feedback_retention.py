@@ -27,7 +27,7 @@ def test_count_limit_applied() -> None:
 
 
 def test_age_limit_drops_old_entries() -> None:
-    today = datetime.datetime.now(datetime.timezone.utc)
+    today = datetime.datetime.now(datetime.UTC)
     old_ts = (today - datetime.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%SZ")
     new_ts = today.strftime("%Y-%m-%dT%H:%M:%SZ")
     entries = [_entry(old_ts), _entry(new_ts)]
@@ -38,7 +38,7 @@ def test_age_limit_drops_old_entries() -> None:
 
 
 def test_age_limit_zero_keeps_all() -> None:
-    today = datetime.datetime.now(datetime.timezone.utc)
+    today = datetime.datetime.now(datetime.UTC)
     old_ts = (today - datetime.timedelta(days=1000)).strftime("%Y-%m-%dT%H:%M:%SZ")
     entries = [_entry(old_ts)]
     kept = apply_retention(entries, max_count=100, max_age_days=0)

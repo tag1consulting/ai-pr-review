@@ -680,10 +680,16 @@ jobs:
           ISSUE_NUMBER: ${{ inputs.issue-number }}
           REPLY_B64: ${{ steps.handler.outputs.reply_b64 }}
         run: |
-          reply=$(echo "$REPLY_B64" | base64 -d)
+          # Write reply to a temp file and use --body-file so the body content
+          # never becomes part of the gh command line. Defense-in-depth: the
+          # Python handler already HTML-escapes user content, but body-file
+          # ensures no part of the reply is parsed by the shell.
+          reply_file=$(mktemp)
+          trap 'rm -f "$reply_file"' EXIT
+          echo "$REPLY_B64" | base64 -d > "$reply_file"
           gh pr comment "$ISSUE_NUMBER" \
             --repo "$REPOSITORY" \
-            --body "$reply"
+            --body-file "$reply_file"
 
       - name: React — done
         if: steps.handler.outputs.is_command == 'true' && success()

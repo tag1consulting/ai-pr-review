@@ -105,10 +105,20 @@ def _classify_proximity(
 
 
 def _read_snippet(file_path: Path, lineno: int, lookup_lines: int) -> str:
-    """Read ±lookup_lines around lineno from file_path, safe against large files."""
+    """Read ±lookup_lines around lineno from file_path, safe against large files.
+
+    Returns "" on OSError (file disappeared between ripgrep and read, permission
+    issue, etc.) and logs at debug level.  Callers should treat an empty result
+    as "no snippet available" and skip the Definition rather than emit an
+    empty code fence into the <symbol-context> block.
+    """
     try:
         lines = file_path.read_text(errors="replace").splitlines()
-    except OSError:
+    except OSError as exc:
+        logger.debug(
+            "context enrichment: could not read snippet from %s: %s",
+            file_path, exc,
+        )
         return ""
     start = max(0, lineno - 1 - lookup_lines)
     end = min(len(lines), lineno + lookup_lines)
@@ -240,6 +250,11 @@ def lookup_definitions(
                 continue
 
             snippet = _read_snippet(abs_path, lineno, lookup_lines)
+            if not snippet:
+                # Skip definitions with no readable snippet — emitting an
+                # empty code fence into the <symbol-context> block would
+                # be pure noise.
+                continue
             proximity = _classify_proximity(rel_file, changed_files)
             defs.append(
                 Definition(

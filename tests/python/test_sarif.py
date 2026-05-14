@@ -4,18 +4,15 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
-
-from ai_pr_review.analyzers.sarif import load_sarif_files, _parse_sarif_file
+from ai_pr_review.analyzers.sarif import _sanitize_sarif_path, load_sarif_files
 
 
 def _write_sarif(data: object, suffix: str = ".sarif") -> str:
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=suffix, delete=False, encoding="utf-8"
-    )
-    json.dump(data, f)
-    f.close()
-    return f.name
+    ) as f:
+        json.dump(data, f)
+        return f.name
 
 
 def _minimal_sarif(
@@ -181,12 +178,12 @@ def test_missing_file_returns_empty(tmp_path: Path) -> None:
 
 
 def test_invalid_json_returns_empty() -> None:
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".sarif", delete=False, encoding="utf-8"
-    )
-    f.write("NOT JSON{")
-    f.close()
-    findings = load_sarif_files([f.name])
+    ) as f:
+        f.write("NOT JSON{")
+        path = f.name
+    findings = load_sarif_files([path])
     assert findings == []
 
 
@@ -229,8 +226,6 @@ def test_load_empty_paths_list() -> None:
 # Path sanitization — security defense
 # ---------------------------------------------------------------------------
 
-from ai_pr_review.analyzers.sarif import _sanitize_sarif_path
-
 
 def test_sanitize_sarif_path_rejects_absolute_path() -> None:
     """Absolute path with no scheme (e.g. /etc/passwd) must be rejected."""
@@ -270,6 +265,13 @@ def test_sanitize_sarif_path_handles_percent_encoding() -> None:
 
 def test_sanitize_sarif_path_empty_input() -> None:
     assert _sanitize_sarif_path("") == ""
+
+
+def test_sanitize_sarif_path_rejects_extra_leading_slashes() -> None:
+    """Regression: lstrip('/') would accept file:////etc/passwd as 'etc/passwd'
+    bypassing the absolute-path check.  Must reject."""
+    assert _sanitize_sarif_path("file:////etc/passwd") == ""
+    assert _sanitize_sarif_path("file://///abs/path") == ""
 
 
 def test_finding_with_traversal_uri_drops_file_field() -> None:

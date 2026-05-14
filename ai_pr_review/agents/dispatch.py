@@ -256,8 +256,8 @@ LLMCall = Callable[[LLMRequest], Awaitable[LLMResponse]]
 
 def _build_user_message(
     diff_text: str,
-    spec: "AgentSpec",
-    context: "DispatchContext",
+    spec: AgentSpec,
+    context: DispatchContext,
 ) -> str:
     """Build the user message for an agent, optionally prepending symbol context.
 
@@ -292,8 +292,12 @@ def _build_user_message(
             return ctx_block + "\n\n" + diff_text
     except Exception as exc:
         import logging
+        # exc_info=True so unexpected errors (MemoryError, bugs in
+        # build_context_block, etc.) are distinguishable from expected
+        # failures (missing grammar, ripgrep absent) in production logs.
         logging.getLogger(__name__).warning(
-            "context enrichment failed for agent %r: %s", spec.name, exc
+            "context enrichment failed for agent %r: %s",
+            spec.name, exc, exc_info=True,
         )
 
     return diff_text
