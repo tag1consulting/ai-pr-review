@@ -34,7 +34,7 @@ class SummaryResult:
 
     @property
     def ok(self) -> bool:
-        return self.error is None and self.comment_id is not None
+        return self.error is None
 
 
 @dataclass(frozen=True)

@@ -18,7 +18,7 @@ import random
 import re
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -34,10 +34,12 @@ _TRANSIENT_ERR_PATTERNS = re.compile(
 # Secret-like tokens we scrub from recorded tapes before they hit disk.
 # Matches Authorization: Bearer xxx, Private-Token: xxx, ghp_, glpat-, etc.
 _AUTH_HEADER_RE = re.compile(
-    r"(?i)(authorization|private-token|x-gitlab-token|x-api-key)\s*:[^\n\r]*"
+    r"(?i)(authorization|private-token|x-gitlab-token|x-api-key|job-token)\s*:[^\n\r]*"
 )
 _TOKEN_VALUE_RE = re.compile(
-    r"\b(gh[psr]_[A-Za-z0-9]{10,}|glpat-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9]{10,})"
+    r"\b(gh[opsruv]_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}"
+    r"|glpat-[A-Za-z0-9_-]{10,}|glcbt-[A-Za-z0-9_-]{10,}"
+    r"|sk-[A-Za-z0-9]{10,})"
 )
 
 
@@ -134,7 +136,7 @@ class TapeRecorder:
 
     record_dir: Path | None
     provider: str = "github"
-    _seq: int = 0
+    _seq: int = field(default=0, init=False, repr=False)
 
     @classmethod
     def from_env(cls, provider: str = "github") -> TapeRecorder:

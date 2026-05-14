@@ -227,7 +227,7 @@ class GitHubProvider:
         existing = self._list_summary_comments()
         if not existing:
             return False
-        keep = existing[0]
+        keep = existing[-1]
         keep_id = int(keep["id"])
         old_body = keep.get("body") or ""
         new_body = replace_summary_sha(
@@ -269,6 +269,7 @@ class GitHubProvider:
         }
 
         inline_comments: list[dict[str, Any]] = []
+        original_inline_comments: list[dict[str, Any]] = []
         body_bullets: list[str] = []
         for f in findings:
             if len(inline_comments) < max_inline:
@@ -319,6 +320,9 @@ class GitHubProvider:
                 inline_posted_count = 0
             else:
                 inline_posted_count = len(inline_comments)
+            # Keep a copy for the fallback path — fallback needs the original
+            # inline findings even after inline_comments is cleared below.
+            original_inline_comments = inline_comments
             inline_comments = []
         else:
             inline_posted_count = 0
@@ -363,8 +367,11 @@ class GitHubProvider:
                 f"retry as COMMENT: HTTP {resp2.status_code}: {resp2.text[:200]}"
             )
 
-        # Fallback 2: plain PR issue comment (loses inline anchoring)
-        fallback = self._render_fallback_body(body, inline_comments)
+        # Fallback 2: plain PR issue comment (loses inline anchoring).
+        # original_inline_comments is initialized at method entry so it is always
+        # defined here — APPROVE path saves the pre-clear copy; other paths leave it [].
+        fallback_inline = original_inline_comments or inline_comments
+        fallback = self._render_fallback_body(body, fallback_inline)
         resp3 = self.client.request(
             "POST", self._issue_comments_url(), json_body={"body": fallback}
         )
@@ -372,7 +379,7 @@ class GitHubProvider:
             return FindingsResult(
                 review_id=None,
                 inline_posted=0,
-                body_findings=len(body_bullets) + len(inline_comments),
+                body_findings=len(body_bullets) + len(fallback_inline),
                 event="COMMENT",
                 degraded_to_comment=True,
             )
@@ -407,10 +414,12 @@ class GitHubProvider:
     # resolve_stale — marker-gated stale-thread resolution + review dismissal
     # ------------------------------------------------------------------
     def resolve_stale(self) -> StaleResult:
+        errors_before = len(self._errors)
         threads = self._fetch_review_threads()
+        # Collect errors emitted by _fetch_review_threads (GraphQL errors, HTTP errors)
+        errors: list[str] = list(self._errors[errors_before:])
         resolved = 0
         skipped_no_marker = 0
-        errors: list[str] = []
         for thread in threads:
             if thread.get("isResolved"):
                 continue
@@ -428,7 +437,9 @@ class GitHubProvider:
                 continue
             resolved += 1
 
+        dismissed_before = len(self._errors)
         dismissed = self._dismiss_stale_reviews(threads)
+        errors.extend(self._errors[dismissed_before:])
 
         return StaleResult(
             threads_resolved=resolved,
@@ -467,6 +478,12 @@ class GitHubProvider:
                 )
                 break
             data = resp.json() or {}
+            if data.get("errors"):
+                msgs = "; ".join(
+                    (e.get("message") or str(e)) for e in data["errors"]
+                )
+                self._errors.append(f"fetch_review_threads GraphQL error: {msgs}")
+                break
             rt = (
                 data.get("data", {})
                 .get("repository", {})
@@ -499,17 +516,19 @@ class GitHubProvider:
         resolved, but only when at least one such thread was authored by us
         (marker gate via thread-body check already applied above)."""
         c = self.config
-        resp = self.client.request(
-            "GET",
-            f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews",
-            params={"per_page": 100},
-        )
-        if resp.status_code >= 400:
-            self._errors.append(
-                f"list reviews: HTTP {resp.status_code}: {resp.text[:200]}"
-            )
-            return 0
-        reviews = resp.json() or []
+        reviews: list[dict[str, Any]] = []
+        url: str | None = f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews"
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                self._errors.append(
+                    f"list reviews: HTTP {resp.status_code}: {resp.text[:200]}"
+                )
+                return 0
+            reviews.extend(resp.json() or [])
+            url = _parse_next_link(resp.headers.get("link", ""))
+            params = None
         # Map review id -> unresolved thread count, only counting threads
         # where the comment body carries OUR inline marker.
         unresolved_by_review: dict[int, int] = {}

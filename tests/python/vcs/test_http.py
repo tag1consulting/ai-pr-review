@@ -129,6 +129,30 @@ def test_redact_no_op_for_clean_text() -> None:
     assert redact_secrets("hello world") == "hello world"
 
 
+def test_redact_github_actions_gho_token() -> None:
+    redacted = redact_secrets("gho_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+    assert "gho_" not in redacted
+    assert "<redacted>" in redacted
+
+
+def test_redact_github_pat_token() -> None:
+    redacted = redact_secrets("github_pat_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+    assert "github_pat_" not in redacted
+    assert "<redacted>" in redacted
+
+
+def test_redact_gitlab_ci_token() -> None:
+    redacted = redact_secrets("glcbt-XXXXXXXXXXXXXXXXXXXXXXXXXX")
+    assert "glcbt-" not in redacted
+    assert "<redacted>" in redacted
+
+
+def test_redact_job_token_header() -> None:
+    redacted = redact_secrets("JOB-TOKEN: supersecretjobtoken123")
+    assert "supersecretjobtoken123" not in redacted
+    assert "<redacted>" in redacted
+
+
 # ---------------------------------------------------------------------------
 # TapeRecorder
 # ---------------------------------------------------------------------------

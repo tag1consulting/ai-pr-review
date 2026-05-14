@@ -23,6 +23,7 @@ import click
 from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.manifest import ChangedFiles
 from ai_pr_review.orchestrate import ReviewResult
+from ai_pr_review.vcs import ProviderConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ def review() -> None:
 
     try:
         exit_code = anyio.run(_run_review_async, config)
+    except ProviderConfigError as exc:
+        click.echo(f"Provider configuration error: {exc}", err=True)
+        sys.exit(1)
     except Exception as exc:  # noqa: BLE001 — top-level catch for clean exit
         click.echo(f"ERROR: {exc!r}", err=True)
         sys.exit(1)
@@ -114,7 +118,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
         click.echo(f"Skipping review: {reason}", err=True)
-        result = await _orchestrate_skip(provider, reason)
+        result = await _orchestrate_skip(provider, reason, config=config)
         return 0 if result.ok else 1
 
     diff_text = str(payload.get("diff") or "")
@@ -124,7 +128,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # 3. Build dispatch context
     script_dir = Path(__file__).resolve().parent.parent
     diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
-    diff_path.write_text(diff_text)
+    diff_path.write_text(diff_text, encoding="utf-8")
 
     dispatch_ctx = DispatchContext(
         script_dir=script_dir,
@@ -140,9 +144,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     # 4. Apply conditional gates
     last_reviewed = provider.get_last_reviewed_sha()
-    changed_paths = payload.get("changed_files") or []
-    if not isinstance(changed_paths, list):
-        changed_paths = []
+    raw_paths = payload.get("changed_files")
+    changed_paths: list[object] = raw_paths if isinstance(raw_paths, list) else []
     cf = _make_changed_files(changed_paths)
     gates = evaluate_gates(
         diff_text=diff_text,
@@ -190,21 +193,25 @@ async def _run_review_async(config: ReviewConfig) -> int:
     return 0 if result.ok else 1
 
 
-async def _orchestrate_skip(provider: object, reason: str) -> ReviewResult:
+async def _orchestrate_skip(
+    provider: object, reason: str, *, config: ReviewConfig
+) -> ReviewResult:
     """Convenience wrapper to call run_review() with only a skip path."""
     from ai_pr_review.agents.dispatch import DispatchContext
     from ai_pr_review.orchestrate import run_review
     from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
 
-    assert isinstance(provider, VcsProvider)
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
     diff_path = Path("/tmp/ai-review-skip-diff.txt")
-    diff_path.write_text("")
+    diff_path.write_text("", encoding="utf-8")
     ctx = DispatchContext(
         script_dir=Path("."),
-        mode="full",
+        mode=config.review_mode,
         diff_path=diff_path,
-        provider="anthropic",
-        standard_model="placeholder",
+        provider=config.provider,
+        standard_model=config.model_standard,
+        premium_model=config.model_premium,
     )
 
     async def _no_llm(_req: object) -> object:

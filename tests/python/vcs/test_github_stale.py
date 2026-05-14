@@ -266,6 +266,8 @@ def test_resolve_thread_failure_includes_http_status_in_error() -> None:
             if "resolveReviewThread" in body.get("query", ""):
                 return httpx.Response(403, json={"message": "forbidden"})
             return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=[])
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
@@ -274,3 +276,57 @@ def test_resolve_thread_failure_includes_http_status_in_error() -> None:
     assert len(result.errors) == 1
     assert "403" in result.errors[0]
     assert "T99" in result.errors[0]
+
+
+def test_fetch_review_threads_graphql_200_with_errors_recorded() -> None:
+    """GraphQL 200-with-errors must be captured in StaleResult.errors, not silently ignored."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(
+                200,
+                json={"errors": [{"message": "Not authorized to read review threads"}]},
+            )
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.threads_resolved == 0
+    assert any("Not authorized to read review threads" in e for e in result.errors)
+
+
+def test_dismiss_stale_reviews_paginates_reviews_list() -> None:
+    """_dismiss_stale_reviews must follow Link: rel=next headers when listing reviews."""
+    # All threads are resolved so dismiss logic proceeds
+    nodes: list[dict] = []
+
+    # Page 1: no matching reviews
+    reviews_page1 = [
+        {"id": 10, "state": "APPROVED", "user": {"login": "github-actions[bot]"}},
+    ]
+    # Page 2: the CHANGES_REQUESTED review we should dismiss
+    reviews_page2 = [
+        {"id": 42, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
+    ]
+    dismissed: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json=_threads_response(nodes))
+        url_str = str(req.url)
+        if req.method == "GET" and "/reviews" in url_str:
+            if "page=2" in url_str:
+                return httpx.Response(200, json=reviews_page2)
+            # First page: return with a Link: next header pointing to page 2
+            base = "https://api.github.com/repos/o/r/pulls/1/reviews"
+            link = f'<{base}?page=2>; rel="next"'
+            return httpx.Response(200, json=reviews_page1, headers={"link": link})
+        if req.method == "PUT" and "/dismissals" in url_str:
+            dismissed.append(url_str)
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.reviews_dismissed == 1
+    assert any("/reviews/42/dismissals" in d for d in dismissed)

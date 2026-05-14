@@ -302,3 +302,38 @@ def test_approve_pre_review_failure_does_not_count_inline_posted() -> None:
     result = prov.post_findings(findings, diff, event="APPROVE")
     # The pre-APPROVE COMMENT POST failed, so inline_posted must be 0
     assert result.inline_posted == 0
+
+
+def test_fallback_includes_inline_findings_when_approve_review_fails() -> None:
+    """Fix: fallback body must include original inline findings even when APPROVE
+    review fails after inline_comments was cleared for the APPROVE path."""
+    findings = [
+        Finding(severity="Low", confidence=80, finding="inline-x", file="app.py", line=4),
+    ]
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+    fallback_bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            # pre-APPROVE COMMENT succeeds
+            body = _json.loads(req.content) if req.content else {}
+            if body.get("event") == "COMMENT" and body.get("comments"):
+                return httpx.Response(201, json={"id": 1})
+            # APPROVE body-only — fail so fallback fires
+            return httpx.Response(403, json={"message": "no permission"})
+        if req.method == "POST" and "/issues/" in str(req.url) and "/comments" in str(req.url):
+            # issue-comment fallback
+            body = _json.loads(req.content) if req.content else {}
+            fallback_bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 99})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings(findings, diff, event="APPROVE")
+    assert result.degraded_to_comment is True
+    # The fallback body must contain the inline finding text
+    assert any("inline-x" in b for b in fallback_bodies), (
+        "fallback body must include original inline findings"
+    )

@@ -151,17 +151,37 @@ async def run_review(
     )
 
     # Phase 4: post summary then findings (AC5 ordering)
-    summary_result = provider.post_summary(summary_text or "## AI Review", diff.head_sha)
+    try:
+        summary_result = provider.post_summary(
+            summary_text or "## AI Review", diff.head_sha
+        )
+    except RetryExhaustedError as exc:
+        err = f"post_summary retry exhausted: {exc}"
+        logger.error(err)
+        summary_result = SummaryResult(
+            comment_id=None, created=False, updated=False, error=err
+        )
     findings_result: FindingsResult | None = None
     if summary_result.ok:
-        findings_result = provider.post_findings(
-            kept,
-            diff,
-            event=outcome.event,
-            failed_agents=[f.name for f in failures],
-            max_inline=cfg.max_inline,
-            enable_suggestions=cfg.enable_suggestions,
-        )
+        try:
+            findings_result = provider.post_findings(
+                kept,
+                diff,
+                event=outcome.event,
+                failed_agents=[f.name for f in failures],
+                max_inline=cfg.max_inline,
+                enable_suggestions=cfg.enable_suggestions,
+            )
+        except RetryExhaustedError as exc:
+            err = f"post_findings retry exhausted: {exc}"
+            logger.error(err)
+            findings_result = FindingsResult(
+                review_id=None,
+                inline_posted=0,
+                body_findings=len(kept),
+                event=outcome.event,
+                error=err,
+            )
     else:
         logger.error(
             "post_summary failed (%s); skipping findings post", summary_result.error

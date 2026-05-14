@@ -346,3 +346,70 @@ def test_retry_exhausted_in_stale_is_captured_not_propagated(tmp_path: Path) -> 
         assert "network down" in result.stale.errors[0]
 
     anyio.run(_run)
+
+
+def test_retry_exhausted_in_post_summary_returns_error_not_raises(tmp_path: Path) -> None:
+    """RetryExhaustedError from post_summary must not propagate; captured in SummaryResult."""
+    from ai_pr_review.vcs.http import RetryExhaustedError
+
+    @dataclass
+    class _RaisingProvider(_FakeProvider):
+        def post_summary(self, summary_body: str, head_sha: str) -> SummaryResult:
+            raise RetryExhaustedError("summary net down after 3 attempts")
+
+    provider = _RaisingProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        assert result.ok is False
+        assert result.summary is not None and result.summary.error is not None
+        assert "retry exhausted" in result.summary.error
+        assert provider.findings_calls == []
+
+    anyio.run(_run)
+
+
+def test_retry_exhausted_in_post_findings_returns_error_not_raises(tmp_path: Path) -> None:
+    """RetryExhaustedError from post_findings must not propagate; captured in FindingsResult."""
+    from ai_pr_review.vcs.http import RetryExhaustedError
+
+    @dataclass
+    class _RaisingProvider(_FakeProvider):
+        def post_findings(  # type: ignore[override]
+            self,
+            findings: Any,
+            diff: Any,
+            *,
+            event: str,
+            **kwargs: Any,
+        ) -> FindingsResult:
+            raise RetryExhaustedError("findings net down after 3 attempts")
+
+    provider = _RaisingProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        assert result.ok is False
+        assert result.findings_post is not None
+        assert result.findings_post.error is not None
+        assert "retry exhausted" in result.findings_post.error
+        # stale must NOT run after findings failure
+        assert provider.stale_calls == 0
+
+    anyio.run(_run)

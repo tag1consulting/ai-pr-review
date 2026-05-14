@@ -203,6 +203,7 @@ class GitLabProvider:
             self._errors.append(
                 f"GET /user: HTTP {resp.status_code}: {resp.text[:200]}"
             )
+            self._resolved_bot_username = _BOT_IDENTITY_AUTH_FAILED
             return _BOT_IDENTITY_AUTH_FAILED
         if resp.status_code >= 500:
             self._errors.append(
@@ -364,6 +365,7 @@ class GitLabProvider:
             (lr.file, lr.line) for lr in parse_new_file_lines(diff.diff_text)
         }
 
+        errors_before = len(self._errors)
         inline_posted = 0
         body_findings: list[Finding] = []
 
@@ -406,7 +408,10 @@ class GitLabProvider:
                 degraded_to_comment=False,
             )
 
-        any_failure = bool(self._errors) and inline_posted == 0 and len(findings) > 0
+        # Scope failure detection to errors generated in this call only, not
+        # accumulated from prior calls (post_summary, _get_bot_username, etc.)
+        new_errors = len(self._errors) - errors_before
+        any_failure = new_errors > 0 and inline_posted == 0 and len(findings) > 0
         return FindingsResult(
             review_id=None,
             inline_posted=inline_posted,
