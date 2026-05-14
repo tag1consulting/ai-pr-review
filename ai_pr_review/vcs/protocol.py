@@ -33,8 +33,17 @@ class SummaryResult:
     error: str | None = None
 
     def __post_init__(self) -> None:
-        # Auto-populate error when the API returned no ID after a create/update.
-        # Callers then get a programmatic error signal rather than ok=False/error=None.
+        """Auto-populate error when the API returned no ID after a create/update.
+
+        Invariant: if created or updated is True, comment_id must be non-None.
+        When a provider constructs SummaryResult(comment_id=None, created=True, ...)
+        it means the POST/PATCH call succeeded at the HTTP level but returned no
+        usable ID (e.g. id=0).  Callers get a programmatic signal via error rather
+        than the ambiguous ok=False/error=None state.
+
+        Providers that know the HTTP status or response body can pass a richer
+        error string directly; this sentinel fires only when error is still None.
+        """
         if (
             self.error is None
             and self.comment_id is None

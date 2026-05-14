@@ -127,12 +127,9 @@ compute_filtered_diff() {
 
   # 3. Cherry-pick all non-merge commits from the range onto a temp worktree
   #    rooted at diff_base.
-  # mktemp -d atomically creates a unique directory (OS-guaranteed), then we
-  # remove it immediately so git worktree add can create it — this avoids the
-  # TOCTOU race that mktemp -u has between name generation and worktree creation.
-  local worktree_path
-  worktree_path=$(mktemp -d /tmp/ai-review-filter-wt-XXXXXXXX)
-  rm -rf "$worktree_path"
+  # Use a path that does not yet exist so git worktree add creates it atomically.
+  # $$ (PID) + $RANDOM avoids the TOCTOU race from mktemp -d + rm -rf.
+  local worktree_path="/tmp/ai-review-filter-wt-$$-${RANDOM}"
   if ! git worktree add --quiet --detach "$worktree_path" "$diff_base" 2>/dev/null; then
     echo "WARNING: merge-commit filter: could not create git worktree; falling back to unfiltered diff." >&2
     export AI_MERGE_FILTER_FALLBACK_REASON="could not create git worktree for merge-commit filtering"
@@ -165,6 +162,7 @@ compute_filtered_diff() {
 
   if [[ "$pick_failed" -ne 0 ]]; then
     git worktree remove --force "$worktree_path" 2>/dev/null || true
+    git worktree prune 2>/dev/null || true
     echo "WARNING: merge-commit filter: cherry-pick conflict; falling back to unfiltered diff." >&2
     export AI_MERGE_FILTER_FALLBACK_REASON="cherry-pick conflict during merge-commit filtering"
     return 1
@@ -175,13 +173,16 @@ compute_filtered_diff() {
   local synthetic_tip
   synthetic_tip=$(git -C "$worktree_path" rev-parse HEAD 2>/dev/null) || synthetic_tip=""
   if [[ -z "$synthetic_tip" || "$synthetic_tip" == "$diff_base" ]]; then
-    # No commits were cherry-picked (e.g. all were upstream-only or merge commits)
+    # All commits in range were upstream-only or merge commits; nothing to cherry-pick.
+    # Write an empty diff so the caller's empty-diff guard triggers a clean skip.
+    echo "Merge-commit filter: all commits were upstream-only; filtered diff is empty." >&2
     : > "$DIFF_FILE"
   else
     git diff "${diff_base}..${synthetic_tip}" -- "${EXCL[@]}" > "$DIFF_FILE" 2>/dev/null || : > "$DIFF_FILE"
   fi
 
   git worktree remove --force "$worktree_path" 2>/dev/null || true
+  git worktree prune 2>/dev/null || true
   echo "Merge-commit filter: synthetic diff written (${diff_base:0:7}..${synthetic_tip:0:7})." >&2
   return 0
 }
