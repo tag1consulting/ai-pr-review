@@ -171,9 +171,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
         enable_suggestions=config.enable_suggestions,
         semaphore_size=config.parallel,
     )
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
-    if not isinstance(provider, VcsProvider):
+        summary_text=summary_text,
         raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
         agents=agents,
         llm_call=_llm_call,
