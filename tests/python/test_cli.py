@@ -1,8 +1,11 @@
 """Tests for ai_pr_review.cli."""
 
+from __future__ import annotations
+
 import json
 import os
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from click.testing import CliRunner
 
@@ -221,3 +224,109 @@ class TestComputeCommand:
                 )
             assert result.exit_code == 0
             assert os.path.exists("from-env.json")
+
+
+class TestScriptDir:
+    """script_dir resolution in _run_review_async."""
+
+    def _make_provider_mock(self) -> MagicMock:
+        """Build a MagicMock that satisfies the VcsProvider runtime_checkable protocol."""
+        from ai_pr_review.vcs.protocol import VcsProvider
+
+        provider = MagicMock(spec=VcsProvider)
+        provider.get_last_reviewed_sha.return_value = None
+        return provider
+
+    def _fake_run_review_factory(self, captured: list) -> AsyncMock:  # type: ignore[type-arg]
+        async def _fake(**kwargs: object) -> object:
+            captured.append(kwargs.get("dispatch_context"))
+            result = MagicMock()
+            result.ok = True
+            result.skipped = False
+            result.findings = []
+            result.failed_agents = []
+            result.outcome = MagicMock()
+            result.outcome.event = "COMMENT"
+            return result
+
+        return AsyncMock(side_effect=_fake)
+
+    def test_env_var_overrides_package_path(self, tmp_path: Path) -> None:
+        """AI_PR_REVIEW_SCRIPT_DIR must take priority over __file__-relative path."""
+        import anyio
+
+        from ai_pr_review.agents.dispatch import DispatchContext
+
+        sentinel = str(tmp_path / "fake_script_dir")
+        os.makedirs(sentinel, exist_ok=True)
+
+        captured: list[DispatchContext] = []
+
+        with (
+            patch.dict(os.environ, {"AI_PR_REVIEW_SCRIPT_DIR": sentinel}),
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.vcs.provider_from_env", return_value=self._make_provider_mock()),
+            patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.agents.roster.AGENTS", []),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            anyio.run(_run_review_async, _make_config())
+
+        assert captured, "run_review was not called"
+        assert str(captured[0].script_dir) == sentinel
+
+    def test_falls_back_to_package_path_when_env_unset(self) -> None:
+        """Without AI_PR_REVIEW_SCRIPT_DIR, script_dir is derived from __file__."""
+        import anyio
+
+        from ai_pr_review import cli as cli_mod
+        from ai_pr_review.agents.dispatch import DispatchContext
+
+        captured: list[DispatchContext] = []
+        expected = Path(cli_mod.__file__).resolve().parent.parent  # type: ignore[arg-type]
+
+        # Remove only AI_PR_REVIEW_SCRIPT_DIR so the fallback path is taken,
+        # without stripping unrelated vars (PATH, HOME, TMPDIR) that anyio needs.
+        saved = os.environ.pop("AI_PR_REVIEW_SCRIPT_DIR", None)
+        try:
+            with (
+                patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+                patch("ai_pr_review.vcs.provider_from_env", return_value=self._make_provider_mock()),
+                patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
+                patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+                patch("ai_pr_review.agents.roster.AGENTS", []),
+            ):
+                from ai_pr_review.cli import _run_review_async
+
+                anyio.run(_run_review_async, _make_config())
+        finally:
+            if saved is not None:
+                os.environ["AI_PR_REVIEW_SCRIPT_DIR"] = saved
+
+        assert captured, "run_review was not called"
+        assert captured[0].script_dir == expected
+
+
+class TestMakeChangedFiles:
+    """_make_changed_files normalisation and warning (B1)."""
+
+    def test_malformed_entry_emits_warning(self) -> None:
+        """Empty-path entries must emit logger.warning, not crash or silently drop."""
+        from unittest.mock import patch
+
+        from ai_pr_review.cli import _make_changed_files  # type: ignore[attr-defined]
+
+        with patch("ai_pr_review.cli.logger") as mock_logger:
+            _make_changed_files([{"path": ""}, {"path": "src/main.py"}, {}])
+        # Two malformed entries: dict with empty path, and bare empty dict (str("") after normalization)
+        assert mock_logger.warning.call_count == 2
+
+    def test_valid_entries_are_included(self) -> None:
+        """Valid path strings and dicts are included in the result."""
+        from ai_pr_review.cli import _make_changed_files  # type: ignore[attr-defined]
+
+        result = _make_changed_files(["a.py", {"path": "b.py"}])
+        # Result is a ChangedFiles; the paths should include both files
+        assert result is not None

@@ -1,0 +1,28 @@
+{
+  "fixture": "bb-incremental-review",
+  "description": "Bitbucket variant: second push to PR — existing summary comment carries old SHA; review re-runs and updates the marker.",
+  "scenario": "incremental-review",
+  "vcs_provider": "bitbucket",
+  "llm_provider": "anthropic",
+  "findings": [],
+  "outcome": {
+    "risk": "None",
+    "review_event": "APPROVE",
+    "finding_count": 0
+  },
+  "outbound_calls": [
+    {
+      "provider": "bitbucket",
+      "method": "PUT",
+      "url_pattern": "repositories/example-workspace/example-repo/pullrequests/32/comments/66200",
+      "body_contains": [
+        "ai-pr-review-summary"
+      ]
+    }
+  ],
+  "inline_comments": [],
+  "watermark": {
+    "sha_before": "prev999sha999prev999sha999prev999sha999pre",
+    "sha_after": "999ccc444ddd555eee666fff111aaa222bbb999a"
+  }
+}

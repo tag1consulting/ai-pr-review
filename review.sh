@@ -195,6 +195,7 @@ main() {
   done
 
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  export AI_PR_REVIEW_SCRIPT_DIR="$SCRIPT_DIR"
   REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
   REVIEW_TARGET="${REVIEW_TARGET:-pr}"
   PR_NUMBER="${PR_NUMBER:-}"
@@ -289,23 +290,22 @@ main() {
   trap cleanup EXIT
 
   # ---------------------------------------------------------------------------
-  # Engine dispatch — AI_PR_REVIEW_ENGINE=python hands compute off to the
-  # Python engine (Epic 1). Posting continues via the bash post-review scripts,
-  # which read the JSON payload at AI_PR_REVIEW_COMPUTE_OUTPUT (Epic 1 S9).
-  # Default engine is "bash"; no behavior change for existing consumers.
-  # Epic 2 (#196) will route posting through Python and remove this shim.
+  # Engine dispatch — AI_PR_REVIEW_ENGINE=python runs the end-to-end Python
+  # pipeline (compute + dispatch + post via the VCS provider) in a single
+  # process. Default engine is still "bash"; no behavior change for existing
+  # consumers until Epic 4 flips the default.
+  # The legacy JSON-tempfile handoff (Epic 1 shim) is removed in Epic 2 S12.
   # ---------------------------------------------------------------------------
   AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
   if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]]; then
-    echo "Engine: python (Epic 1 mode — compute via Python, posting via bash)" >&2
-    if ! python3 -m ai_pr_review compute; then
-      log_error "Python compute engine failed."
+    echo "Engine: python (Epic 2 mode — compute + dispatch + post via Python)" >&2
+    # Export model defaults so the Python subprocess inherits them. Bash
+    # sets these with := but does not auto-export bash-local assignments.
+    export AI_MODEL_STANDARD AI_MODEL_PREMIUM
+    if ! python3 -m ai_pr_review review; then
+      log_error "Python review engine failed."
       exit 1
     fi
-    # Python compute phase complete. The payload is at AI_PR_REVIEW_COMPUTE_OUTPUT.
-    # Full bash posting integration is implemented in Epic 2 (#196).
-    # TODO(#196): remove this early-exit shim when Epic 2 ports posting to Python.
-    echo "Python compute complete. Posting via Python not yet implemented (Epic 2 #196)." >&2
     exit 0
   fi
 
@@ -420,6 +420,17 @@ main() {
     if ! git diff "origin/${BASE_REF}...${HEAD_SHA}" -- "${EXCL[@]}" > "$DIFF_FILE" 2>/dev/null; then
       : > "$DIFF_FILE"
       echo "WARNING: git diff failed; diff output may be empty or incomplete." >&2
+    fi
+  fi
+
+  # Optionally filter out upstream base-branch merges from the diff.
+  # Only applies to PR reviews (not standalone) with a resolved DIFF_BASE.
+  AI_MERGE_FILTER_FALLBACK_REASON=""
+  if [[ "${AI_IGNORE_MERGE_COMMITS:-false}" == "true" && \
+        "$REVIEW_TARGET" != "standalone" && \
+        -n "$DIFF_BASE" ]]; then
+    if ! compute_filtered_diff "$DIFF_BASE" "$HEAD_SHA"; then
+      echo "::warning::Merge-commit filtering failed (${AI_MERGE_FILTER_FALLBACK_REASON}); using unfiltered diff." >&2
     fi
   fi
 

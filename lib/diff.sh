@@ -85,6 +85,109 @@ To review anyway, increase \`MAX_DIFF_LINES\` in the workflow or split this PR i
 }
 
 
+# Filter out merge commits that pulled upstream base-branch changes into the PR branch,
+# leaving only the PR author's own commits. Writes the filtered diff to DIFF_FILE.
+#
+# Args: $1 = diff_base (origin/<BASE_REF> or watermark SHA)
+#       $2 = head_sha
+#
+# Globals read: BASE_REF (the PR's target branch), DIFF_FILE (written by caller before this call)
+# Globals written: AI_MERGE_FILTER_FALLBACK_REASON (non-empty on fallback)
+#
+# Returns:
+#   0 — success (DIFF_FILE updated in-place, or no qualifying merges found — no-op)
+#   1 — cherry-pick conflict; AI_MERGE_FILTER_FALLBACK_REASON set; DIFF_FILE untouched
+compute_filtered_diff() {
+  local diff_base="$1" head_sha="$2"
+
+  # 1. List merge commits in the range
+  local merges
+  merges=$(git rev-list --merges "${diff_base}..${head_sha}" 2>/dev/null) || merges=""
+  if [[ -z "$merges" ]]; then
+    return 0  # no merges in range — no-op
+  fi
+
+  # 2. Filter to merges whose second parent (M^2) is reachable from origin/<BASE_REF>.
+  #    These are "merge main into feature-branch" commits; intra-PR merges have M^2
+  #    that is NOT reachable from origin/<BASE_REF>.
+  local qualifying=()
+  while IFS= read -r m; do
+    local p2
+    p2=$(git rev-parse "${m}^2" 2>/dev/null) || continue
+    if git merge-base --is-ancestor "$p2" "origin/${BASE_REF}" 2>/dev/null; then
+      qualifying+=("$m")
+    fi
+  done <<< "$merges"
+
+  if [[ ${#qualifying[@]} -eq 0 ]]; then
+    return 0  # no base-branch merges to filter — no-op
+  fi
+
+  echo "Merge-commit filter: found ${#qualifying[@]} upstream merge(s); cherry-picking author commits into synthetic branch." >&2
+
+  # 3. Cherry-pick all non-merge commits from the range onto a temp worktree
+  #    rooted at diff_base.
+  # Use a path that does not yet exist so git worktree add creates it atomically.
+  # $$ (PID) + $RANDOM avoids the TOCTOU race from mktemp -d + rm -rf.
+  local worktree_path="/tmp/ai-review-filter-wt-$$-${RANDOM}-${RANDOM}"
+  if ! git worktree add --quiet --detach "$worktree_path" "$diff_base" 2>/dev/null; then
+    echo "WARNING: merge-commit filter: could not create git worktree; falling back to unfiltered diff." >&2
+    export AI_MERGE_FILTER_FALLBACK_REASON="could not create git worktree for merge-commit filtering"
+    return 1
+  fi
+
+  # Exclude commits reachable from origin/<BASE_REF> — these are upstream commits
+  # that were brought in by the merge(s). --not origin/<BASE_REF> removes them.
+  local commits
+  commits=$(git rev-list --reverse --no-merges "${diff_base}..${head_sha}" --not "origin/${BASE_REF}" 2>/dev/null) || commits=""
+
+  local pick_failed=0
+  if [[ -n "$commits" ]]; then
+    # Use || pick_failed=$? so set -e in the parent does not abort before the
+    # graceful fallback path can run.
+    (
+      cd "$worktree_path" || exit 1
+      while IFS= read -r c; do
+        if ! git cherry-pick --no-commit "$c" 2>/dev/null; then
+          git cherry-pick --abort 2>/dev/null || true
+          exit 1
+        fi
+        # Commit preserving original authorship; --allow-empty handles no-change commits
+        if ! git commit --no-edit --allow-empty -C "$c" 2>/dev/null; then
+          exit 1
+        fi
+      done <<< "$commits"
+    ) || pick_failed=$?
+  fi
+
+  if [[ "$pick_failed" -ne 0 ]]; then
+    git worktree remove --force "$worktree_path" 2>/dev/null || true
+    git worktree prune 2>/dev/null || true
+    echo "WARNING: merge-commit filter: cherry-pick conflict; falling back to unfiltered diff." >&2
+    export AI_MERGE_FILTER_FALLBACK_REASON="cherry-pick conflict during merge-commit filtering"
+    return 1
+  fi
+
+  # 4. Write the filtered diff to DIFF_FILE, applying the same exclusion patterns
+  #    used in the normal diff path so lockfiles/vendor dirs are never included.
+  local synthetic_tip
+  synthetic_tip=$(git -C "$worktree_path" rev-parse HEAD 2>/dev/null) || synthetic_tip=""
+  if [[ -z "$synthetic_tip" || "$synthetic_tip" == "$diff_base" ]]; then
+    # All commits in range were upstream-only or merge commits; nothing to cherry-pick.
+    # Write an empty diff so the caller's empty-diff guard triggers a clean skip.
+    echo "Merge-commit filter: all commits were upstream-only; filtered diff is empty." >&2
+    : > "$DIFF_FILE"
+  else
+    git diff "${diff_base}..${synthetic_tip}" -- "${EXCL[@]}" > "$DIFF_FILE" 2>/dev/null || : > "$DIFF_FILE"
+  fi
+
+  git worktree remove --force "$worktree_path" 2>/dev/null || true
+  git worktree prune 2>/dev/null || true
+  echo "Merge-commit filter: synthetic diff written (${diff_base:0:7}..${synthetic_tip:0:7})." >&2
+  return 0
+}
+
+
 # Build the file manifest, detect languages, categorize files, and load
 # language profiles. Sets the following globals:
 #   LANGUAGES, DETECTED_LANGS, FILE_COUNT, SOURCE_FILES, TEST_FILES,

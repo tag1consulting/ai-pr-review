@@ -26,6 +26,31 @@ nav_order: 2
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set (thinking tokens consume the output budget). |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
+| `ignore-merge-commits` | No | `false` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. |
+
+## Repository variables
+
+These optional variables can be set in **Settings → Secrets and variables → Actions → Variables** of the consuming repository. The example workflows read them with a fallback default so the workflow file never needs to be edited for routine configuration changes.
+
+| Variable | Default | Corresponding input | Description |
+|----------|---------|---------------------|-------------|
+| `AI_REVIEW_API_KEY` | — | `api-key` | **(Secret)** API key for your LLM provider |
+| `AI_REVIEW_PROVIDER` | `anthropic` | `provider` | LLM provider name |
+| `AI_REVIEW_BASE_URL` | `''` | `base-url` | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
+| `AI_REVIEW_MODEL_STANDARD` | Per-provider default | `model-standard` | Override the standard agent model ID |
+| `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | `model-premium` | Override the premium agent model ID (full mode only) |
+| `AI_REVIEW_MAX_DIFF_LINES` | `5000` | `max-diff-lines` | Skip review when diff exceeds this many lines |
+| `AI_REVIEW_MAX_INLINE` | `25` | `max-inline` | Max inline comments per run; excess routed to the summary body |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `8192` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
+| `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | `enable-suggestions` | Enable "Apply suggestion" buttons on inline comments |
+| `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
+| `AI_PR_REVIEW_ENGINE` | `bash` | `engine` | Compute engine: `bash` (default) or `python` |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
+
+To set a variable via the GitHub CLI:
+```bash
+gh variable set AI_REVIEW_PROVIDER --body "openai" --repo owner/repo
+```
 
 ## Supported VCS providers
 

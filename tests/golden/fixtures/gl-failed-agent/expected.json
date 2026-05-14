@@ -1,0 +1,31 @@
+{
+  "fixture": "gl-failed-agent",
+  "description": "GitLab variant: one LLM agent times out — partial review with incomplete notice",
+  "scenario": "failed-agent",
+  "vcs_provider": "gitlab",
+  "llm_provider": "anthropic",
+  "findings": [],
+  "outcome": {
+    "risk": "Unknown",
+    "review_event": "COMMENT",
+    "finding_count": 0
+  },
+  "outbound_calls": [
+    {
+      "provider": "gitlab",
+      "method": "POST",
+      "url_pattern": "projects/9876/merge_requests/21/notes",
+      "body_contains": [
+        "ai-pr-review-summary"
+      ]
+    }
+  ],
+  "inline_comments": [],
+  "watermark": {
+    "sha_before": null,
+    "sha_after": "555eee666fff111aaa222bbb333ccc444ddd5556"
+  },
+  "failed_agents": [
+    "blind-hunter"
+  ]
+}

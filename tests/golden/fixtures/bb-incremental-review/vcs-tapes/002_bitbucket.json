@@ -1,0 +1,10 @@
+{
+  "type": "vcs",
+  "provider": "bitbucket",
+  "method": "PUT",
+  "url": "https://api.bitbucket.org/2.0/repositories/example-workspace/example-repo/pullrequests/32/comments/66200",
+  "request_body": "{\"content\":{\"raw\":\"<!-- ai-pr-review-summary sha=999ccc44 -->\\n## AI Review: Approved\\nIncremental review.\"}}",
+  "response_body": "{\"id\":66200}",
+  "timestamp": "2026-05-13T20:00:01Z",
+  "note": "PUT updates the existing comment; sha marker advances to head_sha"
+}

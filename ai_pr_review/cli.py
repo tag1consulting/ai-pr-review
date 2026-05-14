@@ -1,20 +1,31 @@
 """CLI entry point for the AI PR Review Python engine.
 
-`python -m ai_pr_review compute` runs the compute phase and writes
-a JSON payload to AI_PR_REVIEW_COMPUTE_OUTPUT (S9 handoff).
-The bash post-review scripts consume that file.
-
-This is an Epic 1 shim — Epic 2 (#196) will route posting through Python too.
+Subcommands:
+- `compute`: run the compute phase only, writing a JSON payload to
+  AI_PR_REVIEW_COMPUTE_OUTPUT. Retained for backwards compatibility with
+  the Epic 1 handoff path.
+- `review`: end-to-end Python pipeline (compute -> dispatch agents ->
+  extract findings -> outcome -> post via VcsProvider). Replaces the
+  bash post-review scripts when AI_PR_REVIEW_ENGINE=python.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sys
+from pathlib import Path
 
+import anyio
 import click
 
 from ai_pr_review.config import ConfigError, ReviewConfig
+from ai_pr_review.manifest import ChangedFiles
+from ai_pr_review.orchestrate import ReviewResult
+from ai_pr_review.vcs import ProviderConfigError
+
+logger = logging.getLogger(__name__)
 
 
 @click.group()
@@ -56,6 +67,212 @@ def compute(output: str) -> None:
         sys.exit(1)
 
 
+@cli.command()
+def review() -> None:
+    """Run the end-to-end Python review pipeline.
+
+    Builds the VCS provider, runs compute -> dispatch -> post in one process.
+    Reads configuration from the same environment variables review.sh
+    consumed (PR_NUMBER, BASE_REF, HEAD_SHA, GITHUB_REPOSITORY, etc.) plus
+    VCS_PROVIDER for selecting the posting target.
+
+    Exit codes:
+      0 — review posted successfully (or skipped cleanly)
+      1 — configuration / posting error
+    """
+    try:
+        config = ReviewConfig.from_env()
+    except ConfigError as exc:
+        click.echo(f"Configuration error: {exc}", err=True)
+        sys.exit(1)
+
+    try:
+        exit_code = anyio.run(_run_review_async, config)
+    except ProviderConfigError as exc:
+        logger.error("Provider configuration error: %s", exc)
+        logger.debug("Provider configuration error detail", exc_info=True)
+        click.echo(f"Provider configuration error: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001 — top-level catch for clean exit
+        click.echo(f"ERROR: {exc!r}", err=True)
+        sys.exit(1)
+    sys.exit(exit_code)
+
+
+async def _run_review_async(config: ReviewConfig) -> int:
+    """Execute the review pipeline; return CLI exit code."""
+    from ai_pr_review.agents.dispatch import DispatchContext
+    from ai_pr_review.agents.gates import evaluate_gates, filter_agents
+    from ai_pr_review.agents.roster import AGENTS
+    from ai_pr_review.llm.base import LLMRequest, LLMResponse
+    from ai_pr_review.llm.client import call_llm
+    from ai_pr_review.orchestrate import OrchestrationConfig, run_review
+    from ai_pr_review.vcs import provider_from_env
+    from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
+
+    # 1. Build provider from VCS_PROVIDER env
+    provider = provider_from_env()
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
+
+    # 2. Run compute phase to get diff + manifest
+    payload = _run_compute(config)
+    if payload.get("skip"):
+        reason = str(payload.get("reason") or "no changes")
+        click.echo(f"Skipping review: {reason}", err=True)
+        result = await _orchestrate_skip(provider, reason, config=config)
+        return 0 if result.ok else 1
+
+    diff_text = str(payload.get("diff") or "")
+    head_sha = str(payload.get("head") or config.head_sha)
+    base_ref = str(payload.get("base") or config.base_ref)
+
+    # 3. Build dispatch context
+    # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
+    # can locate prompts/language-profiles when installed as a pip package.
+    _env_script_dir = os.environ.get("AI_PR_REVIEW_SCRIPT_DIR")
+    script_dir = Path(_env_script_dir) if _env_script_dir else Path(__file__).resolve().parent.parent
+    diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
+    diff_path.write_text(diff_text, encoding="utf-8")
+
+    dispatch_ctx = DispatchContext(
+        script_dir=script_dir,
+        mode=config.review_mode,
+        diff_path=diff_path,
+        provider=config.provider,
+        standard_model=config.model_standard,
+        premium_model=config.model_premium,
+        enable_suggestions=config.enable_suggestions,
+        cache_priming_env=os.environ.get("AI_CACHE_PRIMING") or "false",
+        prompt_caching_env=os.environ.get("LLM_PROMPT_CACHING") or "auto",
+    )
+
+    # 4. Apply conditional gates
+    last_reviewed = provider.get_last_reviewed_sha()
+    raw_paths = payload.get("changed_files")
+    changed_paths: list[object] = raw_paths if isinstance(raw_paths, list) else []
+    cf = _make_changed_files(changed_paths)
+    gates = evaluate_gates(
+        diff_text=diff_text,
+        changed_files=cf,
+        env=os.environ,
+        last_reviewed_sha=last_reviewed,
+    )
+    # Filter by mode (full vs quick) first, then by fired gates
+    mode_filtered = [
+        a for a in AGENTS if not a.full_mode_only or config.review_mode == "full"
+    ]
+    # pr-summarizer is dispatched via the summarizer module separately;
+    # exclude it from the generic dispatch path (run_tier raises otherwise).
+    mode_filtered = [a for a in mode_filtered if a.name != "pr-summarizer"]
+    agents = filter_agents(mode_filtered, gates)
+
+    # 5. Bind LLM call to the configured provider
+    async def _llm_call(req: LLMRequest) -> LLMResponse:
+        return await call_llm(req, config.provider)
+
+    # 6. Build summary text. Prepend merge-filter fallback note when present.
+    merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
+    summary_text = ""
+    if merge_filter_fallback:
+        summary_text = (
+            f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
+            "diff may include upstream changes._\n\n"
+        )
+
+    # 7. Run the orchestrator
+    orch_config = OrchestrationConfig(
+        mode=config.review_mode,  # type: ignore[arg-type]
+        confidence_threshold=config.confidence_threshold,
+        max_inline=config.max_inline,
+        enable_suggestions=config.enable_suggestions,
+        semaphore_size=config.parallel,
+    )
+    result = await run_review(
+        diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
+        summary_text=summary_text,
+        agents=agents,
+        llm_call=_llm_call,
+        dispatch_context=dispatch_ctx,
+        provider=provider,
+        config=orch_config,
+    )
+
+    _emit_review_result(result, base_ref=base_ref, head=head_sha)
+    return 0 if result.ok else 1
+
+
+async def _orchestrate_skip(
+    provider: object, reason: str, *, config: ReviewConfig
+) -> ReviewResult:
+    """Convenience wrapper to call run_review() with only a skip path."""
+    from ai_pr_review.agents.dispatch import DispatchContext
+    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
+
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
+    diff_path = Path("/tmp/ai-review-skip-diff.txt")
+    diff_path.write_text("", encoding="utf-8")
+    ctx = DispatchContext(
+        script_dir=Path("."),
+        mode=config.review_mode,
+        diff_path=diff_path,
+        provider=config.provider,
+        standard_model=config.model_standard,
+        premium_model=config.model_premium,
+    )
+
+    async def _no_llm(_req: object) -> object:
+        raise RuntimeError("LLM call should not be invoked on skip path")
+
+    return await run_review(
+        diff=DiffContext(diff_text="", head_sha="0000000"),
+        summary_text="",
+        agents=[],
+        llm_call=_no_llm,  # type: ignore[arg-type]
+        dispatch_context=ctx,
+        provider=provider,
+        skip_reason=reason,
+    )
+
+
+def _make_changed_files(files: list[object]) -> ChangedFiles:
+    """Build a ChangedFiles-like value for the gate evaluator.
+
+    The compute payload may carry `changed_files` either as a list of path
+    strings or a list of dicts (forward-compatible). Normalize and rebuild.
+    """
+    from ai_pr_review.manifest import build_changed_files
+
+    paths: list[str] = []
+    for entry in files:
+        path = (
+            str(entry.get("path") or "") if isinstance(entry, dict) else str(entry)
+        )
+        if path:
+            paths.append(path)
+        else:
+            logger.warning("Skipping malformed changed_files entry: %r", entry)
+    return build_changed_files(paths)
+
+
+def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
+    """Emit a one-line summary to stderr."""
+    if result.skipped:
+        click.echo(f"Review skipped: {result.skip_reason}", err=True)
+        return
+    n_findings = len(result.findings)
+    n_failed = len(result.failed_agents)
+    click.echo(
+        f"Review complete: {n_findings} findings, "
+        f"{n_failed} failed agents, "
+        f"event={result.outcome.event}, "
+        f"base={base_ref[:7] if base_ref else '?'}..{head[:7] if head else '?'}",
+        err=True,
+    )
+
+
 def _run_compute(config: ReviewConfig) -> dict[str, object]:
     """Execute compute phase and return the handoff payload dict.
 
@@ -73,6 +290,8 @@ def _run_compute(config: ReviewConfig) -> dict[str, object]:
         base_ref=config.base_ref,
         head_sha=config.head_sha,
         workspace=".",
+        ignore_merge_commits=config.ignore_merge_commits,
+        review_target=config.review_target,
     )
 
     if not diff_result.changed_files:
@@ -118,6 +337,7 @@ def _run_compute(config: ReviewConfig) -> dict[str, object]:
         "head": diff_result.head,
         "is_incremental": diff_result.is_incremental,
         "languages": changed.languages,
+        "merge_filter_fallback_reason": diff_result.fallback_reason,
         "findings": [],
         "token_log": [],
     }

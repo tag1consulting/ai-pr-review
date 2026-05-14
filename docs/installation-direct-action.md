@@ -71,11 +71,20 @@ jobs:
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
+          model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
           review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
           pr-number: ${{ github.event.pull_request.number }}
           base-ref: ${{ github.event.pull_request.base.ref }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+          max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
+          parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
+          engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
 
   # Always attempt to remove the ai-review-rescan label after the review,
   # even if the review job was cancelled by the concurrency rule on a new push.
@@ -110,11 +119,23 @@ In the **consuming** repository's settings:
 **Secrets:**
 - `AI_REVIEW_API_KEY` — API key for your chosen LLM provider
 
-**Variables** (optional):
-- `AI_REVIEW_PROVIDER` — Provider name (default: `anthropic`)
-- `AI_REVIEW_BASE_URL` — Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`)
-- `AI_REVIEW_MODEL_STANDARD` — Override the standard model ID
-- `AI_REVIEW_MODEL_PREMIUM` — Override the premium model ID (full mode only)
+**Variables** (optional) — set in Settings → Secrets and variables → Actions → Variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_REVIEW_PROVIDER` | `anthropic` | Provider name |
+| `AI_REVIEW_BASE_URL` | `''` | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
+| `AI_REVIEW_MODEL_STANDARD` | Per-provider default | Override the standard model ID |
+| `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | Override the premium model ID (full mode only) |
+| `AI_REVIEW_MAX_DIFF_LINES` | `5000` | Skip review when diff exceeds this many lines |
+| `AI_REVIEW_MAX_INLINE` | `25` | Max inline comments per run; excess routed to the summary body |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `8192` | Output token budget per LLM agent call |
+| `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline comments |
+| `AI_REVIEW_PARALLEL` | `true` | Parallel tiered fan-out; set `false` if you hit provider rate limits |
+| `AI_PR_REVIEW_ENGINE` | `bash` | Compute engine: `bash` (default) or `python` |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | Strip upstream base-branch merges from the diff before review |
+
+See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 
 ## Runtime dependencies
 
