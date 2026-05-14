@@ -129,7 +129,7 @@ compute_filtered_diff() {
   #    rooted at diff_base.
   # Use a path that does not yet exist so git worktree add creates it atomically.
   # $$ (PID) + $RANDOM avoids the TOCTOU race from mktemp -d + rm -rf.
-  local worktree_path="/tmp/ai-review-filter-wt-$$-${RANDOM}"
+  local worktree_path="/tmp/ai-review-filter-wt-$$-${RANDOM}-${RANDOM}"
   if ! git worktree add --quiet --detach "$worktree_path" "$diff_base" 2>/dev/null; then
     echo "WARNING: merge-commit filter: could not create git worktree; falling back to unfiltered diff." >&2
     export AI_MERGE_FILTER_FALLBACK_REASON="could not create git worktree for merge-commit filtering"

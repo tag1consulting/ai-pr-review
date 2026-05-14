@@ -90,6 +90,7 @@ def review() -> None:
         exit_code = anyio.run(_run_review_async, config)
     except ProviderConfigError as exc:
         logger.error("Provider configuration error: %s", exc)
+        logger.debug("Provider configuration error detail", exc_info=True)
         click.echo(f"Provider configuration error: {exc}", err=True)
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 — top-level catch for clean exit
