@@ -127,10 +127,12 @@ compute_filtered_diff() {
 
   # 3. Cherry-pick all non-merge commits from the range onto a temp worktree
   #    rooted at diff_base.
-  # Use mktemp -u to get a unique path without creating a file — git worktree
-  # add requires the target to not yet exist.
+  # mktemp -d atomically creates a unique directory (OS-guaranteed), then we
+  # remove it immediately so git worktree add can create it — this avoids the
+  # TOCTOU race that mktemp -u has between name generation and worktree creation.
   local worktree_path
-  worktree_path=$(mktemp -u /tmp/ai-review-filter-wt-XXXXXXXX)
+  worktree_path=$(mktemp -d /tmp/ai-review-filter-wt-XXXXXXXX)
+  rm -rf "$worktree_path"
   if ! git worktree add --quiet --detach "$worktree_path" "$diff_base" 2>/dev/null; then
     echo "WARNING: merge-commit filter: could not create git worktree; falling back to unfiltered diff." >&2
     export AI_MERGE_FILTER_FALLBACK_REASON="could not create git worktree for merge-commit filtering"
