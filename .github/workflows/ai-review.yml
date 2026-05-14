@@ -110,3 +110,6 @@ jobs:
           # input from a PR), so it's safe to interpolate directly into the
           # composite-action input. Default 5000 matches review.sh.
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+          # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
+          # merge commits before diffing. Trusted repo variable; default false.
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
