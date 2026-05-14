@@ -173,7 +173,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
     )
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
-        summary_text=summary_text,
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
         agents=agents,
         llm_call=_llm_call,
         dispatch_context=dispatch_ctx,
