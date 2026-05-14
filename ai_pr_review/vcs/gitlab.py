@@ -34,7 +34,7 @@ from ai_pr_review.vcs._inline import (
     is_suggestion_safe,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
-from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
+from ai_pr_review.vcs.http import RecordingClient, RetryExhaustedError, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
@@ -513,7 +513,11 @@ class GitLabProvider:
             if not is_owned_by_us(body, author, bot_username, kind="inline"):
                 skipped_no_marker += 1
                 continue
-            ok, status, body_snippet = self._resolve_discussion(disc_id)
+            try:
+                ok, status, body_snippet = self._resolve_discussion(disc_id)
+            except RetryExhaustedError as exc:
+                errors.append(f"resolve discussion {disc_id}: retry exhausted: {exc}")
+                break
             if not ok:
                 errors.append(f"resolve discussion {disc_id}: HTTP {status}: {body_snippet}")
                 continue
