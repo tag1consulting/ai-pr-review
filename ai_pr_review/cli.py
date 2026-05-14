@@ -95,7 +95,10 @@ def review() -> None:
         click.echo(f"Provider configuration error: {exc}", err=True)
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 — top-level catch for clean exit
+        import traceback
+        logger.error("Unexpected error in review pipeline", exc_info=True)
         click.echo(f"ERROR: {exc!r}", err=True)
+        click.echo(traceback.format_exc(), err=True)
         sys.exit(1)
     sys.exit(exit_code)
 
@@ -149,7 +152,9 @@ async def _run_review_async(config: ReviewConfig) -> int:
                 entries, diff_text, max_tokens=config.feedback_max_tokens
             )
         except Exception as exc:
-            logger.warning("feedback loop: could not load feedback store: %s", exc)
+            logger.warning(
+                "feedback loop: could not load feedback store: %s", exc, exc_info=True
+            )
 
     # 5. Build dispatch context
     # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
@@ -212,7 +217,6 @@ async def _run_review_async(config: ReviewConfig) -> int:
         enable_suggestions=config.enable_suggestions,
         semaphore_size=config.parallel,
         sarif_paths=config.sarif_paths,
-        feedback_addendum=feedback_addendum,
     )
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),

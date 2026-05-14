@@ -14,9 +14,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class FeedbackEntry:
-    """One piece of human feedback on a finding."""
+    """One piece of human feedback on a finding.
+
+    Frozen because the JSONL store is append-only: once an entry is written,
+    it should never be mutated in place.
+    """
 
     # ISO-8601 UTC timestamp (set by store on write)
     ts: str
@@ -44,6 +48,11 @@ class FeedbackEntry:
     # ---------------------------------------------------------------------------
 
     def to_json(self) -> str:
+        # Filter extras to prevent any key from shadowing the structural
+        # fields below — a forward-compat caller storing {"source": "..."}
+        # in extras must not silently overwrite the structural source field.
+        known = {"ts", "command", "reason", "source", "file", "rule_id"}
+        safe_extras = {k: v for k, v in self.extras.items() if k not in known}
         return json.dumps(
             {
                 "ts": self.ts,
@@ -52,7 +61,7 @@ class FeedbackEntry:
                 "source": self.source,
                 "file": self.file,
                 "rule_id": self.rule_id,
-                **self.extras,
+                **safe_extras,
             },
             ensure_ascii=False,
         )

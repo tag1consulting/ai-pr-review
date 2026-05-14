@@ -77,8 +77,6 @@ class OrchestrationConfig:
     suppression_rules: tuple[SuppressionRule, ...] = ()
     # --- Epic 3: Capability B — SARIF ingestion ---
     sarif_paths: tuple[str, ...] = ()
-    # --- Epic 3: Capability C — feedback loop ---
-    feedback_addendum: str = ""
 
 
 async def run_review(
@@ -110,6 +108,13 @@ async def run_review(
     """
     cfg = config or OrchestrationConfig()
 
+    # Reset the per-run symbol-lookup cache used by Capability A.  In a
+    # long-lived process (container reuse, future server mode) the cache
+    # would otherwise accumulate state across reviews.
+    if dispatch_context.enable_context_enrichment:
+        from ai_pr_review.context.symbols import _reset_cache
+        _reset_cache()
+
     if skip_reason:
         skip_result = provider.post_skip_comment(skip_reason)
         return ReviewResult(
@@ -125,9 +130,9 @@ async def run_review(
             skip_reason=skip_reason,
         )
 
-    # Phase 0.5: inject feedback addendum into dispatch context when provided
-    if cfg.feedback_addendum and not dispatch_context.feedback_addendum:
-        dispatch_context.feedback_addendum = cfg.feedback_addendum
+    # Note: Capability C — feedback addendum is wired by the caller via
+    # DispatchContext.feedback_addendum (see cli._run_review_async).  The
+    # orchestrator does not duplicate that injection.
 
     # Phase 1: dispatch agents
     successes: list[AgentResult]

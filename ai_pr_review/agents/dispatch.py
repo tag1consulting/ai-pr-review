@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import anyio
@@ -65,8 +65,8 @@ class DispatchContext:
     enable_context_enrichment: bool = False
     context_max_tokens: int = 8192
     context_lookup_lines: int = 8
-    repo_root: Path = Path(".")
-    changed_files: list[str] = None  # type: ignore[assignment]
+    repo_root: Path = field(default_factory=Path.cwd)
+    changed_files: list[str] = field(default_factory=list)
     # --- Epic 3: Capability C — feedback loop ---
     feedback_addendum: str = ""
 
@@ -76,8 +76,6 @@ class DispatchContext:
                 "DispatchContext.standard_model must be non-empty "
                 "(empty premium_model is acceptable; dispatch falls back to standard)"
             )
-        if self.changed_files is None:
-            self.changed_files = []
 
 
 # ---------------------------------------------------------------------------

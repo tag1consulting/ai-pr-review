@@ -73,14 +73,25 @@ def handle_command(
     name = command.canonical_name
 
     if command.is_feedback_command:
-        store.append(entry)
-        logger.info(
-            "slash: stored feedback command=%r source=%r file=%r",
-            name,
-            entry.source,
-            entry.file,
+        stored = store.append(entry)
+        if stored:
+            logger.info(
+                "slash: stored feedback command=%r source=%r file=%r",
+                name,
+                entry.source,
+                entry.file,
+            )
+            return _feedback_reply(command)
+        # Store could not persist (network, missing branch, unsupported VCS).
+        # Tell the user honestly rather than silently lying.
+        logger.warning(
+            "slash: feedback store failed to persist command=%r", name,
         )
-        return _feedback_reply(command)
+        return (
+            "**AI Review**: your command was received, but the feedback store "
+            "could not persist it (network error or unsupported VCS). "
+            "Please retry later or check the workflow logs for details."
+        )
 
     if name == "explain":
         logger.info("slash: explain command — stub reply (full re-invocation deferred)")

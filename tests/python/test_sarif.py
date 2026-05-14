@@ -223,3 +223,73 @@ def test_result_without_location_has_empty_file() -> None:
 
 def test_load_empty_paths_list() -> None:
     assert load_sarif_files([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Path sanitization — security defense
+# ---------------------------------------------------------------------------
+
+from ai_pr_review.analyzers.sarif import _sanitize_sarif_path
+
+
+def test_sanitize_sarif_path_rejects_absolute_path() -> None:
+    """Absolute path with no scheme (e.g. /etc/passwd) must be rejected."""
+    assert _sanitize_sarif_path("/etc/passwd") == ""
+
+
+def test_sanitize_sarif_path_rejects_dot_dot_traversal() -> None:
+    assert _sanitize_sarif_path("../../../etc/passwd") == ""
+    assert _sanitize_sarif_path("src/../../etc/passwd") == ""
+
+
+def test_sanitize_sarif_path_accepts_relative_path() -> None:
+    assert _sanitize_sarif_path("src/main.py") == "src/main.py"
+
+
+def test_sanitize_sarif_path_strips_file_scheme() -> None:
+    # file:///abs/path → abs/path (stripped leading slash)
+    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
+
+
+def test_sanitize_sarif_path_drops_authority() -> None:
+    """file://hostname/path must not leave 'hostname' in the result."""
+    result = _sanitize_sarif_path("file://hostname/path/x.py")
+    assert "hostname" not in result
+    assert result == "path/x.py"
+
+
+def test_sanitize_sarif_path_rejects_unknown_scheme() -> None:
+    assert _sanitize_sarif_path("http://evil.example/x.py") == ""
+    assert _sanitize_sarif_path("https://evil.example/x.py") == ""
+
+
+def test_sanitize_sarif_path_handles_percent_encoding() -> None:
+    """URLs with %20 etc. must decode correctly."""
+    assert _sanitize_sarif_path("src/my%20file.py") == "src/my file.py"
+
+
+def test_sanitize_sarif_path_empty_input() -> None:
+    assert _sanitize_sarif_path("") == ""
+
+
+def test_finding_with_traversal_uri_drops_file_field() -> None:
+    """End-to-end: a SARIF result with '../../etc/passwd' should produce a
+    Finding with file="" (not the traversal path)."""
+    sarif = _minimal_sarif(
+        results=[
+            {
+                "message": {"text": "bad path"},
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": "../../etc/passwd"},
+                        }
+                    }
+                ],
+            }
+        ]
+    )
+    path = _write_sarif(sarif)
+    findings = load_sarif_files([path])
+    assert len(findings) == 1
+    assert findings[0].file == "", "traversal path must be dropped"

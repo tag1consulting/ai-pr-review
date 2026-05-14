@@ -44,6 +44,12 @@ _LANG_EXTENSIONS: dict[str, list[str]] = {
 }
 
 
+# Proximity tiers used for sorting/truncation across the context pipeline.
+# Single source of truth — budget.py imports from here.
+PROXIMITY_ORDER: dict[str, int] = {"same-file": 0, "same-package": 1, "repo": 2}
+PROXIMITY_DEFAULT: int = 3  # for unknown/unset proximity values
+
+
 @dataclass(frozen=True)
 class Definition:
     """A symbol definition found by ripgrep."""
@@ -155,7 +161,11 @@ def lookup_definitions(
             )
             break
 
-        cache_key = f"{ref.name}:{language}"
+        # Include repo_root in the cache key — without it, two repos with a
+        # function named `process` would share results in a long-lived process
+        # (container reuse / future server mode).  Use NUL as separator since
+        # it cannot appear in identifiers, language names, or POSIX paths.
+        cache_key = f"{repo_root}\x00{ref.name}\x00{language}"
         cached = _cache.get(cache_key)
         if cached is not None:
             all_defs.extend(cached)
@@ -192,6 +202,16 @@ def lookup_definitions(
             continue
         except OSError as exc:
             logger.warning("context enrichment: ripgrep error for %r: %s", ref.name, exc)
+            _cache.set(cache_key, [])
+            continue
+
+        # ripgrep exit codes: 0 = match, 1 = no match (normal), 2 = error.
+        if result.returncode == 2:
+            logger.warning(
+                "context enrichment: ripgrep error (exit 2) for symbol %r: %s",
+                ref.name,
+                (result.stderr or "")[:200],
+            )
             _cache.set(cache_key, [])
             continue
 
@@ -235,6 +255,5 @@ def lookup_definitions(
         all_defs.extend(defs)
 
     # Sort: same-file → same-package → repo
-    _PROX_ORDER = {"same-file": 0, "same-package": 1, "repo": 2}
-    all_defs.sort(key=lambda d: _PROX_ORDER.get(d.proximity, 3))
+    all_defs.sort(key=lambda d: PROXIMITY_ORDER.get(d.proximity, PROXIMITY_DEFAULT))
     return all_defs

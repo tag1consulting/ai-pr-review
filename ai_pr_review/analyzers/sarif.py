@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlparse
 
 from ai_pr_review.findings.models import Finding
 
@@ -32,6 +33,46 @@ _SARIF_SEVERITY_MAP: dict[str, str] = {
 }
 _DEFAULT_CONFIDENCE = 90
 _DEFAULT_SEVERITY = "Medium"
+
+
+def _sanitize_sarif_path(uri: str) -> str:
+    """Normalize a SARIF artifactLocation URI to a safe repo-relative path.
+
+    Rejects (returns ``""``) anything that:
+      - is absolute (starts with ``/`` after scheme stripping)
+      - contains ``..`` segments after normalization
+      - resolves outside the workspace root
+
+    Handles ``file:///path``, ``file://hostname/path``, percent-encoded URIs,
+    and raw relative paths.
+    """
+    if not uri:
+        return ""
+
+    # Parse via urlparse so authority components are handled correctly
+    # (file://hostname/path leaves "hostname" as netloc; we drop it).
+    parsed = urlparse(uri)
+    if parsed.scheme and parsed.scheme != "file":
+        # Unknown scheme (http://, etc.) — not a local file
+        logger.warning("SARIF: rejecting non-file URI %r", uri)
+        return ""
+    path = unquote(parsed.path or uri)
+
+    # Strip leading slash if it was an absolute file:// URI (file:///x → /x → x).
+    # An absolute path with no scheme (e.g. /etc/passwd) is rejected outright.
+    if parsed.scheme == "file":
+        path = path.lstrip("/")
+    elif path.startswith("/"):
+        logger.warning("SARIF: rejecting absolute path %r", uri)
+        return ""
+
+    # Reject path traversal segments
+    pp = PurePosixPath(path)
+    if any(part == ".." for part in pp.parts):
+        logger.warning("SARIF: rejecting path with '..' segments: %r", uri)
+        return ""
+
+    return str(pp)
 
 
 def _parse_sarif_file(path: str) -> list[Finding]:
@@ -134,8 +175,7 @@ def _convert_result(
                 artifact = phys.get("artifactLocation")
                 if isinstance(artifact, dict):
                     uri = str(artifact.get("uri", "") or "")
-                    # Strip common URI prefixes
-                    file_path = uri.removeprefix("file:///").removeprefix("file://")
+                    file_path = _sanitize_sarif_path(uri)
                 region = phys.get("region")
                 if isinstance(region, dict):
                     start_line = region.get("startLine")
@@ -155,8 +195,14 @@ def _convert_result(
             line=line,
             remediation=remediation,
         )
-    except Exception as exc:
-        logger.warning("SARIF: could not construct Finding from result: %s", exc)
+    except (ValueError, TypeError) as exc:
+        # ValueError covers pydantic validator failures; TypeError covers
+        # genuine arg mismatches (which would indicate a Finding refactor
+        # the SARIF parser hasn't caught up with — log loudly).
+        logger.warning(
+            "SARIF: could not construct Finding from %r: %s (%s)",
+            source_tag, exc, type(exc).__name__,
+        )
         return None
 
 

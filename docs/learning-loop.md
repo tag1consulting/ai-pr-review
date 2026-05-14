@@ -19,13 +19,24 @@ The learning loop allows human reviewers to feed signals back to the AI agents b
 
 ## Storage (ADR-0001)
 
-Feedback is persisted as `.ai-pr-review/learnings.jsonl` on the `ai-pr-review-bot` branch (configurable via `AI_FEEDBACK_BRANCH`). Each line is a JSON object:
+Feedback is persisted as `.ai-pr-review/learnings.jsonl` on the `ai-pr-review-bot` branch (configurable via `AI_FEEDBACK_BRANCH`). The file is stored **oldest-first**, one entry per line:
 
 ```json
 {"ts":"2026-05-14T12:00:00Z","command":"false-positive","reason":"intentional","source":"code-reviewer","file":"src/foo.py","rule_id":""}
 ```
 
 The file survives PR branch deletion and repository forks. Concurrent writes use optimistic-lock (SHA-based `if-match` on the GitHub Contents API) with up to 3 retries and exponential backoff + jitter. If all retries fail, the entry is silently dropped (fail-soft) and the review still posts.
+
+### First-time branch bootstrap
+
+The `ai-pr-review-bot` branch is created automatically on the first feedback write. The store detects the missing branch via a 422 response from the Contents API, then:
+
+1. Resolves the repo's default branch via `GET /repos/{repo}` → `default_branch`.
+2. Resolves the default branch's HEAD sha via `GET /repos/{repo}/git/ref/heads/{default}`.
+3. Creates `refs/heads/ai-pr-review-bot` pointing at that sha via `POST /repos/{repo}/git/refs`.
+4. Retries the original write.
+
+No manual setup is required, but the `GH_TOKEN` must have `contents:write` scope on the repository. If the bootstrap step fails (e.g. fine-grained PAT without write access to refs), a WARNING is logged and the entry is dropped — the review still posts.
 
 ## Retention policy
 
@@ -77,9 +88,17 @@ The `reason` text is sanitized before storage:
 
 ## Required setup
 
-1. Set `feedback-loop: 'true'` in `action.yml` inputs.
-2. Ensure `GH_TOKEN` (a PAT or GitHub App token) has `contents:write` permission on the feedback branch. The `ai-pr-review-bot` branch is created automatically on first write.
+1. Set `feedback-loop: 'true'` in `action.yml` inputs (review action) and `enable-feedback-loop: 'true'` in the reusable slash-commands workflow inputs (command handling).
+2. Ensure `GH_TOKEN` (a PAT or GitHub App token) has `contents:write` permission on the repository. The `ai-pr-review-bot` branch is created automatically on first write.
 3. The `AI_PR_REVIEW_ENGINE` must be `python` for feedback injection to work.
+
+## Access control
+
+Feedback-writing commands (`false-positive`, `wont-fix`, `feedback`, plus the `dismiss` alias) are restricted to users with `OWNER` or `MEMBER` association. `COLLABORATOR` is intentionally excluded — these commands persist data that influences every future review repo-wide, so we apply the same trust level GitHub uses to gate "approve workflow runs from forks". Transient commands like `/ai-pr-review rescan` and `/ai-pr-review skip` continue to accept `COLLABORATOR` per the existing `handle-command` job.
+
+## Defensive prompt framing
+
+The `<repo-feedback>` block is injected into agent system prompts with an explicit XML comment marking the contents as untrusted data, and feedback `reason` text is scanned for instruction-injection patterns (`ignore all previous instructions`, `disregard the above`, `you are now`, `<|system|>`, etc.) — matched patterns are replaced with `[REDACTED]` before injection. This is defense-in-depth on top of the HTML-escape and secret-pattern checks already applied during command parsing.
 
 ## Provider support
 

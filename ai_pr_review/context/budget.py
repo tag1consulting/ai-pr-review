@@ -12,9 +12,11 @@ Gated by ``AI_CONTEXT_ENRICHMENT=1`` — callers must check the flag.
 
 from __future__ import annotations
 
-from ai_pr_review.context.symbols import Definition
-
-_PROX_ORDER: dict[str, int] = {"same-file": 0, "same-package": 1, "repo": 2}
+from ai_pr_review.context.symbols import (
+    PROXIMITY_DEFAULT,
+    PROXIMITY_ORDER,
+    Definition,
+)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -46,7 +48,7 @@ def build_context_block(
     # Sort by proximity tier, then by file+line for determinism
     sorted_defs = sorted(
         defs,
-        key=lambda d: (_PROX_ORDER.get(d.proximity, 3), d.file, d.line),
+        key=lambda d: (PROXIMITY_ORDER.get(d.proximity, PROXIMITY_DEFAULT), d.file, d.line),
     )
 
     wrapper_overhead = _estimate_tokens("<symbol-context>\n</symbol-context>")

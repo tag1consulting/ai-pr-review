@@ -100,6 +100,14 @@ on:
         type: string
         required: false
         default: ''
+      enable-feedback-loop:
+        description: >
+          Set to 'true' to enable Capability C learning-loop commands
+          (false-positive, wont-fix, feedback, explain, revise). When false
+          (default), the feedback-command job is skipped entirely.
+        type: string
+        required: false
+        default: 'false'
       finding-source:
         description: 'Source tag of the finding being acted on (e.g. code-reviewer, sarif:bandit). Used by feedback-loop commands.'
         type: string
@@ -601,15 +609,30 @@ jobs:
   # feedback branch (default: ai-pr-review-bot).
   # ---------------------------------------------------------------------------
   feedback-command:
+    # Feedback commands write to a long-lived branch that influences every
+    # future review repo-wide.  Restrict to OWNER and MEMBER only — the same
+    # trust level GitHub uses to gate "approve workflow runs from forks".
+    # COLLABORATOR is intentionally excluded for persistent side-effects.
     if: |
+      inputs.enable-feedback-loop == 'true' &&
       inputs.event-name == 'issue_comment' &&
       inputs.is-pull-request == 'true' &&
       startsWith(inputs.comment-body, '/ai-pr-review') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+      contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association)
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
     steps:
+      - name: React — seen
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes
+
       - name: Invoke Python slash handler
         id: handler
         env:
@@ -621,6 +644,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           GH_TOKEN: ${{ secrets.github-token }}
           AI_PROVIDER: ${{ inputs.provider }}
+          VCS_PROVIDER: 'github'
         run: |
           set +e
           reply=$(ai-pr-review slash 2>/tmp/slash-stderr)
