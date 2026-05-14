@@ -334,7 +334,9 @@ def _render_combined_body(
             f"agents failed: {joined}\n\n"
             "The review may be incomplete. Please verify manually or re-run "
             "the review."
-        )
+        lines = [
+            ln for ln in original_summary_text.split("\n") if not ln.startswith("## AI Review")
+        ]
         findings_block = ""
     elif event == "APPROVE":
         heading = "## AI Review: Approved"
