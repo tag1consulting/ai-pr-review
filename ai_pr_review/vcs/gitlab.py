@@ -513,8 +513,9 @@ class GitLabProvider:
             if not is_owned_by_us(body, author, bot_username, kind="inline"):
                 skipped_no_marker += 1
                 continue
-            if not self._resolve_discussion(disc_id):
-                errors.append(f"resolve discussion {disc_id}")
+            ok, status, body_snippet = self._resolve_discussion(disc_id)
+            if not ok:
+                errors.append(f"resolve discussion {disc_id}: HTTP {status}: {body_snippet}")
                 continue
             resolved += 1
 
@@ -522,7 +523,7 @@ class GitLabProvider:
             threads_resolved=resolved,
             reviews_dismissed=0,  # GitLab has no separate "review" entity
             threads_skipped_no_marker=skipped_no_marker,
-            errors=tuple(errors),
+            errors=tuple(self._errors + errors),
         )
 
     def _fetch_discussions(self) -> list[dict[str, Any]]:
@@ -547,10 +548,10 @@ class GitLabProvider:
             page += 1
         return all_disc
 
-    def _resolve_discussion(self, discussion_id: str) -> bool:
+    def _resolve_discussion(self, discussion_id: str) -> tuple[bool, int, str]:
         resp = self.client.request(
             "PUT",
             self._discussion_resolve_url(discussion_id),
             json_body={"resolved": True},
         )
-        return resp.status_code < 400
+        return resp.status_code < 400, resp.status_code, resp.text[:200]

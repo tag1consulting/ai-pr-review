@@ -106,6 +106,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     # 1. Build provider from VCS_PROVIDER env
     provider = provider_from_env()
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
 
     # 2. Run compute phase to get diff + manifest
     payload = _run_compute(config)
@@ -174,8 +176,6 @@ async def _run_review_async(config: ReviewConfig) -> int:
         enable_suggestions=config.enable_suggestions,
         semaphore_size=config.parallel,
     )
-    if not isinstance(provider, VcsProvider):
-        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
         summary_text=summary_text,

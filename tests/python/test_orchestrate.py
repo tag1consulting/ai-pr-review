@@ -250,10 +250,15 @@ def test_failed_summary_post_skips_findings_and_stale(tmp_path: Path) -> None:
         )
         assert result.ok is False
         assert result.summary is not None and result.summary.error == "boom"
-        # findings and stale must NOT have run
+        # provider.post_findings must NOT have been called
         assert provider.findings_calls == []
         assert provider.stale_calls == 0
         assert provider.last_call_order == ["post_summary"]
+        # findings_result must be set (not None) so callers can distinguish
+        # "findings skipped due to summary failure" from "no findings"
+        assert result.findings_post is not None
+        assert result.findings_post.error is not None
+        assert "skipped" in result.findings_post.error
 
     anyio.run(_run)
 

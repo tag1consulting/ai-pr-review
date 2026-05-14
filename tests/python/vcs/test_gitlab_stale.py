@@ -251,6 +251,73 @@ def test_get_bot_username_4xx_aborts_resolve_stale() -> None:
     assert any("401" in e for e in result.errors)
 
 
+def test_resolve_discussion_failure_recorded_in_stale_errors() -> None:
+    """Fix 7: _resolve_discussion 4xx must surface in StaleResult.errors."""
+    discussions = [
+        _disc("D_ours", body=f"finding\n{INLINE_MARKER}", author="ai-bot"),
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/discussions" in str(req.url):
+            return httpx.Response(200, json=discussions)
+        if req.method == "PUT" and "/discussions/" in str(req.url):
+            # Use 403 (client error, not retried) so retry policy doesn't raise
+            return httpx.Response(403, json={"message": "forbidden"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.threads_resolved == 0
+    assert len(result.errors) >= 1
+    assert any("403" in e for e in result.errors)
+    assert any("D_ours" in e for e in result.errors)
+
+
+def test_5xx_get_user_error_included_in_stale_result() -> None:
+    """Fix 5: 5xx on GET /user must appear in StaleResult.errors (not only self._errors)."""
+    discussions = [
+        _disc("D_ours", body=f"finding\n{INLINE_MARKER}", author="ai-bot"),
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and str(req.url).endswith("/user"):
+            # Use 500 with a body that doesn't match _TRANSIENT_ERR_PATTERNS
+            # (no "Server Error", "ETIMEDOUT", etc.) so it is returned directly.
+            return httpx.Response(500, json={"message": "unavailable"})
+        if req.method == "GET" and "/discussions" in str(req.url):
+            return httpx.Response(200, json=discussions)
+        if req.method == "PUT" and "/discussions/" in str(req.url):
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport, base_url="https://gitlab.com/api/v4")
+    client = RecordingClient(
+        http=http,
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(
+            attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None
+        ),
+    )
+    # bot_username=None forces the GET /user lookup
+    prov = GitLabProvider(
+        config=GitLabConfig(
+            project_id_or_path="42",
+            mr_iid=1,
+            token="glpat-test",
+            diff_base_sha="basesha",
+            bot_username=None,
+        ),
+        client=client,
+    )
+    result = prov.resolve_stale()
+    # 5xx degrades gracefully (marker-only gating, resolution continues)
+    # but the GET /user 5xx error must appear in StaleResult.errors
+    assert any("500" in e for e in result.errors)
+    # The discussion itself was resolved despite the degraded bot check
+    assert result.threads_resolved == 1
+
+
 def test_gitlab_provider_satisfies_protocol() -> None:
     transport = httpx.MockTransport(lambda _r: httpx.Response(200, json=[]))
     http = httpx.Client(transport=transport, base_url="https://gitlab.com/api/v4")

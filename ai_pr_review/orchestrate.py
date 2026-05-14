@@ -166,6 +166,13 @@ async def run_review(
         logger.error(
             "post_summary failed (%s); skipping findings post", summary_result.error
         )
+        findings_result = FindingsResult(
+            review_id=None,
+            inline_posted=0,
+            body_findings=len(kept),
+            event=outcome.event,
+            error=f"skipped: summary post failed ({summary_result.error})",
+        )
 
     # Phase 5: stale cleanup runs only after a successful post.
     stale_result: StaleResult | None = None
@@ -173,6 +180,10 @@ async def run_review(
         try:
             stale_result = provider.resolve_stale()
         except RetryExhaustedError as exc:
+            # Partial progress (threads resolved before the error) is lost here
+            # because providers raise before returning a partial StaleResult.
+            # Callers see the error in StaleResult.errors; the review itself
+            # is still considered successful (summary + findings were posted).
             stale_result = StaleResult(errors=(str(exc),))
 
     return ReviewResult(
