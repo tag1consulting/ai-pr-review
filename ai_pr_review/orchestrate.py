@@ -196,7 +196,8 @@ async def run_review(
 
     # Phase 5: stale cleanup runs only after a successful post.
     stale_result: StaleResult | None = None
-    if summary_result.ok and (findings_result is None or findings_result.ok):
+    findings_failed = findings_result is not None and not findings_result.ok
+    if summary_result.ok and not findings_failed:
         try:
             stale_result = provider.resolve_stale()
         except RetryExhaustedError as exc:
@@ -205,6 +206,11 @@ async def run_review(
             # Callers see the error in StaleResult.errors; the review itself
             # is still considered successful (summary + findings were posted).
             stale_result = StaleResult(errors=(str(exc),))
+    elif findings_failed:
+        assert findings_result is not None
+        logger.warning(
+            "post_findings failed (%s); skipping stale cleanup", findings_result.error
+        )
 
     return ReviewResult(
         findings=kept,

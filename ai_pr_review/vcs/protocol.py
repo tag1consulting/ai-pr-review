@@ -34,7 +34,11 @@ class SummaryResult:
 
     @property
     def ok(self) -> bool:
-        return self.error is None
+        # ok if no error AND either we have a real comment ID (post succeeded)
+        # or nothing was posted (no-op / skip path where id=0 is acceptable).
+        return self.error is None and (
+            self.comment_id is not None or (not self.created and not self.updated)
+        )
 
 
 @dataclass(frozen=True)

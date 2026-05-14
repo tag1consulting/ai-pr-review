@@ -414,12 +414,14 @@ class GitHubProvider:
     # resolve_stale — marker-gated stale-thread resolution + review dismissal
     # ------------------------------------------------------------------
     def resolve_stale(self) -> StaleResult:
+        # Single snapshot before any sub-calls write to self._errors; all new
+        # entries from _fetch_review_threads and _dismiss_stale_reviews are
+        # collected via self._errors[errors_before:] at the end.
         errors_before = len(self._errors)
         threads = self._fetch_review_threads()
-        # Collect errors emitted by _fetch_review_threads (GraphQL errors, HTTP errors)
-        errors: list[str] = list(self._errors[errors_before:])
         resolved = 0
         skipped_no_marker = 0
+        thread_errors: list[str] = []
         for thread in threads:
             if thread.get("isResolved"):
                 continue
@@ -433,19 +435,19 @@ class GitHubProvider:
                 continue
             ok, status, body_snippet = self._resolve_thread(thread_id)
             if not ok:
-                errors.append(f"resolve thread {thread_id}: HTTP {status}: {body_snippet}")
+                thread_errors.append(
+                    f"resolve thread {thread_id}: HTTP {status}: {body_snippet}"
+                )
                 continue
             resolved += 1
 
-        dismissed_before = len(self._errors)
         dismissed = self._dismiss_stale_reviews(threads)
-        errors.extend(self._errors[dismissed_before:])
 
         return StaleResult(
             threads_resolved=resolved,
             reviews_dismissed=dismissed,
             threads_skipped_no_marker=skipped_no_marker,
-            errors=tuple(errors),
+            errors=tuple(thread_errors) + tuple(self._errors[errors_before:]),
         )
 
     def _fetch_review_threads(self) -> list[dict[str, Any]]:

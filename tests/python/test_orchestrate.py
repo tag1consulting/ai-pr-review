@@ -284,6 +284,30 @@ def test_failed_findings_post_blocks_stale(tmp_path: Path) -> None:
     anyio.run(_run)
 
 
+def test_failed_findings_post_logs_warning_before_skip(
+    tmp_path: Path, caplog: Any
+) -> None:
+    """Finding #2: when post_findings fails, a warning must be logged before skipping stale."""
+    import logging
+
+    provider = _FakeProvider(findings_ok=False)
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        with caplog.at_level(logging.WARNING, logger="ai_pr_review.orchestrate"):
+            await run_review(
+                diff=DiffContext(diff_text="", head_sha="abc1234567"),
+                summary_text="## Summary",
+                agents=[],
+                llm_call=_llm_call_factory({}),
+                dispatch_context=ctx,
+                provider=provider,
+            )
+
+    anyio.run(_run)
+    assert any("post_findings failed" in r.message for r in caplog.records)
+
+
 def test_orchestration_config_defaults() -> None:
     cfg = OrchestrationConfig()
     assert cfg.mode == "full"
