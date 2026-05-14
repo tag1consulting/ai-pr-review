@@ -154,6 +154,13 @@ def _build_gitlab_from_env() -> GitLabProvider:
             "GITLAB_DIFF_BASE_SHA (or CI_MERGE_REQUEST_DIFF_BASE_SHA) is required"
         )
     base_url = os.environ.get("GITLAB_API_URL") or "https://gitlab.com/api/v4"
+    # Normalize: if the caller passed the host without /api/v4 (e.g. the
+    # action.yml default "https://gitlab.com"), append the path so httpx
+    # constructs correct absolute URLs instead of silently returning empty bodies.
+    if base_url.rstrip("/").endswith("/api/v4"):
+        pass  # already correct
+    elif "/api/" not in base_url:
+        base_url = base_url.rstrip("/") + "/api/v4"
     bot_username = os.environ.get("GITLAB_BOT_USERNAME") or None
 
     config = GitLabConfig(
