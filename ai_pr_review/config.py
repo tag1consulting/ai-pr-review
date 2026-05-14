@@ -38,6 +38,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_DISABLE_GATE_SECURITY",
         "AI_DISABLE_GATE_EDGE_CASE",
         "AI_DRY_RUN",
+        "AI_IGNORE_MERGE_COMMITS",
         "AI_PR_REVIEW_RECORD_DIR",
         "AI_PR_REVIEW_ENGINE",
         "AI_PR_REVIEW_COMPUTE_OUTPUT",
@@ -95,6 +96,7 @@ class ReviewConfig(BaseModel):
     disable_gate_architecture: bool = False
     disable_gate_security: bool = False
     disable_gate_edge_case: bool = False
+    ignore_merge_commits: bool = False
 
     # --- Provider credentials ---
     anthropic_api_key: str = ""
@@ -225,6 +227,7 @@ class ReviewConfig(BaseModel):
             disable_gate_architecture=_bool("AI_DISABLE_GATE_ARCHITECTURE"),
             disable_gate_security=_bool("AI_DISABLE_GATE_SECURITY"),
             disable_gate_edge_case=_bool("AI_DISABLE_GATE_EDGE_CASE"),
+            ignore_merge_commits=_bool("AI_IGNORE_MERGE_COMMITS"),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
             google_api_key=os.environ.get("GOOGLE_API_KEY", ""),

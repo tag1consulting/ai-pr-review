@@ -167,10 +167,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, config.provider)
 
-    # 6. Build summary text. For now, leave as-is — the pr-summarizer agent
-    # is dispatched separately via summarizer module; this CLI doesn't yet
-    # invoke it. Defer summarizer integration to a follow-up commit.
+    # 6. Build summary text. Prepend merge-filter fallback note when present.
+    merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
     summary_text = ""
+    if merge_filter_fallback:
+        summary_text = (
+            f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
+            "diff may include upstream changes._\n\n"
+        )
 
     # 7. Run the orchestrator
     orch_config = OrchestrationConfig(
@@ -282,6 +286,8 @@ def _run_compute(config: ReviewConfig) -> dict[str, object]:
         base_ref=config.base_ref,
         head_sha=config.head_sha,
         workspace=".",
+        ignore_merge_commits=config.ignore_merge_commits,
+        review_target=config.review_target,
     )
 
     if not diff_result.changed_files:
@@ -327,6 +333,7 @@ def _run_compute(config: ReviewConfig) -> dict[str, object]:
         "head": diff_result.head,
         "is_incremental": diff_result.is_incremental,
         "languages": changed.languages,
+        "merge_filter_fallback_reason": diff_result.fallback_reason,
         "findings": [],
         "token_log": [],
     }

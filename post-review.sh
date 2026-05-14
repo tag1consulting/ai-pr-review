@@ -608,8 +608,12 @@ post_summary() {
   # Truncate only the summary text — the sha_marker must always be present at the top
   # so get_last_reviewed_sha() can extract it even on very large summaries.
   local sha_marker="${MARKER_PREFIX} sha=${HEAD_SHA} -->"
+  local merge_filter_note=""
+  if [[ -n "${AI_MERGE_FILTER_FALLBACK_REASON:-}" ]]; then
+    merge_filter_note=$'\n'"_Note: merge-commit filtering was skipped (${AI_MERGE_FILTER_FALLBACK_REASON}); diff may include upstream changes._"$'\n'
+  fi
   local truncated_summary
-  truncated_summary=$(truncate_body "${summary}")
+  truncated_summary=$(truncate_body "${merge_filter_note}${summary}")
   local body="${sha_marker}
 ${truncated_summary}
 
