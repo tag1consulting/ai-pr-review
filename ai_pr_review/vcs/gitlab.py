@@ -168,7 +168,15 @@ class GitLabProvider:
                     f"{resp.text[:200]}"
                 )
                 return results
-            page_data = resp.json() or []
+            try:
+                page_data = resp.json() or []
+            except ValueError:
+                self._errors.append(
+                    f"list_summary_notes p{page}: non-JSON body "
+                    f"(status={resp.status_code}, url={resp.url!s}): "
+                    f"{resp.text[:100]!r}"
+                )
+                return results
             for item in page_data:
                 body = item.get("body") or ""
                 if SUMMARY_MARKER_PREFIX in body:
