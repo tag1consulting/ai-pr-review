@@ -35,7 +35,7 @@ def merge_repo(tmp_path: Path) -> dict[str, str]:
         assert r.returncode == 0, f"git {args} failed:\n{r.stderr}"
         return r.stdout.strip()
 
-    git("init", "-q")
+    git("init", "-q", "-b", "main")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Tester")
     git("config", "commit.gpgSign", "false")

@@ -24,7 +24,7 @@ setup() {
 
   (
     cd "$REPO_DIR" || exit 1
-    git init -q
+    git init -q -b main
     git config user.email "test@example.com"
     git config user.name "Tester"
     git config commit.gpgSign false

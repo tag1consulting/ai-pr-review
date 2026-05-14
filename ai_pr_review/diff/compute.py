@@ -149,7 +149,7 @@ def _filtered_diff(
                 return ("", "")
 
             diff_result = subprocess.run(
-                git + ["diff", f"{diff_base}..{synthetic_tip}"],
+                git + ["diff", f"{diff_base}..{synthetic_tip}"] + ["--"] + _EXCLUDE_PATTERNS,
                 capture_output=True,
                 text=True,
             )

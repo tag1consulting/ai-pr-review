@@ -127,9 +127,10 @@ compute_filtered_diff() {
 
   # 3. Cherry-pick all non-merge commits from the range onto a temp worktree
   #    rooted at diff_base.
+  # Use mktemp -u to get a unique path without creating a file — git worktree
+  # add requires the target to not yet exist.
   local worktree_path
-  worktree_path=$(mktemp_tracked /tmp/ai-review-filter-wt-XXXXXXXX)
-  rm -rf "$worktree_path"  # mktemp_tracked creates a file; we need a dir name only
+  worktree_path=$(mktemp -u /tmp/ai-review-filter-wt-XXXXXXXX)
   if ! git worktree add --quiet --detach "$worktree_path" "$diff_base" 2>/dev/null; then
     echo "WARNING: merge-commit filter: could not create git worktree; falling back to unfiltered diff." >&2
     export AI_MERGE_FILTER_FALLBACK_REASON="could not create git worktree for merge-commit filtering"
@@ -143,6 +144,8 @@ compute_filtered_diff() {
 
   local pick_failed=0
   if [[ -n "$commits" ]]; then
+    # Use || pick_failed=$? so set -e in the parent does not abort before the
+    # graceful fallback path can run.
     (
       cd "$worktree_path" || exit 1
       while IFS= read -r c; do
@@ -155,8 +158,7 @@ compute_filtered_diff() {
           exit 1
         fi
       done <<< "$commits"
-    )
-    pick_failed=$?
+    ) || pick_failed=$?
   fi
 
   if [[ "$pick_failed" -ne 0 ]]; then
@@ -166,14 +168,15 @@ compute_filtered_diff() {
     return 1
   fi
 
-  # 4. Write the filtered diff to DIFF_FILE
+  # 4. Write the filtered diff to DIFF_FILE, applying the same exclusion patterns
+  #    used in the normal diff path so lockfiles/vendor dirs are never included.
   local synthetic_tip
   synthetic_tip=$(git -C "$worktree_path" rev-parse HEAD 2>/dev/null) || synthetic_tip=""
   if [[ -z "$synthetic_tip" || "$synthetic_tip" == "$diff_base" ]]; then
-    # No commits were cherry-picked (e.g. all were merge commits with empty diffs)
+    # No commits were cherry-picked (e.g. all were upstream-only or merge commits)
     : > "$DIFF_FILE"
   else
-    git diff "${diff_base}..${synthetic_tip}" > "$DIFF_FILE" 2>/dev/null || : > "$DIFF_FILE"
+    git diff "${diff_base}..${synthetic_tip}" -- "${EXCL[@]}" > "$DIFF_FILE" 2>/dev/null || : > "$DIFF_FILE"
   fi
 
   git worktree remove --force "$worktree_path" 2>/dev/null || true
