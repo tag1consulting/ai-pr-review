@@ -287,18 +287,23 @@ class TestScriptDir:
         captured: list[DispatchContext] = []
         expected = Path(cli_mod.__file__).resolve().parent.parent  # type: ignore[arg-type]
 
-        env_without = {k: v for k, v in os.environ.items() if k != "AI_PR_REVIEW_SCRIPT_DIR"}
-        with (
-            patch.dict(os.environ, env_without, clear=True),
-            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
-            patch("ai_pr_review.vcs.provider_from_env", return_value=self._make_provider_mock()),
-            patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
-            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
-            patch("ai_pr_review.agents.roster.AGENTS", []),
-        ):
-            from ai_pr_review.cli import _run_review_async
+        # Remove only AI_PR_REVIEW_SCRIPT_DIR so the fallback path is taken,
+        # without stripping unrelated vars (PATH, HOME, TMPDIR) that anyio needs.
+        saved = os.environ.pop("AI_PR_REVIEW_SCRIPT_DIR", None)
+        try:
+            with (
+                patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+                patch("ai_pr_review.vcs.provider_from_env", return_value=self._make_provider_mock()),
+                patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
+                patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+                patch("ai_pr_review.agents.roster.AGENTS", []),
+            ):
+                from ai_pr_review.cli import _run_review_async
 
-            anyio.run(_run_review_async, _make_config())
+                anyio.run(_run_review_async, _make_config())
+        finally:
+            if saved is not None:
+                os.environ["AI_PR_REVIEW_SCRIPT_DIR"] = saved
 
         assert captured, "run_review was not called"
         assert captured[0].script_dir == expected
