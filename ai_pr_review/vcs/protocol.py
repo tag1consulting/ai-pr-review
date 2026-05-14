@@ -32,6 +32,18 @@ class SummaryResult:
     updated: bool
     error: str | None = None
 
+    def __post_init__(self) -> None:
+        # Auto-populate error when the API returned no ID after a create/update.
+        # Callers then get a programmatic error signal rather than ok=False/error=None.
+        if (
+            self.error is None
+            and self.comment_id is None
+            and (self.created or self.updated)
+        ):
+            object.__setattr__(
+                self, "error", "API returned no comment ID after create/update"
+            )
+
     @property
     def ok(self) -> bool:
         # ok if no error AND either we have a real comment ID (post succeeded)

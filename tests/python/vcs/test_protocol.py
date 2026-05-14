@@ -34,8 +34,11 @@ def test_summary_result_ok_requires_comment_id_when_created_or_updated() -> None
     # Error path: not ok regardless of comment_id
     assert SummaryResult(comment_id=42, created=True, updated=False, error="boom").ok is False
     assert SummaryResult(comment_id=None, created=False, updated=False, error="boom").ok is False
-    # Broken state: created=True but comment_id=None (API returned id=0): not ok
-    assert SummaryResult(comment_id=None, created=True, updated=False).ok is False
+    # Broken state: created=True but comment_id=None (API returned id=0): not ok AND error populated
+    broken = SummaryResult(comment_id=None, created=True, updated=False)
+    assert broken.ok is False
+    assert broken.error is not None
+    assert "no comment ID" in broken.error
 
 
 def test_stale_result_errors_is_tuple() -> None:
