@@ -106,3 +106,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           parallel: 'true'
           engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
+          # vars.AI_REVIEW_MAX_DIFF_LINES is a trusted repo variable (not user
+          # input from a PR), so it's safe to interpolate directly into the
+          # composite-action input. Default 5000 matches review.sh.
+          max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
