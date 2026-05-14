@@ -57,10 +57,10 @@ class FindingsResult:
 class StaleResult:
     """Outcome of `resolve_stale`."""
 
-    errors: tuple[str, ...] = field(default_factory=tuple)
+    threads_resolved: int = 0
     reviews_dismissed: int = 0
     threads_skipped_no_marker: int = 0
-    errors: Sequence[str] = field(default_factory=tuple)
+    errors: tuple[str, ...] = field(default_factory=tuple)
 
 
 @runtime_checkable

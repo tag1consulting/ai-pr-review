@@ -316,7 +316,9 @@ class GitHubProvider:
                     f"pre-APPROVE COMMENT: HTTP {resp_pre.status_code}: "
                     f"{resp_pre.text[:200]}"
                 )
-            inline_posted_count = len(inline_comments)
+                inline_posted_count = 0
+            else:
+                inline_posted_count = len(inline_comments)
             inline_comments = []
         else:
             inline_posted_count = 0
@@ -420,8 +422,9 @@ class GitHubProvider:
             thread_id = thread.get("id")
             if not isinstance(thread_id, str):
                 continue
-            if not self._resolve_thread(thread_id):
-                errors.append(f"resolve thread {thread_id}")
+            ok, status, body_snippet = self._resolve_thread(thread_id)
+            if not ok:
+                errors.append(f"resolve thread {thread_id}: HTTP {status}: {body_snippet}")
                 continue
             resolved += 1
 
@@ -479,7 +482,7 @@ class GitHubProvider:
                 break
         return threads
 
-    def _resolve_thread(self, thread_id: str) -> bool:
+    def _resolve_thread(self, thread_id: str) -> tuple[bool, int, str]:
         mutation = (
             "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
@@ -489,7 +492,7 @@ class GitHubProvider:
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
         )
-        return resp.status_code < 400
+        return resp.status_code < 400, resp.status_code, resp.text[:200]
 
     def _dismiss_stale_reviews(self, threads: Sequence[dict[str, Any]]) -> int:
         """Dismiss CHANGES_REQUESTED reviews from our bot whose threads are all

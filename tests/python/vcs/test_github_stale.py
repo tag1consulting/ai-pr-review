@@ -250,3 +250,27 @@ def test_resolve_stale_wont_dismiss_when_unresolved_markered_thread_exists() -> 
     # So we still hold off on dismissing this run — the NEXT run will dismiss it.
     assert result.threads_resolved == 1
     assert result.reviews_dismissed == 0
+
+
+def test_resolve_thread_failure_includes_http_status_in_error() -> None:
+    """B4: When _resolve_thread fails, the error string must include the HTTP status."""
+    import json as _json
+
+    nodes = [
+        _thread("T99", resolved=False, body=f"bad\n{INLINE_MARKER}", author="github-actions[bot]"),
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(403, json={"message": "forbidden"})
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.threads_resolved == 0
+    assert len(result.errors) == 1
+    assert "403" in result.errors[0]
+    assert "T99" in result.errors[0]

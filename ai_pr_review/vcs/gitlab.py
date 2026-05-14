@@ -53,6 +53,11 @@ from ai_pr_review.vcs.protocol import (
 # GitLab MR notes have a ~1MB limit but huge comments are bad UX. Match bash.
 _MAX_GITLAB_BODY_SIZE: Final[int] = 250_000
 
+# Sentinel returned by _get_bot_username when a 4xx response indicates the
+# token is invalid. Callers that distinguish hard-auth-failure from "unknown"
+# check for this value and abort rather than degrading.
+_BOT_IDENTITY_AUTH_FAILED: Final[str] = "__auth_failed__"
+
 
 @dataclass(frozen=True)
 class GitLabConfig:
@@ -177,13 +182,29 @@ class GitLabProvider:
     # Bot identity (lazy-resolved)
     # ------------------------------------------------------------------
     def _get_bot_username(self) -> str | None:
+        """Fetch the bot's username via GET /user.
+
+        Returns:
+          - The username string on success.
+          - ``_BOT_IDENTITY_AUTH_FAILED`` sentinel when the token is invalid
+            (4xx response). Callers must treat this as a hard failure and
+            abort rather than degrading to marker-only gating.
+          - ``None`` for any other failure (network error, unexpected body).
+        """
         if self._resolved_bot_username is not None:
             return self._resolved_bot_username
         if self.config.bot_username:
             self._resolved_bot_username = self.config.bot_username
             return self._resolved_bot_username
         resp = self.client.request("GET", "/user")
-        if resp.status_code >= 400:
+        if 400 <= resp.status_code < 500:
+            # 4xx means the token is wrong — propagate as hard failure so
+            # resolve_stale can abort instead of silently degrading.
+            self._errors.append(
+                f"GET /user: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return _BOT_IDENTITY_AUTH_FAILED
+        if resp.status_code >= 500:
             self._errors.append(
                 f"GET /user: HTTP {resp.status_code}: {resp.text[:200]}"
             )
@@ -457,8 +478,13 @@ class GitLabProvider:
     # ------------------------------------------------------------------
     def resolve_stale(self) -> StaleResult:
         bot_username = self._get_bot_username()
-        # bot_username may be None — that's fine for marker-only gating, but we
-        # log so operators can spot a bad PAT.
+        if bot_username == _BOT_IDENTITY_AUTH_FAILED:
+            # 4xx on GET /user means the token is invalid. The error is already
+            # recorded in self._errors. Abort rather than silently degrading
+            # the author-match check.
+            return StaleResult(errors=tuple(self._errors))
+        # bot_username may be None (network/parse failure) — that's acceptable
+        # for marker-only gating, but we warn so operators can spot a bad PAT.
         if bot_username is None:
             self._errors.append(
                 "resolve_stale: bot username unresolved; falling back to "
@@ -525,10 +551,6 @@ class GitLabProvider:
         resp = self.client.request(
             "PUT",
             self._discussion_resolve_url(discussion_id),
-            params={"resolved": "true"},
-        )
-        resp = self.client.request(
-            "PUT",
-            self._discussion_resolve_url(discussion_id),
             json_body={"resolved": True},
         )
+        return resp.status_code < 400

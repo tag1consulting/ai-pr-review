@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.protocol import VcsProvider
+from ai_pr_review.vcs.protocol import StaleResult, VcsProvider
 
 
 def test_github_provider_satisfies_vcs_provider_protocol() -> None:
@@ -22,3 +22,16 @@ def test_github_provider_satisfies_vcs_provider_protocol() -> None:
     config = GitHubConfig(owner="o", repo="r", pr_number=1, token="t")
     provider = GitHubProvider(config=config, client=client)
     assert isinstance(provider, VcsProvider)
+
+
+def test_stale_result_errors_is_tuple() -> None:
+    """B7/A4: StaleResult.errors must be a tuple, not a mutable list."""
+    result = StaleResult(errors=("one", "two"))
+    assert isinstance(result.errors, tuple)
+    # Default is also a tuple (empty)
+    default = StaleResult()
+    assert isinstance(default.errors, tuple)
+    assert default.errors == ()
+    assert default.threads_resolved == 0
+    assert default.reviews_dismissed == 0
+    assert default.threads_skipped_no_marker == 0

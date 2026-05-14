@@ -287,3 +287,57 @@ def test_orchestration_config_defaults() -> None:
     assert cfg.enable_suggestions is True
     assert cfg.semaphore_size == 4
     assert cfg.suppression_rules == ()
+
+
+def test_failed_summary_logs_error(tmp_path: Path, caplog: Any) -> None:
+    """B2: post_summary failure must be logged before skipping findings."""
+    import logging
+
+    provider = _FakeProvider(summary_ok=False)
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        with caplog.at_level(logging.ERROR, logger="ai_pr_review.orchestrate"):
+            await run_review(
+                diff=DiffContext(diff_text="", head_sha="abc1234567"),
+                summary_text="## Summary",
+                agents=[],
+                llm_call=_llm_call_factory({}),
+                dispatch_context=ctx,
+                provider=provider,
+            )
+
+    anyio.run(_run)
+    assert any("post_summary failed" in r.message for r in caplog.records)
+    assert any("boom" in r.message for r in caplog.records)
+
+
+def test_retry_exhausted_in_stale_is_captured_not_propagated(tmp_path: Path) -> None:
+    """B6: RetryExhaustedError from resolve_stale must not propagate; captured in StaleResult."""
+    from ai_pr_review.vcs.http import RetryExhaustedError
+
+    @dataclass
+    class _RaisingProvider(_FakeProvider):
+        def resolve_stale(self) -> StaleResult:
+            self.stale_calls += 1
+            raise RetryExhaustedError("network down after 3 attempts")
+
+    provider = _RaisingProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        # The review itself must not fail; stale error is in StaleResult
+        assert result.summary is not None and result.summary.ok
+        assert result.stale is not None
+        assert len(result.stale.errors) == 1
+        assert "network down" in result.stale.errors[0]
+
+    anyio.run(_run)

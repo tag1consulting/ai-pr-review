@@ -10,6 +10,7 @@ thin wrapper that builds these from environment.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -30,6 +31,7 @@ from ai_pr_review.review.outcome import (
     ReviewOutcome,
     classify_review_outcome,
 )
+from ai_pr_review.vcs.http import RetryExhaustedError
 from ai_pr_review.vcs.protocol import (
     DiffContext,
     FindingsResult,
@@ -37,6 +39,8 @@ from ai_pr_review.vcs.protocol import (
     SummaryResult,
     VcsProvider,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -158,11 +162,18 @@ async def run_review(
             max_inline=cfg.max_inline,
             enable_suggestions=cfg.enable_suggestions,
         )
+    else:
+        logger.error(
+            "post_summary failed (%s); skipping findings post", summary_result.error
+        )
 
     # Phase 5: stale cleanup runs only after a successful post.
     stale_result: StaleResult | None = None
     if summary_result.ok and (findings_result is None or findings_result.ok):
-        stale_result = provider.resolve_stale()
+        try:
+            stale_result = provider.resolve_stale()
+        except RetryExhaustedError as exc:
+            stale_result = StaleResult(errors=(str(exc),))
 
     return ReviewResult(
         findings=kept,

@@ -12,6 +12,7 @@ Subcommands:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -22,6 +23,8 @@ import click
 from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.manifest import ChangedFiles
 from ai_pr_review.orchestrate import ReviewResult
+
+logger = logging.getLogger(__name__)
 
 
 @click.group()
@@ -99,7 +102,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     from ai_pr_review.llm.client import call_llm
     from ai_pr_review.orchestrate import OrchestrationConfig, run_review
     from ai_pr_review.vcs import provider_from_env
-    from ai_pr_review.vcs.protocol import DiffContext
+    from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
 
     # 1. Build provider from VCS_PROVIDER env
     provider = provider_from_env()
@@ -176,7 +179,6 @@ async def _run_review_async(config: ReviewConfig) -> int:
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
         summary_text=summary_text,
-        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
         agents=agents,
         llm_call=_llm_call,
         dispatch_context=dispatch_ctx,
@@ -234,6 +236,8 @@ def _make_changed_files(files: list[object]) -> ChangedFiles:
         )
         if path:
             paths.append(path)
+        else:
+            logger.warning("Skipping malformed changed_files entry: %r", entry)
     return build_changed_files(paths)
 
 

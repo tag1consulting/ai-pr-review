@@ -279,3 +279,26 @@ def test_post_findings_all_three_paths_fail_returns_error() -> None:
     assert not result.ok
     assert result.error is not None
     assert "posting attempts failed" in result.error
+
+
+def test_approve_pre_review_failure_does_not_count_inline_posted() -> None:
+    """B3: When the pre-APPROVE COMMENT review POST fails, inline_posted must be 0."""
+    findings = [
+        Finding(severity="Low", confidence=80, finding="x", file="app.py", line=4),
+    ]
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/reviews" in str(req.url):
+            # First call: pre-APPROVE COMMENT — fail
+            # Second call: APPROVE body-only — succeed
+            if not hasattr(handler, "_seen"):
+                handler._seen = True  # type: ignore[attr-defined]
+                return httpx.Response(422, json={"message": "no permission"})
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings(findings, diff, event="APPROVE")
+    # The pre-APPROVE COMMENT POST failed, so inline_posted must be 0
+    assert result.inline_posted == 0

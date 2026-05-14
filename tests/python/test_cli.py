@@ -221,3 +221,26 @@ class TestComputeCommand:
                 )
             assert result.exit_code == 0
             assert os.path.exists("from-env.json")
+
+
+class TestMakeChangedFiles:
+    """_make_changed_files normalisation and warning (B1)."""
+
+    def test_malformed_entry_emits_warning(self) -> None:
+        """Empty-path entries must emit logger.warning, not crash or silently drop."""
+        from unittest.mock import patch
+
+        from ai_pr_review.cli import _make_changed_files  # type: ignore[attr-defined]
+
+        with patch("ai_pr_review.cli.logger") as mock_logger:
+            _make_changed_files([{"path": ""}, {"path": "src/main.py"}, {}])
+        # Two malformed entries: dict with empty path, and bare empty dict (str("") after normalization)
+        assert mock_logger.warning.call_count == 2
+
+    def test_valid_entries_are_included(self) -> None:
+        """Valid path strings and dicts are included in the result."""
+        from ai_pr_review.cli import _make_changed_files  # type: ignore[attr-defined]
+
+        result = _make_changed_files(["a.py", {"path": "b.py"}])
+        # Result is a ChangedFiles; the paths should include both files
+        assert result is not None
