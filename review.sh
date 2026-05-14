@@ -419,6 +419,17 @@ main() {
     fi
   fi
 
+  # Optionally filter out upstream base-branch merges from the diff.
+  # Only applies to PR reviews (not standalone) with a resolved DIFF_BASE.
+  AI_MERGE_FILTER_FALLBACK_REASON=""
+  if [[ "${AI_IGNORE_MERGE_COMMITS:-false}" == "true" && \
+        "$REVIEW_TARGET" != "standalone" && \
+        -n "$DIFF_BASE" ]]; then
+    if ! compute_filtered_diff "$DIFF_BASE" "$HEAD_SHA"; then
+      echo "::warning::Merge-commit filtering failed (${AI_MERGE_FILTER_FALLBACK_REASON}); using unfiltered diff." >&2
+    fi
+  fi
+
   # Check for empty diff
   DIFF_LINES=$(wc -l < "$DIFF_FILE" | tr -d ' ')
   if [[ "$DIFF_LINES" -eq 0 ]]; then

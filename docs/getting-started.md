@@ -89,16 +89,25 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+    model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
+    model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
     review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
     pr-number: ${{ github.event.pull_request.number }}
     base-ref: ${{ github.event.pull_request.base.ref }}
     head-sha: ${{ github.event.pull_request.head.sha }}
     github-token: ${{ secrets.GITHUB_TOKEN }}
+    max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+    max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+    max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+    enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
+    parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
+    engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
+    ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
 ```
 
 See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/README.md) for a complete setup walkthrough including slash commands and provider configuration.
 
-**Secrets and variables** — configure in the consuming repository's settings:
+**Secrets and variables** — configure in the consuming repository's settings (Settings → Secrets and variables → Actions):
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
@@ -107,6 +116,15 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_REVIEW_BASE_URL` | Variable | No | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
 | `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
+| `AI_REVIEW_MAX_DIFF_LINES` | Variable | No | Skip review when diff exceeds this many lines (default: `5000`) |
+| `AI_REVIEW_MAX_INLINE` | Variable | No | Max inline comments per run; excess in summary (default: `25`) |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | Variable | No | Output token budget per LLM agent (default: `8192`) |
+| `AI_REVIEW_ENABLE_SUGGESTIONS` | Variable | No | Enable "Apply suggestion" buttons (default: `true`) |
+| `AI_REVIEW_PARALLEL` | Variable | No | Parallel tiered fan-out; set `false` for sequential (default: `true`) |
+| `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `bash` or `python` (default: `bash`) |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `false`) |
+
+See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 
 **Local development** — run reviews against any open PR without a CI runner:
 
