@@ -8,6 +8,7 @@ per-provider docstrings.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from ai_pr_review.vcs.bitbucket import (
@@ -39,6 +40,8 @@ from ai_pr_review.vcs.protocol import (
     SummaryResult,
     VcsProvider,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BitbucketConfig",
@@ -160,7 +163,13 @@ def _build_gitlab_from_env() -> GitLabProvider:
     if base_url.rstrip("/").endswith("/api/v4"):
         pass  # already correct
     elif "/api/" not in base_url:
+        original = base_url
         base_url = base_url.rstrip("/") + "/api/v4"
+        logger.warning(
+            "GITLAB_API_URL %r did not include /api/v4; normalized to %r",
+            original,
+            base_url,
+        )
     bot_username = os.environ.get("GITLAB_BOT_USERNAME") or None
 
     config = GitLabConfig(

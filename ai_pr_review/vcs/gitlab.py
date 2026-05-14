@@ -170,7 +170,7 @@ class GitLabProvider:
                 return results
             try:
                 page_data = resp.json() or []
-            except Exception:
+            except ValueError:
                 self._errors.append(
                     f"list_summary_notes p{page}: non-JSON body "
                     f"(status={resp.status_code}, url={resp.url!s}): "
