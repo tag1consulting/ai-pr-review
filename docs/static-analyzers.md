@@ -41,3 +41,43 @@ Findings are mapped from CVSS score: >= 9.0 → Critical, 7.0–8.9 → High, 4.
 No configuration is required — the check runs automatically when a manifest file is in the diff. The OSV.dev API is unauthenticated and free. If the API is unreachable, the check emits a warning and continues — the review is never blocked by CVE-lookup failures.
 
 To accept a specific CVE (e.g. a library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID. See [Suppression rules](suppression#suppressing-cve-findings) for the schema and a worked example.
+
+## SARIF ingestion (Capability B)
+
+In addition to the built-in analyzers, the Python engine can ingest SARIF 2.1.0 output from any external tool (CodeQL, Semgrep Pro, Trivy, Snyk, custom scanners).
+
+### Setup
+
+1. Set `engine: python` in your action inputs.
+2. Run your SARIF-producing tool as a prior step (e.g. CodeQL, Trivy).
+3. Pass the output path(s) via the `sarif-paths` input:
+
+```yaml
+- uses: tag1consulting/ai-pr-review@main
+  with:
+    engine: python
+    sarif-paths: 'results/codeql.sarif,results/trivy.sarif'
+    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+See `examples/workflows/sarif-codeql.yml` for a complete CodeQL + AI review pipeline.
+
+### Severity mapping
+
+| SARIF level | AI review severity |
+|------------|-------------------|
+| `error` | High |
+| `warning` | Medium |
+| `note` | Low |
+| `none` | Low |
+
+### Behavior
+
+- Source tag: `sarif:<driver.name>` (e.g. `sarif:CodeQL`, `sarif:trivy`).
+- Default confidence: 90.
+- Remediation text: taken from the rule's `help.text` field when present.
+- File URI prefixes (`file:///`, `file://`) are stripped from location paths.
+- Findings from SARIF files are merged into the same dedup/suppress pipeline as findings from native analyzers and LLM agents.
+- Unreadable or malformed SARIF files emit a `WARNING` log and are skipped (fail-soft).
+

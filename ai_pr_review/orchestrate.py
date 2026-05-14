@@ -75,6 +75,10 @@ class OrchestrationConfig:
     enable_suggestions: bool = True
     semaphore_size: int = 4
     suppression_rules: tuple[SuppressionRule, ...] = ()
+    # --- Epic 3: Capability B — SARIF ingestion ---
+    sarif_paths: tuple[str, ...] = ()
+    # --- Epic 3: Capability C — feedback loop ---
+    feedback_addendum: str = ""
 
 
 async def run_review(
@@ -121,6 +125,10 @@ async def run_review(
             skip_reason=skip_reason,
         )
 
+    # Phase 0.5: inject feedback addendum into dispatch context when provided
+    if cfg.feedback_addendum and not dispatch_context.feedback_addendum:
+        dispatch_context.feedback_addendum = cfg.feedback_addendum
+
     # Phase 1: dispatch agents
     successes: list[AgentResult]
     failures: list[FailedAgent]
@@ -131,8 +139,15 @@ async def run_review(
     else:
         successes, failures = [], []
 
-    # Phase 2: extract + merge + suppress
+    # Phase 1.5: inject SARIF findings (Capability B)
     raw_findings: list[Finding] = []
+    if cfg.sarif_paths:
+        from ai_pr_review.analyzers.sarif import load_sarif_files
+        sarif_findings = load_sarif_files(list(cfg.sarif_paths))
+        raw_findings.extend(sarif_findings)
+        logger.info("SARIF: loaded %d finding(s) from %d file(s)", len(sarif_findings), len(cfg.sarif_paths))
+
+    # Phase 2: extract + merge + suppress
     for s in successes:
         raw_findings.extend(
             extract_findings(s.output, agent_name=s.name, truncated=s.truncated)

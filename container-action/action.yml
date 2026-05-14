@@ -107,6 +107,40 @@ inputs:
     required: false
     default: 'bash'
 
+  ignore-merge-commits:
+    description: >
+      When true, strip merge commits that pulled in upstream base-branch changes
+      before computing the diff. Only the PR author's own commits are reviewed.
+      Intra-PR merges (merging one feature branch into another) are preserved.
+      Falls back to the unfiltered diff if cherry-pick conflicts occur.
+    required: false
+    default: 'false'
+
+  sarif-paths:
+    description: >
+      Comma-separated list of SARIF 2.1.0 file paths to ingest as additional
+      findings. Each path is relative to the workspace root. Requires the
+      Python engine (engine: python).
+    required: false
+    default: ''
+
+  context-enrichment:
+    description: >
+      When true, extract symbol references from the diff and look them up
+      in the repo using ripgrep, then inject a <symbol-context> block into
+      each agent's prompt. Requires tree-sitter-language-pack and ripgrep.
+      Only available with the Python engine.
+    required: false
+    default: 'false'
+
+  feedback-loop:
+    description: >
+      When true, load recent feedback entries from the GitBranchStore and
+      inject a <repo-feedback> block into each agent's prompt. GitHub-only.
+      Requires GH_TOKEN with contents:write on the feedback branch.
+    required: false
+    default: 'false'
+
 runs:
   using: composite
   steps:
@@ -155,6 +189,10 @@ runs:
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
         AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
+        AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
+        AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
+        AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
+        AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
       run: |
         docker pull "$IMAGE"
         # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
@@ -185,6 +223,10 @@ runs:
           -e AI_MAX_INLINE \
           -e AI_MAX_TOKENS_PER_AGENT \
           -e AI_ENABLE_SUGGESTIONS \
+          -e AI_IGNORE_MERGE_COMMITS \
+          -e AI_SARIF_PATHS \
+          -e AI_CONTEXT_ENRICHMENT \
+          -e AI_FEEDBACK_LOOP \
           ${FORCE_FULL_DIFF:+-e FORCE_FULL_DIFF} \
           ${STANDALONE_DEPTH:+-e STANDALONE_DEPTH} \
           ${LLM_RETRY_COUNT:+-e LLM_RETRY_COUNT} \

@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+context = [
+    "tree-sitter-language-pack>=0.7.0",
+]
 dev = [
     "pytest>=8.0",
     "anyio[trio]>=4.0",

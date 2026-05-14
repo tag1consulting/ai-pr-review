@@ -5,11 +5,16 @@
 # for a ready-to-use consumer template.
 #
 # Supported commands (post as a PR comment):
-#   /ai-pr-review rescan       — force full diff, re-run review
-#   /ai-pr-review review-full  — run in full mode (all agents)
-#   /ai-pr-review skip         — add skip-ai-review label
-#   /ai-pr-review dismiss      — reply to a finding to mark it as a false positive
-#   /ai-pr-review help         — post the command list
+#   /ai-pr-review rescan                      — force full diff, re-run review
+#   /ai-pr-review review-full                 — run in full mode (all agents)
+#   /ai-pr-review skip                        — add skip-ai-review label
+#   /ai-pr-review dismiss                     — reply to a finding to mark it as false positive
+#   /ai-pr-review false-positive [reason]     — record finding as false positive (learning loop)
+#   /ai-pr-review wont-fix [reason]           — record finding as intentional (learning loop)
+#   /ai-pr-review feedback <text>             — store free-form feedback (learning loop)
+#   /ai-pr-review explain                     — request explanation from the originating agent
+#   /ai-pr-review revise <hint>               — request agent revision with a hint
+#   /ai-pr-review help                        — post the command list
 #
 # IMPORTANT: issue_comment and pull_request_review_comment workflows run
 # from the default branch only. The consumer workflow that calls this must
@@ -95,7 +100,23 @@ on:
         type: string
         required: false
         default: ''
+      finding-source:
+        description: 'Source tag of the finding being acted on (e.g. code-reviewer, sarif:bandit). Used by feedback-loop commands.'
+        type: string
+        required: false
+        default: ''
+      finding-file:
+        description: 'File path the finding was on. Used by feedback-loop commands.'
+        type: string
+        required: false
+        default: ''
+      finding-rule-id:
+        description: 'Rule ID of the finding (e.g. SARIF ruleId). Used by feedback-loop commands.'
+        type: string
+        required: false
+        default: ''
     secrets:
+
       api-key:
         description: 'API key for the LLM provider'
         required: true
@@ -163,6 +184,11 @@ jobs:
           - `/ai-pr-review review-full` — run all agents (full mode)
           - `/ai-pr-review skip` — suppress the next automated review
           - `/ai-pr-review dismiss` — reply to a finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved)
+          - `/ai-pr-review false-positive [reason]` — record finding as false positive in the learning loop
+          - `/ai-pr-review wont-fix [reason]` — record finding as intentional in the learning loop
+          - `/ai-pr-review feedback <text>` — store free-form feedback in the learning loop
+          - `/ai-pr-review explain` — request a detailed explanation from the originating agent
+          - `/ai-pr-review revise <hint>` — request the agent to revise its finding with a hint
           - `/ai-pr-review help` — show this message
           HELP
           )"
@@ -555,4 +581,104 @@ jobs:
         run: |
           gh api \
             "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}/reactions" \
+            -f content=confused
+
+  # ---------------------------------------------------------------------------
+  # Capability C: learning-loop feedback commands.
+  #
+  # Handles: /ai-pr-review false-positive [reason]
+  #          /ai-pr-review wont-fix [reason]
+  #          /ai-pr-review feedback <text>
+  #          /ai-pr-review explain
+  #          /ai-pr-review revise <hint>
+  #
+  # Runs the Python CLI `ai-pr-review slash` subcommand, which parses the
+  # comment body, writes a FeedbackEntry to the GitBranchStore, and prints
+  # a reply.  The reply is posted back to the comment thread and the thread
+  # is resolved if the command is a feedback command.
+  #
+  # Requires AI_FEEDBACK_LOOP=true and a GH_TOKEN with contents:write on the
+  # feedback branch (default: ai-pr-review-bot).
+  # ---------------------------------------------------------------------------
+  feedback-command:
+    if: |
+      inputs.event-name == 'issue_comment' &&
+      inputs.is-pull-request == 'true' &&
+      startsWith(inputs.comment-body, '/ai-pr-review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
+    steps:
+      - name: Invoke Python slash handler
+        id: handler
+        env:
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+          SLASH_SOURCE: ${{ inputs.finding-source }}
+          SLASH_FILE: ${{ inputs.finding-file }}
+          SLASH_RULE_ID: ${{ inputs.finding-rule-id }}
+          AI_FEEDBACK_LOOP: 'true'
+          GITHUB_REPOSITORY: ${{ inputs.repository }}
+          GH_TOKEN: ${{ secrets.github-token }}
+          AI_PROVIDER: ${{ inputs.provider }}
+        run: |
+          set +e
+          reply=$(ai-pr-review slash 2>/tmp/slash-stderr)
+          exit_code=$?
+          stderr_content=$(cat /tmp/slash-stderr)
+          if [[ -n "$stderr_content" ]]; then
+            echo "$stderr_content" >&2
+          fi
+          if [[ $exit_code -eq 2 ]]; then
+            echo "::notice::Not a recognized slash command; skipping."
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ $exit_code -ne 0 ]]; then
+            echo "::error::slash handler exited $exit_code"
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+            exit $exit_code
+          fi
+          if [[ -z "$reply" ]]; then
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Encode reply so it survives multiline GITHUB_OUTPUT
+          encoded=$(printf '%s' "$reply" | base64 -w0)
+          echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
+          echo "is_command=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post reply comment
+        if: steps.handler.outputs.is_command == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          REPLY_B64: ${{ steps.handler.outputs.reply_b64 }}
+        run: |
+          reply=$(echo "$REPLY_B64" | base64 -d)
+          gh pr comment "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body "$reply"
+
+      - name: React — done
+        if: steps.handler.outputs.is_command == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content="+1"
+
+      - name: React — failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=confused
