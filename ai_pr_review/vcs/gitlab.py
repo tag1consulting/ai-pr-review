@@ -517,7 +517,7 @@ class GitLabProvider:
                 ok, status, body_snippet = self._resolve_discussion(disc_id)
             except RetryExhaustedError as exc:
                 errors.append(f"resolve discussion {disc_id}: retry exhausted: {exc}")
-                break
+                continue
             if not ok:
                 errors.append(f"resolve discussion {disc_id}: HTTP {status}: {body_snippet}")
                 continue
