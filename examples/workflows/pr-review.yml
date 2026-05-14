@@ -40,13 +40,25 @@ jobs:
 
       - name: Run AI review
         uses: tag1consulting/ai-pr-review/container-action@main
+        env:
+          FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
         with:
           image-tag: 'latest'
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # --- Provider ---
+          # Set AI_REVIEW_API_KEY as a repository secret.
+          api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
           base-ref: ${{ github.event.pull_request.base.ref }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+          # --- Optional repo variables (set in Settings → Variables) ---
+          # AI_REVIEW_PROVIDER: LLM provider (default: anthropic)
+          provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
+          # AI_REVIEW_BASE_URL: custom endpoint for openai-compatible or bedrock-proxy
+          base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          # AI_REVIEW_MODEL_STANDARD / AI_REVIEW_MODEL_PREMIUM: override provider defaults
+          model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
+          model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
           # Auto-select full mode for release PRs; customize the branch pattern
           # for your repo's convention. See README "Auto-detecting release PRs".
           review-mode: >-
@@ -55,4 +67,18 @@ jobs:
               startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
               'quick'
             }}
+          # AI_REVIEW_MAX_DIFF_LINES: skip review when diff exceeds this many lines (default: 5000)
+          max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+          # AI_REVIEW_MAX_INLINE: max inline comments per run; excess goes to summary (default: 25)
+          max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+          # AI_REVIEW_MAX_TOKENS_PER_AGENT: output token budget per LLM agent (default: 8192)
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          # AI_REVIEW_ENABLE_SUGGESTIONS: "Apply suggestion" buttons on inline comments (default: true)
+          enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
+          # AI_REVIEW_PARALLEL: parallel tiered fan-out; set false to go sequential (default: true)
+          parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
+          # AI_PR_REVIEW_ENGINE: compute engine, bash or python (default: bash)
+          engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
+          # AI_REVIEW_IGNORE_MERGE_COMMITS: strip upstream base-branch merges from diff (default: false)
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
           # Use /ai-pr-review rescan in a PR comment to trigger a full-diff re-review

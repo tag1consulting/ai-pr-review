@@ -92,6 +92,10 @@ jobs:
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          # vars.AI_REVIEW_MODEL_STANDARD / AI_REVIEW_MODEL_PREMIUM override the
+          # provider defaults. Leave unset to use provider defaults.
+          model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
+          model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
           review-mode: >-
             ${{
               inputs.review_mode ||
@@ -104,9 +108,20 @@ jobs:
           base-ref: ${{ steps.resolve-standalone.outputs.base_ref || steps.resolve-pr.outputs.base_ref || github.event.pull_request.base.ref || github.event.repository.default_branch }}
           head-sha: ${{ steps.resolve-standalone.outputs.head_sha || steps.resolve-pr.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          parallel: 'true'
+          # vars.AI_REVIEW_PARALLEL disables tiered parallel fan-out (default true).
+          # Set to 'false' if you hit provider rate limits.
+          parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
           engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
           # vars.AI_REVIEW_MAX_DIFF_LINES is a trusted repo variable (not user
           # input from a PR), so it's safe to interpolate directly into the
           # composite-action input. Default 5000 matches review.sh.
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+          # vars.AI_REVIEW_MAX_INLINE caps inline comments per run (default 25).
+          max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+          # vars.AI_REVIEW_MAX_TOKENS_PER_AGENT caps output tokens per agent (default 8192).
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          # vars.AI_REVIEW_ENABLE_SUGGESTIONS enables "Apply suggestion" buttons (default true).
+          enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
+          # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
+          # merge commits before diffing. Trusted repo variable; default false.
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}

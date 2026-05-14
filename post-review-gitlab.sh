@@ -512,6 +512,11 @@ ${body_findings}"
 
   local sha_marker="${MARKER_PREFIX} sha=${HEAD_SHA} -->"
 
+  local merge_filter_note=""
+  if [[ -n "${AI_MERGE_FILTER_FALLBACK_REASON:-}" ]]; then
+    merge_filter_note=$'\n'"_Note: merge-commit filtering was skipped (${AI_MERGE_FILTER_FALLBACK_REASON}); diff may include upstream changes._"$'\n'
+  fi
+
   local pr_summary_block=""
   if [[ -n "$summary" ]]; then
     pr_summary_block="
@@ -535,7 +540,7 @@ ${token_content}
   fi
 
   local body
-  body="${sha_marker}
+  body="${sha_marker}${merge_filter_note}
 ${heading}
 
 ${summary_block}
