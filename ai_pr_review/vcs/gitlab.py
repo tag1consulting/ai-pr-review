@@ -527,4 +527,8 @@ class GitLabProvider:
             self._discussion_resolve_url(discussion_id),
             params={"resolved": "true"},
         )
-        return resp.status_code < 400
+        resp = self.client.request(
+            "PUT",
+            self._discussion_resolve_url(discussion_id),
+            json_body={"resolved": True},
+        )
