@@ -128,7 +128,10 @@ async def _run_review_async(config: ReviewConfig) -> int:
     base_ref = str(payload.get("base") or config.base_ref)
 
     # 3. Build dispatch context
-    script_dir = Path(__file__).resolve().parent.parent
+    # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
+    # can locate prompts/language-profiles when installed as a pip package.
+    _env_script_dir = os.environ.get("AI_PR_REVIEW_SCRIPT_DIR")
+    script_dir = Path(_env_script_dir) if _env_script_dir else Path(__file__).resolve().parent.parent
     diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
     diff_path.write_text(diff_text, encoding="utf-8")
 

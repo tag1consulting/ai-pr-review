@@ -42,6 +42,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_PR_REVIEW_RECORD_DIR",
         "AI_PR_REVIEW_ENGINE",
         "AI_PR_REVIEW_COMPUTE_OUTPUT",
+        "AI_PR_REVIEW_SCRIPT_DIR",
         # Claude Code sets this in its agent environment; not a user-configured var.
         "AI_AGENT",
     }

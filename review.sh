@@ -195,6 +195,7 @@ main() {
   done
 
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  export AI_PR_REVIEW_SCRIPT_DIR="$SCRIPT_DIR"
   REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
   REVIEW_TARGET="${REVIEW_TARGET:-pr}"
   PR_NUMBER="${PR_NUMBER:-}"
@@ -298,6 +299,9 @@ main() {
   AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
   if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]]; then
     echo "Engine: python (Epic 2 mode — compute + dispatch + post via Python)" >&2
+    # Export model defaults so the Python subprocess inherits them. Bash
+    # sets these with := but does not auto-export bash-local assignments.
+    export AI_MODEL_STANDARD AI_MODEL_PREMIUM
     if ! python3 -m ai_pr_review review; then
       log_error "Python review engine failed."
       exit 1
