@@ -115,13 +115,13 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     try:
         from tree_sitter_language_pack import get_parser
     except ImportError as exc:
-        # Include the underlying cause: missing package ("No module named ...")
-        # vs broken install (ABI mismatch, missing symbol) need different
-        # operator responses, and bare "not installed" hides the latter.
+        # Include the underlying cause via exc_info so the full exception
+        # chain (e.g. an OSError __cause__ from a broken native extension)
+        # is attached to the log record — not just the top-level message.
         logger.warning(
             "tree-sitter-language-pack unavailable; context enrichment disabled. "
-            "Install with: pip install 'ai-pr-review[context]'. Cause: %s",
-            exc,
+            "Install with: pip install 'ai-pr-review[context]'.",
+            exc_info=exc,
         )
         return []
 
