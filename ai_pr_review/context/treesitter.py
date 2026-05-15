@@ -142,7 +142,13 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     # current API first, fall back to the old one.
     try:
         tree = parser.parse(src)
-    except (TypeError, AttributeError):
+    except (TypeError, AttributeError) as primary_exc:
+        # Don't lose the primary mismatch detail — operators debugging an
+        # API skew need to see which signature was tried first.
+        logger.debug(
+            "tree-sitter: parser.parse(str) raised %s (%s); trying bytes fallback",
+            type(primary_exc).__name__, primary_exc,
+        )
         try:
             tree = parser.parse(src_bytes)
         except Exception as exc:
@@ -237,8 +243,15 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
             for i in range(child_count):
                 try:
                     child = node.child(i)  # type: ignore[attr-defined]
-                except (TypeError, AttributeError):
-                    break
+                except (TypeError, AttributeError) as exc:
+                    # Log the first failure so silent traversal truncation is
+                    # visible, then continue so we still visit remaining
+                    # siblings (the failure is per-index, not whole-loop).
+                    logger.debug(
+                        "tree-sitter: node.child(%d) failed (%s: %s); skipping",
+                        i, type(exc).__name__, exc,
+                    )
+                    continue
                 if child is not None:
                     _walk(child)
         else:
