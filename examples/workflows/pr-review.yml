@@ -43,7 +43,10 @@ jobs:
         env:
           FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
         with:
-          image-tag: 'latest'
+          # AI_REVIEW_IMAGE_TAG: container image tag (default: latest)
+          # Set to 'dev' to dogfood pre-release builds, or pin to a release
+          # tag (e.g. '0.8.0') for reproducibility.
+          image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
           # --- Provider ---
           # Set AI_REVIEW_API_KEY as a repository secret.
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}

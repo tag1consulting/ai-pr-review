@@ -35,7 +35,12 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-That's it — reviews start firing on the next PR. **Want slash commands?** (`/ai-pr-review rescan`, `review-full`, etc.) — see [Slash commands](#slash-commands) for the additional workflow file. See [Installation](#installation) for full-mode agents, provider configuration, and other options.
+That's it — reviews start firing on the next PR.
+
+**Going further:**
+- [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and the Epic 3 learning-loop commands (`false-positive`, `wont-fix`, `feedback`)
+- [Opt-in capabilities (Epic 3)](#opt-in-capabilities-epic-3) — tree-sitter symbol-context enrichment, SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All default off, all require `engine: python`.
+- [Installation](#installation) — full-mode agents, provider configuration, [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) for the complete repo-variable pattern used by internal consumers
 
 ## Supported VCS providers
 
@@ -143,7 +148,7 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
   env:
     FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
   with:
-    image-tag: 'latest'            # or pin to a release tag, e.g. '0.7.0'
+    image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}  # or pin to a release tag, e.g. '0.8.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
@@ -154,9 +159,9 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-See [examples/README.md](examples/README.md) for a complete setup walkthrough including slash commands and provider configuration.
+See [examples/README.md](examples/README.md) for the complete setup walkthrough including [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) — the canonical template every internal Tag1 repo uses, with every input wired to a `vars.AI_REVIEW_*` repo variable with a safe fallback default.
 
-**Secrets and variables** — configure in the consuming repository's settings:
+**Secrets and variables** — configure in the consuming repository's settings. All variables are optional; the secret is required.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
@@ -165,6 +170,14 @@ See [examples/README.md](examples/README.md) for a complete setup walkthrough in
 | `AI_REVIEW_BASE_URL` | Variable | No | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
 | `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
+| `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `v0.8.0`) |
+| `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `bash` (default) or `python` — the latter is required for the Epic 3 opt-in capabilities |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `true` to strip base-branch merge commits from the diff before review (default `false`) |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (Epic 3, requires `engine: python`; default `false`) |
+| `AI_REVIEW_SARIF_PATHS` | Variable | No | Comma-separated SARIF 2.1.0 file paths to merge as findings (Epic 3, requires `engine: python`; default `''`) |
+| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | `true` to enable the learning loop (Epic 3, GitHub-only, requires `engine: python`; default `false`) |
+
+See [Configuration → Repository variables](docs/configuration.md#repository-variables) for the full list including the runtime tuning vars (`AI_REVIEW_MAX_DIFF_LINES`, `AI_REVIEW_MAX_INLINE`, `AI_REVIEW_MAX_TOKENS_PER_AGENT`, `AI_REVIEW_ENABLE_SUGGESTIONS`, `AI_REVIEW_PARALLEL`).
 
 **Local development** — run reviews against any open PR without a CI runner:
 

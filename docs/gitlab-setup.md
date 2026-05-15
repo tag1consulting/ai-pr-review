@@ -98,7 +98,7 @@ In your GitLab project, go to **Settings → CI/CD → Variables** and add:
 
 ### 3. Copy the starter pipeline
 
-Copy [`examples/pipelines/.gitlab-ci.yml`](../examples/pipelines/.gitlab-ci.yml)
+Copy [`examples/pipelines/.gitlab-ci.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/pipelines/.gitlab-ci.yml)
 to the root of your repo as `.gitlab-ci.yml`, commit, and push. The review
 fires on every MR open/update via merge request pipelines.
 
