@@ -240,25 +240,29 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         # Iterate children: new API uses child(i)/child_count(); old uses .children
         child_count = _attr_or_call(node, "child_count", None)
         if isinstance(child_count, int):
-            visited_any = False
+            # Track failed access separately from "child returned None" — the
+            # latter is a legitimate state for some node kinds and must not
+            # trigger the total-failure WARNING.
+            failed_count = 0
             for i in range(child_count):
                 try:
                     child = node.child(i)  # type: ignore[attr-defined]
                 except (TypeError, AttributeError) as exc:
-                    # Log per-index failures at DEBUG so silent truncation
-                    # is visible; continue rather than break since failure
-                    # is per-index (e.g. one unsupported child kind).
+                    # Per-index DEBUG so silent truncation is visible;
+                    # continue rather than break since failure is per-index
+                    # (e.g. one unsupported child kind).
                     logger.debug(
                         "tree-sitter: node.child(%d/%d) failed (%s: %s); skipping",
                         i, child_count, type(exc).__name__, exc,
                     )
+                    failed_count += 1
                     continue
                 if child is not None:
-                    visited_any = True
                     _walk(child)
-            # If we had children to visit but couldn't reach any of them,
-            # the entire subtree is silently lost — promote to WARNING.
-            if child_count > 0 and not visited_any:
+            # If every child raised, the entire subtree is silently lost —
+            # promote to WARNING.  Partial failures stay at DEBUG since the
+            # walk still made progress.
+            if child_count > 0 and failed_count == child_count:
                 node_kind = _attr_or_call(node, "kind", None) or _attr_or_call(
                     node, "type", "?",
                 )
@@ -266,6 +270,15 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
                     "tree-sitter: node.child() failed for all %d children of "
                     "node kind %r; subtree skipped",
                     child_count, node_kind,
+                )
+            elif 0 < failed_count < child_count:
+                node_kind = _attr_or_call(node, "kind", None) or _attr_or_call(
+                    node, "type", "?",
+                )
+                logger.debug(
+                    "tree-sitter: node.child() failed for %d/%d children of "
+                    "node kind %r; partial subtree skipped",
+                    failed_count, child_count, node_kind,
                 )
         else:
             children = _attr_or_call(node, "children", []) or []
