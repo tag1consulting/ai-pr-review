@@ -787,7 +787,9 @@ jobs:
         run: |
           set -e
           reply_file=$(mktemp)
-          trap 'rm -f "$reply_file"' EXIT
+          # Trap covers both the base file and the transient .with-note copy
+          # so we don't leak a temp file if the prepend pipeline below fails.
+          trap 'rm -f "$reply_file" "${reply_file}.with-note"' EXIT
           # If base64 decode fails the file is empty; fail loudly instead of
           # silently POSTing a blank reply.
           if ! echo "$REPLY_B64" | base64 -d > "$reply_file"; then
@@ -890,7 +892,9 @@ jobs:
             # GraphQL returns HTTP 200 even on schema/permission errors; the
             # errors land in .errors[]. Treat them as fatal-for-this-step but
             # still best-effort overall (feedback already persisted).
-            if echo "$result" | jq -e '.errors // empty' >/dev/null 2>&1; then
+            # Use `length // 0 > 0` so we correctly skip on missing-key,
+            # .errors:null, and empty array — not just on a present .errors.
+            if echo "$result" | jq -e '(.errors | length // 0) > 0' >/dev/null 2>&1; then
               echo "::warning::GraphQL error fetching review threads: $(echo "$result" | jq -c '.errors'); feedback persisted but thread left open."
               exit 0
             fi
@@ -918,7 +922,7 @@ jobs:
               echo "::warning::Failed to resolve review thread ${thread_id} (transport error): ${mut_result}; feedback persisted."
               exit 0
             }
-          if echo "$mut_result" | jq -e '.errors // empty' >/dev/null 2>&1; then
+          if echo "$mut_result" | jq -e '(.errors | length // 0) > 0' >/dev/null 2>&1; then
             echo "::warning::GraphQL error resolving review thread ${thread_id}: $(echo "$mut_result" | jq -c '.errors'); feedback persisted."
             exit 0
           fi
