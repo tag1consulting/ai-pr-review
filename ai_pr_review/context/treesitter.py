@@ -113,7 +113,7 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         return []
 
     try:
-        from tree_sitter_language_pack import get_parser  # type: ignore[import]
+        from tree_sitter_language_pack import get_parser
     except ImportError:
         logger.warning(
             "tree-sitter-language-pack not installed; context enrichment disabled. "
@@ -140,7 +140,7 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     refs: list[SymbolRef] = []
     seen: set[str] = set()
 
-    def _walk(node: object) -> None:  # type: ignore[misc]
+    def _walk(node: object) -> None:
         node_type: str = getattr(node, "type", "")
         if node_type in _IDENTIFIER_NODE_TYPES:
             name: str = getattr(node, "text", b"").decode(errors="replace")

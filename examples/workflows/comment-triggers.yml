@@ -8,11 +8,19 @@
 # secrets and optional provider configuration below.
 #
 # Supported commands (post as a PR comment):
-#   /ai-pr-review rescan       — force full diff, re-run review
-#   /ai-pr-review review-full  — run in full mode (all agents)
-#   /ai-pr-review skip         — add skip-ai-review label to suppress the next review
-#   /ai-pr-review dismiss      — reply to an inline finding to mark it as a false positive
-#   /ai-pr-review help         — post the command list as a reply
+#   /ai-pr-review rescan                  — force full diff, re-run review
+#   /ai-pr-review review-full             — run in full mode (all agents)
+#   /ai-pr-review skip                    — add skip-ai-review label to suppress next review
+#   /ai-pr-review dismiss                 — reply to an inline finding (false-positive alias)
+#   /ai-pr-review help                    — post the command list as a reply
+#
+# Epic 3 learning-loop commands (require enable-feedback-loop: 'true' below, plus
+# a GH_TOKEN with contents:write on the ai-pr-review-bot branch; OWNER/MEMBER only):
+#   /ai-pr-review false-positive [reason] — persist a false-positive verdict
+#   /ai-pr-review wont-fix [reason]       — persist a "won't fix" verdict
+#   /ai-pr-review feedback <text>         — persist free-form feedback for future reviews
+#   /ai-pr-review explain                 — request an expanded explanation (stub for now)
+#   /ai-pr-review revise <hint>           — request a revised verdict (stub for now)
 #
 # Requirements:
 #   - ANTHROPIC_API_KEY secret (or your provider's key)
@@ -68,6 +76,12 @@ jobs:
       # base-url: ''
       # image-tag: 'latest'
       # review-mode-default: 'quick'
+      #
+      # --- Epic 3 — Capability C (learning loop) ---
+      # Uncomment to enable /ai-pr-review false-positive | wont-fix | feedback |
+      # explain | revise commands. Persistent feedback commands require GH_TOKEN
+      # with contents:write on the ai-pr-review-bot branch. Off by default.
+      # enable-feedback-loop: 'true'
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # GH_TOKEN must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.

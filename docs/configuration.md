@@ -46,6 +46,10 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
 | `AI_PR_REVIEW_ENGINE` | `bash` | `engine` | Compute engine: `bash` (default) or `python` |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
+| `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | `context-enrichment` | **Epic 3 — Capability A.** Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). |
+| `AI_REVIEW_SARIF_PATHS` | `''` | `sarif-paths` | **Epic 3 — Capability B.** Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
+| `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | **Epic 3 — Capability C.** Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. |
 
 To set a variable via the GitHub CLI:
 ```bash

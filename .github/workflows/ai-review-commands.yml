@@ -42,6 +42,14 @@ jobs:
       actor-login: ${{ github.event.comment.user.login }}
       provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
       base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+      # vars.AI_REVIEW_IMAGE_TAG pins the container image used by feedback-command
+      # (default 'latest'). Override for testing pre-release images.
+      image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
+      # --- Epic 3: Capability C — learning loop ---
+      # vars.AI_REVIEW_FEEDBACK_LOOP enables /ai-pr-review false-positive | wont-fix
+      # | feedback | explain | revise commands. Disabled by default; the
+      # feedback-command job is skipped entirely until this is 'true'.
+      enable-feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
     secrets:
       api-key: ${{ secrets.AI_REVIEW_API_KEY }}
       # Must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.
