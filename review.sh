@@ -181,6 +181,48 @@ fetch_pr_description() {
 }
 
 
+# warn_epic3_capability_misconfig — surface Epic 3 capability/engine mismatches.
+#
+# The three Epic 3 capabilities (context enrichment, SARIF ingestion, learning
+# loop) are implemented only in the Python engine.  When they are enabled but
+# the engine is "bash", they silently do nothing — the operator who set the
+# flag has no way to know.  We emit a loud GitHub-Actions-style ::warning::
+# (also visible on Bitbucket / GitLab as a plain stderr line) so the
+# misconfiguration is visible in the run log.
+#
+# Warns rather than fail-fasts to match the codebase's fail-soft posture
+# (e.g. missing tree-sitter grammar → warn + regex fallback).
+#
+# Arguments:
+#   $1 — the resolved AI_PR_REVIEW_ENGINE value
+# Reads env vars:
+#   AI_CONTEXT_ENRICHMENT, AI_FEEDBACK_LOOP — bool flags
+#   AI_SARIF_PATHS — non-empty string triggers the warning
+warn_epic3_capability_misconfig() {
+  local engine="$1"
+  if [[ "$engine" == "python" ]]; then
+    return 0
+  fi
+  # Hoist all locals to the top so that under `set -e`, a `local` declaration
+  # at the start of a loop iteration cannot mask an assignment failure on its
+  # RHS — `local` itself always exits 0.
+  local var val feature
+  for pair in \
+      "AI_CONTEXT_ENRICHMENT:tree-sitter context enrichment (Capability A)" \
+      "AI_FEEDBACK_LOOP:learning loop (Capability C)"; do
+    var="${pair%%:*}"
+    feature="${pair#*:}"
+    val="${!var:-}"
+    if [[ "$val" == "true" || "$val" == "True" || "$val" == "1" ]]; then
+      echo "::warning::${var}=${val} but AI_PR_REVIEW_ENGINE=${engine}; ${feature} requires the Python engine and will be IGNORED. Set AI_PR_REVIEW_ENGINE=python to enable." >&2
+    fi
+  done
+  if [[ -n "${AI_SARIF_PATHS:-}" ]]; then
+    echo "::warning::AI_SARIF_PATHS is set but AI_PR_REVIEW_ENGINE=${engine}; SARIF ingestion (Capability B) requires the Python engine and will be IGNORED. Set AI_PR_REVIEW_ENGINE=python to enable." >&2
+  fi
+}
+
+
 main() {
 
   set -euo pipefail
@@ -297,6 +339,12 @@ main() {
   # The legacy JSON-tempfile handoff (Epic 1 shim) is removed in Epic 2 S12.
   # ---------------------------------------------------------------------------
   AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+
+  # Surface Epic 3 capability/engine misconfigurations to stderr before
+  # dispatching to either engine.  Defined as a top-level function so it's
+  # testable via tests/warn_epic3_capability_misconfig.bats.
+  warn_epic3_capability_misconfig "$AI_PR_REVIEW_ENGINE"
+
   if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]]; then
     echo "Engine: python (Epic 2 mode — compute + dispatch + post via Python)" >&2
     # Export model defaults so the Python subprocess inherits them. Bash
