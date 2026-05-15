@@ -9,8 +9,20 @@
 #                                    Falls back to CI_JOB_TOKEN (limited scopes).
 #
 # Optional CI/CD variables:
-#   AI_PROVIDER         (default: anthropic)
-#   AI_REVIEW_MODE      (default: quick; set to 'full' for deep agents)
+#   AI_PROVIDER             (default: anthropic)
+#   AI_REVIEW_MODE          (default: quick; set to 'full' for deep agents)
+#   AI_REVIEW_IMAGE_TAG     (default: latest; set to 'dev' to dogfood pre-release
+#                            builds, or pin to a version like 'v0.8.0')
+#   AI_PR_REVIEW_ENGINE     (default: bash; set to 'python' to opt into the
+#                            Epic 3 capabilities below)
+#   AI_IGNORE_MERGE_COMMITS (default: false; strip base-branch merges from diff)
+#
+# Epic 3 opt-in capabilities (require Python engine):
+#   AI_CONTEXT_ENRICHMENT  (default: false; tree-sitter symbol-context injection)
+#   AI_SARIF_PATHS         (default: ''; comma-separated SARIF 2.1.0 file paths
+#                           to merge as findings)
+# Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only by design — see
+# docs/learning-loop.md. On GitLab it degrades silently to a no-op.
 #
 # GIT_STRATEGY=clone + GIT_DEPTH=0 are required: review.sh calls
 # `git fetch origin $BASE_REF` to compute the diff, and the default
@@ -21,11 +33,21 @@
 # merge request pipelines (triggered by rules with $CI_MERGE_REQUEST_IID).
 
 image:
-  name: ghcr.io/tag1consulting/ai-pr-review:0
+  # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.  Defaulted
+  # below in the `variables:` block to 'latest'; override by setting the
+  # variable in project CI/CD settings (e.g. 'dev' to dogfood pre-release
+  # builds, or 'v0.8.0' to pin a release).
+  #
+  # NOTE: GitLab Runner expands $VAR / ${VAR} in image.name via Go's
+  # os.Expand(), which does NOT support bash-style ${VAR:-default}
+  # parameter expansion.  The default must come from `variables:` below.
+  name: ghcr.io/tag1consulting/ai-pr-review:$AI_REVIEW_IMAGE_TAG
 
 variables:
   GIT_STRATEGY: clone
   GIT_DEPTH: "0"
+  # Default image tag.  Project CI/CD variables override this.
+  AI_REVIEW_IMAGE_TAG: latest
 
 ai-review:
   stage: test
@@ -35,6 +57,11 @@ ai-review:
     - export VCS_PROVIDER=gitlab
     - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
     - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+    - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+    - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-false}"
+    # Epic 3 opt-in capabilities (Python engine only)
+    - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
+    - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"
     - export PR_NUMBER="$CI_MERGE_REQUEST_IID"
     - export BASE_REF="$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - export HEAD_SHA="$CI_COMMIT_SHA"

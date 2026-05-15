@@ -71,17 +71,19 @@ jobs:
       repository-owner: ${{ github.repository_owner }}
       repository-name: ${{ github.event.repository.name }}
       actor-login: ${{ github.event.comment.user.login }}
-      # --- CUSTOMIZE: uncomment and modify these for your setup ---
-      # provider: 'anthropic'
-      # base-url: ''
-      # image-tag: 'latest'
-      # review-mode-default: 'quick'
-      #
+      # --- Optional repo variables (set in Settings → Variables) ---
+      # All of these fall back to safe defaults when the corresponding
+      # repo variable is unset, so this wrapper works out of the box.
+      provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
+      base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+      image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
+      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || 'quick' }}
       # --- Epic 3 — Capability C (learning loop) ---
-      # Uncomment to enable /ai-pr-review false-positive | wont-fix | feedback |
-      # explain | revise commands. Persistent feedback commands require GH_TOKEN
-      # with contents:write on the ai-pr-review-bot branch. Off by default.
-      # enable-feedback-loop: 'true'
+      # AI_REVIEW_FEEDBACK_LOOP gates the feedback-command job which handles
+      # /ai-pr-review false-positive | wont-fix | feedback | explain | revise.
+      # Persistent feedback commands require GH_TOKEN with contents:write on
+      # the ai-pr-review-bot branch. OWNER/MEMBER only (enforced upstream).
+      enable-feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # GH_TOKEN must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.

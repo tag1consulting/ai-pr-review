@@ -85,7 +85,7 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
   env:
     FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
   with:
-    image-tag: 'latest'            # or pin to a release tag, e.g. '0.7.0'
+    image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}  # or pin to a release tag, e.g. '0.8.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
@@ -103,6 +103,10 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
     parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
     engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
     ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
+    # --- Epic 3 opt-in capabilities (require engine=python) ---
+    context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
+    sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || '' }}
+    feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
 ```
 
 See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/README.md) for a complete setup walkthrough including slash commands and provider configuration.
@@ -123,6 +127,10 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_REVIEW_PARALLEL` | Variable | No | Parallel tiered fan-out; set `false` for sequential (default: `true`) |
 | `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `bash` or `python` (default: `bash`) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `false`) |
+| `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default: `latest`); set to `dev` to dogfood pre-release builds or pin to a release |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | **Epic 3 — Capability A.** Tree-sitter symbol-context injection (default: `false`; requires `engine: python`) |
+| `AI_REVIEW_SARIF_PATHS` | Variable | No | **Epic 3 — Capability B.** Comma-separated SARIF 2.1.0 paths to merge as findings (default: `''`; requires `engine: python`) |
+| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | **Epic 3 — Capability C.** Enable the learning loop (default: `false`; GitHub-only; requires `engine: python`) |
 
 See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 

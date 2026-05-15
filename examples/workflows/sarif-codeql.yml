@@ -4,7 +4,11 @@
 # so findings from both are merged into a single review comment.
 #
 # Requirements:
-#   - AI_PR_REVIEW_ENGINE=python (set via engine: python below)
+#   - Python engine (`engine: python`) — SARIF ingestion is implemented in
+#     the Python pipeline only.  Because the Python engine ships in the
+#     container image, this workflow uses `container-action` rather than
+#     the root composite action (which would need pip + Python deps on the
+#     Actions runner).
 #   - ANTHROPIC_API_KEY or equivalent secret
 #   - Standard GitHub Actions permissions for CodeQL + PR review posting
 
@@ -44,11 +48,18 @@ jobs:
           output: results/codeql.sarif
           upload: false  # We'll pass the SARIF to AI reviewer instead
 
-      # Run AI PR Review, ingesting the CodeQL SARIF output
+      # Run AI PR Review, ingesting the CodeQL SARIF output.
+      # Uses container-action because SARIF ingestion requires the Python
+      # engine, which ships in the container image.
       - name: AI PR Review
-        uses: tag1consulting/ai-pr-review@main
+        uses: tag1consulting/ai-pr-review/container-action@main
         with:
-          engine: python
+          # vars.AI_REVIEW_IMAGE_TAG pins the container image. Default
+          # 'latest'; set to 'dev' to dogfood pre-release builds.
+          image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
+          engine: 'python'
+          # Comma-separated paths to SARIF 2.1.0 files. Findings merge
+          # into the same dedup/suppress pipeline as native analyzers.
           sarif-paths: 'results/codeql.sarif'
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

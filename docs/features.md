@@ -7,6 +7,28 @@ render_with_liquid: false
 
 # Features
 
+## What's new in Epic 3 (post-v0.8.0)
+
+Three opt-in capability groups in the Python engine. All default off, all require `engine: python`. See [Configuration → Opt-in capabilities](configuration#opt-in-capabilities-epic-3) for the full env-var reference.
+
+**Capability A — Context enrichment** (`AI_CONTEXT_ENRICHMENT=true`)
+- Tree-sitter extracts symbol references from diff hunks (9 grammars), with a regex fallback when tree-sitter is unavailable.
+- ripgrep looks up cross-file definitions and ranks by proximity (same-file > same-package > repo-wide).
+- Definitions are token-budget-capped and injected into eligible agent prompts as a `<symbol-context>` block. Reduces hallucinated "should check X" findings.
+
+**Capability B — SARIF 2.1.0 ingestion** (`AI_SARIF_PATHS=a.sarif,b.sarif`)
+- Parse external scanner output (CodeQL, Semgrep, Trivy, Bandit, custom) into the existing finding pipeline.
+- Severity mapping: `error → High`, `warning → Medium`, `note/none → Low`. Source tag: `sarif:<driver.name>`. Confidence: 90.
+- Findings flow through the same dedup/suppress/post path as native analyzers. Fail-soft on malformed files.
+- See [`examples/workflows/sarif-codeql.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/sarif-codeql.yml) for a CodeQL + AI review pipeline.
+
+**Capability C — Learning loop** (`AI_FEEDBACK_LOOP=true`, GitHub-only)
+- New slash commands: `/ai-pr-review false-positive [reason]`, `wont-fix [reason]`, `feedback <text>`, `explain`, `revise <hint>`.
+- Verdicts persist to `.ai-pr-review/learnings.jsonl` on a dedicated `ai-pr-review-bot` branch (auto-bootstrapped on first write).
+- Future reviews see a `<repo-feedback>` block of relevance-ranked recent entries, so repeated false positives get suppressed without further reviewer action.
+- Security-hardened input pipeline: NFC normalization, control-char stripping, length cap, HTML escape, secret-pattern rejection, defensive prompt framing against injection.
+- See [Learning loop](learning-loop) for the architecture.
+
 ## What's new in v0.7.0
 
 **Performance**

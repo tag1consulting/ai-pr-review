@@ -6,12 +6,28 @@ Copy these files into your repository to enable AI PR/MR reviews.
 
 | File | Purpose |
 |---|---|
-| `workflows/pr-review.yml` | GitHub Actions: automatic review on PR open/sync |
-| `workflows/comment-triggers.yml` | GitHub Actions: slash command support — thin wrapper that calls the reusable workflow (`/ai-pr-review rescan`, etc.) |
+| `workflows/pr-review.yml` | GitHub Actions: automatic review on PR open/sync. **Canonical template** — every input is wired to a `vars.AI_REVIEW_*` repo variable with a safe fallback, so you can flip any knob without editing the workflow. |
+| `workflows/comment-triggers.yml` | GitHub Actions: slash command support — thin wrapper that calls the reusable workflow (`/ai-pr-review rescan`, plus Epic 3 learning-loop commands when enabled) |
+| `workflows/sarif-codeql.yml` | GitHub Actions: example **CodeQL + AI review** pipeline using Capability B (SARIF 2.1.0 ingestion) |
 | `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
 | `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
 
-GitHub workflows use the container-action variant, which pulls a pinned public image from GHCR with all analyzer binaries pre-installed. Bitbucket and GitLab pipelines use the same image directly.
+GitHub workflows use the `container-action` variant, which pulls a pinned public image from GHCR with all analyzer binaries pre-installed. Bitbucket and GitLab pipelines use the same image directly.
+
+### Standardized call pattern
+
+`workflows/pr-review.yml` is the reference template. Every input reads from a repo variable with a safe default fallback:
+
+```yaml
+image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
+engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
+context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
+# ... etc.
+```
+
+Once the workflow is in place, you can change behavior at any time by setting (or unsetting) the corresponding variable in **Settings → Secrets and variables → Actions → Variables** — no further PR to the workflow file needed.
+
+See [Configuration → Repository variables](../docs/configuration.md#repository-variables) for the full list.
 
 ## Setup
 
@@ -62,8 +78,13 @@ Once the file is merged to your default branch, post these commands in any PR co
 | `/ai-pr-review skip` | Add `skip-ai-review` label to suppress the next review |
 | `/ai-pr-review help` | Post the command list as a reply |
 | `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive (dispatched via `pull_request_review_comment`, not `issue_comment`) |
+| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict to the learning store. Requires `AI_REVIEW_FEEDBACK_LOOP=true`. OWNER/MEMBER only. |
+| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. |
+| `/ai-pr-review feedback <text>` | **Epic 3 — Capability C.** Persist free-form feedback for future review runs. |
+| `/ai-pr-review explain` | **Epic 3 — Capability C.** Request a longer explanation (stub for now). |
+| `/ai-pr-review revise <hint>` | **Epic 3 — Capability C.** Request agent revision with a hint (stub for now). |
 
-Only users with `OWNER`, `MEMBER`, or `COLLABORATOR` association can trigger commands. This is enforced via an `author_association` guard in the workflow — GitHub does **not** do this automatically.
+The basic commands (`rescan`, `review-full`, `skip`, `dismiss`, `help`) allow OWNER, MEMBER, or COLLABORATOR. The Epic 3 learning-loop commands are restricted to OWNER and MEMBER only because they persist data that influences every future review repo-wide. Both restrictions are enforced via `author_association` guards in the workflow — GitHub does **not** do this automatically.
 
 See [docs/slash-commands.md](../docs/slash-commands.md) for full details.
 
@@ -76,6 +97,18 @@ Both `issue_comment` and `pull_request_review_comment` workflows run from the **
 
 This is a GitHub Actions platform behavior, not a limitation of this action.
 
+## Opt-in capabilities (Epic 3)
+
+Three optional features can be enabled independently. All default off, all require `engine: python`. Set the corresponding repo variable to turn them on without editing the workflow.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | Tree-sitter symbol-context injection into agent prompts (`<symbol-context>` block) |
+| `AI_REVIEW_SARIF_PATHS` | `''` | Comma-separated SARIF 2.1.0 file paths to merge as findings — see [`workflows/sarif-codeql.yml`](workflows/sarif-codeql.yml) for the CodeQL flavor |
+| `AI_REVIEW_FEEDBACK_LOOP` | `false` | Learning loop — persists `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts and re-injects them into future reviews. GitHub-only. |
+
+See [Configuration → Opt-in capabilities](../docs/configuration.md#opt-in-capabilities-epic-3) for the full env-var reference (retention knobs, token budgets, branch name).
+
 ## Using a pinned image version
 
 For reproducible builds, pin the image tag instead of using `latest`:
@@ -83,11 +116,13 @@ For reproducible builds, pin the image tag instead of using `latest`:
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: '0.7.0'   # pin to a specific release
+    image-tag: '0.8.0'   # pin to a specific release
     ...
 ```
 
-Available tags: `latest`, `<major>` (e.g. `0`), `<major.minor>` (e.g. `0.7`), `<major.minor.patch>` (e.g. `0.7.0`).
+Or set the `AI_REVIEW_IMAGE_TAG` repo variable to your chosen tag — the canonical `workflows/pr-review.yml` template reads it via `${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}`.
+
+Available tags: `latest`, `dev`, `<major>` (e.g. `0`), `<major.minor>` (e.g. `0.8`), `<major.minor.patch>` (e.g. `0.8.0`).
 
 ## Using the non-container action
 

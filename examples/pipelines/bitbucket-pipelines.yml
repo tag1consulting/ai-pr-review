@@ -9,17 +9,41 @@
 #   BITBUCKET_EMAIL     (plain)    — Atlassian account email for the bot user.
 #   BITBUCKET_API_TOKEN (secured)  — Atlassian API token with
 #                                    Repository:Read + PR:Write scopes.
+#   AI_REVIEW_IMAGE_TAG (plain)    — Container tag to pull. Recommended:
+#                                    'latest' (stable), 'dev' (pre-release),
+#                                    or a pinned release like 'v0.8.0'.
+#                                    Bitbucket Pipelines does not support
+#                                    bash-style defaults in image.name, so
+#                                    this must be set explicitly.
 #
 # Optional repository variables:
-#   AI_PROVIDER         (plain, default: anthropic)
-#   AI_REVIEW_MODE      (plain, default: quick; set to 'full' for deep agents)
+#   AI_PROVIDER             (plain, default: anthropic)
+#   AI_REVIEW_MODE          (plain, default: quick; set to 'full' for deep agents)
+#   AI_PR_REVIEW_ENGINE     (plain, default: bash; set to 'python' to opt into
+#                            the Epic 3 capabilities below)
+#   AI_IGNORE_MERGE_COMMITS (plain, default: false; strip base-branch merges
+#                            from the diff before review)
+#
+# Epic 3 opt-in capabilities (require Python engine):
+#   AI_CONTEXT_ENRICHMENT  (plain, default: false; tree-sitter symbol context)
+#   AI_SARIF_PATHS         (plain, default: ''; comma-separated SARIF 2.1.0
+#                           file paths to merge as findings)
+# Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only — no-op on Bitbucket.
 #
 # `clone.depth: full` is required: review.sh calls `git fetch origin $BASE_REF`
 # to compute the diff, and the default shallow Pipelines clone does not always
 # include the base branch history.
 
 image:
-  name: ghcr.io/tag1consulting/ai-pr-review:0
+  # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.
+  # IMPORTANT: Bitbucket Pipelines expands $VAR in image.name but does NOT
+  # support bash-style ${VAR:-default} parameter expansion (image.name is
+  # processed by the Pipelines engine, not bash).  You must set
+  # AI_REVIEW_IMAGE_TAG as a repository variable; recommended values:
+  #   'latest' — stable
+  #   'dev'    — dogfood pre-release builds
+  #   'v0.8.0' (or similar) — pin a specific release
+  name: ghcr.io/tag1consulting/ai-pr-review:$AI_REVIEW_IMAGE_TAG
   # For private pulls (ai-pr-review is currently public — use the public
   # pull below unless/until you host your own mirror). If you fork to a
   # private registry, uncomment and configure:
@@ -38,6 +62,11 @@ pipelines:
             - export VCS_PROVIDER=bitbucket
             - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
             - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+            - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+            - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-false}"
+            # Epic 3 opt-in capabilities (Python engine only)
+            - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
+            - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"
             - export PR_NUMBER="$BITBUCKET_PR_ID"
             - export BASE_REF="$BITBUCKET_PR_DESTINATION_BRANCH"
             - export HEAD_SHA="$BITBUCKET_COMMIT"
