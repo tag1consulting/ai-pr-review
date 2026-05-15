@@ -125,3 +125,14 @@ jobs:
           # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
           # merge commits before diffing. Trusted repo variable; default false.
           ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
+          # --- Epic 3: opt-in capabilities (Python engine only) ---
+          # vars.AI_REVIEW_CONTEXT_ENRICHMENT enables tree-sitter symbol-context
+          # injection into agent prompts (Capability A). Requires engine=python.
+          context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
+          # vars.AI_REVIEW_SARIF_PATHS — comma-separated SARIF 2.1.0 file paths
+          # to ingest as additional findings (Capability B). Empty disables.
+          sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || '' }}
+          # vars.AI_REVIEW_FEEDBACK_LOOP enables the learning loop (Capability C):
+          # loads recent <repo-feedback> entries from the ai-pr-review-bot branch
+          # and injects them into agent prompts. GitHub-only.
+          feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}

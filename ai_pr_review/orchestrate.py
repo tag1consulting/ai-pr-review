@@ -75,6 +75,8 @@ class OrchestrationConfig:
     enable_suggestions: bool = True
     semaphore_size: int = 4
     suppression_rules: tuple[SuppressionRule, ...] = ()
+    # --- Epic 3: Capability B — SARIF ingestion ---
+    sarif_paths: tuple[str, ...] = ()
 
 
 async def run_review(
@@ -106,6 +108,13 @@ async def run_review(
     """
     cfg = config or OrchestrationConfig()
 
+    # Reset the per-run symbol-lookup cache used by Capability A.  In a
+    # long-lived process (container reuse, future server mode) the cache
+    # would otherwise accumulate state across reviews.
+    if dispatch_context.enable_context_enrichment:
+        from ai_pr_review.context.symbols import _reset_cache
+        _reset_cache()
+
     if skip_reason:
         skip_result = provider.post_skip_comment(skip_reason)
         return ReviewResult(
@@ -121,6 +130,10 @@ async def run_review(
             skip_reason=skip_reason,
         )
 
+    # Note: Capability C — feedback addendum is wired by the caller via
+    # DispatchContext.feedback_addendum (see cli._run_review_async).  The
+    # orchestrator does not duplicate that injection.
+
     # Phase 1: dispatch agents
     successes: list[AgentResult]
     failures: list[FailedAgent]
@@ -131,8 +144,15 @@ async def run_review(
     else:
         successes, failures = [], []
 
-    # Phase 2: extract + merge + suppress
+    # Phase 1.5: inject SARIF findings (Capability B)
     raw_findings: list[Finding] = []
+    if cfg.sarif_paths:
+        from ai_pr_review.analyzers.sarif import load_sarif_files
+        sarif_findings = load_sarif_files(list(cfg.sarif_paths))
+        raw_findings.extend(sarif_findings)
+        logger.info("SARIF: loaded %d finding(s) from %d file(s)", len(sarif_findings), len(cfg.sarif_paths))
+
+    # Phase 2: extract + merge + suppress
     for s in successes:
         raw_findings.extend(
             extract_findings(s.output, agent_name=s.name, truncated=s.truncated)

@@ -7,6 +7,7 @@ Subcommands:
 - `review`: end-to-end Python pipeline (compute -> dispatch agents ->
   extract findings -> outcome -> post via VcsProvider). Replaces the
   bash post-review scripts when AI_PR_REVIEW_ENGINE=python.
+- `slash`: handle one ``/ai-pr-review`` comment command (Capability C).
 """
 
 from __future__ import annotations
@@ -94,7 +95,10 @@ def review() -> None:
         click.echo(f"Provider configuration error: {exc}", err=True)
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 — top-level catch for clean exit
+        import traceback
+        logger.error("Unexpected error in review pipeline", exc_info=True)
         click.echo(f"ERROR: {exc!r}", err=True)
+        click.echo(traceback.format_exc(), err=True)
         sys.exit(1)
     sys.exit(exit_code)
 
@@ -127,13 +131,41 @@ async def _run_review_async(config: ReviewConfig) -> int:
     head_sha = str(payload.get("head") or config.head_sha)
     base_ref = str(payload.get("base") or config.base_ref)
 
-    # 3. Build dispatch context
+    # 3. Build summary text. Prepend merge-filter fallback note when present.
+    merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
+    summary_text = ""
+    if merge_filter_fallback:
+        summary_text = (
+            f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
+            "diff may include upstream changes._\n\n"
+        )
+
+    # 4. Build feedback addendum when AI_FEEDBACK_LOOP=1 (before dispatch context)
+    feedback_addendum = ""
+    if config.enable_feedback_loop:
+        try:
+            from ai_pr_review.feedback.inject import build_feedback_addendum
+            from ai_pr_review.feedback.store import make_store
+            store = make_store(config)
+            entries = store.load_recent()
+            feedback_addendum = build_feedback_addendum(
+                entries, diff_text, max_tokens=config.feedback_max_tokens
+            )
+        except Exception as exc:
+            logger.warning(
+                "feedback loop: could not load feedback store: %s", exc, exc_info=True
+            )
+
+    # 5. Build dispatch context
     # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
     # can locate prompts/language-profiles when installed as a pip package.
     _env_script_dir = os.environ.get("AI_PR_REVIEW_SCRIPT_DIR")
     script_dir = Path(_env_script_dir) if _env_script_dir else Path(__file__).resolve().parent.parent
     diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
     diff_path.write_text(diff_text, encoding="utf-8")
+
+    _raw_changed = payload.get("changed_files")
+    _changed_list: list[str] = [str(f) for f in _raw_changed if f] if isinstance(_raw_changed, list) else []
 
     dispatch_ctx = DispatchContext(
         script_dir=script_dir,
@@ -145,9 +177,15 @@ async def _run_review_async(config: ReviewConfig) -> int:
         enable_suggestions=config.enable_suggestions,
         cache_priming_env=os.environ.get("AI_CACHE_PRIMING") or "false",
         prompt_caching_env=os.environ.get("LLM_PROMPT_CACHING") or "auto",
+        enable_context_enrichment=config.enable_context_enrichment,
+        context_max_tokens=config.context_max_tokens,
+        context_lookup_lines=config.context_lookup_lines,
+        repo_root=Path("."),
+        changed_files=_changed_list,
+        feedback_addendum=feedback_addendum,
     )
 
-    # 4. Apply conditional gates
+    # 6. Apply conditional gates
     last_reviewed = provider.get_last_reviewed_sha()
     raw_paths = payload.get("changed_files")
     changed_paths: list[object] = raw_paths if isinstance(raw_paths, list) else []
@@ -167,26 +205,18 @@ async def _run_review_async(config: ReviewConfig) -> int:
     mode_filtered = [a for a in mode_filtered if a.name != "pr-summarizer"]
     agents = filter_agents(mode_filtered, gates)
 
-    # 5. Bind LLM call to the configured provider
+    # 7. Bind LLM call to the configured provider
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, config.provider)
 
-    # 6. Build summary text. Prepend merge-filter fallback note when present.
-    merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
-    summary_text = ""
-    if merge_filter_fallback:
-        summary_text = (
-            f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
-            "diff may include upstream changes._\n\n"
-        )
-
-    # 7. Run the orchestrator
+    # 8. Run the orchestrator
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
         max_inline=config.max_inline,
         enable_suggestions=config.enable_suggestions,
         semaphore_size=config.parallel,
+        sarif_paths=config.sarif_paths,
     )
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
@@ -271,6 +301,75 @@ def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> No
         f"base={base_ref[:7] if base_ref else '?'}..{head[:7] if head else '?'}",
         err=True,
     )
+
+
+@cli.command()
+@click.option(
+    "--body",
+    envvar="SLASH_COMMENT_BODY",
+    default="",
+    help="Raw comment body (defaults to SLASH_COMMENT_BODY env var).",
+)
+@click.option(
+    "--source",
+    envvar="SLASH_SOURCE",
+    default="",
+    help="Finding source tag (e.g. 'code-reviewer', 'sarif:bandit').",
+)
+@click.option(
+    "--file",
+    "file_path",
+    envvar="SLASH_FILE",
+    default="",
+    help="File path the finding was on (may be empty).",
+)
+@click.option(
+    "--rule-id",
+    envvar="SLASH_RULE_ID",
+    default="",
+    help="Rule ID from the original finding (may be empty).",
+)
+def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
+    """Handle one /ai-pr-review comment command (Capability C).
+
+    Parses the comment body, dispatches to the appropriate handler, and
+    prints the reply message to stdout.  The GitHub Actions step in
+    slash-commands.yml captures stdout and posts it as a reply comment.
+
+    Exit codes:
+      0 — handled (or no-op / not a slash command)
+      2 — parse error (unknown command / malformed)
+    """
+    from ai_pr_review.slash.handlers import build_entry, handle_command
+    from ai_pr_review.slash.parser import ParseError, parse_command
+
+    if not body:
+        # Nothing to do — not an error
+        return
+
+    result = parse_command(body)
+
+    if result is None:
+        # Not a slash command — silently ignore
+        return
+
+    if isinstance(result, ParseError):
+        click.echo(f"slash: {result.message}", err=True)
+        sys.exit(2)
+
+    try:
+        config = ReviewConfig.from_env()
+    except ConfigError as exc:
+        click.echo(f"Configuration error: {exc}", err=True)
+        sys.exit(1)
+
+    from ai_pr_review.feedback.store import make_store
+
+    store = make_store(config)
+    entry = build_entry(result, source=source, file=file_path, rule_id=rule_id)
+    reply = handle_command(result, entry, store)
+    if reply:
+        click.echo(reply)
 
 
 def _run_compute(config: ReviewConfig) -> dict[str, object]:

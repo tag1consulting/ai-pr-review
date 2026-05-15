@@ -45,6 +45,18 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_PR_REVIEW_SCRIPT_DIR",
         # Claude Code sets this in its agent environment; not a user-configured var.
         "AI_AGENT",
+        # --- Epic 3: Capability A (context enrichment) ---
+        "AI_CONTEXT_ENRICHMENT",
+        "AI_CONTEXT_MAX_TOKENS",
+        "AI_CONTEXT_LOOKUP_LINES",
+        # --- Epic 3: Capability B (SARIF ingestion) ---
+        "AI_SARIF_PATHS",
+        # --- Epic 3: Capability C (slash commands + learning loop) ---
+        "AI_FEEDBACK_LOOP",
+        "AI_FEEDBACK_BRANCH",
+        "AI_FEEDBACK_MAX_TOKENS",
+        "AI_FEEDBACK_RETENTION_COUNT",
+        "AI_FEEDBACK_RETENTION_AGE_DAYS",
     }
 )
 
@@ -98,6 +110,21 @@ class ReviewConfig(BaseModel):
     disable_gate_security: bool = False
     disable_gate_edge_case: bool = False
     ignore_merge_commits: bool = False
+
+    # --- Epic 3: Capability A — context enrichment ---
+    enable_context_enrichment: bool = False
+    context_max_tokens: int = 8192
+    context_lookup_lines: int = 8
+
+    # --- Epic 3: Capability B — SARIF ingestion ---
+    sarif_paths: tuple[str, ...] = ()
+
+    # --- Epic 3: Capability C — slash commands + learning loop ---
+    enable_feedback_loop: bool = False
+    feedback_branch: str = "ai-pr-review-bot"
+    feedback_max_tokens: int = 2048
+    feedback_retention_count: int = 500
+    feedback_retention_age_days: int = 365
 
     # --- Provider credentials ---
     anthropic_api_key: str = ""
@@ -229,6 +256,19 @@ class ReviewConfig(BaseModel):
             disable_gate_security=_bool("AI_DISABLE_GATE_SECURITY"),
             disable_gate_edge_case=_bool("AI_DISABLE_GATE_EDGE_CASE"),
             ignore_merge_commits=_bool("AI_IGNORE_MERGE_COMMITS"),
+            enable_context_enrichment=_bool("AI_CONTEXT_ENRICHMENT"),
+            context_max_tokens=_int("AI_CONTEXT_MAX_TOKENS", 8192),
+            context_lookup_lines=_int("AI_CONTEXT_LOOKUP_LINES", 8),
+            sarif_paths=tuple(
+                p.strip()
+                for p in os.environ.get("AI_SARIF_PATHS", "").split(",")
+                if p.strip()
+            ),
+            enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
+            feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
+            feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),
+            feedback_retention_count=_int("AI_FEEDBACK_RETENTION_COUNT", 500),
+            feedback_retention_age_days=_int("AI_FEEDBACK_RETENTION_AGE_DAYS", 365),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
             google_api_key=os.environ.get("GOOGLE_API_KEY", ""),

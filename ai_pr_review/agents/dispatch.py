@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import anyio
@@ -61,6 +61,14 @@ class DispatchContext:
     enable_suggestions: bool = True
     cache_priming_env: str = "false"
     prompt_caching_env: str = "auto"
+    # --- Epic 3: Capability A — context enrichment ---
+    enable_context_enrichment: bool = False
+    context_max_tokens: int = 8192
+    context_lookup_lines: int = 8
+    repo_root: Path = field(default_factory=Path.cwd)
+    changed_files: list[str] = field(default_factory=list)
+    # --- Epic 3: Capability C — feedback loop ---
+    feedback_addendum: str = ""
 
     def __post_init__(self) -> None:
         if not self.standard_model:
@@ -246,6 +254,75 @@ def _format_exception_chain(exc: BaseException) -> str:
 LLMCall = Callable[[LLMRequest], Awaitable[LLMResponse]]
 
 
+def _build_user_message(
+    diff_text: str,
+    spec: AgentSpec,
+    context: DispatchContext,
+) -> str:
+    """Build the user message for an agent, optionally prepending symbol context.
+
+    When context enrichment is enabled and the agent is eligible, extracts
+    symbol references from the diff, looks up their definitions via ripgrep,
+    and prepends a ``<symbol-context>`` block.  Falls back to raw diff on any
+    error (fail-soft).
+    """
+    if not (context.enable_context_enrichment and spec.context_enrichment_eligible):
+        return diff_text
+
+    try:
+        from ai_pr_review.context.budget import build_context_block
+        from ai_pr_review.context.symbols import lookup_definitions
+        from ai_pr_review.context.treesitter import extract_symbol_refs
+
+        # Detect language from changed_files (use the most common extension)
+        language = _detect_primary_language(context.changed_files)
+        refs = extract_symbol_refs(diff_text, language)
+        if not refs:
+            return diff_text
+
+        defs = lookup_definitions(
+            refs,
+            context.repo_root,
+            context.changed_files,
+            language=language,
+            lookup_lines=context.context_lookup_lines,
+        )
+        ctx_block = build_context_block(defs, max_tokens=context.context_max_tokens)
+        if ctx_block:
+            return ctx_block + "\n\n" + diff_text
+    except Exception as exc:
+        import logging
+        # exc_info=True so unexpected errors (MemoryError, bugs in
+        # build_context_block, etc.) are distinguishable from expected
+        # failures (missing grammar, ripgrep absent) in production logs.
+        logging.getLogger(__name__).warning(
+            "context enrichment failed for agent %r: %s",
+            spec.name, exc, exc_info=True,
+        )
+
+    return diff_text
+
+
+def _detect_primary_language(changed_files: list[str]) -> str:
+    """Return the most common language key from a list of file paths."""
+    _EXT_TO_LANG: dict[str, str] = {
+        "py": "python", "ts": "typescript", "tsx": "tsx",
+        "js": "javascript", "jsx": "javascript",
+        "go": "go", "php": "php", "rb": "ruby", "rs": "rust",
+        "sh": "bash", "bash": "bash", "java": "java",
+        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "h": "c", "c": "c",
+    }
+    counts: dict[str, int] = {}
+    for f in changed_files:
+        ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
+        lang = _EXT_TO_LANG.get(ext, "")
+        if lang:
+            counts[lang] = counts.get(lang, 0) + 1
+    if not counts:
+        return ""
+    return max(counts, key=lambda k: counts[k])
+
+
 async def _run_single_agent(
     spec: AgentSpec,
     llm_call: LLMCall,
@@ -282,10 +359,19 @@ async def _run_single_agent(
 
         use_premium = spec.tier == 2 and context.mode == "full" and bool(context.premium_model)
         model_id = context.premium_model if use_premium else context.standard_model
+
+        # --- Epic 3: Capability A — context enrichment ---
+        user_message = _build_user_message(diff_text, spec, context)
+
+        # --- Epic 3: Capability C — feedback loop injection ---
+        system_prompt = prompt_path.read_text()
+        if context.feedback_addendum:
+            system_prompt = system_prompt + "\n\n" + context.feedback_addendum
+
         request = LLMRequest(
             model_id=model_id,
-            system_prompt=prompt_path.read_text(),
-            user_message=diff_text,
+            system_prompt=system_prompt,
+            user_message=user_message,
             max_tokens=spec.max_output_tokens,
         )
         async with limiter:

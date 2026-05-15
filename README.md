@@ -202,6 +202,11 @@ Once the comment-trigger workflow is merged to your default branch, users with w
 | `/ai-pr-review skip` | Add `skip-ai-review` label |
 | `/ai-pr-review help` | Post command list as reply |
 | `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive; dismisses the `CHANGES_REQUESTED` review when every thread is resolved |
+| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict to the feedback store. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
+| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. |
+| `/ai-pr-review feedback <text>` | **Epic 3 — Capability C.** Persist free-form feedback for future review runs to consider. |
+| `/ai-pr-review explain` | **Epic 3 — Capability C.** Ask the agent for a longer explanation (stub for now — replies with a canned message). |
+| `/ai-pr-review revise <hint>` | **Epic 3 — Capability C.** Ask the agent to revise its verdict with a hint (stub for now). |
 
 Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo — it's a thin wrapper (~70 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted here, so all command logic is maintained upstream. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch requirement.
 
@@ -225,8 +230,25 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
+| `engine` | No | `bash` | Compute engine: `bash` (default) or `python` (Epic 1+ Python engine). Required for Epic 3 capabilities below. |
+| `ignore-merge-commits` | No | `false` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. |
+| `context-enrichment` | No | `false` | **Epic 3 — Capability A.** Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Capabilities A/B/C below](#opt-in-capabilities-epic-3). |
+| `sarif-paths` | No | `''` | **Epic 3 — Capability B.** Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
+| `feedback-loop` | No | `false` | **Epic 3 — Capability C.** Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. |
 
 Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).
+
+## Opt-in capabilities (Epic 3)
+
+Three optional features can be enabled independently — all off by default, all require `engine: python`.
+
+| Capability | Action input | Env var | Default | Description |
+|-----------|-------------|---------|---------|-------------|
+| **A. Context enrichment** | `context-enrichment: 'true'` | `AI_CONTEXT_ENRICHMENT=true` | `false` | Use tree-sitter + ripgrep to look up cross-file symbol definitions referenced in the diff, then inject a `<symbol-context>` block (token-budget-capped) into eligible agent prompts. Reduces hallucinated "we should check X" findings by giving agents the real definitions. |
+| **B. SARIF ingestion** | `sarif-paths: 'a.sarif,b.sarif'` | `AI_SARIF_PATHS=a.sarif,b.sarif` | `''` | Parse SARIF 2.1.0 files produced by external scanners (CodeQL, Semgrep, Trivy, Bandit, ...) and merge their findings into the same dedup/suppress/post pipeline as native analyzers. See [examples/workflows/sarif-codeql.yml](examples/workflows/sarif-codeql.yml). |
+| **C. Learning loop** | `feedback-loop: 'true'` + `enable-feedback-loop: 'true'` on the slash-commands workflow | `AI_FEEDBACK_LOOP=true` | `false` | Reviewers post `/ai-pr-review false-positive`, `wont-fix`, or `feedback` to mark findings. Entries persist to a dedicated `ai-pr-review-bot` branch (auto-bootstrapped on first write) and feed into future agent prompts as a `<repo-feedback>` block. Requires `github-token` with `contents:write`. GitHub-only. See [docs/learning-loop.md](docs/learning-loop.md). |
+
+See [docs/configuration.md](docs/configuration.md#opt-in-capabilities-epic-3) for the full env-var reference including retention knobs (`AI_FEEDBACK_RETENTION_COUNT`, `AI_FEEDBACK_RETENTION_AGE_DAYS`), token budgets (`AI_CONTEXT_MAX_TOKENS`, `AI_FEEDBACK_MAX_TOKENS`), and the feedback branch name (`AI_FEEDBACK_BRANCH`).
 
 ## Review modes
 

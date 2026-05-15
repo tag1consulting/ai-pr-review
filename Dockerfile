@@ -73,6 +73,7 @@ RUN apt-get update -qq && \
       php-zip \
       python3 \
       python3-pip \
+      ripgrep \
       unzip \
     && rm -rf /var/lib/apt/lists/*
 
@@ -99,7 +100,7 @@ COPY pyproject.toml /opt/ai-pr-review/pyproject.toml
 RUN pip3 install --no-cache-dir --break-system-packages \
       "semgrep==${SEMGREP_VERSION}" \
       "checkov==${CHECKOV_VERSION}" \
-      /opt/ai-pr-review
+      "/opt/ai-pr-review[context]"
 
 # Bake semgrep rulesets so runtime scans skip the network.
 # run-semgrep.sh points --config at /opt/ai-pr-review/semgrep-rules/ and falls
@@ -159,6 +160,7 @@ RUN apt-get update -qq && \
       php-xml \
       php-mbstring \
       python3 \
+      ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # Binaries from single-binary tool stages

@@ -46,6 +46,10 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
 | `AI_PR_REVIEW_ENGINE` | `bash` | `engine` | Compute engine: `bash` (default) or `python` |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
+| `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | `context-enrichment` | **Epic 3 — Capability A.** Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). |
+| `AI_REVIEW_SARIF_PATHS` | `''` | `sarif-paths` | **Epic 3 — Capability B.** Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
+| `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | **Epic 3 — Capability C.** Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. |
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -111,6 +115,35 @@ These variables control in-development features gated behind explicit opt-in.
 |----------|---------|-------------|
 | `AI_PR_REVIEW_ENGINE` | `bash` | Select the compute engine. `bash` (default) uses the existing shell pipeline. `python` dispatches compute to the Python engine (Epic 1+); posting remains in bash. This flag is experimental — the Python engine is feature-incomplete until Epic 2 (#196). |
 | `AI_PR_REVIEW_COMPUTE_OUTPUT` | `''` | Path where the Python engine writes its compute-phase JSON payload. The bash post-review scripts read this file when `AI_PR_REVIEW_ENGINE=python`. See [docs/compute-output-schema.md](compute-output-schema.md). |
+| `AI_IGNORE_MERGE_COMMITS` | `false` | Strip base-branch merge commits before diff computation. Only reviews code the PR author wrote. Falls back to unfiltered diff on cherry-pick conflicts. Python engine and bash pipeline. |
+
+### Opt-in capabilities (Epic 3)
+
+These variables enable optional capabilities that are off by default. All require the Python engine (`AI_PR_REVIEW_ENGINE=python`) unless stated otherwise.
+
+#### Capability A — Context enrichment
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_CONTEXT_ENRICHMENT` | `false` | Enable tree-sitter + ripgrep symbol-context injection. Extracts symbol references from the diff and appends relevant definitions to each agent's prompt in a `<symbol-context>` block. Requires `tree-sitter-language-pack` (included in the container image) and `ripgrep`. |
+| `AI_CONTEXT_MAX_TOKENS` | `8192` | Maximum token budget for the injected `<symbol-context>` block per agent call. |
+| `AI_CONTEXT_LOOKUP_LINES` | `8` | Number of source lines to capture per symbol definition (snippet window). |
+
+#### Capability B — SARIF ingestion
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_SARIF_PATHS` | `''` | Comma-separated list of SARIF 2.1.0 file paths (relative to workspace root) to ingest as additional findings. Findings are merged into the same dedup/suppress pipeline as native analyzer results. Source tag: `sarif:<driver.name>`. |
+
+#### Capability C — Learning loop
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_FEEDBACK_LOOP` | `false` | Enable the learning loop. Loads recent feedback from the GitBranchStore and injects a `<repo-feedback>` block into agent prompts. GitHub-only (GitLab/Bitbucket stub returns no-op). |
+| `AI_FEEDBACK_BRANCH` | `ai-pr-review-bot` | Git branch used to persist the feedback JSONL file. The branch is created automatically on first write. Requires `GH_TOKEN` with `contents:write` on this branch. |
+| `AI_FEEDBACK_MAX_TOKENS` | `2048` | Maximum token budget for the injected `<repo-feedback>` block. |
+| `AI_FEEDBACK_RETENTION_COUNT` | `500` | Maximum number of feedback entries to keep (rolling window; oldest dropped first). |
+| `AI_FEEDBACK_RETENTION_AGE_DAYS` | `365` | Drop entries older than this many days. Set to `0` to disable age-based pruning. |
 
 > **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
 

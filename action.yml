@@ -148,6 +148,32 @@ inputs:
     required: false
     default: 'false'
 
+  sarif-paths:
+    description: >
+      Comma-separated list of SARIF 2.1.0 file paths to ingest as additional
+      findings. Each path is relative to the workspace root. Requires the
+      Python engine (engine: python). Findings are merged into the same
+      dedup/suppress pipeline as native analyzer results.
+    required: false
+    default: ''
+
+  context-enrichment:
+    description: >
+      When true, extract symbol references from the diff and look them up
+      in the repo using ripgrep, then inject a <symbol-context> block into
+      each agent's prompt. Requires tree-sitter-language-pack and ripgrep.
+      Only available with the Python engine.
+    required: false
+    default: 'false'
+
+  feedback-loop:
+    description: >
+      When true, load recent feedback entries from the GitBranchStore and
+      inject a <repo-feedback> block into each agent's prompt. GitHub-only.
+      Requires GH_TOKEN with contents:write on the feedback branch.
+    required: false
+    default: 'false'
+
 runs:
   using: composite
   steps:
@@ -199,4 +225,7 @@ runs:
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
         AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
+        AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
+        AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
+        AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
       run: bash "${{ github.action_path }}/review.sh"

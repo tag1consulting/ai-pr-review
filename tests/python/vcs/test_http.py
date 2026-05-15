@@ -102,6 +102,50 @@ def test_retry_non_transient_exception_reraises() -> None:
         )
 
 
+def test_retry_200_with_rate_limit_in_body_is_not_transient() -> None:
+    """Regression: e2e on Bitbucket 2026-05-15 surfaced a bogus retry exhaustion
+    when the POST response body echoed the request payload — which contained
+    the literal phrase 'rate limit' from the seeded test repo comment. The
+    body-text fallback in _is_transient must only apply on 5xx responses, not
+    arbitrary 200 OK payloads echoed back by some providers (Bitbucket Cloud).
+    """
+    calls = {"n": 0}
+
+    def call() -> httpx.Response:
+        calls["n"] += 1
+        # 200 OK whose body contains an echoed comment matching the transient pattern.
+        return _response(
+            200,
+            "comment body: 'No rate limiting, no email validation' — POST succeeded",
+        )
+
+    resp = retry_transient(
+        call,
+        policy=RetryPolicy(attempts=3, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    assert resp.status_code == 200
+    assert calls["n"] == 1, "200 OK must not trigger any retry, even if body matches transient pattern"
+
+
+def test_retry_5xx_with_transient_phrase_in_body_still_retries() -> None:
+    """5xx with a transient-phrase body should still be classified transient
+    (the body-text fallback is still useful on error responses)."""
+    calls = {"n": 0}
+
+    def call() -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return _response(500, "Internal Server Error: rate limit exceeded")
+        return _response(200, "ok")
+
+    resp = retry_transient(
+        call,
+        policy=RetryPolicy(attempts=3, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    assert resp.status_code == 200
+    assert calls["n"] == 3
+
+
 # ---------------------------------------------------------------------------
 # redact_secrets
 # ---------------------------------------------------------------------------

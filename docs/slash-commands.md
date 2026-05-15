@@ -84,9 +84,45 @@ When invoked:
 
 This allows selective dismissal — if a review has three findings and only one is a false positive, dismissing that one leaves the `CHANGES_REQUESTED` state in place until the remaining threads are also resolved (either by pushing a fix or dismissing them individually).
 
+### `/ai-pr-review false-positive [reason]`
+
+Records the finding as a false positive in the learning loop. The `[reason]` is optional but encouraged — it helps future reviews avoid the same finding in similar contexts.
+
+Requires `AI_FEEDBACK_LOOP=true` on the action input and a `GH_TOKEN` with `contents:write` on the feedback branch (default: `ai-pr-review-bot`). The entry is persisted to `.ai-pr-review/learnings.jsonl` on that branch.
+
+### `/ai-pr-review wont-fix [reason]`
+
+Records the finding as intentional / won't-fix. Use this when the finding is valid but the pattern is deliberate in this codebase (e.g. intentional use of MD5 for non-security checksums, intentional exception swallowing in a specific error handler).
+
+Requires the same setup as `false-positive`.
+
+### `/ai-pr-review feedback <text>`
+
+Stores free-form feedback in the learning loop — not tied to a specific finding verdict. Useful for noting that a certain category of finding is too noisy for this repository.
+
+### `/ai-pr-review explain`
+
+Requests a more detailed explanation from the originating agent. Currently stubbed — the command is recognized and acknowledged, but full agent re-invocation is not yet implemented. Posts a canned reply.
+
+### `/ai-pr-review revise <hint>`
+
+Requests the originating agent to revise its finding with the provided hint. Currently stubbed — same as `explain`.
+
 ### `/ai-pr-review help`
 
 Posts the command list as a reply comment.
+
+## Learning loop setup
+
+The learning loop (`AI_FEEDBACK_LOOP=true`) stores feedback in a JSONL file on a dedicated git branch (`ai-pr-review-bot` by default). To enable it:
+
+1. Set `feedback-loop: 'true'` in the action input.
+2. Ensure `GH_TOKEN` has `contents:write` on the feedback branch. The branch is created automatically on first write.
+3. Optionally set `feedback-branch` to a custom branch name.
+
+See [Learning loop](learning-loop.md) for the full architecture and retention policy.
+
+> **GitLab / Bitbucket:** The learning loop is GitHub-only in this release. On other providers, feedback commands are silently no-ops.
 
 ## Access control
 
