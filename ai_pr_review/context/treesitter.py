@@ -152,7 +152,10 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         try:
             # 0.x API only accepted bytes; the 1.x type stubs say str.
             # The runtime fallback is intentional for backward compat.
-            tree = parser.parse(src_bytes)  # type: ignore[arg-type]
+            # The dual error-code list is needed because CI's mypy lint
+            # job doesn't install the [context] extra, so parser.parse
+            # is untyped (Any) and the arg-type ignore is unused there.
+            tree = parser.parse(src_bytes)  # type: ignore[arg-type,unused-ignore]
         except Exception as exc:
             logger.warning(
                 "tree-sitter: parse error for language %r: %s", language, exc,
