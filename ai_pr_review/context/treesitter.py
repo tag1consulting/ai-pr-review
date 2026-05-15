@@ -135,9 +135,21 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     src, line_map = _strip_diff_markers(diff_hunk)
     if not src.strip():
         return []
+    src_bytes = src.encode()
 
+    # tree-sitter-language-pack 1.x parser accepts str (and exposes parse_bytes
+    # for the bytes variant).  Earlier 0.x took bytes via parse().  Try the
+    # current API first, fall back to the old one.
     try:
-        tree = parser.parse(src.encode())
+        tree = parser.parse(src)
+    except (TypeError, AttributeError):
+        try:
+            tree = parser.parse(src_bytes)
+        except Exception as exc:
+            logger.warning(
+                "tree-sitter: parse error for language %r: %s", language, exc,
+            )
+            return []
     except Exception as exc:
         logger.warning("tree-sitter: parse error for language %r: %s", language, exc)
         return []
@@ -145,10 +157,58 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     refs: list[SymbolRef] = []
     seen: set[str] = set()
 
+    def _attr_or_call(obj: object, name: str, default: object) -> object:
+        """Read an attribute that may be a property OR a method.
+
+        tree-sitter-language-pack 1.x exposes everything as methods (.kind(),
+        .byte_range(), .start_point()) while older releases used properties.
+        Support both so we don't have to ship two implementations.
+        """
+        val = getattr(obj, name, default)
+        if callable(val) and not isinstance(val, type):
+            try:
+                return val()
+            except TypeError:
+                return default
+        return val
+
+    def _node_text(node: object) -> str:
+        """Extract identifier text from a node by slicing the source bytes.
+
+        Supports three byte-range shapes across tree-sitter versions:
+        - 1.x C-extension: ``ByteRange`` object with ``.start`` and ``.end``
+        - 0.x Python: ``(start, end)`` tuple
+        - direct ``.start_byte`` / ``.end_byte`` attrs (also 1.x fallback)
+        """
+        # Prefer direct start_byte/end_byte attrs (works on 1.x)
+        sb = _attr_or_call(node, "start_byte", None)
+        eb = _attr_or_call(node, "end_byte", None)
+        if isinstance(sb, int) and isinstance(eb, int):
+            return src_bytes[sb:eb].decode(errors="replace")
+
+        br = _attr_or_call(node, "byte_range", None)
+        if br is not None:
+            br_start = _attr_or_call(br, "start", None)
+            br_end = _attr_or_call(br, "end", None)
+            if isinstance(br_start, int) and isinstance(br_end, int):
+                return src_bytes[br_start:br_end].decode(errors="replace")
+            if isinstance(br, tuple) and len(br) == 2:
+                start, end = br
+                if isinstance(start, int) and isinstance(end, int):
+                    return src_bytes[start:end].decode(errors="replace")
+
+        # Fallback to .text attribute (old API, bytes or str)
+        text = _attr_or_call(node, "text", "")
+        if isinstance(text, bytes):
+            return text.decode(errors="replace")
+        return str(text or "")
+
     def _walk(node: object) -> None:
-        node_type: str = getattr(node, "type", "")
-        if node_type in _IDENTIFIER_NODE_TYPES:
-            name: str = getattr(node, "text", b"").decode(errors="replace")
+        node_kind = _attr_or_call(node, "kind", None) or _attr_or_call(node, "type", "")
+        if not isinstance(node_kind, str):
+            return
+        if node_kind in _IDENTIFIER_NODE_TYPES:
+            name = _node_text(node)
             if (
                 len(name) >= _MIN_SYMBOL_LEN
                 and name not in _STOP_WORDS
@@ -156,14 +216,41 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
                 and name not in seen
             ):
                 seen.add(name)
-                # Map tree-sitter's 0-based row to hunk line (1-based)
-                ts_row: int = getattr(getattr(node, "start_point", None), "row", 0) if hasattr(node, "start_point") else 0
+                # Map tree-sitter's 0-based row to hunk line (1-based).
+                # 1.x exposes start_position() -> Point(row, column).
+                # 0.x exposes start_point as a property returning (row, column).
+                sp = _attr_or_call(node, "start_position", None)
+                if sp is None:
+                    sp = _attr_or_call(node, "start_point", None)
+                ts_row = 0
+                if isinstance(sp, tuple) and sp and isinstance(sp[0], int):
+                    ts_row = sp[0]
+                elif sp is not None:
+                    raw_row = _attr_or_call(sp, "row", 0)
+                    if isinstance(raw_row, int):
+                        ts_row = raw_row
                 hunk_line = line_map.get(ts_row, ts_row + 1)
-                refs.append(SymbolRef(name=name, kind=node_type, line=hunk_line))
-        for child in getattr(node, "children", []):
-            _walk(child)
+                refs.append(SymbolRef(name=name, kind=node_kind, line=hunk_line))
+        # Iterate children: new API uses child(i)/child_count(); old uses .children
+        child_count = _attr_or_call(node, "child_count", None)
+        if isinstance(child_count, int):
+            for i in range(child_count):
+                try:
+                    child = node.child(i)  # type: ignore[attr-defined]
+                except (TypeError, AttributeError):
+                    break
+                if child is not None:
+                    _walk(child)
+        else:
+            children = _attr_or_call(node, "children", []) or []
+            if isinstance(children, (list, tuple)):
+                for child in children:
+                    _walk(child)
 
-    _walk(tree.root_node)
+    root = _attr_or_call(tree, "root_node", None)
+    if root is None:
+        return []
+    _walk(root)
     return refs
 
 

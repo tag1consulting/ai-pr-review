@@ -215,3 +215,51 @@ def test_branch_exists_returns_none_on_unexpected_status() -> None:
         repo="o/r", branch="b", token="t", client=_FakeClient(),  # type: ignore[arg-type]
     )
     assert store._branch_exists() is None
+
+
+# ---------------------------------------------------------------------------
+# _append_once — bootstrap trigger on 404 "Branch not found"
+# ---------------------------------------------------------------------------
+
+def test_append_once_treats_404_as_missing_branch_signal() -> None:
+    """Regression: GitHub Contents API returns 404 (not 422) when the target
+    branch does not exist on a PUT.  e2e testing 2026-05-15 found that the
+    bootstrap path only triggered on 422, so 404+missing-branch was silently
+    converted to a generic 'HTTP error' WARNING and the entry was dropped.
+    """
+    import httpx
+
+    from ai_pr_review.feedback.models import FeedbackEntry
+    from ai_pr_review.feedback.store import _MissingBranchError
+
+    branches_seen: list[str] = []
+
+    class _FakeClient:
+        def get(self, url: str, headers: dict) -> httpx.Response:
+            # Contents GET → 404 (file/branch absent)
+            if "/contents/" in url:
+                return httpx.Response(404, request=httpx.Request("GET", url))
+            # Branch existence probe → 404 (confirms branch missing)
+            if "/branches/" in url:
+                branches_seen.append(url)
+                return httpx.Response(404, request=httpx.Request("GET", url))
+            return httpx.Response(404, request=httpx.Request("GET", url))
+
+        def put(self, url: str, headers: dict, json: dict) -> httpx.Response:
+            return httpx.Response(
+                404,
+                json={"message": "Branch test-bot not found"},
+                request=httpx.Request("PUT", url),
+            )
+
+    store = GitBranchStore(
+        repo="o/r", branch="test-bot", token="t", client=_FakeClient(),  # type: ignore[arg-type]
+    )
+    entry = FeedbackEntry(
+        ts="2026-05-15T00:00:00Z", command="feedback", reason="r", source="s"
+    )
+    # _append_once must raise _MissingBranchError so append() can bootstrap
+    with pytest.raises(_MissingBranchError):
+        store._append_once(entry)
+    # And the branch probe must have been called
+    assert len(branches_seen) == 1, "branch existence probe should fire on 404"

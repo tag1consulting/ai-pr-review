@@ -284,17 +284,23 @@ class GitBranchStore:
         resp = self.client.put(url, headers=self._headers(), json=payload)
         if resp.status_code == 409:
             raise _ConflictError(409)
-        if resp.status_code == 422:
-            # 422 can mean either "branch not found" (bootstrap needed) or a
-            # genuine validation error. Probe the branch endpoint to tell them
-            # apart instead of retrying blindly.  _branch_exists is tri-state:
-            # only treat a definitive False as "branch missing"; None (transient
-            # error) must surface as a validation error rather than triggering
-            # an unnecessary branch-creation attempt.
+        # GitHub returns 404 with "Branch ... not found" when the branch
+        # doesn't exist on a PUT (observed behavior, May 2026).  Some older
+        # docs say 422; handle both for forward compatibility.  We confirm
+        # via _branch_exists() so a 404 on a missing file (vs. missing
+        # branch) isn't misinterpreted.
+        if resp.status_code in (404, 422):
+            # _branch_exists is tri-state: only treat a definitive False as
+            # "branch missing"; None (transient error) must surface as a
+            # generic failure rather than triggering an unnecessary
+            # branch-creation attempt.
             if self._branch_exists() is False:
                 raise _MissingBranchError(self.branch)
+            # If the branch DOES exist but we got 404/422, that's a genuine
+            # validation error — surface it with the response body so the
+            # operator can diagnose.
             raise RuntimeError(
-                f"GitHub Contents API returned 422 Unprocessable Entity: "
+                f"GitHub Contents API returned {resp.status_code}: "
                 f"{resp.text[:200]}"
             )
         resp.raise_for_status()
