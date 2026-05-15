@@ -240,20 +240,33 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         # Iterate children: new API uses child(i)/child_count(); old uses .children
         child_count = _attr_or_call(node, "child_count", None)
         if isinstance(child_count, int):
+            visited_any = False
             for i in range(child_count):
                 try:
                     child = node.child(i)  # type: ignore[attr-defined]
                 except (TypeError, AttributeError) as exc:
-                    # Log the first failure so silent traversal truncation is
-                    # visible, then continue so we still visit remaining
-                    # siblings (the failure is per-index, not whole-loop).
+                    # Log per-index failures at DEBUG so silent truncation
+                    # is visible; continue rather than break since failure
+                    # is per-index (e.g. one unsupported child kind).
                     logger.debug(
-                        "tree-sitter: node.child(%d) failed (%s: %s); skipping",
-                        i, type(exc).__name__, exc,
+                        "tree-sitter: node.child(%d/%d) failed (%s: %s); skipping",
+                        i, child_count, type(exc).__name__, exc,
                     )
                     continue
                 if child is not None:
+                    visited_any = True
                     _walk(child)
+            # If we had children to visit but couldn't reach any of them,
+            # the entire subtree is silently lost — promote to WARNING.
+            if child_count > 0 and not visited_any:
+                node_kind = _attr_or_call(node, "kind", None) or _attr_or_call(
+                    node, "type", "?",
+                )
+                logger.warning(
+                    "tree-sitter: node.child() failed for all %d children of "
+                    "node kind %r; subtree skipped",
+                    child_count, node_kind,
+                )
         else:
             children = _attr_or_call(node, "children", []) or []
             if isinstance(children, (list, tuple)):
