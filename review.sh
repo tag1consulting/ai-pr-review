@@ -203,12 +203,15 @@ warn_epic3_capability_misconfig() {
   if [[ "$engine" == "python" ]]; then
     return 0
   fi
-  local var val
+  # Hoist all locals to the top so that under `set -e`, a `local` declaration
+  # at the start of a loop iteration cannot mask an assignment failure on its
+  # RHS — `local` itself always exits 0.
+  local var val feature
   for pair in \
       "AI_CONTEXT_ENRICHMENT:tree-sitter context enrichment (Capability A)" \
       "AI_FEEDBACK_LOOP:learning loop (Capability C)"; do
     var="${pair%%:*}"
-    local feature="${pair#*:}"
+    feature="${pair#*:}"
     val="${!var:-}"
     if [[ "$val" == "true" || "$val" == "True" || "$val" == "1" ]]; then
       echo "::warning::${var}=${val} but AI_PR_REVIEW_ENGINE=${engine}; ${feature} requires the Python engine and will be IGNORED. Set AI_PR_REVIEW_ENGINE=python to enable." >&2
