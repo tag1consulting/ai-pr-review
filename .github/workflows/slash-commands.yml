@@ -633,16 +633,21 @@ jobs:
         id: endpoints
         # GitHub uses two different REST API paths for comment reactions
         # depending on event type. Compute once, use everywhere. Also expose
-        # a flag for the review-thread-specific steps.
+        # a flag for the review-thread-specific steps.  The job-level `if:`
+        # already restricts to two values, but defense-in-depth: bail if
+        # we get an unexpected one rather than silently falling through.
         env:
           EVENT_NAME: ${{ inputs.event-name }}
         run: |
           if [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
-            echo "reactions_path=pulls/comments"      >> "$GITHUB_OUTPUT"
-            echo "is_review_comment=true"             >> "$GITHUB_OUTPUT"
+            echo "reactions_path=pulls/comments"  >> "$GITHUB_OUTPUT"
+            echo "is_review_comment=true"         >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == "issue_comment" ]]; then
+            echo "reactions_path=issues/comments" >> "$GITHUB_OUTPUT"
+            echo "is_review_comment=false"        >> "$GITHUB_OUTPUT"
           else
-            echo "reactions_path=issues/comments"     >> "$GITHUB_OUTPUT"
-            echo "is_review_comment=false"            >> "$GITHUB_OUTPUT"
+            echo "::error::Unrecognized event-name '${EVENT_NAME}'; refusing to dispatch feedback command."
+            exit 1
           fi
 
       - name: React — seen
@@ -661,6 +666,13 @@ jobs:
         # parent comment IS the AI finding. Fetch it, validate the author is
         # github-actions[bot], and parse source / file / rule_id from the
         # rendered body so the FeedbackEntry has proper context.
+        #
+        # All failure modes (missing in_reply_to_id, parent fetch error,
+        # parent author isn't the bot, header parse failure) are best-effort:
+        # the FeedbackEntry is still persisted (the reviewer's intent is
+        # captured) but with empty context fields, AND a context_missing_reason
+        # is exported.  The reply step prepends an explicit "(no finding
+        # context auto-extracted)" note so the reviewer is not misled.
         if: steps.endpoints.outputs.is_review_comment == 'true'
         id: context
         env:
@@ -668,20 +680,26 @@ jobs:
           REPOSITORY: ${{ inputs.repository }}
           IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
         run: |
+          export_missing() {
+            local reason="$1"
+            echo "::warning::${reason}"
+            echo "context_missing_reason=${reason}" >> "$GITHUB_OUTPUT"
+          }
+
           parent_id="${IN_REPLY_TO_ID}"
           if [[ -z "$parent_id" || "$parent_id" == "0" ]]; then
-            echo "::warning::Feedback command on a review-thread reply requires a parent comment; proceeding without finding context."
+            export_missing "review-thread reply has no parent comment (in_reply_to_id is empty)"
             exit 0
           fi
           parent_json=$(gh api \
             "repos/${REPOSITORY}/pulls/comments/${parent_id}" \
             --jq '{login: .user.login, path: .path, body: .body}' 2>/dev/null) || {
-            echo "::warning::Could not fetch parent comment ${parent_id}; proceeding without finding context."
+            export_missing "could not fetch parent comment ${parent_id} from GitHub API"
             exit 0
           }
           parent_author=$(echo "$parent_json" | jq -r '.login')
           if [[ "$parent_author" != "github-actions[bot]" ]]; then
-            echo "::warning::Parent comment is not from the AI reviewer (author: ${parent_author}); proceeding without finding context."
+            export_missing "parent comment is not from the AI reviewer (author: ${parent_author})"
             exit 0
           fi
           parent_path=$(echo "$parent_json" | jq -r '.path // ""')
@@ -689,23 +707,28 @@ jobs:
           # Inline-comment body header format (see ai_pr_review/vcs/github.py
           # _build_inline_comment_body):
           #   {icon} **[{severity}]** [{source}] {finding text}
-          # For SARIF findings the finding text starts with [{rule_id}].
-          # Parse with grep -oP for portability across the container's GNU grep.
+          # For SARIF findings, finding text starts with [{rule_id}].
+          # We extract bracketed tokens positionally from the first line:
+          #   token[1] = severity (always present)
+          #   token[2] = source   (the tag we want)
+          #   token[3] = SARIF ruleId, only present when source starts with sarif:
           first_line=$(echo "$parent_body" | head -1)
-          # Skip the severity bracket (which is the first [..] in the header),
-          # then take the next bracketed token as the source tag.
           source=$(echo "$first_line" \
-            | grep -oP '\[(?!Critical\]|High\]|Medium\]|Low\])[^\]]+\]' \
-            | head -1 | tr -d '[]')
+            | grep -oP '\[[^\]]+\]' | sed -n '2p' | tr -d '[]')
           rule_id=""
           if [[ "$source" == sarif:* ]]; then
-            # Third [...] is the SARIF ruleId.
             rule_id=$(echo "$first_line" \
               | grep -oP '\[[^\]]+\]' | sed -n '3p' | tr -d '[]')
           fi
-          echo "source=${source}"     >> "$GITHUB_OUTPUT"
-          echo "file=${parent_path}"  >> "$GITHUB_OUTPUT"
-          echo "rule_id=${rule_id}"   >> "$GITHUB_OUTPUT"
+          if [[ -z "$source" ]]; then
+            export_missing "could not parse source tag from parent comment header"
+            # Still export path so file= is populated even on parse failure.
+            echo "file=${parent_path}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "source=${source}"    >> "$GITHUB_OUTPUT"
+          echo "file=${parent_path}" >> "$GITHUB_OUTPUT"
+          echo "rule_id=${rule_id}"  >> "$GITHUB_OUTPUT"
 
       - name: Invoke Python slash handler
         id: handler
@@ -760,12 +783,30 @@ jobs:
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REPLY_B64: ${{ steps.handler.outputs.reply_b64 }}
+          CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
         run: |
+          set -e
           reply_file=$(mktemp)
           trap 'rm -f "$reply_file"' EXIT
-          echo "$REPLY_B64" | base64 -d > "$reply_file"
+          # If base64 decode fails the file is empty; fail loudly instead of
+          # silently POSTing a blank reply.
+          if ! echo "$REPLY_B64" | base64 -d > "$reply_file"; then
+            echo "::error::Failed to decode reply body from the slash handler."
+            exit 1
+          fi
+          if [[ ! -s "$reply_file" ]]; then
+            echo "::error::Decoded reply body is empty; refusing to post a blank reply."
+            exit 1
+          fi
+          # Prepend a transparency note if context auto-extraction missed
+          # something, so the reviewer knows their FeedbackEntry was persisted
+          # without source/file/rule_id and isn't misled by the success reaction.
+          if [[ -n "$CONTEXT_MISSING_REASON" ]]; then
+            { printf '> ⚠️ **Note:** finding context was not auto-extracted (%s). The feedback was still persisted, but the entry will lack source/file/rule_id.\n\n' "$CONTEXT_MISSING_REASON"; cat "$reply_file"; } > "${reply_file}.with-note"
+            mv "${reply_file}.with-note" "$reply_file"
+          fi
           # gh has no built-in subcommand for review-comment replies; use the
-          # REST API directly with --field-file so the body bypasses argv.
+          # REST API directly with --field "body=@file" so the body bypasses argv.
           gh api \
             --method POST \
             "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/replies" \
@@ -788,9 +829,17 @@ jobs:
           # never becomes part of the gh command line. Defense-in-depth: the
           # Python handler already HTML-escapes user content, but body-file
           # ensures no part of the reply is parsed by the shell.
+          set -e
           reply_file=$(mktemp)
           trap 'rm -f "$reply_file"' EXIT
-          echo "$REPLY_B64" | base64 -d > "$reply_file"
+          if ! echo "$REPLY_B64" | base64 -d > "$reply_file"; then
+            echo "::error::Failed to decode reply body from the slash handler."
+            exit 1
+          fi
+          if [[ ! -s "$reply_file" ]]; then
+            echo "::error::Decoded reply body is empty; refusing to post a blank comment."
+            exit 1
+          fi
           gh pr comment "$ISSUE_NUMBER" \
             --repo "$REPOSITORY" \
             --body-file "$reply_file"
@@ -835,9 +884,16 @@ jobs:
               }' \
               -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
               ${cursor:+-f after="$cursor"}) || {
-              echo "::warning::Could not fetch review threads to resolve; feedback persisted but thread left open."
+              echo "::warning::Could not fetch review threads to resolve (transport error); feedback persisted but thread left open."
               exit 0
             }
+            # GraphQL returns HTTP 200 even on schema/permission errors; the
+            # errors land in .errors[]. Treat them as fatal-for-this-step but
+            # still best-effort overall (feedback already persisted).
+            if echo "$result" | jq -e '.errors // empty' >/dev/null 2>&1; then
+              echo "::warning::GraphQL error fetching review threads: $(echo "$result" | jq -c '.errors'); feedback persisted but thread left open."
+              exit 0
+            fi
             thread_id=$(echo "$result" | jq -r \
               --argjson cid "$PARENT_COMMENT_ID" \
               '.data.repository.pullRequest.reviewThreads.nodes[]
@@ -852,15 +908,21 @@ jobs:
             echo "::warning::Could not locate review thread for parent comment ${PARENT_COMMENT_ID}; feedback persisted but thread left open."
             exit 0
           fi
-          gh api graphql -f query='
+          mut_result=$(gh api graphql -f query='
             mutation($threadId: ID!) {
               resolveReviewThread(input: {threadId: $threadId}) {
                 thread { id isResolved }
               }
             }' \
-            -f threadId="$thread_id" >/dev/null && \
-            echo "Thread ${thread_id} resolved." >&2 || \
-            echo "::warning::Failed to resolve review thread ${thread_id}; feedback persisted."
+            -f threadId="$thread_id" 2>&1) || {
+              echo "::warning::Failed to resolve review thread ${thread_id} (transport error): ${mut_result}; feedback persisted."
+              exit 0
+            }
+          if echo "$mut_result" | jq -e '.errors // empty' >/dev/null 2>&1; then
+            echo "::warning::GraphQL error resolving review thread ${thread_id}: $(echo "$mut_result" | jq -c '.errors'); feedback persisted."
+            exit 0
+          fi
+          echo "Thread ${thread_id} resolved." >&2
 
       - name: React — done
         if: steps.handler.outputs.is_command == 'true' && success()
