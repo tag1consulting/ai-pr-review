@@ -391,12 +391,22 @@ async def _run_single_agent(
             truncated=truncated,
             prompt_degraded=prompt_degraded,
         ))
-    except Exception as exc:
+    except BaseException as exc:
+        # Catch BaseException (not Exception) so SystemExit from llm/client.py
+        # — raised on auth failure (exit 1), retry exhaustion (exit 2), or
+        # content-filter block (exit 3) — is isolated to a single FailedAgent
+        # instead of cancelling sibling tasks in the anyio task group.
+        # KeyboardInterrupt is re-raised so Ctrl-C still aborts the run.
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         elapsed = int((time.monotonic() - start) * 1000)
+        exit_code = 1
+        if isinstance(exc, SystemExit) and isinstance(exc.code, int):
+            exit_code = exc.code
         results.append(FailedAgent(
             name=spec.name,
             reason=_format_exception_chain(exc),
-            exit_code=1,
+            exit_code=exit_code,
             elapsed_ms=elapsed,
         ))
     finally:

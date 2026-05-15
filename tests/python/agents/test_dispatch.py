@@ -287,6 +287,39 @@ async def test_run_tier_captures_exception_chain(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_run_tier_isolates_systemexit_from_llm_call(tmp_path: Path) -> None:
+    """SystemExit from llm_call (per llm/client.py contract) must be isolated.
+
+    Regression test: dispatch.py previously caught `Exception`, so SystemExit
+    (BaseException subclass) escaped the handler and propagated through the
+    anyio task group, cancelling all sibling agents. The fix catches
+    BaseException and synthesizes a FailedAgent with exit_code = exc.code.
+    """
+    ctx = _make_context(tmp_path)
+    agents = [get_agent("code-reviewer"), get_agent("silent-failure-hunter")]
+    call_count = 0
+
+    async def mock_llm(request: object) -> LLMResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Mirrors llm/client.py: SystemExit(2) on retries exhausted.
+            raise SystemExit(2)
+        return _make_response("ok")
+
+    successes, failures = await run_tier(
+        agents=agents,
+        llm_call=mock_llm,
+        context=ctx,
+        semaphore_size=1,  # Force ordered execution so the SystemExit fires first.
+    )
+    # Sibling must still complete; the SystemExit-raising one must be a FailedAgent.
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert failures[0].exit_code == 2  # Preserved from SystemExit.code.
+
+
+@pytest.mark.anyio
 async def test_run_tier_uses_premium_model_for_tier2_full(tmp_path: Path) -> None:
     """Tier-2 agents in full mode use premium_model; tier-1 always use standard_model."""
     # Construct directly with the intended values — mutating the context

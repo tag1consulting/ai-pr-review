@@ -224,9 +224,14 @@ class ReviewConfig(BaseModel):
                 return default
 
         def _float(key: str, default: float) -> float:
+            raw = os.environ.get(key, str(default))
             try:
-                return float(os.environ.get(key, str(default)))
+                return float(raw)
             except ValueError:
+                print(
+                    f"WARNING: {key}={raw!r} is not a valid float; using default {default}. Review will proceed with this default.",
+                    file=sys.stderr,
+                )
                 return default
 
         return cls(

@@ -95,3 +95,20 @@ def test_int_env_var_parse_failure_warns(
     assert "WARNING" in captured.err
     assert "not-a-number" in captured.err
     assert "proceed with" in captured.err
+
+
+def test_float_env_var_parse_failure_warns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """_float() must warn on parse failure, mirroring _int().
+
+    Without the warning, an operator who typos AI_TEMPERATURE silently
+    gets the default and has no way to know their config was rejected.
+    """
+    monkeypatch.setenv("AI_TEMPERATURE", "not-a-float")
+    cfg = ReviewConfig.from_env()
+    assert cfg.temperature == 0.3  # falls back to default
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "not-a-float" in captured.err
+    assert "proceed with" in captured.err
