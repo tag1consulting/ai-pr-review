@@ -1,11 +1,20 @@
+---
+layout: default
+title: Compute Output Schema
+nav_order: 8
+---
+
 # Compute Output Schema
 
-The Python engine (`AI_PR_REVIEW_ENGINE=python`) writes a JSON payload to
-`AI_PR_REVIEW_COMPUTE_OUTPUT` at the end of the compute phase. The bash
-post-review scripts read this file to perform posting.
+This page describes the JSON payload that the Python engine writes when
+`AI_PR_REVIEW_COMPUTE_OUTPUT` points at a file path.
 
-> **Epic 1 shim** — this handoff mechanism is temporary. Epic 2 (#196)
-> routes posting through Python and removes this file.
+> **Status (v0.9.0):** The Python engine now handles compute, dispatch,
+> *and* posting end-to-end (Epic 2). The action itself no longer needs
+> the compute → bash handoff this file once enabled. `AI_PR_REVIEW_COMPUTE_OUTPUT`
+> is retained for external tooling that wants to consume the compute
+> payload independently — set the env var to a path and the Python engine
+> will write the JSON shape below.
 
 ## Schema
 

@@ -11,9 +11,9 @@ nav_order: 2
 for GitHub Actions. The Bitbucket path posts a single summary comment per PR
 (updated in place on subsequent runs), with all findings rendered as markdown
 bullets inside the comment body. Inline review comments and Code Insights
-annotations are not available in the initial Bitbucket release (v0.2.0).
+annotations are not currently available on the Bitbucket path.
 
-## What works in v0.2.0
+## What works
 
 - Summary comment upsert (single comment per PR, updated on each run)
 - Incremental-diff SHA watermark (the same HTML-comment marker trick used on
@@ -167,4 +167,4 @@ mode is GitHub-only (Bitbucket Cloud has no Issues product).
 
 Most likely the diff is over `MAX_DIFF_LINES` (default 5000). The pipeline
 logs will show `::warning::Diff is too large`. On Bitbucket, no skip comment
-is posted (by design in v0.2.0).
+is posted (by design — no comment is preferable to a noisy empty one).
