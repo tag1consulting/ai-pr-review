@@ -61,7 +61,12 @@ def _is_transient(exc: Exception | None, response: httpx.Response | None) -> boo
         return True
     if isinstance(exc, httpx.TimeoutException | httpx.NetworkError):
         return True
-    if response is not None:
+    if response is not None and response.status_code >= 500:
+        # Only scan the body for transient-error phrases on 5xx responses.
+        # Bitbucket (and others) echo the request payload back in 200 OK
+        # response bodies, so e.g. a PR comment containing the literal
+        # phrase "rate limit" or "Server Error" would have triggered a
+        # bogus retry on a successful POST. e2e regression 2026-05-15.
         body = response.text or ""
         if _TRANSIENT_ERR_PATTERNS.search(body):
             return True
