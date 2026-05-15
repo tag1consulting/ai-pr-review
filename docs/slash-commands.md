@@ -2,7 +2,7 @@
 layout: default
 title: Slash Commands
 parent: Getting Started
-nav_order: 99
+nav_order: 7
 ---
 
 # Slash commands

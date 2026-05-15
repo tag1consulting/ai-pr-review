@@ -7,9 +7,17 @@ render_with_liquid: false
 
 # Features
 
-## What's new in Epic 3 (post-v0.8.0)
+## What's new in v0.9.0
 
-Three opt-in capability groups in the Python engine. All default off, all require `engine: python`. See [Configuration → Opt-in capabilities](configuration#opt-in-capabilities-epic-3) for the full env-var reference.
+**Python engine end-to-end (Epic 2).** `engine: python` now routes compute,
+agent dispatch, and PR/MR posting through the Python implementation across
+GitHub, GitLab, and Bitbucket. The bash pipeline remains the default and is
+unchanged. Required for all Epic 3 capabilities below.
+
+**Epic 3 — three opt-in capability groups in the Python engine.** All default
+off, all require `engine: python`. See
+[Configuration → Opt-in capabilities](configuration#opt-in-capabilities-epic-3)
+for the full env-var reference.
 
 **Capability A — Context enrichment** (`AI_CONTEXT_ENRICHMENT=true`)
 - Tree-sitter extracts symbol references from diff hunks (9 grammars), with a regex fallback when tree-sitter is unavailable.
@@ -64,7 +72,7 @@ Code suggestions are enabled by default. The review tool asks eligible LLM agent
 To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
-- uses: tag1consulting/ai-pr-review/container-action@v0.7.0
+- uses: tag1consulting/ai-pr-review/container-action@main  # or pin to a release tag
   with:
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}

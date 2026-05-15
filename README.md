@@ -26,6 +26,9 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: tag1consulting/ai-pr-review/container-action@main
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -278,7 +281,7 @@ Code suggestions are enabled by default. The review tool asks eligible LLM agent
 To disable suggestions, set `enable-suggestions: false`:
 
 ```yaml
-- uses: tag1consulting/ai-pr-review/container-action@v0.7.0
+- uses: tag1consulting/ai-pr-review/container-action@main  # or pin to a release tag
   with:
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}

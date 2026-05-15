@@ -195,8 +195,8 @@ In the **consuming** repository's settings:
 ```bash
 cd .github/actions/ai-pr-review
 git fetch --all
-git checkout v0.2.0
+git checkout v0.9.0
 cd ../../..
 git add .github/actions/ai-pr-review
-git commit -m "Bump ai-pr-review submodule to v0.2.0"
+git commit -m "Bump ai-pr-review submodule to v0.9.0"
 ```

@@ -107,15 +107,11 @@ to change them.
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_EDGE_CASE` | `false` | Disables the control-flow heuristic gate; `edge-case-hunter` always runs regardless of diff content. |
 
-### Feature flags (experimental)
-
-These variables control in-development features gated behind explicit opt-in.
+### Legacy compatibility
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_PR_REVIEW_ENGINE` | `bash` | Select the compute engine. `bash` (default) uses the existing shell pipeline. `python` dispatches compute to the Python engine (Epic 1+); posting remains in bash. This flag is experimental — the Python engine is feature-incomplete until Epic 2 (#196). |
-| `AI_PR_REVIEW_COMPUTE_OUTPUT` | `''` | Path where the Python engine writes its compute-phase JSON payload. The bash post-review scripts read this file when `AI_PR_REVIEW_ENGINE=python`. See [docs/compute-output-schema.md](compute-output-schema.md). |
-| `AI_IGNORE_MERGE_COMMITS` | `false` | Strip base-branch merge commits before diff computation. Only reviews code the PR author wrote. Falls back to unfiltered diff on cherry-pick conflicts. Python engine and bash pipeline. |
+| `AI_PR_REVIEW_COMPUTE_OUTPUT` | `''` | **Legacy shim from the Epic 1 staged rollout.** Originally the Python compute phase wrote its payload here and the bash post-review scripts read it back. Since Epic 2 (v0.9.0), the Python engine handles posting end-to-end and this handoff is no longer used by the action. Setting this still works for tooling that consumes the JSON directly. See [Compute Output Schema](compute-output-schema.md). |
 
 ### Opt-in capabilities (Epic 3)
 

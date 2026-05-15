@@ -135,7 +135,9 @@ inputs:
   engine:
     description: >
       Compute engine to use. 'bash' (default) uses the original shell pipeline;
-      'python' routes compute through the Epic 1 Python engine (AI_PR_REVIEW_ENGINE=python).
+      'python' routes compute, dispatch, and posting through the Python engine.
+      Required for Epic 3 capabilities (context enrichment, SARIF ingestion,
+      learning loop). Sets AI_PR_REVIEW_ENGINE.
     required: false
     default: 'bash'
 
