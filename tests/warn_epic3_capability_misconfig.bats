@@ -135,6 +135,24 @@ setup() {
   [[ "$output" == *"Capability C"* ]]
 }
 
+@test "bash engine: context-enrichment=yes → warning fires (parity with Python _bool)" {
+  # Python ai_pr_review/config.py:_bool() accepts true/1/yes case-insensitively.
+  # Without lowercase normalization the bash guard would miss this form and
+  # the operator's capability flag would be silently dropped on the bash engine.
+  export AI_CONTEXT_ENRICHMENT=yes
+  run warn_epic3_capability_misconfig bash
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"AI_CONTEXT_ENRICHMENT=yes"* ]]
+  [[ "$output" == *"Capability A"* ]]
+}
+
+@test "bash engine: feedback-loop=YES (uppercase) → warning fires" {
+  export AI_FEEDBACK_LOOP=YES
+  run warn_epic3_capability_misconfig bash
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Capability C"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # Other engine values: treated like bash (warn on truthy flags)
 # ---------------------------------------------------------------------------
