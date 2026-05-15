@@ -55,6 +55,12 @@ def _parse_ts(ts: str) -> datetime.datetime | None:
     Returns ``None`` on parse failure (caller treats this as "keep the entry"
     rather than drop it — better to keep stale data than silently delete it).
     """
+    if not isinstance(ts, str):
+        # Guards against malformed JSONL where ts was deserialized as int/None;
+        # without this, ts.endswith() below would raise AttributeError and
+        # crash the entire retention pass.
+        logger.debug("retention: non-string timestamp %r; entry kept", ts)
+        return None
     try:
         # fromisoformat accepts '+00:00' natively; rewrite trailing 'Z' for it.
         normalized = ts[:-1] + "+00:00" if ts.endswith("Z") else ts

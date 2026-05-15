@@ -162,6 +162,11 @@ def lookup_definitions(
     repo_root = repo_root.resolve()
     glob_args = _glob_patterns(language)
     all_defs: list[Definition] = []
+    # Track how many candidate definitions we dropped because _read_snippet
+    # could not produce a snippet (file disappeared, permission denied, etc.).
+    # We log a single aggregate WARNING at the end if the rate is significant.
+    skipped_no_snippet = 0
+    total_candidates = 0
 
     for ref in refs:
         if _cache.query_count >= max_queries:
@@ -249,11 +254,14 @@ def lookup_definitions(
             except ValueError:
                 continue
 
+            total_candidates += 1
             snippet = _read_snippet(abs_path, lineno, lookup_lines)
             if not snippet:
                 # Skip definitions with no readable snippet — emitting an
                 # empty code fence into the <symbol-context> block would
-                # be pure noise.
+                # be pure noise.  We aggregate the skip count and emit a
+                # single WARNING below if the rate is high.
+                skipped_no_snippet += 1
                 continue
             proximity = _classify_proximity(rel_file, changed_files)
             defs.append(
@@ -268,6 +276,16 @@ def lookup_definitions(
 
         _cache.set(cache_key, defs)
         all_defs.extend(defs)
+
+    # If we dropped a significant fraction of candidates because their files
+    # were unreadable, surface that as a single WARNING.  Per-file DEBUG logs
+    # in _read_snippet already record the individual paths.
+    if total_candidates >= 4 and skipped_no_snippet * 2 >= total_candidates:
+        logger.warning(
+            "context enrichment: dropped %d of %d candidate definitions "
+            "(unreadable snippets) — context block may be sparse",
+            skipped_no_snippet, total_candidates,
+        )
 
     # Sort: same-file → same-package → repo
     all_defs.sort(key=lambda d: PROXIMITY_ORDER.get(d.proximity, PROXIMITY_DEFAULT))

@@ -57,3 +57,42 @@ def test_count_applied_before_adding_more() -> None:
     # Should keep newest two
     assert kept[0].ts == "2026-05-14T00:00:00Z"
     assert kept[1].ts == "2026-05-13T00:00:00Z"
+
+
+def test_apply_retention_tolerates_plus_offset_timestamp() -> None:
+    """Regression: lexicographic compare misordered '+00:00' offsets vs 'Z'."""
+    today = datetime.datetime.now(datetime.UTC)
+    new_iso = today.isoformat()  # produces '...+00:00'
+    old_iso = (today - datetime.timedelta(days=400)).isoformat()
+    entries = [_entry(new_iso), _entry(old_iso)]
+    kept = apply_retention(entries, max_count=100, max_age_days=365)
+    # Old must be dropped; new must survive
+    assert len(kept) == 1
+    assert kept[0].ts == new_iso
+
+
+def test_apply_retention_tolerates_unparseable_timestamp() -> None:
+    """Regression: a malformed ts must not crash the retention pass; entry kept."""
+    entries = [
+        _entry("not-an-iso-timestamp"),
+        _entry(datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
+    ]
+    kept = apply_retention(entries, max_count=100, max_age_days=365)
+    # Both kept — unparseable ts is lenient (skip the age check, retain the entry)
+    assert len(kept) == 2
+
+
+def test_apply_retention_tolerates_non_string_timestamp() -> None:
+    """Regression: int/None ts (malformed JSONL) must not raise AttributeError.
+
+    Before the isinstance guard, ``ts.endswith('Z')`` would crash on any
+    non-string value, taking down the entire retention pass.
+    """
+    from ai_pr_review.feedback.models import FeedbackEntry
+
+    # Build via dict-like construction to bypass dataclass type hints
+    bad = FeedbackEntry(ts=None, command="feedback", reason="r", source="s")  # type: ignore[arg-type]
+    good = _entry(datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    # Must not raise
+    kept = apply_retention([bad, good], max_count=100, max_age_days=365)
+    assert len(kept) == 2
