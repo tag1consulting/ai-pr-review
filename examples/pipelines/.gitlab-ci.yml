@@ -33,14 +33,21 @@
 # merge request pipelines (triggered by rules with $CI_MERGE_REQUEST_IID).
 
 image:
-  # Default to the 'latest' tag; set AI_REVIEW_IMAGE_TAG in project CI/CD
-  # variables to override (e.g. 'dev' to dogfood pre-release builds, or a
-  # pinned release like 'v0.8.0').
-  name: ghcr.io/tag1consulting/ai-pr-review:${AI_REVIEW_IMAGE_TAG:-latest}
+  # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.  Defaulted
+  # below in the `variables:` block to 'latest'; override by setting the
+  # variable in project CI/CD settings (e.g. 'dev' to dogfood pre-release
+  # builds, or 'v0.8.0' to pin a release).
+  #
+  # NOTE: GitLab Runner expands $VAR / ${VAR} in image.name via Go's
+  # os.Expand(), which does NOT support bash-style ${VAR:-default}
+  # parameter expansion.  The default must come from `variables:` below.
+  name: ghcr.io/tag1consulting/ai-pr-review:$AI_REVIEW_IMAGE_TAG
 
 variables:
   GIT_STRATEGY: clone
   GIT_DEPTH: "0"
+  # Default image tag.  Project CI/CD variables override this.
+  AI_REVIEW_IMAGE_TAG: latest
 
 ai-review:
   stage: test
