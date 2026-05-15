@@ -15,7 +15,10 @@
 #   /ai-pr-review help                    — post the command list as a reply
 #
 # Epic 3 learning-loop commands (require enable-feedback-loop: 'true' below, plus
-# a GH_TOKEN with contents:write on the ai-pr-review-bot branch; OWNER/MEMBER only):
+# a GH_TOKEN with contents:write on the ai-pr-review-bot branch; OWNER/MEMBER only;
+# accept both review-thread replies AND top-level PR comments — review-thread
+# replies are recommended for false-positive / wont-fix since the workflow
+# auto-resolves the parent thread on success):
 #   /ai-pr-review false-positive [reason] — persist a false-positive verdict
 #   /ai-pr-review wont-fix [reason]       — persist a "won't fix" verdict
 #   /ai-pr-review feedback <text>         — persist free-form feedback for future reviews

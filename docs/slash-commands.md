@@ -13,7 +13,7 @@ nav_order: 99
 > (manual pipeline triggers, CI variables), see
 > [GitLab setup — slash command alternatives](gitlab-setup#slash-command-alternatives).
 
-AI PR Review supports commands posted as PR comments. Most commands are processed by a workflow that reacts to `issue_comment` events; the `dismiss` command listens on `pull_request_review_comment` events since it operates on inline review threads.
+AI PR Review supports commands posted as PR comments. The workflow listens on both `issue_comment` (top-level PR comments) and `pull_request_review_comment` (replies on inline review threads) events. Commands that operate on a specific finding (`dismiss`, `false-positive`, `wont-fix`) are normally posted as **replies on inline review-thread comments** so the workflow can resolve the right thread automatically; the learning-loop commands (`false-positive`, `wont-fix`, `feedback`, `explain`, `revise`) also accept top-level PR comments for cases where there is no specific finding to attach them to.
 
 ## Quick start
 
@@ -88,13 +88,15 @@ This allows selective dismissal — if a review has three findings and only one 
 
 Records the finding as a false positive in the learning loop. The `[reason]` is optional but encouraged — it helps future reviews avoid the same finding in similar contexts.
 
+**Where to post it:** As a reply on the AI's inline review-comment thread for the specific finding (recommended — the workflow also resolves the thread on success, same UX as `/ai-pr-review dismiss`), **or** as a top-level PR comment when there's no specific finding to attach to. In review-thread replies the workflow auto-extracts the source / file / rule_id from the parent comment for the `FeedbackEntry`.
+
 Requires `AI_FEEDBACK_LOOP=true` on the action input and a `GH_TOKEN` with `contents:write` on the feedback branch (default: `ai-pr-review-bot`). The entry is persisted to `.ai-pr-review/learnings.jsonl` on that branch.
 
 ### `/ai-pr-review wont-fix [reason]`
 
 Records the finding as intentional / won't-fix. Use this when the finding is valid but the pattern is deliberate in this codebase (e.g. intentional use of MD5 for non-security checksums, intentional exception swallowing in a specific error handler).
 
-Requires the same setup as `false-positive`.
+Same posting and threading rules as `false-positive` (above): review-thread reply preferred, top-level PR comment accepted. Requires the same setup.
 
 ### `/ai-pr-review feedback <text>`
 

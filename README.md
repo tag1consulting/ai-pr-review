@@ -215,8 +215,8 @@ Once the comment-trigger workflow is merged to your default branch, users with w
 | `/ai-pr-review skip` | Add `skip-ai-review` label |
 | `/ai-pr-review help` | Post command list as reply |
 | `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive; dismisses the `CHANGES_REQUESTED` review when every thread is resolved |
-| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict to the feedback store. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
-| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. |
+| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict. Post as a reply on the AI's inline finding (recommended — also resolves the thread on success) **or** as a top-level PR comment. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
+| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. Same posting rules as `false-positive` (review-thread reply preferred). |
 | `/ai-pr-review feedback <text>` | **Epic 3 — Capability C.** Persist free-form feedback for future review runs to consider. |
 | `/ai-pr-review explain` | **Epic 3 — Capability C.** Ask the agent for a longer explanation (stub for now — replies with a canned message). |
 | `/ai-pr-review revise <hint>` | **Epic 3 — Capability C.** Ask the agent to revise its verdict with a hint (stub for now). |

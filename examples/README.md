@@ -78,8 +78,8 @@ Once the file is merged to your default branch, post these commands in any PR co
 | `/ai-pr-review skip` | Add `skip-ai-review` label to suppress the next review |
 | `/ai-pr-review help` | Post the command list as a reply |
 | `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive (dispatched via `pull_request_review_comment`, not `issue_comment`) |
-| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict to the learning store. Requires `AI_REVIEW_FEEDBACK_LOOP=true`. OWNER/MEMBER only. |
-| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. |
+| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict to the learning store. Post as a reply on the AI's inline finding (recommended — also resolves the thread on success) **or** as a top-level PR comment. Requires `AI_REVIEW_FEEDBACK_LOOP=true`. OWNER/MEMBER only. |
+| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. Same posting rules as `false-positive` (review-thread reply preferred). |
 | `/ai-pr-review feedback <text>` | **Epic 3 — Capability C.** Persist free-form feedback for future review runs. |
 | `/ai-pr-review explain` | **Epic 3 — Capability C.** Request a longer explanation (stub for now). |
 | `/ai-pr-review revise <hint>` | **Epic 3 — Capability C.** Request agent revision with a hint (stub for now). |
