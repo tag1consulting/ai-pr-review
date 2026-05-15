@@ -115,12 +115,13 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     try:
         from tree_sitter_language_pack import get_parser
     except ImportError as exc:
-        # Include the underlying cause via exc_info so the full exception
-        # chain (e.g. an OSError __cause__ from a broken native extension)
-        # is attached to the log record — not just the top-level message.
+        # Include the cause in BOTH the message body (visible in JSON loggers
+        # / truncating aggregators) and via exc_info (full chain incl. any
+        # __cause__ from a broken native extension).
         logger.warning(
             "tree-sitter-language-pack unavailable; context enrichment disabled. "
-            "Install with: pip install 'ai-pr-review[context]'.",
+            "Install with: pip install 'ai-pr-review[context]'. Cause: %s",
+            exc,
             exc_info=exc,
         )
         return []
