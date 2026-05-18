@@ -269,6 +269,7 @@ class TestScriptDir:
             patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch("ai_pr_review.agents.roster.AGENTS", []),
+            patch("ai_pr_review.cli._run_summarizer", return_value=""),
         ):
             from ai_pr_review.cli import _run_review_async
 
@@ -297,6 +298,7 @@ class TestScriptDir:
                 patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
                 patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
                 patch("ai_pr_review.agents.roster.AGENTS", []),
+                patch("ai_pr_review.cli._run_summarizer", return_value=""),
             ):
                 from ai_pr_review.cli import _run_review_async
 

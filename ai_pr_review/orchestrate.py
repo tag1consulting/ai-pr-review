@@ -53,6 +53,7 @@ class ReviewResult:
     summary: SummaryResult | None
     findings_post: FindingsResult | None
     stale: StaleResult | None
+    agent_results: list[AgentResult] = ()  # type: ignore[assignment]
     skipped: bool = False
     skip_reason: str = ""
 
@@ -239,6 +240,7 @@ async def run_review(
         summary=summary_result,
         findings_post=findings_result,
         stale=stale_result,
+        agent_results=successes,
     )
 
 

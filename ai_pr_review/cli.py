@@ -131,7 +131,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     head_sha = str(payload.get("head") or config.head_sha)
     base_ref = str(payload.get("base") or config.base_ref)
 
-    # 3. Build summary text. Prepend merge-filter fallback note when present.
+    # 3. Build summary prefix. Prepend merge-filter fallback note when present.
     merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
     summary_text = ""
     if merge_filter_fallback:
@@ -139,6 +139,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
             f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
             "diff may include upstream changes._\n\n"
         )
+    is_incremental = bool(payload.get("is_incremental"))
 
     # 4. Build feedback addendum when AI_FEEDBACK_LOOP=1 (before dispatch context)
     feedback_addendum = ""
@@ -209,6 +210,17 @@ async def _run_review_async(config: ReviewConfig) -> int:
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, config.provider)
 
+    # 7.5. Run pr-summarizer on first review (fail-soft; skip on incremental runs).
+    if not is_incremental:
+        summary_text += await _run_summarizer(
+            diff_text=diff_text,
+            manifest_text=str(payload.get("manifest") or ""),
+            base_ref=base_ref,
+            script_dir=script_dir,
+            model=config.model_standard,
+            llm_call=_llm_call,
+        )
+
     # 8. Run the orchestrator
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
@@ -227,6 +239,10 @@ async def _run_review_async(config: ReviewConfig) -> int:
         provider=provider,
         config=orch_config,
     )
+
+    # 9. Append token cost table to the summary comment (upsert).
+    if result.agent_results and result.summary and result.summary.ok:
+        _upsert_token_table(result, provider, head_sha, script_dir)
 
     _emit_review_result(result, base_ref=base_ref, head=head_sha)
     return 0 if result.ok else 1
@@ -285,6 +301,105 @@ def _make_changed_files(files: list[object]) -> ChangedFiles:
         else:
             logger.warning("Skipping malformed changed_files entry: %r", entry)
     return build_changed_files(paths)
+
+
+async def _run_summarizer(
+    *,
+    diff_text: str,
+    manifest_text: str,
+    base_ref: str,
+    script_dir: Path,
+    model: str,
+    llm_call: object,
+) -> str:
+    """Run the pr-summarizer agent and return its formatted markdown output.
+
+    Fail-soft: on any error (missing prompt, LLM failure, parse error) logs a
+    WARNING and returns "" so the review continues without a summary.
+    """
+    import subprocess
+
+    from ai_pr_review.agents.summarizer import (
+        build_summarizer_system_prompt,
+        build_summarizer_user_message,
+        parse_summarizer_output,
+    )
+    from ai_pr_review.llm.base import LLMRequest
+
+    try:
+        prompt_path = script_dir / "prompts" / "pr-summarizer.md"
+        system_prompt = build_summarizer_system_prompt(prompt_path, include_diagram=True)
+
+        commit_log = ""
+        try:
+            result = subprocess.run(
+                ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"{base_ref}..HEAD"],
+                capture_output=True, text=True, timeout=15,
+            )
+            commit_log = result.stdout.strip()
+        except Exception as exc:
+            logger.warning("pr-summarizer: could not get commit log: %s", exc)
+
+        user_message = build_summarizer_user_message(manifest_text, commit_log, diff_text)
+        request = LLMRequest(
+            model_id=model,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            max_tokens=4096,
+        )
+        from ai_pr_review.llm.base import LLMResponse
+        response: LLMResponse = await llm_call(request)  # type: ignore[misc]
+        # Validate the output is parseable (catches LLM refusals / truncated responses).
+        parse_summarizer_output(response.text, include_diagram=True)
+        return response.text
+    except Exception as exc:
+        logger.warning("pr-summarizer: failed (review will continue without summary): %s", exc)
+        return ""
+
+
+def _upsert_token_table(
+    result: "ReviewResult",
+    provider: object,
+    head_sha: str,
+    script_dir: Path,
+) -> None:
+    """Render the token cost table and upsert it into the existing summary comment."""
+    from ai_pr_review.agents.dispatch import AgentResult
+    from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
+    from ai_pr_review.vcs.protocol import VcsProvider
+
+    if not isinstance(provider, VcsProvider):
+        return
+
+    token_log: list[TokenEntry] = []
+    for ar in result.agent_results:
+        if isinstance(ar, AgentResult) and ar.token_log is not None:
+            tl = ar.token_log
+            token_log.append(TokenEntry(
+                agent=ar.name,
+                model=tl.model,
+                input_tokens=tl.input,
+                output_tokens=tl.output,
+                cache_creation_tokens=tl.cache_creation,
+                cache_read_tokens=tl.cache_read,
+            ))
+
+    if not token_log:
+        return
+
+    pricing_file = str(script_dir / "config" / "model-pricing.json")
+    pricing_data = load_pricing(pricing_file)
+    table = emit_token_table(token_log, pricing_data)
+
+    # Fetch the current summary body and append the table.
+    assert result.summary is not None
+    # post_summary is an upsert — calling it again updates the same comment.
+    try:
+        current_body = result.summary.body if hasattr(result.summary, "body") else ""
+        new_body = (current_body or "## AI Review").rstrip() + "\n\n" + table
+        provider.post_summary(new_body, head_sha)
+    except Exception as exc:
+        logger.warning("token table: could not upsert summary comment: %s", exc)
 
 
 def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
