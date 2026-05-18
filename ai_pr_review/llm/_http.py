@@ -7,12 +7,14 @@ httpx exceptions (ConnectError, TimeoutException, NetworkError).
 
 from __future__ import annotations
 
+import logging
 import random
-import sys
 from typing import Any
 
 import anyio
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # HTTP status codes worth retrying.
 _TRANSIENT_HTTP: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524})
@@ -63,10 +65,9 @@ async def retry_post(
                 attempt += 1
                 delay = retry_base_delay * (2 ** (attempt - 1))
                 jitter = random.random()
-                print(
-                    f"WARNING: {provider_label} request failed ({type(exc).__name__}), "
-                    f"retrying in {delay + jitter:.1f}s (attempt {attempt}/{retry_count})...",
-                    file=sys.stderr,
+                logger.warning(
+                    "%s request failed (%s), retrying in %.1fs (attempt %d/%d)...",
+                    provider_label, type(exc).__name__, delay + jitter, attempt, retry_count,
                 )
                 await anyio.sleep(delay + jitter)
                 continue
@@ -81,10 +82,9 @@ async def retry_post(
                 attempt += 1
                 delay = retry_base_delay * (2 ** (attempt - 1))
                 jitter = random.random()
-                print(
-                    f"WARNING: {provider_label} returned HTTP {response.status_code}, "
-                    f"retrying in {delay + jitter:.1f}s (attempt {attempt}/{retry_count})...",
-                    file=sys.stderr,
+                logger.warning(
+                    "%s returned HTTP %d, retrying in %.1fs (attempt %d/%d)...",
+                    provider_label, response.status_code, delay + jitter, attempt, retry_count,
                 )
                 await anyio.sleep(delay + jitter)
                 continue
@@ -94,17 +94,13 @@ async def retry_post(
             )
 
         if response.status_code < 200 or response.status_code >= 300:
-            print(
-                f"ERROR: {provider_label} API returned HTTP {response.status_code}",
-                file=sys.stderr,
-            )
+            logger.error("%s API returned HTTP %d", provider_label, response.status_code)
             try:
-                print(response.text, file=sys.stderr)
+                logger.debug("%s error response body: %s", provider_label, response.text)
             except Exception as log_exc:
-                print(
-                    f"WARNING: could not read error response body: {log_exc}; "
-                    f"raw bytes: {response.content[:200]!r}",
-                    file=sys.stderr,
+                logger.warning(
+                    "could not read error response body: %s; raw bytes: %r",
+                    log_exc, response.content[:200],
                 )
             raise LLMError(
                 f"{provider_label} returned HTTP {response.status_code}: {response.text[:500]}"

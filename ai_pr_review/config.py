@@ -57,6 +57,12 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_FEEDBACK_MAX_TOKENS",
         "AI_FEEDBACK_RETENTION_COUNT",
         "AI_FEEDBACK_RETENTION_AGE_DAYS",
+        # --- Epic 4: Capability 1 — structured logging ---
+        "AI_LOG_FORMAT",
+        "AI_LOG_LEVEL",
+        # Set by the engine at startup and inherited by analyzer subprocesses;
+        # not a user-configured input but must be known to avoid ConfigError.
+        "AI_PR_REVIEW_CORRELATION_ID",
     }
 )
 
@@ -164,6 +170,10 @@ class ReviewConfig(BaseModel):
     record_dir: str = ""
     compute_output: str = ""
 
+    # --- Epic 4: Capability 1 — structured logging ---
+    log_format: str = "human"
+    log_level: str = "WARNING"
+
     @field_validator("review_mode")
     @classmethod
     def _validate_review_mode(cls, v: str) -> str:
@@ -191,6 +201,21 @@ class ReviewConfig(BaseModel):
         if not (0 <= v <= 100):
             raise ValueError(f"confidence_threshold must be 0-100, got {v}")
         return v
+
+    @field_validator("log_format")
+    @classmethod
+    def _validate_log_format(cls, v: str) -> str:
+        if v not in ("human", "json"):
+            raise ValueError(f"log_format must be 'human' or 'json', got {v!r}")
+        return v
+
+    @field_validator("log_level")
+    @classmethod
+    def _validate_log_level(cls, v: str) -> str:
+        valid = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+        if v.upper() not in valid:
+            raise ValueError(f"log_level must be one of {valid}, got {v!r}")
+        return v.upper()
 
     @model_validator(mode="before")
     @classmethod
@@ -302,4 +327,6 @@ class ReviewConfig(BaseModel):
             engine=os.environ.get("AI_PR_REVIEW_ENGINE", "bash"),
             record_dir=os.environ.get("AI_PR_REVIEW_RECORD_DIR", ""),
             compute_output=os.environ.get("AI_PR_REVIEW_COMPUTE_OUTPUT", ""),
+            log_format=os.environ.get("AI_LOG_FORMAT", "human"),
+            log_level=os.environ.get("AI_LOG_LEVEL", "WARNING"),
         )

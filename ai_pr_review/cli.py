@@ -25,6 +25,7 @@ import anyio
 import click
 
 from ai_pr_review.config import ConfigError, ReviewConfig
+from ai_pr_review.logging import generate_correlation_id, setup_logging
 from ai_pr_review.manifest import ChangedFiles
 from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.vcs import ProviderConfigError
@@ -58,6 +59,10 @@ def compute(output: str) -> None:
     except ConfigError as exc:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(1)
+
+    correlation_id = os.environ.get("AI_PR_REVIEW_CORRELATION_ID") or generate_correlation_id()
+    os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
+    setup_logging(config.log_format, config.log_level, correlation_id)
 
     payload = _run_compute(config)
 
@@ -93,6 +98,11 @@ def review() -> None:
     except ConfigError as exc:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(1)
+
+    correlation_id = os.environ.get("AI_PR_REVIEW_CORRELATION_ID") or generate_correlation_id()
+    os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
+    setup_logging(config.log_format, config.log_level, correlation_id)
+    logger.info("review started")
 
     try:
         exit_code = anyio.run(_run_review_async, config)
@@ -533,6 +543,10 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
     except ConfigError as exc:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(1)
+
+    correlation_id = os.environ.get("AI_PR_REVIEW_CORRELATION_ID") or generate_correlation_id()
+    os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
+    setup_logging(config.log_format, config.log_level, correlation_id)
 
     from ai_pr_review.feedback.store import make_store
 
