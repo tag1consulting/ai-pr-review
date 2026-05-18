@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ai_pr_review.agents.dispatch import (
     AgentResult,
@@ -53,7 +53,7 @@ class ReviewResult:
     summary: SummaryResult | None
     findings_post: FindingsResult | None
     stale: StaleResult | None
-    agent_results: list[AgentResult] = ()  # type: ignore[assignment]
+    agent_results: list[AgentResult] = field(default_factory=list)
     skipped: bool = False
     skip_reason: str = ""
 

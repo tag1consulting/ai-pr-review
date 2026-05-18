@@ -242,7 +242,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     # 9. Append token cost table to the summary comment (upsert).
     if result.agent_results and result.summary and result.summary.ok:
-        _upsert_token_table(result, provider, head_sha, script_dir)
+        _upsert_token_table(result, provider, head_sha, script_dir, summary_text)
 
     _emit_review_result(result, base_ref=base_ref, head=head_sha)
     return 0 if result.ok else 1
@@ -332,11 +332,16 @@ async def _run_summarizer(
 
         commit_log = ""
         try:
-            result = subprocess.run(
+            git_result = subprocess.run(
                 ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"{base_ref}..HEAD"],
                 capture_output=True, text=True, timeout=15,
             )
-            commit_log = result.stdout.strip()
+            if git_result.returncode != 0:
+                logger.warning(
+                    "pr-summarizer: git log exited %d: %s",
+                    git_result.returncode, git_result.stderr.strip(),
+                )
+            commit_log = git_result.stdout.strip()
         except Exception as exc:
             logger.warning("pr-summarizer: could not get commit log: %s", exc)
 
@@ -353,15 +358,19 @@ async def _run_summarizer(
         parse_summarizer_output(response.text, include_diagram=True)
         return response.text
     except Exception as exc:
-        logger.warning("pr-summarizer: failed (review will continue without summary): %s", exc)
+        logger.warning(
+            "pr-summarizer: failed (review will continue without summary): %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
         return ""
 
 
 def _upsert_token_table(
-    result: "ReviewResult",
+    result: ReviewResult,
     provider: object,
     head_sha: str,
     script_dir: Path,
+    summary_text: str,
 ) -> None:
     """Render the token cost table and upsert it into the existing summary comment."""
     from ai_pr_review.agents.dispatch import AgentResult
@@ -369,6 +378,7 @@ def _upsert_token_table(
     from ai_pr_review.vcs.protocol import VcsProvider
 
     if not isinstance(provider, VcsProvider):
+        logger.debug("_upsert_token_table: provider %r is not a VcsProvider; skipping", type(provider).__name__)
         return
 
     token_log: list[TokenEntry] = []
@@ -391,12 +401,9 @@ def _upsert_token_table(
     pricing_data = load_pricing(pricing_file)
     table = emit_token_table(token_log, pricing_data)
 
-    # Fetch the current summary body and append the table.
-    assert result.summary is not None
     # post_summary is an upsert — calling it again updates the same comment.
     try:
-        current_body = result.summary.body if hasattr(result.summary, "body") else ""
-        new_body = (current_body or "## AI Review").rstrip() + "\n\n" + table
+        new_body = (summary_text or "## AI Review").rstrip() + "\n\n" + table
         provider.post_summary(new_body, head_sha)
     except Exception as exc:
         logger.warning("token table: could not upsert summary comment: %s", exc)
