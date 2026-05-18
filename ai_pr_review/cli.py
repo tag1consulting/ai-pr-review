@@ -347,11 +347,14 @@ async def _run_summarizer(
         system_prompt = build_summarizer_system_prompt(prompt_path, include_diagram=True)
 
         commit_log = ""
+        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"{base_ref}..HEAD"]
         proc: subprocess.CompletedProcess[str] | None = None
         try:
-            proc = subprocess.run(
-                ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"{base_ref}..HEAD"],
-                capture_output=True, text=True, timeout=15,
+            # Run in a thread to avoid blocking the anyio event loop.
+            proc = await anyio.to_thread.run_sync(
+                lambda: subprocess.run(
+                    _git_cmd, capture_output=True, text=True, timeout=15,
+                )
             )
         except subprocess.TimeoutExpired:
             logger.warning("pr-summarizer: git log timed out; proceeding without commit log")
