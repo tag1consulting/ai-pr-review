@@ -372,7 +372,7 @@ async def _run_summarizer(
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
         parse_summarizer_output(response.text, include_diagram=True)
         return response.text
-    except (OSError, ValueError, RuntimeError) as exc:
+    except Exception as exc:
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
             type(exc).__name__, exc, exc_info=True,
@@ -412,7 +412,10 @@ def _upsert_token_table(
         pricing_data = load_pricing(pricing_file)
         table = emit_token_table(token_log, pricing_data)
     except Exception as exc:
-        logger.warning("token table: could not generate token table: %s", exc, exc_info=True)
+        logger.warning(
+            "token table: could not generate token table (pricing_file=%r): %s",
+            str(script_dir / "config" / "model-pricing.json"), exc, exc_info=True,
+        )
         return
 
     accordion = (
