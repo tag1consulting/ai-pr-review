@@ -112,7 +112,7 @@ development_status:
   epic-4: in-progress
   4-1-structured-logging: review
   4-2-telemetry-hooks: ready-for-dev
-  4-3-cost-table-refinement: in-progress
+  4-3-cost-table-refinement: review
   4-4-perf-tuning-cache-priming: backlog
   4-5-error-surface-polish: review
   4-6-docs-refresh-python-primary: backlog
