@@ -38,6 +38,16 @@ _LANG_TO_GRAMMAR: dict[str, str] = {
     "java": "java",
     "cpp": "cpp",
     "c": "c",
+    "kotlin": "kotlin",
+    "swift": "swift",
+    "csharp": "csharp",
+    "scala": "scala",
+    "terraform": "terraform",
+    "yaml": "yaml",
+    "dockerfile": "dockerfile",
+    "sql": "sql",
+    "lua": "lua",
+    "perl": "perl",
 }
 
 # Node types considered "symbol references" per language.
