@@ -140,7 +140,7 @@ class GitBranchStore:
             except _ConflictError:
                 if attempt == _MAX_RETRIES:
                     logger.warning(
-                        "feedback store: SHA conflict after %d attempts; entry dropped",
+                        "[ai-pr-review] WARNING: feedback store: SHA conflict after %d attempts; entry dropped",
                         _MAX_RETRIES,
                     )
                     return False
@@ -148,7 +148,7 @@ class GitBranchStore:
                 time.sleep(_RETRY_BASE_S * attempt + jitter)
             except (httpx.TransportError, httpx.HTTPStatusError) as exc:
                 logger.warning(
-                    "feedback store: HTTP error on append attempt %d: %s",
+                    "[ai-pr-review] WARNING: feedback store: HTTP error on append attempt %d: %s",
                     attempt, exc,
                 )
                 return False
@@ -165,7 +165,7 @@ class GitBranchStore:
                 return False
             except Exception:
                 logger.error(
-                    "feedback store: unexpected error in append (entry dropped)",
+                    "[ai-pr-review] ERROR: feedback store: unexpected error in append (entry dropped)",
                     exc_info=True,
                 )
                 return False

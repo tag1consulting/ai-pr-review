@@ -161,7 +161,7 @@ def effective_prompt(
         else:
             degraded = True
             print(
-                f"WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
+                f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
                 f"agent '{agent_name}' will run without suggestion instructions",
                 file=sys.stderr,
             )
@@ -461,7 +461,7 @@ async def run_tier(
 
     for failure in failures:
         print(
-            f"WARNING: agent '{failure.name}' failed "
+            f"\n[ai-pr-review] WARNING: agent '{failure.name}' failed "
             f"(exit_code={failure.exit_code}, elapsed={failure.elapsed_ms}ms): "
             f"{failure.reason}",
             file=sys.stderr,

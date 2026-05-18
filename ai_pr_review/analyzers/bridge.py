@@ -95,17 +95,17 @@ def _run_analyzer(
         )
     except subprocess.TimeoutExpired:
         print(
-            f"WARNING: {spec.name} timed out after {_SUBPROCESS_TIMEOUT_SECS}s; skipping.",
+            f"\n[ai-pr-review] WARNING: {spec.name} timed out after {_SUBPROCESS_TIMEOUT_SECS}s; skipping.",
             file=sys.stderr,
         )
         return []
     except OSError as exc:
-        print(f"WARNING: {spec.name} failed to start: {exc}; skipping.", file=sys.stderr)
+        print(f"\n[ai-pr-review] WARNING: {spec.name} failed to start: {exc}; skipping.", file=sys.stderr)
         return []
 
     if result.returncode not in (0, 1):
         print(
-            f"WARNING: {spec.name} exited {result.returncode}; skipping. "
+            f"\n[ai-pr-review] WARNING: {spec.name} exited {result.returncode}; skipping. "
             f"stderr: {result.stderr[:200]}",
             file=sys.stderr,
         )
@@ -124,7 +124,7 @@ def _normalise_output(output: str, source: str) -> list[Finding]:
         data = json.loads(output)
     except json.JSONDecodeError:
         print(
-            f"WARNING: {source} produced non-JSON output; skipping. Preview: {output[:200]}",
+            f"\n[ai-pr-review] WARNING: {source} produced non-JSON output; skipping. Preview: {output[:200]}",
             file=sys.stderr,
         )
         return []

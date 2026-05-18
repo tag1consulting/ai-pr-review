@@ -129,7 +129,7 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         # / truncating aggregators) and via exc_info (full chain incl. any
         # __cause__ from a broken native extension).
         logger.warning(
-            "tree-sitter-language-pack unavailable; context enrichment disabled. "
+            "[ai-pr-review] WARNING: tree-sitter-language-pack unavailable; context enrichment disabled. "
             "Install with: pip install 'ai-pr-review[context]'. Cause: %s",
             exc,
             exc_info=exc,
@@ -139,7 +139,7 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     try:
         parser = get_parser(grammar_name)
     except Exception as exc:
-        logger.warning("tree-sitter: could not load grammar %r: %s", grammar_name, exc)
+        logger.warning("[ai-pr-review] WARNING: tree-sitter: could not load grammar %r: %s", grammar_name, exc)
         return []
 
     src, line_map = _strip_diff_markers(diff_hunk)
@@ -168,7 +168,7 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
             tree = parser.parse(src_bytes)  # type: ignore[arg-type,unused-ignore]
         except Exception as exc:
             logger.warning(
-                "tree-sitter: parse error for language %r: %s", language, exc,
+                "[ai-pr-review] WARNING: tree-sitter: parse error for language %r: %s", language, exc,
             )
             return []
     except Exception as exc:

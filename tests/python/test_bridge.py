@@ -208,3 +208,47 @@ class TestRunAnalyzers:
             findings = run_analyzers(cf, "/tmp/test.diff", tmpdir)
             assert len(findings) == 1
             assert "/tmp/test.diff" in findings[0].finding
+
+
+# ---------------------------------------------------------------------------
+# Warning format assertions (Story 4-5)
+# ---------------------------------------------------------------------------
+
+
+class TestWarningFormat:
+    def test_timeout_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
+        spec = AnalyzerSpec("slow-tool", "run-slow.sh", [])
+        with (
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="bash", timeout=120)),
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            Path(tmpdir, "analyzers").mkdir()
+            script = Path(tmpdir, "analyzers", "run-slow.sh")
+            script.write_text("#!/bin/bash\nsleep 9999\n")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = run_analyzers(ChangedFiles(), "/dev/null", tmpdir)
+        captured = capsys.readouterr()
+        assert findings == []
+        assert "[ai-pr-review] WARNING:" in captured.err
+
+    def test_oserror_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("subprocess.run", side_effect=OSError("permission denied")),
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            Path(tmpdir, "analyzers").mkdir()
+            script = Path(tmpdir, "analyzers", "run-shellcheck.sh")
+            script.write_text("#!/bin/bash\n")
+            script.chmod(0o644)
+            findings = run_analyzers(ChangedFiles(shell=["review.sh"]), "/dev/null", tmpdir)
+        captured = capsys.readouterr()
+        assert findings == []
+        assert "[ai-pr-review] WARNING:" in captured.err
+
+    def test_non_json_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
+        result = _normalise_output("not json at all", "my-analyzer")
+        captured = capsys.readouterr()
+        assert result == []
+        assert "[ai-pr-review] WARNING:" in captured.err
