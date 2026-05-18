@@ -102,23 +102,32 @@ class SecretMaskingFormatter(logging.Formatter):
         # Work on a shallow copy so mutations (exc_text, exc_info rendering)
         # are not visible to other handlers that process the same LogRecord.
         record = copy.copy(record)
-        # Render the message.  Narrow to TypeError (%-formatting arity mismatch)
-        # and include the exception type so malformed log calls are visible in
-        # output.  Attempt to render record.args so masking can apply to values.
+        # Render the message.  The entire block is wrapped in a broad except so
+        # format() never raises regardless of LogRecord state — a crash in the
+        # formatter would propagate to handleError() and could leak unmasked
+        # content to stderr.  TypeError catches %-formatting arity mismatches;
+        # the outer except catches anything unusual in record.args rendering.
         try:
             message = record.getMessage()
-        except TypeError as fmt_exc:
+        except Exception as fmt_exc:
             try:
                 args = record.args
-                rendered_args = " ".join(
-                    str(a)
-                    for a in (args if isinstance(args, tuple) else (args,))
-                ) if args else ""
+                if isinstance(args, dict):
+                    rendered_args = str(args)
+                elif args:
+                    rendered_args = " ".join(
+                        str(a) for a in (args if isinstance(args, tuple) else (args,))
+                    )
+                else:
+                    rendered_args = ""
                 message = (
-                    f"{record.msg!r} {rendered_args} [FORMATTING ERROR: {type(fmt_exc).__name__}]"
+                    f"{record.msg!r} {rendered_args}"
+                    f" [FORMATTING ERROR: {type(fmt_exc).__name__}: {fmt_exc}]"
                 ).strip()
             except Exception:
-                message = f"{record.msg!r} [FORMATTING ERROR: {type(fmt_exc).__name__}]"
+                message = (
+                    f"{record.msg!r} [FORMATTING ERROR: {type(fmt_exc).__name__}: {fmt_exc}]"
+                )
         # Clear exc_text before formatting so a previously-cached value from a
         # non-masking formatter cannot bypass secret redaction here.
         record.exc_text = None
