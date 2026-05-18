@@ -24,7 +24,7 @@ def _reset_pkg_logger() -> Generator[None, None, None]:
     original_propagate = pkg.propagate
     yield
     for h in pkg.handlers:
-        if getattr(h, "_ai_pr_review_managed", False):
+        if getattr(h, "_ai_pr_review_managed", False) and h not in original_handlers:
             h.close()
     pkg.handlers[:] = original_handlers
     pkg.setLevel(original_level)

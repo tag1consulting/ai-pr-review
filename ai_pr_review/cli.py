@@ -37,6 +37,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _secret_set(config: ReviewConfig) -> frozenset[str]:
+    """Return non-empty credential values from config for Layer 3 secret masking."""
+    return frozenset(
+        v for v in (
+            config.anthropic_api_key,
+            config.openai_api_key,
+            config.google_api_key,
+            config.bedrock_api_key,
+            config.gh_token,
+            config.gitlab_token,
+            config.bitbucket_api_token,
+            config.ci_job_token,
+        )
+        if v
+    )
+
+
 @click.group()
 def cli() -> None:
     """AI PR Review — Python compute engine."""
@@ -62,7 +79,7 @@ def compute(output: str) -> None:
 
     correlation_id = os.environ.get("AI_PR_REVIEW_CORRELATION_ID") or generate_correlation_id()
     os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
-    setup_logging(config.log_format, config.log_level, correlation_id)
+    setup_logging(config.log_format, config.log_level, correlation_id, secrets=_secret_set(config))
 
     payload = _run_compute(config)
 
@@ -101,7 +118,7 @@ def review() -> None:
 
     correlation_id = os.environ.get("AI_PR_REVIEW_CORRELATION_ID") or generate_correlation_id()
     os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
-    setup_logging(config.log_format, config.log_level, correlation_id)
+    setup_logging(config.log_format, config.log_level, correlation_id, secrets=_secret_set(config))
     logger.info("review started")
 
     try:
@@ -546,7 +563,7 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
 
     correlation_id = os.environ.get("AI_PR_REVIEW_CORRELATION_ID") or generate_correlation_id()
     os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
-    setup_logging(config.log_format, config.log_level, correlation_id)
+    setup_logging(config.log_format, config.log_level, correlation_id, secrets=_secret_set(config))
 
     from ai_pr_review.feedback.store import make_store
 

@@ -42,7 +42,7 @@ _TOKEN_PREFIX_RE = re.compile(
 
 # Layer 1: env-var name=value patterns.
 _ENV_VAR_RE = re.compile(
-    r"(?i)((?:[A-Z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|_KEY)\b)[^\s=]*)\s*[=:]\s*(\S+)"
+    r"(?i)((?:[A-Z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|_KEY)\b)[^\s=]*)(\s*[=:]\s*)(\S+)"
 )
 
 
@@ -59,8 +59,8 @@ def _mask_secrets(text: str, *, secret_literals: re.Pattern[str] | None = None) 
     2. Provider token prefixes (sk-ant-xxx → <redacted>)
     3. Literal secret values compiled at setup time (Layer 3 pattern passed in)
     """
-    # Layer 1
-    text = _ENV_VAR_RE.sub(lambda m: m.group(1) + "=<redacted>", text)
+    # Layer 1 — preserve the original separator (= or :) so TOKEN: value → TOKEN: <redacted>
+    text = _ENV_VAR_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", text)
     # Layer 2
     text = _TOKEN_PREFIX_RE.sub("<redacted>", text)
     # Layer 3
@@ -129,9 +129,12 @@ class SecretMaskingFormatter(logging.Formatter):
                     f"{record.msg!r} {rendered_args}"
                     f" [FORMATTING ERROR: {type(fmt_exc).__name__}: {fmt_exc}]"
                 ).strip()
-            except Exception:
+            except Exception as inner_exc:
                 # Avoid record.msg!r here — if msg has a broken __repr__ it raises again.
-                message = f"[UNFORMATTABLE LOG RECORD] {type(fmt_exc).__name__}: {fmt_exc}"
+                message = (
+                    f"[UNFORMATTABLE LOG RECORD] {type(fmt_exc).__name__}: {fmt_exc}"
+                    f" (secondary: {type(inner_exc).__name__}: {inner_exc})"
+                )
         # Clear exc_text before formatting so a previously-cached value from a
         # non-masking formatter cannot bypass secret redaction here.
         record.exc_text = None
@@ -232,5 +235,11 @@ def setup_logging(
     # any ai_pr_review.* child logger.
     handler.addFilter(CorrelationFilter())
     pkg_logger.addHandler(handler)
-    pkg_logger.setLevel(log_level)
+    try:
+        pkg_logger.setLevel(log_level)
+    except ValueError:
+        pkg_logger.setLevel(logging.WARNING)
+        pkg_logger.warning(
+            "[ai-pr-review] WARNING: unrecognised log level %r, falling back to WARNING", log_level
+        )
     pkg_logger.propagate = False

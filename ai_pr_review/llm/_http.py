@@ -66,8 +66,8 @@ async def retry_post(
                 delay = retry_base_delay * (2 ** (attempt - 1))
                 jitter = random.random()
                 logger.warning(
-                    "%s request failed (%s), retrying in %.1fs (attempt %d/%d)...",
-                    provider_label, type(exc).__name__, delay + jitter, attempt, retry_count,
+                    "%s request failed (%s: %s), retrying in %.1fs (attempt %d/%d)...",
+                    provider_label, type(exc).__name__, exc, delay + jitter, attempt, retry_count,
                 )
                 await anyio.sleep(delay + jitter)
                 continue
@@ -83,8 +83,10 @@ async def retry_post(
                 delay = retry_base_delay * (2 ** (attempt - 1))
                 jitter = random.random()
                 logger.warning(
-                    "%s returned HTTP %d, retrying in %.1fs (attempt %d/%d)...",
-                    provider_label, response.status_code, delay + jitter, attempt, retry_count,
+                    "%s returned HTTP %d (%s), retrying in %.1fs (attempt %d/%d)...",
+                    provider_label, response.status_code,
+                    response.text[:200] if response.content else "",
+                    delay + jitter, attempt, retry_count,
                 )
                 await anyio.sleep(delay + jitter)
                 continue
