@@ -17,24 +17,6 @@ from ai_pr_review.logging import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Fixture: reset ai_pr_review package logger after each test.
-# setup_logging() now targets logging.getLogger("ai_pr_review") rather than the
-# root logger, so we only need to restore that logger's state.
-# ---------------------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def _reset_pkg_logger():
-    """Ensure the ai_pr_review package logger is clean before and after each test."""
-    pkg = logging.getLogger("ai_pr_review")
-    original_handlers = pkg.handlers[:]
-    original_level = pkg.level
-    original_propagate = pkg.propagate
-    yield
-    pkg.handlers[:] = original_handlers
-    pkg.setLevel(original_level)
-    pkg.propagate = original_propagate
-
-
 def _emit_and_capture(capsys, *, log_format: str, log_level: str = "DEBUG",
                       correlation_id: str = "test1234", message: str = "hello test",
                       level: int = logging.WARNING) -> str:
