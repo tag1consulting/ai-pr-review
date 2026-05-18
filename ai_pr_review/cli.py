@@ -352,10 +352,9 @@ async def _run_summarizer(
         else:
             if proc.returncode != 0:
                 logger.warning(
-                    "pr-summarizer: git log exited %d: %s",
-                    proc.returncode, proc.stderr.strip(),
+                    "pr-summarizer: git log exited %d; stderr=%r stdout=%r",
+                    proc.returncode, proc.stderr.strip(), proc.stdout.strip(),
                 )
-                commit_log = ""
             else:
                 commit_log = proc.stdout.strip()
 
@@ -367,10 +366,13 @@ async def _run_summarizer(
             max_tokens=4096,
         )
         response: LLMResponse = await llm_call(request)
-        # Validate the output is parseable (catches LLM refusals / truncated responses).
+        # parse_summarizer_output returns a SummarizerOutput dataclass (not a
+        # cleaned string). We call it here only to validate the response is
+        # parseable before returning the raw markdown to the caller.
+        logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
         parse_summarizer_output(response.text, include_diagram=True)
         return response.text
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
             type(exc).__name__, exc, exc_info=True,
@@ -409,17 +411,24 @@ def _upsert_token_table(
         pricing_file = str(script_dir / "config" / "model-pricing.json")
         pricing_data = load_pricing(pricing_file)
         table = emit_token_table(token_log, pricing_data)
+    except Exception as exc:
+        logger.warning("token table: could not generate token table: %s", exc, exc_info=True)
+        return
 
-        accordion = (
-            "<details>\n<summary>Token usage by agent</summary>\n\n"
-            + table
-            + "\n</details>"
-        )
-        # post_summary is an upsert — calling it again updates the same comment.
+    accordion = (
+        "<details>\n<summary>Token usage by agent</summary>\n\n"
+        + table
+        + "\n</details>"
+    )
+    # post_summary is an upsert — calling it again updates the same comment.
+    try:
         new_body = (summary_text.strip() or "## AI Review").rstrip() + "\n\n" + accordion
         provider.post_summary(new_body, head_sha)
     except Exception as exc:
-        logger.warning("token table: could not generate or post token table: %s", exc, exc_info=True)
+        logger.error(
+            "token table: could not post token table to PR comment: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
 
 
 def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
