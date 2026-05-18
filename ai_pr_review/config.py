@@ -163,7 +163,7 @@ class ReviewConfig(BaseModel):
     ci_job_token: str = ""
 
     # --- PHP ---
-    phpstan_level: int = 5
+    phpstan_level: int = 3
 
     # --- Engine / recording ---
     engine: str = "bash"
@@ -323,7 +323,7 @@ class ReviewConfig(BaseModel):
                 "CI_MERGE_REQUEST_DIFF_BASE_SHA", ""
             ),
             ci_job_token=os.environ.get("CI_JOB_TOKEN", ""),
-            phpstan_level=_int("PHPSTAN_LEVEL", 5),
+            phpstan_level=_int("PHPSTAN_LEVEL", 3),
             engine=os.environ.get("AI_PR_REVIEW_ENGINE", "bash"),
             record_dir=os.environ.get("AI_PR_REVIEW_RECORD_DIR", ""),
             compute_output=os.environ.get("AI_PR_REVIEW_COMPUTE_OUTPUT", ""),

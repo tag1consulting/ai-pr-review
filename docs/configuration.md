@@ -101,7 +101,7 @@ to change them.
 |----------|---------|-------------|
 | `FORCE_FULL_DIFF` | `false` | Bypass the SHA watermark and review the full PR diff. Prefer the `ai-review-rescan` PR label instead — it sets this automatically. |
 | `STANDALONE_DEPTH` | `''` | In standalone mode, diff the last N commits when base and head resolve to the same SHA. If unset, diffs the entire tree. |
-| `LLM_RETRY_COUNT` | `3` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
+| `LLM_RETRY_COUNT` | `3` (bash) / `2` (python) | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings. Findings below this are dropped before suppressions. |
 | `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Disables the docs-only heuristic gate; `architecture-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
@@ -142,6 +142,18 @@ These variables enable optional capabilities that are off by default. All requir
 | `AI_FEEDBACK_RETENTION_AGE_DAYS` | `365` | Drop entries older than this many days. Set to `0` to disable age-based pruning. |
 
 > **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
+
+### Structured logging (Epic 4)
+
+These variables configure the Python engine's logging system (`engine: python` only). Set them in your workflow `env:` block.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_LOG_FORMAT` | `human` | Log output format. `human` — human-readable timestamped lines. `json` — machine-readable JSON objects with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields; suitable for Datadog, CloudWatch, and similar log aggregators. |
+| `AI_LOG_LEVEL` | `WARNING` | Minimum log level to emit. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). |
+| `AI_PR_REVIEW_CORRELATION_ID` | *(auto-generated)* | 8-character hex correlation ID injected into every log record for the duration of a review run. Auto-generated at startup; set explicitly to correlate logs across multiple jobs. |
+
+Secret masking is always active: API keys, tokens, and other credentials from `ReviewConfig` are redacted from log output regardless of log format or level.
 
 ### Bitbucket-specific variables
 

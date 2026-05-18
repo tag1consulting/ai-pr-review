@@ -7,6 +7,16 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.9.1
+
+**Language detection expanded to 23 languages (PR #297).** The Python engine (`engine: python`) now detects Kotlin, Swift, C#, Scala, Terraform, YAML, SQL, Lua, Perl, plus Drupal PHP extensions (`.module`, `.theme`, `.inc`) and Ruby build files (`.rake`, `.gemspec`). Tree-sitter context enrichment (Capability A) covers all 23 language keys.
+
+**PR summarizer and token cost table wired (PR #299).** On first-run reviews (`engine: python`), the engine now automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. Skipped on incremental runs (SHA watermark active).
+
+**Structured logging — Epic 4, Story 1 (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](#structured-logging-epic-4) for the full env-var reference.
+
+**Error surface polish — Epic 4, Story 5 (PR #300).** All internal exceptions now use a typed hierarchy (`AiPrReviewError` → `ConfigError` / `ProviderError` / `CapabilityError` / `AnalyzerError` / `EngineError`). Warning messages follow a consistent `[ai-pr-review] WARNING: <component>: <message>` format across all modules.
+
 ## What's new in v0.9.0
 
 **Python engine end-to-end (Epic 2).** `engine: python` now routes compute,
@@ -99,7 +109,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
 
-**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl errors (connection refused, timeout, network failure) are retried with exponential backoff and jitter. Controlled by the `LLM_RETRY_COUNT` env var (default: 3).
+**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl errors (connection refused, timeout, network failure) are retried with exponential backoff and jitter. Controlled by the `LLM_RETRY_COUNT` env var (default: 3 for the bash engine, 2 for the Python engine).
 
 **Parallel execution**: Agents run in a tiered fan-out by default — Tier 1 issues up to ~3 concurrent LLM calls alongside any triggered static analyzers; Tier 2 (full mode only) issues up to 5 concurrent LLM calls. The concurrency numbers apply to LLM calls only (for rate-limit planning); static analyzers run concurrently with them but do not consume LLM quota. If your provider's rate limits cannot sustain this throughput, set `parallel: false` to revert to sequential execution.
 

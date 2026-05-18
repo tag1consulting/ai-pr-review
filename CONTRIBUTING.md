@@ -17,6 +17,21 @@ shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh \
   post-review-gitlab.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
 ```
 
+### Python engine setup
+
+```bash
+# Prerequisites: Python 3.11+, uv or pip
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"   # installs pytest, ruff, mypy, and runtime deps
+
+# Run the Python test suite
+pytest tests/python/ -q
+
+# Lint and type-check
+ruff check ai_pr_review/
+mypy ai_pr_review/
+```
+
 ## Adding a static analyzer
 
 Static analyzers are the easiest contribution — self-contained scripts with a consistent pattern.
@@ -181,7 +196,10 @@ Before opening a pull request:
 
 - [ ] `bats tests/*.bats` — all tests pass
 - [ ] `shellcheck` on any modified `.sh` files
+- [ ] `pytest tests/python/ -q` — Python tests pass (if you touched `ai_pr_review/`)
+- [ ] `ruff check ai_pr_review/` and `mypy ai_pr_review/` — no new lint or type errors
 - [ ] Update `CLAUDE.md` if you changed interfaces (new env vars, new scripts, changed function signatures)
+- [ ] If you added an `AI_*` env var, register it in `_KNOWN_AI_VARS` in `ai_pr_review/config.py` and add a `from_env()` field — otherwise the Python engine raises `ConfigError` at startup
 - [ ] Update `README.md` and `docs/` pages if you changed user-facing behavior
 - [ ] Run `/comprehensive-review --quick` to catch issues before the CI review
 
