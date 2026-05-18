@@ -20,7 +20,7 @@ off, all require `engine: python`. See
 for the full env-var reference.
 
 **Capability A — Context enrichment** (`AI_CONTEXT_ENRICHMENT=true`)
-- Tree-sitter extracts symbol references from diff hunks (9 grammars), with a regex fallback when tree-sitter is unavailable.
+- Tree-sitter extracts symbol references from diff hunks (23 language keys), with a regex fallback when tree-sitter is unavailable.
 - ripgrep looks up cross-file definitions and ranks by proximity (same-file > same-package > repo-wide).
 - Definitions are token-budget-capped and injected into eligible agent prompts as a `<symbol-context>` block. Reduces hallucinated "should check X" findings.
 

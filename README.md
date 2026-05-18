@@ -359,7 +359,7 @@ Local rules are merged with the global suppression rules at runtime — no actio
 
 ## Language profiles
 
-The action auto-detects languages from file extensions and injects per-language context into agent prompts. Language profiles are markdown files in `language-profiles/`:
+The action auto-detects languages from file extensions (23 language keys as of v0.9.1) and injects per-language context into agent prompts when a profile file exists. Language profiles are markdown files in `language-profiles/`:
 
 | Profile file | Covers |
 |---|---|
@@ -373,7 +373,7 @@ The action auto-detects languages from file extensions and injects per-language 
 | `java.md` | Java |
 | `c++.md` | C and C++ |
 
-To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `review.sh` for the relevant file extensions. See CLAUDE.md for the full extension-to-language mapping.
+To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `lib/languages.sh` for the relevant file extensions. See CLAUDE.md for the full extension-to-language mapping.
 
 ## Dependency vulnerability check
 

@@ -108,4 +108,4 @@ The action auto-detects languages from file extensions and injects per-language 
 | `java.md` | Java |
 | `c++.md` | C and C++ |
 
-To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `review.sh` for the relevant file extensions.
+To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `lib/languages.sh` for the relevant file extensions.

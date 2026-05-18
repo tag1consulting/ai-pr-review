@@ -61,6 +61,13 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 | `c`, `h`, `cpp`, `hpp`, `cc`, `cxx` | `C++` | `language-profiles/c++.md` |
 | `tf`, `tfvars` | `Terraform` | *(no profile)* |
 | `yaml`, `yml` | `YAML` | *(no profile)* |
+| `kt`, `kts` | `Kotlin` | *(no profile)* |
+| `swift` | `Swift` | *(no profile)* |
+| `cs` | `CSharp` | *(no profile)* |
+| `scala`, `sbt` | `Scala` | *(no profile)* |
+| `sql` | `SQL` | *(no profile)* |
+| `lua` | `Lua` | *(no profile)* |
+| `pl`, `pm` | `Perl` | *(no profile)* |
 
 ## Test-file detection
 
