@@ -323,9 +323,17 @@ async def _run_summarizer(
 ) -> str:
     """Run the pr-summarizer agent and return its formatted markdown output.
 
-    Fail-soft: on any error (missing prompt, LLM failure, parse error) logs a
-    WARNING and returns a visible failure notice so the PR comment communicates
-    the partial failure rather than silently omitting the summary.
+    Returns response.text (the full LLM markdown including summary, walkthrough
+    table, and optional sequence diagram) rather than SummarizerOutput.summary_md,
+    because summary_md contains only the text before the **Type:** line —
+    returning it alone would drop the walkthrough table and sequence diagram.
+    parse_summarizer_output() is called for validation only (not to reformat).
+
+    Fail-soft: on any error logs a WARNING and returns _SUMMARIZER_FAILURE_NOTICE
+    so the PR comment communicates the partial failure rather than silently
+    omitting the summary.  except Exception is intentional: the fail-soft contract
+    requires that any unexpected error (KeyError, TypeError, etc.) in the prompt
+    assembly or parse path skips the summary rather than aborting the whole review.
     """
     from ai_pr_review.agents.summarizer import (
         build_summarizer_system_prompt,
@@ -355,6 +363,8 @@ async def _run_summarizer(
                     "pr-summarizer: git log exited %d; stderr=%r stdout=%r",
                     proc.returncode, proc.stderr.strip()[:500], proc.stdout.strip()[:500],
                 )
+                # Use a prompt-safe marker so the LLM knows context is absent.
+                commit_log = "_Note: commit log unavailable (git log failed)._"
             else:
                 commit_log = proc.stdout.strip()
 
@@ -387,7 +397,18 @@ def _upsert_token_table(
     script_dir: Path,
     summary_text: str,
 ) -> None:
-    """Render the token cost table and upsert it into the existing summary comment."""
+    """Render the token cost table and append it to the posted summary comment.
+
+    Design: run_review() posts summary_text (or "## AI Review") as the summary
+    comment via post_summary().  After dispatch completes and token logs are
+    available, this function calls post_summary() a second time with the same
+    base text plus the token-table accordion.  post_summary() is a marker-keyed
+    upsert (<!-- ai-pr-review-summary sha=... -->), so the second call replaces
+    the first comment body in-place — no duplicate comment is created.
+
+    Agent findings are posted separately by post_findings() as a GitHub PR
+    review object, which is unaffected by this upsert.
+    """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
 
