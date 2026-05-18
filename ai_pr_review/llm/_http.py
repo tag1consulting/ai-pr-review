@@ -96,7 +96,7 @@ async def retry_post(
         if response.status_code < 200 or response.status_code >= 300:
             logger.error("%s API returned HTTP %d", provider_label, response.status_code)
             try:
-                logger.debug("%s error response body: %s", provider_label, response.text)
+                logger.warning("%s error response body: %s", provider_label, response.text[:500])
             except Exception as log_exc:
                 logger.warning(
                     "could not read error response body: %s; raw bytes: %r",

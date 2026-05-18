@@ -8,7 +8,9 @@ before emission via SecretMaskingFormatter.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
+import copy
 import json
 import logging
 import re
@@ -97,11 +99,12 @@ class SecretMaskingFormatter(logging.Formatter):
         return _mask_secrets(rendered, secret_literals=self._secret_literals)
 
     def _format_json(self, record: logging.LogRecord) -> str:
-        # Render the message so that exception tracebacks are captured in the
-        # message field.  Narrow to TypeError (%-formatting arity mismatch) and
-        # include the exception type so malformed log calls are visible in output
-        # rather than silently emitting a raw template string.  Attempt to render
-        # record.args into the fallback so masking can still apply to arg values.
+        # Work on a shallow copy so mutations (exc_text, exc_info rendering)
+        # are not visible to other handlers that process the same LogRecord.
+        record = copy.copy(record)
+        # Render the message.  Narrow to TypeError (%-formatting arity mismatch)
+        # and include the exception type so malformed log calls are visible in
+        # output.  Attempt to render record.args so masking can apply to values.
         try:
             message = record.getMessage()
         except TypeError as fmt_exc:
@@ -197,9 +200,17 @@ def setup_logging(
     pkg_logger = logging.getLogger("ai_pr_review")
 
     # Remove only handlers we previously installed; leave external handlers intact.
-    pkg_logger.handlers = [
-        h for h in pkg_logger.handlers
-        if not getattr(h, "_ai_pr_review_managed", False)
+    # Close managed handlers to release file descriptors before discarding them.
+    for h in list(pkg_logger.handlers):
+        if getattr(h, "_ai_pr_review_managed", False):
+            with contextlib.suppress(Exception):
+                h.close()
+            pkg_logger.removeHandler(h)
+
+    # Remove any CorrelationFilter instances we previously added to the logger
+    # so they don't accumulate across multiple setup_logging() calls.
+    pkg_logger.filters = [
+        f for f in pkg_logger.filters if not isinstance(f, CorrelationFilter)
     ]
 
     handler = logging.StreamHandler()

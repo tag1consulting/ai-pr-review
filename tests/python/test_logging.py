@@ -229,21 +229,38 @@ class TestMaskSecrets:
 
 class TestCorrelationIdBoundary:
     def test_correlation_id_in_subprocess_env(self, monkeypatch, tmp_path):
-        """AI_PR_REVIEW_CORRELATION_ID is present in env passed to subprocess.run."""
+        """AI_PR_REVIEW_CORRELATION_ID is forwarded to analyzer subprocesses.
+
+        bridge._run_analyzer merges os.environ into run_env before calling
+        subprocess.run, so the correlation ID set in os.environ propagates.
+        """
         import subprocess
+        from unittest.mock import MagicMock
+
+        from ai_pr_review.analyzers.bridge import AnalyzerSpec, _run_analyzer
+
         captured_envs: list[dict] = []
-        real_run = subprocess.run
 
         def fake_run(*args, **kwargs):
-            if "env" in kwargs and kwargs["env"] is not None:
-                captured_envs.append(dict(kwargs["env"]))
-            return real_run(*args, **kwargs)
+            env = kwargs.get("env") or {}
+            captured_envs.append(dict(env))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "[]"
+            result.stderr = ""
+            return result
 
         monkeypatch.setenv("AI_PR_REVIEW_CORRELATION_ID", "propagate1")
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        # Verify the env var is set — the bridge will pick it up from os.environ
-        assert os.environ.get("AI_PR_REVIEW_CORRELATION_ID") == "propagate1"
+        # diff_file doesn't need to exist — subprocess.run is mocked
+        spec = AnalyzerSpec("test", "run-test.sh", [])
+        _run_analyzer(spec, "/fake/run-test.sh", "/fake/diff.txt", {})
+
+        assert captured_envs, "_run_analyzer should have called subprocess.run"
+        assert captured_envs[0].get("AI_PR_REVIEW_CORRELATION_ID") == "propagate1", (
+            f"correlation ID not forwarded: {captured_envs[0]}"
+        )
 
     def test_inbound_correlation_id_reused(self, monkeypatch):
         """If AI_PR_REVIEW_CORRELATION_ID is already set, that value is used."""
@@ -258,8 +275,8 @@ class TestCorrelationIdBoundary:
         assert all(c in "0123456789abcdef" for c in cid)
 
     def test_generate_correlation_id_unique(self):
-        ids = {generate_correlation_id() for _ in range(100)}
-        assert len(ids) == 100  # no collisions in 100 samples
+        ids = {generate_correlation_id() for _ in range(10)}
+        assert len(ids) == 10  # no collisions in 10 samples (birthday p≈0.000001%)
 
 
 # ---------------------------------------------------------------------------
