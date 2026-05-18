@@ -15,8 +15,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import anyio
 import click
@@ -25,6 +28,9 @@ from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.manifest import ChangedFiles
 from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.vcs import ProviderConfigError
+
+if TYPE_CHECKING:
+    from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +114,6 @@ async def _run_review_async(config: ReviewConfig) -> int:
     from ai_pr_review.agents.dispatch import DispatchContext
     from ai_pr_review.agents.gates import evaluate_gates, filter_agents
     from ai_pr_review.agents.roster import AGENTS
-    from ai_pr_review.llm.base import LLMRequest, LLMResponse
     from ai_pr_review.llm.client import call_llm
     from ai_pr_review.orchestrate import OrchestrationConfig, run_review
     from ai_pr_review.vcs import provider_from_env
@@ -303,6 +308,9 @@ def _make_changed_files(files: list[object]) -> ChangedFiles:
     return build_changed_files(paths)
 
 
+_SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"
+
+
 async def _run_summarizer(
     *,
     diff_text: str,
@@ -310,15 +318,14 @@ async def _run_summarizer(
     base_ref: str,
     script_dir: Path,
     model: str,
-    llm_call: object,
+    llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
 ) -> str:
     """Run the pr-summarizer agent and return its formatted markdown output.
 
     Fail-soft: on any error (missing prompt, LLM failure, parse error) logs a
-    WARNING and returns "" so the review continues without a summary.
+    WARNING and returns a visible failure notice so the PR comment communicates
+    the partial failure rather than silently omitting the summary.
     """
-    import subprocess
-
     from ai_pr_review.agents.summarizer import (
         build_summarizer_system_prompt,
         build_summarizer_user_message,
@@ -331,19 +338,25 @@ async def _run_summarizer(
         system_prompt = build_summarizer_system_prompt(prompt_path, include_diagram=True)
 
         commit_log = ""
+        proc: subprocess.CompletedProcess[str] | None = None
         try:
-            git_result = subprocess.run(
+            proc = subprocess.run(
                 ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"{base_ref}..HEAD"],
                 capture_output=True, text=True, timeout=15,
             )
-            if git_result.returncode != 0:
-                logger.warning(
-                    "pr-summarizer: git log exited %d: %s",
-                    git_result.returncode, git_result.stderr.strip(),
-                )
-            commit_log = git_result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            logger.warning("pr-summarizer: git log timed out; proceeding without commit log")
         except Exception as exc:
             logger.warning("pr-summarizer: could not get commit log: %s", exc)
+        else:
+            if proc.returncode != 0:
+                logger.warning(
+                    "pr-summarizer: git log exited %d: %s",
+                    proc.returncode, proc.stderr.strip(),
+                )
+                commit_log = "(commit log unavailable)"
+            else:
+                commit_log = proc.stdout.strip()
 
         user_message = build_summarizer_user_message(manifest_text, commit_log, diff_text)
         request = LLMRequest(
@@ -352,8 +365,7 @@ async def _run_summarizer(
             user_message=user_message,
             max_tokens=4096,
         )
-        from ai_pr_review.llm.base import LLMResponse
-        response: LLMResponse = await llm_call(request)  # type: ignore[misc]
+        response: LLMResponse = await llm_call(request)
         # Validate the output is parseable (catches LLM refusals / truncated responses).
         parse_summarizer_output(response.text, include_diagram=True)
         return response.text
@@ -362,7 +374,7 @@ async def _run_summarizer(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
             type(exc).__name__, exc, exc_info=True,
         )
-        return ""
+        return _SUMMARIZER_FAILURE_NOTICE
 
 
 def _upsert_token_table(
@@ -378,7 +390,7 @@ def _upsert_token_table(
     from ai_pr_review.vcs.protocol import VcsProvider
 
     if not isinstance(provider, VcsProvider):
-        logger.debug("_upsert_token_table: provider %r is not a VcsProvider; skipping", type(provider).__name__)
+        logger.warning("_upsert_token_table: provider %r is not a VcsProvider; skipping", type(provider).__name__)
         return
 
     token_log: list[TokenEntry] = []
@@ -401,12 +413,17 @@ def _upsert_token_table(
     pricing_data = load_pricing(pricing_file)
     table = emit_token_table(token_log, pricing_data)
 
+    accordion = (
+        "<details>\n<summary>Token usage by agent</summary>\n\n"
+        + table
+        + "\n</details>"
+    )
     # post_summary is an upsert — calling it again updates the same comment.
     try:
-        new_body = (summary_text or "## AI Review").rstrip() + "\n\n" + table
+        new_body = (summary_text.strip() or "## AI Review").rstrip() + "\n\n" + accordion
         provider.post_summary(new_body, head_sha)
     except Exception as exc:
-        logger.warning("token table: could not upsert summary comment: %s", exc)
+        logger.warning("token table: could not upsert summary comment: %s", exc, exc_info=True)
 
 
 def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
