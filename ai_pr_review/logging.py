@@ -93,6 +93,11 @@ class SecretMaskingFormatter(logging.Formatter):
         self._secret_literals = secret_literals
 
     def format(self, record: logging.LogRecord) -> str:
+        # Ensure correlation_id is present so %(correlation_id)s in the human
+        # format string does not raise KeyError for records from loggers outside
+        # the ai_pr_review hierarchy (e.g. propagated root-logger records).
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = ""
         if self._json_format:
             return self._format_json(record)
         rendered = super().format(record)
@@ -125,14 +130,16 @@ class SecretMaskingFormatter(logging.Formatter):
                     f" [FORMATTING ERROR: {type(fmt_exc).__name__}: {fmt_exc}]"
                 ).strip()
             except Exception:
-                message = (
-                    f"{record.msg!r} [FORMATTING ERROR: {type(fmt_exc).__name__}: {fmt_exc}]"
-                )
+                # Avoid record.msg!r here — if msg has a broken __repr__ it raises again.
+                message = f"[UNFORMATTABLE LOG RECORD] {type(fmt_exc).__name__}: {fmt_exc}"
         # Clear exc_text before formatting so a previously-cached value from a
         # non-masking formatter cannot bypass secret redaction here.
         record.exc_text = None
         if record.exc_info:
-            record.exc_text = self.formatException(record.exc_info)
+            try:
+                record.exc_text = self.formatException(record.exc_info)
+            except Exception:
+                record.exc_text = "[exception formatting failed]"
         if record.exc_text:
             message = message + "\n" + record.exc_text
         if record.stack_info:
@@ -216,19 +223,14 @@ def setup_logging(
                 h.close()
             pkg_logger.removeHandler(h)
 
-    # Remove any CorrelationFilter instances we previously added to the logger
-    # so they don't accumulate across multiple setup_logging() calls.
-    pkg_logger.filters = [
-        f for f in pkg_logger.filters if not isinstance(f, CorrelationFilter)
-    ]
-
     handler = logging.StreamHandler()
     handler._ai_pr_review_managed = True  # type: ignore[attr-defined]
     handler.setFormatter(formatter)
-    # Add CorrelationFilter to both the handler and the logger so any handler
-    # later attached to the logger also receives records with correlation_id set.
+    # CorrelationFilter on the handler (not the logger) so it fires for records
+    # propagated from child loggers — Python's callHandlers skips parent-logger
+    # filters when propagating, so a filter on the logger would be a no-op for
+    # any ai_pr_review.* child logger.
     handler.addFilter(CorrelationFilter())
     pkg_logger.addHandler(handler)
-    pkg_logger.addFilter(CorrelationFilter())
     pkg_logger.setLevel(log_level)
     pkg_logger.propagate = False

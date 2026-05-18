@@ -344,3 +344,5 @@ class TestSetupLoggingIdempotency:
         stderr = capsys.readouterr().err
         lines = [line for line in stderr.strip().splitlines() if line.strip()]
         assert len(lines) == 1, f"Expected 1 line, got {len(lines)}: {stderr!r}"
+        # Verify the second call's correlation ID is active, not the first's.
+        assert json.loads(lines[0])["correlation_id"] == "idem0002"
