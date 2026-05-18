@@ -31,6 +31,7 @@ from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
+    from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +355,7 @@ async def _run_summarizer(
                     "pr-summarizer: git log exited %d: %s",
                     proc.returncode, proc.stderr.strip(),
                 )
-                commit_log = "(commit log unavailable)"
+                commit_log = ""
             else:
                 commit_log = proc.stdout.strip()
 
@@ -379,7 +380,7 @@ async def _run_summarizer(
 
 def _upsert_token_table(
     result: ReviewResult,
-    provider: object,
+    provider: VcsProvider,
     head_sha: str,
     script_dir: Path,
     summary_text: str,
@@ -387,43 +388,38 @@ def _upsert_token_table(
     """Render the token cost table and upsert it into the existing summary comment."""
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
-    from ai_pr_review.vcs.protocol import VcsProvider
 
-    if not isinstance(provider, VcsProvider):
-        logger.warning("_upsert_token_table: provider %r is not a VcsProvider; skipping", type(provider).__name__)
-        return
-
-    token_log: list[TokenEntry] = []
-    for ar in result.agent_results:
-        if isinstance(ar, AgentResult) and ar.token_log is not None:
-            tl = ar.token_log
-            token_log.append(TokenEntry(
-                agent=ar.name,
-                model=tl.model,
-                input_tokens=tl.input,
-                output_tokens=tl.output,
-                cache_creation_tokens=tl.cache_creation,
-                cache_read_tokens=tl.cache_read,
-            ))
-
-    if not token_log:
-        return
-
-    pricing_file = str(script_dir / "config" / "model-pricing.json")
-    pricing_data = load_pricing(pricing_file)
-    table = emit_token_table(token_log, pricing_data)
-
-    accordion = (
-        "<details>\n<summary>Token usage by agent</summary>\n\n"
-        + table
-        + "\n</details>"
-    )
-    # post_summary is an upsert — calling it again updates the same comment.
     try:
+        token_log: list[TokenEntry] = []
+        for ar in result.agent_results:
+            if isinstance(ar, AgentResult) and ar.token_log is not None:
+                tl = ar.token_log
+                token_log.append(TokenEntry(
+                    agent=ar.name,
+                    model=tl.model,
+                    input_tokens=tl.input,
+                    output_tokens=tl.output,
+                    cache_creation_tokens=tl.cache_creation,
+                    cache_read_tokens=tl.cache_read,
+                ))
+
+        if not token_log:
+            return
+
+        pricing_file = str(script_dir / "config" / "model-pricing.json")
+        pricing_data = load_pricing(pricing_file)
+        table = emit_token_table(token_log, pricing_data)
+
+        accordion = (
+            "<details>\n<summary>Token usage by agent</summary>\n\n"
+            + table
+            + "\n</details>"
+        )
+        # post_summary is an upsert — calling it again updates the same comment.
         new_body = (summary_text.strip() or "## AI Review").rstrip() + "\n\n" + accordion
         provider.post_summary(new_body, head_sha)
     except Exception as exc:
-        logger.warning("token table: could not upsert summary comment: %s", exc, exc_info=True)
+        logger.warning("token table: could not generate or post token table: %s", exc, exc_info=True)
 
 
 def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
