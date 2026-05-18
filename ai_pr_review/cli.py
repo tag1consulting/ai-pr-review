@@ -353,7 +353,7 @@ async def _run_summarizer(
             if proc.returncode != 0:
                 logger.warning(
                     "pr-summarizer: git log exited %d; stderr=%r stdout=%r",
-                    proc.returncode, proc.stderr.strip(), proc.stdout.strip(),
+                    proc.returncode, proc.stderr.strip()[:500], proc.stdout.strip()[:500],
                 )
             else:
                 commit_log = proc.stdout.strip()
