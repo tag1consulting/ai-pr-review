@@ -14,6 +14,7 @@ import copy
 import json
 import logging
 import re
+import sys
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -41,8 +42,9 @@ _TOKEN_PREFIX_RE = re.compile(
 )
 
 # Layer 1: env-var name=value patterns.
+# Group 3 stops at common delimiters (,;'") to preserve surrounding structure.
 _ENV_VAR_RE = re.compile(
-    r"(?i)((?:[A-Z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|_KEY)\b)[^\s=]*)(\s*[=:]\s*)(\S+)"
+    r"(?i)((?:[A-Z_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|_KEY)\b)[^\s=]*)(\s*[=:]\s*)([^\s,;'\"]+)"
 )
 
 
@@ -104,8 +106,9 @@ class SecretMaskingFormatter(logging.Formatter):
         return _mask_secrets(rendered, secret_literals=self._secret_literals)
 
     def _format_json(self, record: logging.LogRecord) -> str:
-        # Work on a shallow copy so mutations (exc_text, exc_info rendering)
-        # are not visible to other handlers that process the same LogRecord.
+        # Work on a shallow copy so this formatter's mutations (exc_text clearing,
+        # exc_info rendering, message assembly) do not affect the original LogRecord
+        # seen by other handlers — the copy protects the original, not the reverse.
         record = copy.copy(record)
         # Render the message.  The entire block is wrapped in a broad except so
         # format() never raises regardless of LogRecord state — a crash in the
@@ -130,9 +133,10 @@ class SecretMaskingFormatter(logging.Formatter):
                     f" [FORMATTING ERROR: {type(fmt_exc).__name__}: {fmt_exc}]"
                 ).strip()
             except Exception as inner_exc:
-                # Avoid record.msg!r here — if msg has a broken __repr__ it raises again.
+                # Avoid record.msg!r — broken __repr__ raises again. Use safe stdlib attrs.
                 message = (
-                    f"[UNFORMATTABLE LOG RECORD] {type(fmt_exc).__name__}: {fmt_exc}"
+                    f"[UNFORMATTABLE LOG RECORD logger={record.name} level={record.levelname}]"
+                    f" {type(fmt_exc).__name__}: {fmt_exc}"
                     f" (secondary: {type(inner_exc).__name__}: {inner_exc})"
                 )
         # Clear exc_text before formatting so a previously-cached value from a
@@ -226,20 +230,38 @@ def setup_logging(
                 h.close()
             pkg_logger.removeHandler(h)
 
+    # Remove any CorrelationFilter instances previously added to pkg_logger so
+    # they don't accumulate across repeated setup_logging() calls.
+    pkg_logger.filters = [
+        f for f in pkg_logger.filters if not isinstance(f, CorrelationFilter)
+    ]
+
     handler = logging.StreamHandler()
     handler._ai_pr_review_managed = True  # type: ignore[attr-defined]
     handler.setFormatter(formatter)
-    # CorrelationFilter on the handler (not the logger) so it fires for records
-    # propagated from child loggers — Python's callHandlers skips parent-logger
-    # filters when propagating, so a filter on the logger would be a no-op for
-    # any ai_pr_review.* child logger.
-    handler.addFilter(CorrelationFilter())
+    # CorrelationFilter on the handler so it fires for records propagated from
+    # child loggers — Python's callHandlers skips parent-logger filters when
+    # propagating, so a filter only on the logger would be a no-op for any
+    # ai_pr_review.* child logger.  The filter is also added to pkg_logger so
+    # that any external handler later attached directly to pkg_logger also
+    # receives records with correlation_id set.
+    # Note: secret masking only covers ai_pr_review.* log lines. Records from
+    # third-party libraries (httpx, anyio, etc.) are not routed through
+    # SecretMaskingFormatter and are therefore out of scope for masking here.
+    # Callers must not log raw credential values through third-party loggers.
+    corr_filter = CorrelationFilter()
+    handler.addFilter(corr_filter)
+    pkg_logger.addFilter(corr_filter)
     pkg_logger.addHandler(handler)
     try:
         pkg_logger.setLevel(log_level)
     except ValueError:
         pkg_logger.setLevel(logging.WARNING)
-        pkg_logger.warning(
-            "[ai-pr-review] WARNING: unrecognised log level %r, falling back to WARNING", log_level
+        # Write directly to stderr — the logger level is not yet set, so a
+        # logger.warning() call here could be suppressed by the default level.
+        print(
+            f"[ai-pr-review] WARNING: unrecognised log level {log_level!r},"
+            " falling back to WARNING",
+            file=sys.stderr,
         )
     pkg_logger.propagate = False
