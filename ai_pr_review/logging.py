@@ -97,15 +97,29 @@ class SecretMaskingFormatter(logging.Formatter):
         return _mask_secrets(rendered, secret_literals=self._secret_literals)
 
     def _format_json(self, record: logging.LogRecord) -> str:
-        # Render the message (including exc_info if present) via the base class
-        # so that exception tracebacks are captured in the message field.
-        # Guard against malformed log calls (e.g. wrong arg count) so masking
-        # still runs on the best-effort message rather than escaping via handleError.
+        # Render the message so that exception tracebacks are captured in the
+        # message field.  Narrow to TypeError (%-formatting arity mismatch) and
+        # include the exception type so malformed log calls are visible in output
+        # rather than silently emitting a raw template string.  Attempt to render
+        # record.args into the fallback so masking can still apply to arg values.
         try:
             message = record.getMessage()
-        except Exception:
-            message = str(record.msg)
-        if record.exc_info and not record.exc_text:
+        except TypeError as fmt_exc:
+            try:
+                args = record.args
+                rendered_args = " ".join(
+                    str(a)
+                    for a in (args if isinstance(args, tuple) else (args,))
+                ) if args else ""
+                message = (
+                    f"{record.msg!r} {rendered_args} [FORMATTING ERROR: {type(fmt_exc).__name__}]"
+                ).strip()
+            except Exception:
+                message = f"{record.msg!r} [FORMATTING ERROR: {type(fmt_exc).__name__}]"
+        # Clear exc_text before formatting so a previously-cached value from a
+        # non-masking formatter cannot bypass secret redaction here.
+        record.exc_text = None
+        if record.exc_info:
             record.exc_text = self.formatException(record.exc_info)
         if record.exc_text:
             message = message + "\n" + record.exc_text
@@ -136,8 +150,17 @@ def setup_logging(
     """Configure the ai_pr_review package logger for this process.
 
     Must be called once at process startup (cli.py review/compute/slash commands).
-    Idempotent: replaces existing handlers on the package logger rather than
-    clearing root logger handlers (which would remove pytest's caplog handler).
+    Idempotent: removes only handlers previously installed by this function
+    (identified by the ``_ai_pr_review_managed`` sentinel attribute) so external
+    handlers (Sentry, file handlers added by deployment infrastructure) are not
+    disturbed on reconfiguration.
+
+    Sets ``propagate=False`` on the ``ai_pr_review`` package logger so records
+    are not doubled by root-logger handlers in production.  In tests, records
+    logged to ``ai_pr_review.*`` loggers are captured by ``caplog`` only when
+    ``caplog.at_level(..., logger='ai_pr_review')`` is used (or via the
+    ``_reset_pkg_logger`` fixture in conftest.py which restores propagate after
+    each test).
 
     Args:
         log_format: "json" or "human".
@@ -171,13 +194,21 @@ def setup_logging(
             secret_literals=secret_literals,
         )
 
-    # Install on the package logger rather than root so pytest's caplog handler
-    # (attached to root) is not cleared during test sessions.
     pkg_logger = logging.getLogger("ai_pr_review")
-    pkg_logger.handlers.clear()
+
+    # Remove only handlers we previously installed; leave external handlers intact.
+    pkg_logger.handlers = [
+        h for h in pkg_logger.handlers
+        if not getattr(h, "_ai_pr_review_managed", False)
+    ]
+
     handler = logging.StreamHandler()
+    handler._ai_pr_review_managed = True  # type: ignore[attr-defined]
     handler.setFormatter(formatter)
+    # Add CorrelationFilter to both the handler and the logger so any handler
+    # later attached to the logger also receives records with correlation_id set.
     handler.addFilter(CorrelationFilter())
     pkg_logger.addHandler(handler)
+    pkg_logger.addFilter(CorrelationFilter())
     pkg_logger.setLevel(log_level)
     pkg_logger.propagate = False

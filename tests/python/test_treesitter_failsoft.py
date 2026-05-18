@@ -22,6 +22,7 @@ def test_missing_package_is_failsoft(monkeypatch, caplog):
 
 def test_grammar_load_failure_is_failsoft(monkeypatch, caplog):
     sys.modules.pop("ai_pr_review.context.treesitter", None)
+    sys.modules.pop("tree_sitter_language_pack", None)
 
     mock_pack = types.ModuleType("tree_sitter_language_pack")
 
