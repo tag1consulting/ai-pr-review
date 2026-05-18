@@ -263,3 +263,27 @@ def test_append_once_treats_404_as_missing_branch_signal() -> None:
         store._append_once(entry)
     # And the branch probe must have been called
     assert len(branches_seen) == 1, "branch existence probe should fire on 404"
+
+
+# ---------------------------------------------------------------------------
+# Warning format assertion (Story 4-5, path 13)
+# ---------------------------------------------------------------------------
+
+
+def test_append_http_error_logs_standard_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+    from unittest.mock import patch
+
+    import httpx
+
+    store = GitBranchStore(repo="owner/repo", branch="ai-pr-review-bot", token="tok")
+    entry = FeedbackEntry(ts="2026-05-18T00:00:00Z", command="dismiss", reason="test", source="code-reviewer", file="foo.py")
+
+    with (
+        patch.object(store.client, "get", side_effect=httpx.TransportError("conn refused")),
+        caplog.at_level(logging.WARNING, logger="ai_pr_review.feedback.store"),
+    ):
+        result = store.append(entry)
+
+    assert result is False
+    assert any("[ai-pr-review] WARNING:" in r.message for r in caplog.records)

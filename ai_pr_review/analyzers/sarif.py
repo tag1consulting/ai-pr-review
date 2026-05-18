@@ -90,22 +90,22 @@ def _parse_sarif_file(path: str) -> list[Finding]:
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as exc:
-        logger.warning("SARIF: could not read file %r: %s", path, exc)
+        logger.warning("[ai-pr-review] WARNING: SARIF: could not read file %r: %s", path, exc)
         return []
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
-        logger.warning("SARIF: invalid JSON in %r: %s", path, exc)
+        logger.warning("[ai-pr-review] WARNING: SARIF: invalid JSON in %r: %s", path, exc)
         return []
 
     if not isinstance(data, dict):
-        logger.warning("SARIF: root of %r is not an object; skipping", path)
+        logger.warning("[ai-pr-review] WARNING: SARIF: root of %r is not an object; skipping", path)
         return []
 
     runs = data.get("runs")
     if not isinstance(runs, list):
-        logger.warning("SARIF: no 'runs' array in %r; skipping", path)
+        logger.warning("[ai-pr-review] WARNING: SARIF: no 'runs' array in %r; skipping", path)
         return []
 
     findings: list[Finding] = []

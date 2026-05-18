@@ -295,3 +295,29 @@ def test_finding_with_traversal_uri_drops_file_field() -> None:
     findings = load_sarif_files([path])
     assert len(findings) == 1
     assert findings[0].file == "", "traversal path must be dropped"
+
+
+# ---------------------------------------------------------------------------
+# Warning format (fail-soft path 4-5: Story 4-5)
+# ---------------------------------------------------------------------------
+
+
+def test_unreadable_sarif_logs_warning(tmp_path, caplog):
+    import logging
+
+    missing = tmp_path / "ghost.sarif"
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.analyzers.sarif"):
+        result = load_sarif_files([str(missing)])
+    assert result == []
+    assert any("[ai-pr-review] WARNING:" in r.message for r in caplog.records)
+
+
+def test_invalid_json_sarif_logs_warning(tmp_path, caplog):
+    import logging
+
+    bad = tmp_path / "bad.sarif"
+    bad.write_text("NOT JSON{", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.analyzers.sarif"):
+        result = load_sarif_files([str(bad)])
+    assert result == []
+    assert any("[ai-pr-review] WARNING:" in r.message for r in caplog.records)
