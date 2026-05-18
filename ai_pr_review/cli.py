@@ -440,9 +440,11 @@ def _upsert_token_table(
     review object, which is unaffected by this upsert.
     """
     from ai_pr_review.agents.dispatch import AgentResult
+    from ai_pr_review.agents.roster import AGENTS
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
 
     try:
+        _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
         token_log: list[TokenEntry] = []
         for ar in result.agent_results:
             if isinstance(ar, AgentResult) and ar.token_log is not None:
@@ -454,14 +456,28 @@ def _upsert_token_table(
                     output_tokens=tl.output,
                     cache_creation_tokens=tl.cache_creation,
                     cache_read_tokens=tl.cache_read,
+                    max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
                 ))
 
         if not token_log:
             return
 
+        # Sum context tokens across agents (all enriched agents get the same block;
+        # take the max to avoid double-counting if multiple agents ran).
+        context_tokens = max(
+            (ar.context_tokens_used for ar in result.agent_results
+             if isinstance(ar, AgentResult)),
+            default=0,
+        )
+
         pricing_file = str(script_dir / "config" / "model-pricing.json")
         pricing_data = load_pricing(pricing_file)
-        table = emit_token_table(token_log, pricing_data)
+        table = emit_token_table(
+            token_log,
+            pricing_data,
+            context_tokens=context_tokens,
+            sarif_elapsed_s=result.sarif_elapsed_s,
+        )
     except Exception as exc:
         logger.warning(
             "token table: could not generate token table (pricing_file=%r): %s",

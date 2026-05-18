@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
@@ -215,16 +216,18 @@ def _convert_result(
         return None
 
 
-def load_sarif_files(paths: list[str]) -> list[Finding]:
-    """Parse all SARIF files in *paths* and return a combined list of Findings.
+def load_sarif_files(paths: list[str]) -> tuple[list[Finding], float]:
+    """Parse all SARIF files in *paths* and return ``(findings, elapsed_seconds)``.
 
-    Each unreadable or malformed file is logged as a WARNING and skipped
-    (fail-soft).  Findings from all files flow through the same
-    merge/dedup/suppress pipeline as native analyzer findings.
+    ``elapsed_seconds`` is the wall-clock time for the full ingestion pass
+    (0.0 if *paths* is empty).  Each unreadable or malformed file is logged as
+    a WARNING and skipped (fail-soft).  Findings from all files flow through
+    the same merge/dedup/suppress pipeline as native analyzer findings.
     """
+    t0 = time.monotonic()
     all_findings: list[Finding] = []
     for path in paths:
         file_findings = _parse_sarif_file(path)
         logger.info("SARIF: %r → %d finding(s)", path, len(file_findings))
         all_findings.extend(file_findings)
-    return all_findings
+    return all_findings, time.monotonic() - t0

@@ -30,6 +30,7 @@ class TokenEntry:
     output_tokens: int
     cache_creation_tokens: int = 0
     cache_read_tokens: int = 0
+    max_output_tokens: int = 0  # 0 means no cap shown
 
 
 def load_pricing(pricing_file: str) -> list[dict[str, object]]:
@@ -97,6 +98,9 @@ def _row_cost(entry: TokenEntry, rates: ModelRates) -> int | None:
 def emit_token_table(
     token_log: list[TokenEntry],
     pricing_data: list[dict[str, object]],
+    *,
+    context_tokens: int = 0,
+    sarif_elapsed_s: float | None = None,
 ) -> str:
     """Render the token-usage markdown table. Matches bash emit_token_table output."""
     any_cache = any(
@@ -137,16 +141,22 @@ def emit_token_table(
             + entry.cache_read_tokens
         )
 
+        output_cell = (
+            f"{entry.output_tokens} / {entry.max_output_tokens}"
+            if entry.max_output_tokens > 0
+            else f"{entry.output_tokens}"
+        )
+
         if any_cache:
             lines.append(
                 f"| {entry.agent} | {rates.display_name} | {entry.input_tokens} | "
-                f"{entry.output_tokens} | {entry.cache_creation_tokens} | "
+                f"{output_cell} | {entry.cache_creation_tokens} | "
                 f"{entry.cache_read_tokens} | {row_total} | {cost_display} |"
             )
         else:
             lines.append(
                 f"| {entry.agent} | {rates.display_name} | {entry.input_tokens} | "
-                f"{entry.output_tokens} | {row_total} | {cost_display} |"
+                f"{output_cell} | {row_total} | {cost_display} |"
             )
 
         total_in += entry.input_tokens
@@ -167,6 +177,34 @@ def emit_token_table(
             f"| **Total** | | **{total_in}** | **{total_out}** | "
             f"**{grand_total}** | **{total_cost_str}** |"
         )
+
+    if context_tokens > 0:
+        if any_cache:
+            # 8-col: Agent | Model | Input(value) | Output | CW | CR | Total | Cost
+            lines.append(
+                f"| Context enrichment | *(context)* | {context_tokens}"
+                " | — | — | — | — | — |"
+            )
+        else:
+            # 6-col: Agent | Model | Input(value) | Output | Total | Cost
+            lines.append(
+                f"| Context enrichment | *(context)* | {context_tokens}"
+                " | — | — | — |"
+            )
+
+    if sarif_elapsed_s is not None:
+        if any_cache:
+            # 8-col: Agent | Model | Input | Output(value) | CW | CR | Total | Cost
+            lines.append(
+                f"| SARIF ingestion | *(timing)* | — | {sarif_elapsed_s:.2f}s"
+                " | — | — | — | — |"
+            )
+        else:
+            # 6-col: Agent | Model | Input | Output(value) | Total | Cost
+            lines.append(
+                f"| SARIF ingestion | *(timing)* | — | {sarif_elapsed_s:.2f}s"
+                " | — | — |"
+            )
 
     return "\n".join(lines)
 
