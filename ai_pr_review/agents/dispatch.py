@@ -308,7 +308,8 @@ def _detect_primary_language(changed_files: list[str]) -> str:
     _EXT_TO_LANG: dict[str, str] = {
         "py": "python", "ts": "typescript", "tsx": "tsx",
         "js": "javascript", "jsx": "javascript",
-        "go": "go", "php": "php", "module": "php", "theme": "php", "inc": "php",
+        "go": "go",
+        "php": "php", "module": "php", "theme": "php", "inc": "php",
         "rb": "ruby", "rake": "ruby", "gemspec": "ruby",
         "rs": "rust",
         "sh": "bash", "bash": "bash",
