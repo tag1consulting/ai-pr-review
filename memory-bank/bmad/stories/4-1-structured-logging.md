@@ -428,4 +428,4 @@ All ACs satisfied. Key decision: `AI_PR_REVIEW_CORRELATION_ID` added to `_KNOWN_
 
 9. **The existing `test_all_ai_vars_read_in_from_env_are_known` test in `test_config.py` will fail if `AI_LOG_FORMAT` or `AI_LOG_LEVEL` are not added to `_KNOWN_AI_VARS`**. Run `pytest tests/python/test_config.py` as your first check after modifying `config.py`.
 
-10. **Do not add `AI_PR_REVIEW_CORRELATION_ID` to `_KNOWN_AI_VARS`** — it is an internal propagation variable set by the engine itself, not a user-configured input. It must NOT be in `_KNOWN_AI_VARS` or `from_env()` (it would trigger ConfigError if a user set it externally, which is a supported use case for bash-to-python hand-off).
+10. **`AI_PR_REVIEW_CORRELATION_ID` IS added to `_KNOWN_AI_VARS`** (to suppress ConfigError when a user or the bash layer sets it externally), but it is NOT parsed by `from_env()` — the CLI reads it directly from `os.environ` and generates a new ID if absent. This is the opposite of what the original guardrail said; it was corrected during implementation.

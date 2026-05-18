@@ -25,9 +25,6 @@ _correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "correlation_id", default=""
 )
 
-# Compiled at setup_logging() time from the caller-supplied secret values.
-_secret_literals_pattern: re.Pattern[str] | None = None
-
 # Layer 2: provider token prefix patterns (applied globally, not just at setup time).
 _TOKEN_PREFIX_RE = re.compile(
     r"\b("
@@ -102,7 +99,12 @@ class SecretMaskingFormatter(logging.Formatter):
     def _format_json(self, record: logging.LogRecord) -> str:
         # Render the message (including exc_info if present) via the base class
         # so that exception tracebacks are captured in the message field.
-        message = record.getMessage()
+        # Guard against malformed log calls (e.g. wrong arg count) so masking
+        # still runs on the best-effort message rather than escaping via handleError.
+        try:
+            message = record.getMessage()
+        except Exception:
+            message = str(record.msg)
         if record.exc_info and not record.exc_text:
             record.exc_text = self.formatException(record.exc_info)
         if record.exc_text:
@@ -131,10 +133,11 @@ def setup_logging(
     *,
     secrets: frozenset[str] | None = None,
 ) -> None:
-    """Configure the root logger for this process.
+    """Configure the ai_pr_review package logger for this process.
 
     Must be called once at process startup (cli.py review/compute/slash commands).
-    Idempotent: clears existing root handlers before reinstalling.
+    Idempotent: replaces existing handlers on the package logger rather than
+    clearing root logger handlers (which would remove pytest's caplog handler).
 
     Args:
         log_format: "json" or "human".
@@ -168,13 +171,13 @@ def setup_logging(
             secret_literals=secret_literals,
         )
 
-    # Install CorrelationFilter + handler on root logger.
-    # Clear existing handlers first to stay idempotent across test calls.
-    root = logging.root
-    root.handlers.clear()
-
+    # Install on the package logger rather than root so pytest's caplog handler
+    # (attached to root) is not cleared during test sessions.
+    pkg_logger = logging.getLogger("ai_pr_review")
+    pkg_logger.handlers.clear()
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     handler.addFilter(CorrelationFilter())
-    root.addHandler(handler)
-    root.setLevel(log_level)
+    pkg_logger.addHandler(handler)
+    pkg_logger.setLevel(log_level)
+    pkg_logger.propagate = False

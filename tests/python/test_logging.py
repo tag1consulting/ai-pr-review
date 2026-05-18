@@ -18,24 +18,32 @@ from ai_pr_review.logging import (
 
 
 # ---------------------------------------------------------------------------
-# Fixture: reset root logger after each test to prevent handler accumulation.
+# Fixture: reset ai_pr_review package logger after each test.
+# setup_logging() now targets logging.getLogger("ai_pr_review") rather than the
+# root logger, so we only need to restore that logger's state.
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def _reset_root_logger():
-    """Ensure root logger is clean before and after each test."""
-    original_handlers = logging.root.handlers[:]
-    original_level = logging.root.level
+def _reset_pkg_logger():
+    """Ensure the ai_pr_review package logger is clean before and after each test."""
+    pkg = logging.getLogger("ai_pr_review")
+    original_handlers = pkg.handlers[:]
+    original_level = pkg.level
+    original_propagate = pkg.propagate
     yield
-    logging.root.handlers[:] = original_handlers
-    logging.root.setLevel(original_level)
+    pkg.handlers[:] = original_handlers
+    pkg.setLevel(original_level)
+    pkg.propagate = original_propagate
 
 
 def _emit_and_capture(capsys, *, log_format: str, log_level: str = "DEBUG",
                       correlation_id: str = "test1234", message: str = "hello test",
                       level: int = logging.WARNING) -> str:
-    """Helper: setup_logging, emit one record, return captured stderr."""
+    """Helper: setup_logging, emit one record, return captured stderr.
+
+    Uses a child of ai_pr_review so the package handler picks it up.
+    """
     setup_logging(log_format, log_level, correlation_id)
-    test_logger = logging.getLogger("test_logging_4_1")
+    test_logger = logging.getLogger("ai_pr_review.test_logging_4_1")
     test_logger.log(level, message)
     return capsys.readouterr().err
 
@@ -110,7 +118,7 @@ class TestHumanFormat:
 class TestLogLevel:
     def test_warning_level_suppresses_debug(self, capsys):
         setup_logging("json", "WARNING", "aaaa1111")
-        test_logger = logging.getLogger("test_logging_4_1_level")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_4_1_level")
         test_logger.debug("should be suppressed")
         test_logger.info("also suppressed")
         stderr = capsys.readouterr().err
@@ -118,19 +126,19 @@ class TestLogLevel:
 
     def test_warning_level_suppresses_info(self, capsys):
         setup_logging("json", "WARNING", "aaaa1111")
-        test_logger = logging.getLogger("test_logging_4_1_level")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_4_1_level")
         test_logger.info("info suppressed")
         assert capsys.readouterr().err.strip() == ""
 
     def test_warning_level_passes_warning(self, capsys):
         setup_logging("json", "WARNING", "aaaa1111")
-        test_logger = logging.getLogger("test_logging_4_1_level")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_4_1_level")
         test_logger.warning("this passes")
         assert capsys.readouterr().err.strip() != ""
 
     def test_debug_level_passes_all(self, capsys):
         setup_logging("json", "DEBUG", "bbbb2222")
-        test_logger = logging.getLogger("test_logging_4_1_debug")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_4_1_debug")
         test_logger.debug("debug passes")
         stderr = capsys.readouterr().err
         assert stderr.strip() != ""
@@ -148,7 +156,7 @@ class TestSecretMasking:
         fake_key = "sk-ant-fake-key-for-testing-1234abcd"
         secrets = frozenset({fake_key})
         setup_logging("json", "DEBUG", "sec00001", secrets=secrets)
-        test_logger = logging.getLogger("test_logging_mask_1")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_mask_1")
         test_logger.warning("key is %s", fake_key)
         stderr = capsys.readouterr().err
         assert fake_key not in stderr
@@ -157,7 +165,7 @@ class TestSecretMasking:
     def test_provider_token_prefix_redacted(self, capsys):
         """ghp_xxxx token in a log message is redacted by Layer 2."""
         setup_logging("json", "DEBUG", "sec00002")
-        test_logger = logging.getLogger("test_logging_mask_2")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_mask_2")
         token = "ghp_abcdefghijklmnopqrst"
         test_logger.warning("token: %s", token)
         stderr = capsys.readouterr().err
@@ -167,7 +175,7 @@ class TestSecretMasking:
     def test_sk_ant_prefix_redacted(self, capsys):
         """sk-ant-xxx token in a log message is redacted by Layer 2."""
         setup_logging("json", "DEBUG", "sec00003")
-        test_logger = logging.getLogger("test_logging_mask_3")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_mask_3")
         token = "sk-ant-api03-reallylong-token-value"
         test_logger.warning("auth: %s", token)
         stderr = capsys.readouterr().err
@@ -177,7 +185,7 @@ class TestSecretMasking:
         """Values shorter than 8 chars are NOT redacted by Layer 3 (avoids false positives)."""
         secrets = frozenset({"short"})  # only 5 chars — below threshold
         setup_logging("json", "DEBUG", "sec00004", secrets=secrets)
-        test_logger = logging.getLogger("test_logging_mask_4")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_mask_4")
         test_logger.warning("value: short")
         stderr = capsys.readouterr().err
         assert "short" in stderr  # must NOT be redacted
@@ -185,7 +193,7 @@ class TestSecretMasking:
     def test_env_var_assignment_redacted(self, capsys):
         """ANTHROPIC_API_KEY=<value> in a log message is redacted by Layer 1."""
         setup_logging("json", "DEBUG", "sec00005")
-        test_logger = logging.getLogger("test_logging_mask_5")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_mask_5")
         test_logger.warning("ANTHROPIC_API_KEY=some-secret-value")
         stderr = capsys.readouterr().err
         assert "some-secret-value" not in stderr
@@ -196,7 +204,7 @@ class TestSecretMasking:
         fake_key = "sk-ant-fake-key-in-exception-abcd1234"
         secrets = frozenset({fake_key})
         setup_logging("json", "DEBUG", "sec00006", secrets=secrets)
-        test_logger = logging.getLogger("test_logging_mask_6")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_mask_6")
         try:
             raise ValueError(f"auth failed with key {fake_key}")
         except ValueError:
@@ -332,7 +340,7 @@ class TestSetupLoggingIdempotency:
         """Calling setup_logging twice must not result in duplicate output."""
         setup_logging("json", "DEBUG", "idem0001")
         setup_logging("json", "DEBUG", "idem0002")
-        test_logger = logging.getLogger("test_logging_idem")
+        test_logger = logging.getLogger("ai_pr_review.test_logging_idem")
         test_logger.warning("once")
         stderr = capsys.readouterr().err
         lines = [line for line in stderr.strip().splitlines() if line.strip()]
