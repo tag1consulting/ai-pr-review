@@ -308,9 +308,21 @@ def _detect_primary_language(changed_files: list[str]) -> str:
     _EXT_TO_LANG: dict[str, str] = {
         "py": "python", "ts": "typescript", "tsx": "tsx",
         "js": "javascript", "jsx": "javascript",
-        "go": "go", "php": "php", "rb": "ruby", "rs": "rust",
-        "sh": "bash", "bash": "bash", "java": "java",
-        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "h": "c", "c": "c",
+        "go": "go", "php": "php", "module": "php", "theme": "php", "inc": "php",
+        "rb": "ruby", "rake": "ruby", "gemspec": "ruby",
+        "rs": "rust",
+        "sh": "bash", "bash": "bash",
+        "java": "java",
+        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp", "h": "c", "c": "c",
+        "kt": "kotlin", "kts": "kotlin",
+        "swift": "swift",
+        "cs": "csharp",
+        "scala": "scala", "sbt": "scala",
+        "tf": "terraform", "tfvars": "terraform",
+        "yaml": "yaml", "yml": "yaml",
+        "sql": "sql",
+        "lua": "lua",
+        "pl": "perl", "pm": "perl",
     }
     counts: dict[str, int] = {}
     for f in changed_files:

@@ -36,6 +36,16 @@ _EXT_MAP: dict[str, str] = {
     "hpp": "C++",
     "cc": "C++",
     "cxx": "C++",
+    "kt": "Kotlin",
+    "kts": "Kotlin",
+    "swift": "Swift",
+    "cs": "CSharp",
+    "scala": "Scala",
+    "sbt": "Scala",
+    "sql": "SQL",
+    "lua": "Lua",
+    "pl": "Perl",
+    "pm": "Perl",
 }
 
 # Patterns for test-file classification (mirrors lib/languages.sh is_test_file).
