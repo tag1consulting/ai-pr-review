@@ -70,7 +70,7 @@ class ReviewRuntime:
 def build_review_runtime(
     config: ReviewConfig,
     *,
-    provider_factory: Callable[[], VcsProvider] = provider_from_env,
+    provider_factory: Callable[[], VcsProvider] | None = None,
 ) -> ReviewRuntime | SkipPlan:
     """Assemble all prepared inputs for run_review().
 
@@ -79,17 +79,19 @@ def build_review_runtime(
     and exit-code concerns.
 
     The `provider_factory` seam lets tests inject a fake VcsProvider without
-    requiring env vars.
+    requiring env vars. Defaults to `provider_from_env`.
     """
     from ai_pr_review.agents.gates import evaluate_gates, filter_agents
     from ai_pr_review.agents.roster import AGENTS
     from ai_pr_review.findings.models import Finding as _Finding
 
+    _factory = provider_factory if provider_factory is not None else provider_from_env
+
     # Resolve provider model defaults before any downstream use.
     config = config.resolve_models()
 
     # 1. Build provider.
-    provider = provider_factory()
+    provider = _factory()
     if not isinstance(provider, VcsProvider):
         raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
 

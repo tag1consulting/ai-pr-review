@@ -260,13 +260,17 @@ class TestScriptDir:
 
         sentinel = str(tmp_path / "fake_script_dir")
         os.makedirs(sentinel, exist_ok=True)
+        diff_file = str(tmp_path / "diff.txt")
 
         captured: list[DispatchContext] = []
 
         with (
-            patch.dict(os.environ, {"AI_PR_REVIEW_SCRIPT_DIR": sentinel}),
+            patch.dict(
+                os.environ,
+                {"AI_PR_REVIEW_SCRIPT_DIR": sentinel, "AI_PR_REVIEW_DIFF_FILE": diff_file},
+            ),
             patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
-            patch("ai_pr_review.vcs.provider_from_env", return_value=self._make_provider_mock()),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=self._make_provider_mock()),
             patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch("ai_pr_review.agents.roster.AGENTS", []),
@@ -279,23 +283,26 @@ class TestScriptDir:
         assert captured, "run_review was not called"
         assert str(captured[0].script_dir) == sentinel
 
-    def test_falls_back_to_package_path_when_env_unset(self) -> None:
+    def test_falls_back_to_package_path_when_env_unset(self, tmp_path: Path) -> None:
         """Without AI_PR_REVIEW_SCRIPT_DIR, script_dir is derived from __file__."""
         import anyio
 
-        from ai_pr_review import cli as cli_mod
         from ai_pr_review.agents.dispatch import DispatchContext
 
         captured: list[DispatchContext] = []
-        expected = Path(cli_mod.__file__).resolve().parent.parent  # type: ignore[arg-type]
+        # runtime.py is at ai_pr_review/review/runtime.py; parent.parent.parent = repo root
+        from ai_pr_review.review import runtime as runtime_mod
+        expected = Path(runtime_mod.__file__).resolve().parent.parent.parent  # type: ignore[arg-type]
+        diff_file = str(tmp_path / "diff.txt")
 
         # Remove only AI_PR_REVIEW_SCRIPT_DIR so the fallback path is taken,
         # without stripping unrelated vars (PATH, HOME, TMPDIR) that anyio needs.
         saved = os.environ.pop("AI_PR_REVIEW_SCRIPT_DIR", None)
         try:
             with (
+                patch.dict(os.environ, {"AI_PR_REVIEW_DIFF_FILE": diff_file}),
                 patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
-                patch("ai_pr_review.vcs.provider_from_env", return_value=self._make_provider_mock()),
+                patch("ai_pr_review.review.runtime.provider_from_env", return_value=self._make_provider_mock()),
                 patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory(captured)),
                 patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
                 patch("ai_pr_review.agents.roster.AGENTS", []),
