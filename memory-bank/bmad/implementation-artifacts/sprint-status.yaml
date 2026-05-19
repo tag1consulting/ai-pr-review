@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-05-19T09:00:00-07:00
+# last_updated: 2026-05-19T10:00:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-18T11:48:00-07:00
-last_updated: 2026-05-19T09:00:00-07:00
+last_updated: 2026-05-19T10:00:00-07:00
 project: ai-pr-review
 project_key: NOKEY
 tracking_system: file-system
@@ -113,7 +113,7 @@ development_status:
   4-1-structured-logging: review
   4-2-telemetry-hooks: review
   4-3-cost-table-refinement: review
-  4-4-perf-tuning-cache-priming: backlog
+  4-4-perf-tuning-cache-priming: review
   4-5-error-surface-polish: review
   4-6-docs-refresh-python-primary: backlog
   4-7-field-soak: in-progress

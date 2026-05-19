@@ -112,3 +112,17 @@ def test_float_env_var_parse_failure_warns(
     assert "WARNING" in captured.err
     assert "not-a-float" in captured.err
     assert "proceed with" in captured.err
+
+
+def test_cache_priming_default_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_CACHE_PRIMING unset → cache_priming defaults to False."""
+    monkeypatch.delenv("AI_CACHE_PRIMING", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.cache_priming is False
+
+
+def test_cache_priming_env_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_CACHE_PRIMING=true → cache_priming is True."""
+    monkeypatch.setenv("AI_CACHE_PRIMING", "true")
+    cfg = ReviewConfig.from_env()
+    assert cfg.cache_priming is True

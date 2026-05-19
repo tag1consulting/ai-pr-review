@@ -108,7 +108,7 @@ class ReviewConfig(BaseModel):
     max_inline: int = 10
     max_tokens_per_agent: int = 4096
     enable_suggestions: bool = True
-    cache_priming: bool = True
+    cache_priming: bool = False
     llm_prompt_caching: str = "auto"
     confidence_threshold: int = 75
     max_diff_lines: int = 5000
@@ -284,7 +284,7 @@ class ReviewConfig(BaseModel):
             max_inline=_int("AI_MAX_INLINE", 10),
             max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 4096),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
-            cache_priming=_bool("AI_CACHE_PRIMING", True),
+            cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),
             confidence_threshold=_int("AI_CONFIDENCE_THRESHOLD", 75),
             max_diff_lines=_int("MAX_DIFF_LINES", 5000),

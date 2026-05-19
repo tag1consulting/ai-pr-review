@@ -189,3 +189,12 @@ def test_config_telemetry_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -
     config = ReviewConfig.from_env()
     assert config.telemetry_enabled is False
     assert config.telemetry_sink == ""
+
+
+def test_event_agent_latency_ms_populated(tmp_path: Path) -> None:
+    """TelemetryEvent with agent_latency_ms dict is serialised and round-trips."""
+    sink = f"file://{tmp_path}/t.jsonl"
+    event = _sample_event(agent_latency_ms={"code-reviewer": 1250, "security-reviewer": 3400})
+    emit_telemetry(event, sink=sink)
+    data = json.loads((tmp_path / "t.jsonl").read_text())
+    assert data["agent_latency_ms"] == {"code-reviewer": 1250, "security-reviewer": 3400}

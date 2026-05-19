@@ -45,6 +45,9 @@ class AgentResult:
     Zero when context enrichment was disabled or produced no context.
     E4.S3: used by the CLI to populate the Context enrichment row in the
     token cost table."""
+    elapsed_ms: int = 0
+    """Wall-clock milliseconds from call start to response received.
+    E4.S4: used by cli.py to populate agent_latency_ms in TelemetryEvent."""
 
 
 @dataclass(frozen=True)
@@ -402,6 +405,7 @@ async def _run_single_agent(
             model=model_id,
         )
         truncated = response.stop_reason in ("max_tokens", "length", "MAX_TOKENS")
+        elapsed = int((time.monotonic() - start) * 1000)
         results.append(AgentResult(
             name=spec.name,
             output=response.text,
@@ -409,6 +413,7 @@ async def _run_single_agent(
             truncated=truncated,
             prompt_degraded=prompt_degraded,
             context_tokens_used=context_tokens_used,
+            elapsed_ms=elapsed,
         ))
     except BaseException as exc:
         # Catch BaseException (not Exception) so SystemExit from llm/client.py

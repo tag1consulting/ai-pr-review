@@ -83,6 +83,18 @@ def test_agent_result_fields() -> None:
     assert result.truncated is False
 
 
+def test_agent_result_elapsed_ms_default() -> None:
+    usage = TokenUsage(input=10, output=5, cache_creation=0, cache_read=0, model="m")
+    result = AgentResult(name="code-reviewer", output="ok", token_log=usage, truncated=False)
+    assert result.elapsed_ms == 0
+
+
+def test_agent_result_elapsed_ms_set() -> None:
+    usage = TokenUsage(input=10, output=5, cache_creation=0, cache_read=0, model="m")
+    result = AgentResult(name="code-reviewer", output="ok", token_log=usage, truncated=False, elapsed_ms=1234)
+    assert result.elapsed_ms == 1234
+
+
 def test_agent_result_truncated_from_stop_reason() -> None:
     resp = _make_response(stop_reason="max_tokens")
     usage = TokenUsage(
@@ -142,6 +154,24 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
     assert len(failures) == 0
     names = {r.name for r in successes}
     assert names == {"code-reviewer", "silent-failure-hunter"}
+
+
+@pytest.mark.anyio
+async def test_run_tier_populates_elapsed_ms(tmp_path: Path) -> None:
+    """AgentResult.elapsed_ms is populated (>= 0) for successful agents."""
+    ctx = _make_context(tmp_path)
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("ok")
+
+    successes, failures = await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=mock_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(successes) == 1
+    assert successes[0].elapsed_ms >= 0
 
 
 @pytest.mark.anyio
