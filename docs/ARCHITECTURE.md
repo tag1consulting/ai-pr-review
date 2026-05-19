@@ -27,6 +27,22 @@ The `source` field is optional in agent output — `extract_findings()` stamps t
 
 `review.sh` uses `extract_findings()` to parse this block and validate shape. Findings below confidence 75 are filtered out. Duplicates are deduped using proximity-based matching: findings in the same file within 3 lines of each other are merged into a single cluster, keeping the highest-severity finding. The dedup step carries a `sources` array on the surviving finding, unioning all sources from the cluster. When multiple sources are present, the post-review script renders `[first-source] *(also flagged by: other)*` attribution (sources are sorted alphabetically).
 
+## Python engine runtime flow
+
+When `AI_PR_REVIEW_ENGINE=python`, the entrypoint is `ai_pr_review.cli:review`. The Click command parses flags, sets up logging, and calls `_run_review_async()`, which:
+
+1. Calls `build_review_runtime(config)` in `ai_pr_review/review/runtime.py`. The runtime layer:
+   - Resolves provider model defaults (`ReviewConfig.resolve_models()`).
+   - Builds the VCS provider via `provider_from_env`.
+   - Fetches the last-reviewed SHA and computes the diff (`ai_pr_review/review/compute.py`).
+   - Returns `SkipPlan` if compute reports no changes.
+   - Loads the feedback store, runs native analyzers, loads SARIF findings (via `config.sarif_paths`), loads suppression rules, evaluates gates, and builds the `DispatchContext` and `OrchestrationConfig`. All pre-computed findings are merged into `OrchestrationConfig.extra_findings`.
+2. Runs `pr-summarizer` on first (non-incremental) reviews.
+3. If `AI_DRY_RUN=1`, short-circuits after assembly without posting.
+4. Otherwise calls `orchestrate.run_review()`, which dispatches agent tiers, merges LLM + pre-computed findings via `extra_findings`, suppresses, classifies the outcome, and posts via the provider.
+
+**Boundary:** `run_review()` reads no environment and constructs no dependencies — it is the unit-testable core. `build_review_runtime()` is the seam between env-driven configuration and pure orchestration. Tests for the assembly layer are in `tests/python/test_runtime.py`.
+
 ## Findings pipeline (review.sh phases)
 
 1. **Phase 0** — Fetch PR/MR description from VCS API. Compute diff (incremental if SHA watermark found, else full PR diff). Exclude lockfiles, vendor dirs, node_modules.
@@ -319,13 +335,26 @@ The final stage uses `COPY post-review*.sh` (a glob) so future provider scripts 
 
 ## Test architecture
 
-Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because sourcing the scripts triggers the full orchestration pipeline, `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell.
+**Bash engine:** Tests live in `tests/` and use [bats-core](https://github.com/bats-core/bats-core). Because sourcing the scripts triggers the full orchestration pipeline, `tests/test_helper.bash` extracts individual function definitions using an awk brace-depth tracker and `eval`s them into the test shell.
 
 - Tests cover pure functions from `review.sh`, `llm-call.sh`, `vcs/common.sh`, and the provider-specific scripts
 - Fixture files in `tests/fixtures/` provide sample agent output for `extract_findings` tests
 - Static analyzer scripts are tested via their own `.bats` files using the mock env var pattern (set `<TOOL>_MOCK_FILE` to a fixture path)
 
 To add a test for a new function, call `load_function "$script" "function_name"` in the `setup()` block of the relevant `.bats` file.
+
+**Python engine:** Tests live in `tests/python/` and use pytest. Key test files:
+
+| File | Covers |
+|---|---|
+| `test_runtime.py` | Assembly boundary: `build_review_runtime()`, `SkipPlan`, SARIF routing, provider factory seam |
+| `test_orchestrate.py` | `run_review()` happy path, skip path, summary/findings failure, token table |
+| `test_cli.py` | `run_compute()`, `compute` command, `slash` command, `_make_changed_files()`, `AI_PR_REVIEW_SCRIPT_DIR` resolution |
+| `test_config.py` | `ReviewConfig.from_env()`, `resolve_models()`, unknown-var detection, deprecation warnings |
+| `test_suppress.py`, `test_findings.py` | Suppression pipeline and findings merge |
+| `test_sarif.py`, `test_bridge.py` | SARIF parsing and static analyzer bridge |
+
+Run with `python -m pytest tests/python/ -q`.
 
 ## Environment variable reference
 

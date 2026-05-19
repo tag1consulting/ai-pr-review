@@ -1,8 +1,7 @@
 """Typed configuration for the AI PR Review engine.
 
-Maps every environment variable from the Epic 0 config matrix into a
-pydantic ReviewConfig. Unknown AI_* vars raise ConfigError with a
-nearest-match suggestion.
+Maps every environment variable into a pydantic ReviewConfig. Unknown AI_*
+vars raise ConfigError with a nearest-match suggestion.
 """
 
 from __future__ import annotations
@@ -45,25 +44,25 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_PR_REVIEW_SCRIPT_DIR",
         # Claude Code sets this in its agent environment; not a user-configured var.
         "AI_AGENT",
-        # --- Epic 3: Capability A (context enrichment) ---
+        # --- Context enrichment ---
         "AI_CONTEXT_ENRICHMENT",
         "AI_CONTEXT_MAX_TOKENS",
         "AI_CONTEXT_LOOKUP_LINES",
-        # --- Epic 3: Capability B (SARIF ingestion) ---
+        # --- SARIF ingestion ---
         "AI_SARIF_PATHS",
-        # --- Epic 3: Capability C (slash commands + learning loop) ---
+        # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
         "AI_FEEDBACK_MAX_TOKENS",
         "AI_FEEDBACK_RETENTION_COUNT",
         "AI_FEEDBACK_RETENTION_AGE_DAYS",
-        # --- Epic 4: Capability 1 — structured logging ---
+        # --- Structured logging ---
         "AI_LOG_FORMAT",
         "AI_LOG_LEVEL",
         # Set by the engine at startup and inherited by analyzer subprocesses;
         # not a user-configured input but must be known to avoid ConfigError.
         "AI_PR_REVIEW_CORRELATION_ID",
-        # --- Epic 4: Capability 2 — telemetry hooks ---
+        # --- Telemetry ---
         "AI_TELEMETRY_ENABLED",
         "AI_TELEMETRY_SINK",
     }
@@ -139,15 +138,15 @@ class ReviewConfig(BaseModel):
     disable_gate_edge_case: bool = False
     ignore_merge_commits: bool = False
 
-    # --- Epic 3: Capability A — context enrichment ---
+    # --- Context enrichment ---
     enable_context_enrichment: bool = False
     context_max_tokens: int = 8192
     context_lookup_lines: int = 8
 
-    # --- Epic 3: Capability B — SARIF ingestion ---
+    # --- SARIF ingestion ---
     sarif_paths: tuple[str, ...] = ()
 
-    # --- Epic 3: Capability C — slash commands + learning loop ---
+    # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
     feedback_branch: str = "ai-pr-review-bot"
     feedback_max_tokens: int = 2048
@@ -192,11 +191,11 @@ class ReviewConfig(BaseModel):
     record_dir: str = ""
     compute_output: str = ""
 
-    # --- Epic 4: Capability 1 — structured logging ---
+    # --- Structured logging ---
     log_format: str = "human"
     log_level: str = "WARNING"
 
-    # --- Epic 4: Capability 2 — telemetry hooks ---
+    # --- Telemetry ---
     telemetry_enabled: bool = False
     telemetry_sink: str = ""
 

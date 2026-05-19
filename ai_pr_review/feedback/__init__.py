@@ -1,1 +1,1 @@
-# Feedback store — Capability C (learning loop).
+# Feedback store (learning loop).
