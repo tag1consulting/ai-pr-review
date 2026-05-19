@@ -52,8 +52,13 @@ jobs:
         github.event.label.name == 'ai-review-full' ||
         github.event.label.name == 'ai-review-rescan'))
     runs-on: ubuntu-latest
+    # Explicitly drop the workflow-level write grants; this job only needs read
+    # access. pull-requests: none + issues: none prevent the elevated permissions
+    # from being usable even if a tool were to make API calls.
     permissions:
       contents: read
+      pull-requests: none
+      issues: none
     steps:
       - uses: actions/checkout@v6
         with:
@@ -89,14 +94,14 @@ jobs:
           no-fail: true
 
       # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
-      # Pinned to a specific commit SHA for supply-chain safety.
+      # Pinned to commit SHA for supply-chain safety (tag v1, verified 2026-05-19).
       # To update: gh api repos/returntocorp/semgrep-action/git/ref/tags/v1 | jq -r '.object.sha'
       # semgrep-action writes its SARIF output to semgrep.sarif in the workspace root
       # (documented at https://github.com/returntocorp/semgrep-action#outputs); the
       # subsequent step moves it into sarif-results/ for artifact upload.
       - name: Semgrep (SARIF)
         continue-on-error: true
-        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # v1
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # tag: v1, 2026-05-19
         with:
           config: p/ci
           generateSarif: '1'
@@ -144,8 +149,10 @@ jobs:
 
   review:
     needs: sarif-prep
-    # always() lets the review run even when sarif-prep fails or is skipped;
-    # the SARIF ingestor is fail-soft on missing files.
+    # always() is intentional: the review job must run even when sarif-prep is
+    # skipped (draft PR converted to ready) or fails (transient tool error).
+    # The SARIF ingestor is fail-soft — missing artifact files produce a WARNING
+    # log and zero findings rather than a hard failure.
     # ⚠️  KEEP IN SYNC with the sarif-prep if: condition above.  GitHub Actions
     # does not support reusable conditions; both jobs must share the same predicate
     # so that review never runs on a PR that sarif-prep would have skipped.
