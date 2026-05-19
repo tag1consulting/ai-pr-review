@@ -46,7 +46,10 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
     empty or unrecognised sink schemes — telemetry must never abort a review.
     """
     if not sink:
-        logger.warning("telemetry: sink is empty; skipping emission")
+        logger.warning(
+            "telemetry: AI_TELEMETRY_SINK is empty; skipping emission. "
+            "Set AI_TELEMETRY_SINK to a file:// path or http(s):// URL to receive events."
+        )
         return
     if sink.startswith("file://"):
         _emit_file(event, sink[len("file://"):])
@@ -71,7 +74,8 @@ def _emit_file(event: TelemetryEvent, path: str) -> None:
         with open(path, "a") as fh:
             fh.write(payload + "\n")
     except OSError as exc:
-        logger.warning("telemetry: could not write to file %r: %s", path, exc)
+        logger.warning("telemetry: could not write to file %r (%s): %s",
+                       path, type(exc).__name__, exc)
 
 
 def _emit_http(event: TelemetryEvent, url: str) -> None:
@@ -83,6 +87,10 @@ def _emit_http(event: TelemetryEvent, url: str) -> None:
         return
     except httpx.HTTPError as exc:
         logger.warning("telemetry: HTTP POST to %r failed: %s", url, exc)
+        return
+    except Exception as exc:
+        logger.warning("telemetry: HTTP POST to %r failed (unexpected: %s): %s",
+                       url, type(exc).__name__, exc)
         return
     if response.status_code >= 400:
         logger.warning(

@@ -111,11 +111,23 @@ def test_http_timeout_swallowed() -> None:
         emit_telemetry(event, sink="https://example.com/telemetry")
 
 
+def test_http_non_httpx_exception_swallowed(caplog: pytest.LogCaptureFixture) -> None:
+    """Non-httpx transport exceptions (ssl.SSLError, socket OSError) are swallowed."""
+    import ssl
+    event = _sample_event()
+    with (
+        patch("ai_pr_review.telemetry.httpx.post", side_effect=ssl.SSLError("certificate verify failed")),
+        caplog.at_level(logging.WARNING),
+    ):
+        emit_telemetry(event, sink="https://example.com/telemetry")
+    assert any("SSLError" in r.message or "unexpected" in r.message.lower() for r in caplog.records)
+
+
 def test_empty_sink_skipped(caplog: pytest.LogCaptureFixture) -> None:
     event = _sample_event()
     with caplog.at_level(logging.WARNING):
         emit_telemetry(event, sink="")
-    assert any("sink" in r.message.lower() or "telemetry" in r.message.lower() for r in caplog.records)
+    assert any("AI_TELEMETRY_SINK" in r.message or "sink" in r.message.lower() for r in caplog.records)
 
 
 def test_unknown_scheme_skipped(caplog: pytest.LogCaptureFixture) -> None:
@@ -170,12 +182,14 @@ def test_file_sink_serialization_error_swallowed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A TypeError from json.dumps (non-serialisable field) is logged and not re-raised."""
-    from unittest.mock import patch as _patch
     import json as _json
+    from unittest.mock import patch as _patch
     sink = f"file://{tmp_path}/t.jsonl"
-    with caplog.at_level(logging.WARNING):
-        with _patch.object(_json, "dumps", side_effect=TypeError("not serialisable")):
-            emit_telemetry(_sample_event(), sink=sink)
+    with (
+        caplog.at_level(logging.WARNING),
+        _patch.object(_json, "dumps", side_effect=TypeError("not serialisable")),
+    ):
+        emit_telemetry(_sample_event(), sink=sink)
     assert not (tmp_path / "t.jsonl").exists()
     assert any("serialis" in r.message.lower() or "json" in r.message.lower() for r in caplog.records)
 
