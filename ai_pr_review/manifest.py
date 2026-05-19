@@ -80,6 +80,29 @@ class ChangedFiles:
         return result
 
 
+def parse_changed_files_payload(raw: list[object]) -> ChangedFiles:
+    """Normalize the raw changed_files payload from compute and build ChangedFiles.
+
+    Payload entries may be path strings or dicts with a "path" key (forward-compatible
+    compute schema). Malformed entries are skipped with a warning.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+    paths: list[str] = []
+    for entry in raw:
+        if entry is None:
+            _log.warning("Skipping malformed changed_files entry: %r", entry)
+            continue
+        path = (
+            str(entry.get("path") or "") if isinstance(entry, dict) else str(entry)
+        )
+        if path:
+            paths.append(path)
+        else:
+            _log.warning("Skipping malformed changed_files entry: %r", entry)
+    return build_changed_files(paths)
+
+
 def build_changed_files(file_list: list[str]) -> ChangedFiles:
     """Categorize a list of changed file paths."""
     cf = ChangedFiles(all_files=file_list)
