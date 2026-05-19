@@ -63,6 +63,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # Set by the engine at startup and inherited by analyzer subprocesses;
         # not a user-configured input but must be known to avoid ConfigError.
         "AI_PR_REVIEW_CORRELATION_ID",
+        # --- Epic 4: Capability 2 — telemetry hooks ---
+        "AI_TELEMETRY_ENABLED",
+        "AI_TELEMETRY_SINK",
     }
 )
 
@@ -173,6 +176,10 @@ class ReviewConfig(BaseModel):
     # --- Epic 4: Capability 1 — structured logging ---
     log_format: str = "human"
     log_level: str = "WARNING"
+
+    # --- Epic 4: Capability 2 — telemetry hooks ---
+    telemetry_enabled: bool = False
+    telemetry_sink: str = ""
 
     @field_validator("review_mode")
     @classmethod
@@ -329,4 +336,6 @@ class ReviewConfig(BaseModel):
             compute_output=os.environ.get("AI_PR_REVIEW_COMPUTE_OUTPUT", ""),
             log_format=os.environ.get("AI_LOG_FORMAT", "human"),
             log_level=os.environ.get("AI_LOG_LEVEL", "WARNING"),
+            telemetry_enabled=_bool("AI_TELEMETRY_ENABLED", False),
+            telemetry_sink=os.environ.get("AI_TELEMETRY_SINK", ""),
         )
