@@ -135,239 +135,122 @@ def review() -> None:
 
 async def _run_review_async(config: ReviewConfig) -> int:
     """Execute the review pipeline; return CLI exit code."""
-    from ai_pr_review.agents.dispatch import DispatchContext
-    from ai_pr_review.agents.gates import evaluate_gates, filter_agents
-    from ai_pr_review.agents.roster import AGENTS
+    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
     from ai_pr_review.llm.client import call_llm
-    from ai_pr_review.orchestrate import OrchestrationConfig, run_review
-    from ai_pr_review.vcs import provider_from_env
-    from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
+    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.review.runtime import SkipPlan, build_review_runtime
 
-    # #319: fill provider model defaults before any downstream use
-    config = config.resolve_models()
+    runtime = build_review_runtime(config)
 
-    # 1. Build provider from VCS_PROVIDER env
-    provider = provider_from_env()
-    if not isinstance(provider, VcsProvider):
-        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
-
-    # #313: fetch last-reviewed SHA *before* compute so incremental diff works
-    last_reviewed = provider.get_last_reviewed_sha()
-
-    # 2. Run compute phase to get diff + manifest (incremental when SHA available)
-    payload = run_compute(config, last_reviewed_sha=last_reviewed)
-    if payload.get("skip"):
-        reason = str(payload.get("reason") or "no changes")
-        click.echo(f"Skipping review: {reason}", err=True)
-        result = await _orchestrate_skip(provider, reason, config=config)
+    if isinstance(runtime, SkipPlan):
+        click.echo(f"Skipping review: {runtime.reason}", err=True)
+        result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config)
         return 0 if result.ok else 1
 
-    diff_text = str(payload.get("diff") or "")
-    head_sha = str(payload.get("head") or config.head_sha)
-    base_ref = str(payload.get("base") or config.base_ref)
+    # Use the post-resolve_models() config stored on the runtime for all downstream use.
+    rc = runtime.config
 
-    # 3. Build summary prefix. Prepend merge-filter fallback note when present.
-    merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
-    summary_text = ""
-    if merge_filter_fallback:
-        summary_text = (
-            f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
-            "diff may include upstream changes._\n\n"
-        )
-    is_incremental = bool(payload.get("is_incremental"))
-
-    # 4. Build feedback addendum when AI_FEEDBACK_LOOP=1 (before dispatch context)
-    feedback_addendum = ""
-    feedback_entries_count = 0
-    if config.enable_feedback_loop:
-        try:
-            from ai_pr_review.feedback.inject import build_feedback_addendum
-            from ai_pr_review.feedback.store import make_store
-            store = make_store(config)
-            entries = store.load_recent()
-            feedback_entries_count = len(entries)
-            feedback_addendum = build_feedback_addendum(
-                entries, diff_text, max_tokens=config.feedback_max_tokens
-            )
-        except Exception as exc:
-            logger.warning(
-                "feedback loop: could not load feedback store: %s", exc, exc_info=True
-            )
-
-    # 5. Build dispatch context
-    # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
-    # can locate prompts/language-profiles when installed as a pip package.
-    _env_script_dir = os.environ.get("AI_PR_REVIEW_SCRIPT_DIR")
-    script_dir = Path(_env_script_dir) if _env_script_dir else Path(__file__).resolve().parent.parent
-    diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
-    diff_path.write_text(diff_text, encoding="utf-8")
-
-    _raw_changed = payload.get("changed_files")
-    _changed_list: list[str] = [str(f) for f in _raw_changed if f] if isinstance(_raw_changed, list) else []
-
-    dispatch_ctx = DispatchContext(
-        script_dir=script_dir,
-        mode=config.review_mode,
-        diff_path=diff_path,
-        provider=config.provider,
-        standard_model=config.model_standard,
-        premium_model=config.model_premium,
-        enable_suggestions=config.enable_suggestions,
-        cache_priming_env="true" if config.cache_priming else "false",
-        prompt_caching_env=config.llm_prompt_caching,
-        enable_context_enrichment=config.enable_context_enrichment,
-        context_max_tokens=config.context_max_tokens,
-        context_lookup_lines=config.context_lookup_lines,
-        repo_root=Path("."),
-        changed_files=_changed_list,
-        feedback_addendum=feedback_addendum,
-        max_tokens_per_agent=config.max_tokens_per_agent,  # #316
-    )
-
-    # 6. Apply conditional gates
-    raw_paths = payload.get("changed_files")
-    changed_paths: list[object] = raw_paths if isinstance(raw_paths, list) else []
-    cf = _make_changed_files(changed_paths)
-    gates = evaluate_gates(
-        diff_text=diff_text,
-        changed_files=cf,
-        env=os.environ,
-        last_reviewed_sha=last_reviewed,
-    )
-    # Filter by mode (full vs quick) first, then by fired gates
-    mode_filtered = [
-        a for a in AGENTS if not a.full_mode_only or config.review_mode == "full"
-    ]
-    # pr-summarizer is dispatched via the summarizer module separately;
-    # exclude it from the generic dispatch path (run_tier raises otherwise).
-    mode_filtered = [a for a in mode_filtered if a.name != "pr-summarizer"]
-    agents = filter_agents(mode_filtered, gates)
-
-    # 6.5. Run native static analyzers (#315) — fail-soft; findings merged later
-    from ai_pr_review.findings.models import Finding as _Finding
-    analyzer_findings: list[_Finding] = []
-    try:
-        from ai_pr_review.analyzers.bridge import run_analyzers
-        analyzer_findings = run_analyzers(
-            cf,
-            diff_file=str(diff_path),
-            script_dir=str(script_dir),
-        )
-        if analyzer_findings:
-            logger.info("analyzers: %d finding(s) from native static analysis", len(analyzer_findings))
-    except Exception as exc:
-        logger.warning("analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True)
-
-    # 7. Bind LLM call to the configured provider
+    # Bind LLM call to the configured provider.
     async def _llm_call(req: LLMRequest) -> LLMResponse:
-        return await call_llm(req, config.provider)
+        return await call_llm(req, rc.provider)
 
-    # 7.5. Run pr-summarizer on first review (fail-soft; skip on incremental runs).
-    if not is_incremental:
+    # Run pr-summarizer on first review (fail-soft; skip on incremental runs).
+    summary_text = runtime.summary_prefix
+    if not runtime.is_incremental:
         summary_text += await _run_summarizer(
-            diff_text=diff_text,
-            manifest_text=str(payload.get("manifest") or ""),
-            base_ref=base_ref,
-            script_dir=script_dir,
-            model=config.model_standard,
+            diff_text=runtime.diff.diff_text,
+            manifest_text=runtime.manifest_text,
+            base_ref=runtime.base_ref,
+            script_dir=runtime.script_dir,
+            model=rc.model_standard,
             llm_call=_llm_call,
         )
 
-    # 8. Build orchestrator config
-    # #317: load global + local suppression rules
-    from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
-    suppression_rules = tuple(
-        _load_suppression_rules(str(script_dir), workspace=".")
-    )
+    def _token_renderer(
+        successes: Sequence[_AgentResult], sarif_elapsed_s: float | None
+    ) -> str:
+        return _build_token_table_accordion(successes, sarif_elapsed_s, runtime.script_dir)
 
-    orch_config = OrchestrationConfig(
-        mode=config.review_mode,  # type: ignore[arg-type]
-        confidence_threshold=config.confidence_threshold,
-        max_inline=config.max_inline,
-        enable_suggestions=config.enable_suggestions,
-        # #314: config.concurrency is an int derived from the parallel bool
-        semaphore_size=config.concurrency,
-        sarif_paths=config.sarif_paths,
-        suppression_rules=suppression_rules,
-        # #315: inject native static analyzer findings
-        extra_findings=tuple(analyzer_findings),
-    )
-
-    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
-
-    def _token_renderer(successes: Sequence[_AgentResult], sarif_elapsed_s: float | None) -> str:
-        return _build_token_table_accordion(successes, sarif_elapsed_s, script_dir)
-
-    # #312: honour AI_DRY_RUN — render findings to stdout without VCS posting
-    if config.dry_run:
+    # Honour AI_DRY_RUN — assemble is complete but skip VCS posting.
+    if rc.dry_run:
         click.echo("[dry-run] review complete — VCS posting suppressed", err=True)
-        click.echo(f"[dry-run] diff: {len(diff_text.splitlines())} lines, {len(agents)} agents selected")
+        click.echo(
+            f"[dry-run] diff: {len(runtime.diff.diff_text.splitlines())} lines, "
+            f"{len(runtime.agents)} agents selected"
+        )
         click.echo(f"[dry-run] summary_text length: {len(summary_text)} chars")
         return 0
 
-    # 9. Run orchestrator; token table is rendered after dispatch and injected
-    # into the review body by the orchestrator (matching bash engine behavior).
     result = await run_review(
-        diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
+        diff=runtime.diff,
         summary_text=summary_text,
-        agents=agents,
+        agents=runtime.agents,
         llm_call=_llm_call,
-        dispatch_context=dispatch_ctx,
-        provider=provider,
-        config=orch_config,
+        dispatch_context=runtime.dispatch_context,
+        provider=runtime.provider,
+        config=runtime.orch_config,
         token_table_renderer=_token_renderer,
     )
 
-    _emit_review_result(result, base_ref=base_ref, head=head_sha)
+    _emit_review_result(result, base_ref=runtime.base_ref, head=runtime.head_sha)
 
-    if config.telemetry_enabled:
-        import datetime
-        from collections import Counter
-
-        from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
-        from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
-
-        try:
-            token_usage_by_agent: dict[str, dict[str, object]] = {}
-            for ar in result.agent_results:
-                if isinstance(ar, _AgentResult) and ar.token_log is not None:
-                    tl = ar.token_log
-                    token_usage_by_agent[ar.name] = {
-                        "input": tl.input,
-                        "output": tl.output,
-                        "cache_creation": tl.cache_creation,
-                        "cache_read": tl.cache_read,
-                        "model": tl.model,
-                    }
-
-            findings_by_severity: dict[str, int] = dict(Counter(f.severity for f in result.findings))
-
-            telemetry_event = TelemetryEvent(
-                correlation_id=os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""),
-                timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
-                repository=config.github_repository,
-                pr_number=str(config.pr_number),
-                outcome=result.outcome.event,
-                findings_count=len(result.findings),
-                findings_by_severity=findings_by_severity,
-                failed_agents=[f.name for f in result.failed_agents],
-                token_usage_by_agent=token_usage_by_agent,
-                agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results},
-                sarif_elapsed_s=result.sarif_elapsed_s,
-                learning_store_entries_loaded=feedback_entries_count,
-                telemetry_schema_version="1",
-            )
-        except Exception as exc:
-            logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
-            return 0 if result.ok else 1
-        try:
-            await anyio.to_thread.run_sync(
-                lambda: emit_telemetry(telemetry_event, sink=config.telemetry_sink)
-            )
-        except Exception as exc:
-            logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
+    if rc.telemetry_enabled:
+        await _emit_telemetry(result, rc, runtime.feedback_entries_count)
 
     return 0 if result.ok else 1
+
+
+async def _emit_telemetry(
+    result: ReviewResult,
+    config: ReviewConfig,
+    feedback_entries_count: int,
+) -> None:
+    """Assemble and emit a telemetry event (fail-soft on any error)."""
+    import datetime
+    from collections import Counter
+
+    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
+    from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
+
+    try:
+        token_usage_by_agent: dict[str, dict[str, object]] = {}
+        for ar in result.agent_results:
+            if isinstance(ar, _AgentResult) and ar.token_log is not None:
+                tl = ar.token_log
+                token_usage_by_agent[ar.name] = {
+                    "input": tl.input,
+                    "output": tl.output,
+                    "cache_creation": tl.cache_creation,
+                    "cache_read": tl.cache_read,
+                    "model": tl.model,
+                }
+
+        findings_by_severity: dict[str, int] = dict(Counter(f.severity for f in result.findings))
+
+        telemetry_event = TelemetryEvent(
+            correlation_id=os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""),
+            timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+            repository=config.github_repository,
+            pr_number=str(config.pr_number),
+            outcome=result.outcome.event,
+            findings_count=len(result.findings),
+            findings_by_severity=findings_by_severity,
+            failed_agents=[f.name for f in result.failed_agents],
+            token_usage_by_agent=token_usage_by_agent,
+            agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results},
+            sarif_elapsed_s=result.sarif_elapsed_s,
+            learning_store_entries_loaded=feedback_entries_count,
+            telemetry_schema_version="1",
+        )
+    except Exception as exc:
+        logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
+        return
+    try:
+        await anyio.to_thread.run_sync(
+            lambda: emit_telemetry(telemetry_event, sink=config.telemetry_sink)
+        )
+    except Exception as exc:
+        logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
 
 
 async def _orchestrate_skip(

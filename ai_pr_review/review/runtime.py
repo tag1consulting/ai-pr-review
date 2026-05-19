@@ -44,11 +44,11 @@ class ReviewRuntime:
     All fields are pre-built. The orchestrator reads no environment and
     constructs no dependencies.
 
-    `summary_text`, `script_dir`, `diff_path`, `manifest_text`, `is_incremental`,
-    `base_ref`, `head_sha`, and `feedback_entries_count` are also used by the
-    CLI layer to run the pr-summarizer and assemble telemetry.
+    `config` is the post-resolve_models() copy; use it (not the original) for
+    model names, telemetry, and the summarizer call.
     """
 
+    config: ReviewConfig
     provider: VcsProvider
     diff: DiffContext
     # Prefix portion of summary_text (merge-filter note); CLI appends summarizer output.
@@ -239,6 +239,7 @@ def build_review_runtime(
     )
 
     return ReviewRuntime(
+        config=config,
         provider=provider,
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
         summary_prefix=summary_prefix,
