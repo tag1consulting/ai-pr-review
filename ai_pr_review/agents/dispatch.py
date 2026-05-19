@@ -275,7 +275,7 @@ def _build_user_message(
         return diff_text, 0
 
     try:
-        from ai_pr_review.context.budget import _estimate_tokens, build_context_block
+        from ai_pr_review.context.budget import build_context_block, estimate_tokens
         from ai_pr_review.context.symbols import lookup_definitions
         from ai_pr_review.context.treesitter import extract_symbol_refs
 
@@ -294,7 +294,7 @@ def _build_user_message(
         )
         ctx_block = build_context_block(defs, max_tokens=context.context_max_tokens)
         if ctx_block:
-            return ctx_block + "\n\n" + diff_text, _estimate_tokens(ctx_block)
+            return ctx_block + "\n\n" + diff_text, estimate_tokens(ctx_block)
     except Exception as exc:
         import logging
         # exc_info=True so unexpected errors (MemoryError, bugs in

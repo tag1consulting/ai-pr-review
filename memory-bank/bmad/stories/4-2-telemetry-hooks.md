@@ -70,7 +70,7 @@ so that I can monitor token costs, latency trends, finding rates, and feedback l
 
 **`AgentResult` does not have `elapsed_ms`.** `FailedAgent` has it (dispatch.py:50), but `AgentResult` does not. Do NOT add `elapsed_ms` to `AgentResult` in this story — that's E4.S4 scope. Emit `agent_latency_ms: {}` (empty dict) for now and note in a TODO comment that E4.S4 will populate it.
 
-**`sarif_elapsed_s` not yet threaded.** E4.S3 changes `load_sarif_files()` to return `(findings, elapsed)` and threads the elapsed time up. E4.S2 lands before E4.S3, so emit `sarif_elapsed_s: null` for now. The field must still be present in the schema to ensure consumers don't break when E4.S3 wires it.
+**`sarif_elapsed_s` is now available.** E4.S3 landed before E4.S2 and has already changed `load_sarif_files()` to return `(findings, elapsed)`, threading the value through `orchestrate.py` → `ReviewResult.sarif_elapsed_s`. Wire it directly from `result.sarif_elapsed_s` in `_run_review_async` — do not emit `null`. The field is present and populated when SARIF paths are configured; it is `None` when no SARIF paths are provided.
 
 ### Repository and PR number in config
 
