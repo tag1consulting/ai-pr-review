@@ -522,7 +522,13 @@ class GitHubProvider:
     def _dismiss_stale_reviews(self, threads: Sequence[dict[str, Any]]) -> int:
         """Dismiss CHANGES_REQUESTED reviews from our bot whose threads are all
         resolved, but only when at least one such thread was authored by us
-        (marker gate via thread-body check already applied above)."""
+        (marker gate via thread-body check already applied above).
+
+        The newest bot CHANGES_REQUESTED review (highest ID) is never dismissed
+        — it represents the current run and must remain until superseded by a
+        future run.  Only older reviews with zero unresolved markered threads
+        are eligible.
+        """
         c = self.config
         reviews: list[dict[str, Any]] = []
         url: str | None = f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews"
@@ -537,6 +543,21 @@ class GitHubProvider:
             reviews.extend(resp.json() or [])
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None
+
+        # Identify all bot CHANGES_REQUESTED reviews so we can protect the newest.
+        bot_cr_ids: list[int] = [
+            int(r["id"])
+            for r in reviews
+            if r.get("state") == "CHANGES_REQUESTED"
+            and (r.get("user") or {}).get("login") == c.bot_login
+            and int(r.get("id", 0)) > 0
+        ]
+        if len(bot_cr_ids) < 2:
+            # Zero reviews: nothing to dismiss.
+            # Exactly one review: it is the current run — never dismiss it.
+            return 0
+        newest_id = max(bot_cr_ids)
+
         # Map review id -> unresolved thread count, only counting threads
         # where the comment body carries OUR inline marker.
         unresolved_by_review: dict[int, int] = {}
@@ -561,6 +582,8 @@ class GitHubProvider:
             rid = int(review.get("id", 0))
             if rid <= 0:
                 continue
+            if rid == newest_id:
+                continue  # never dismiss the current run
             if unresolved_by_review.get(rid, 0) > 0:
                 continue
             resp = self.client.request(
