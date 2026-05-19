@@ -490,5 +490,3 @@ def test_token_table_renderer_exception_is_failsoft(tmp_path: Path) -> None:
         assert provider.findings_calls[0]["token_table"] == ""
 
     anyio.run(_run)
-
-    anyio.run(_run)

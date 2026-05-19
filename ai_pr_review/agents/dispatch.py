@@ -13,10 +13,10 @@ from pathlib import Path
 
 import anyio
 
-_log = logging.getLogger(__name__)
-
 from ai_pr_review.agents.roster import AgentSpec
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Value objects

@@ -489,34 +489,41 @@ def _build_token_table_accordion(
     from ai_pr_review.agents.roster import AGENTS
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
 
+    _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
+    token_log: list[TokenEntry] = []
+    for ar in successes:
+        if isinstance(ar, AgentResult) and ar.token_log is not None:
+            tl = ar.token_log
+            token_log.append(TokenEntry(
+                agent=ar.name,
+                model=tl.model,
+                input_tokens=tl.input,
+                output_tokens=tl.output,
+                cache_creation_tokens=tl.cache_creation,
+                cache_read_tokens=tl.cache_read,
+                max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
+            ))
+
+    if not token_log:
+        return ""
+
+    # All enriched agents receive the same context block; take the max (which
+    # equals the single non-zero value) rather than summing to avoid double-counting.
+    context_tokens = max(
+        (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+        default=0,
+    )
+
+    pricing_file = str(script_dir / "config" / "model-pricing.json")
     try:
-        _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
-        token_log: list[TokenEntry] = []
-        for ar in successes:
-            if isinstance(ar, AgentResult) and ar.token_log is not None:
-                tl = ar.token_log
-                token_log.append(TokenEntry(
-                    agent=ar.name,
-                    model=tl.model,
-                    input_tokens=tl.input,
-                    output_tokens=tl.output,
-                    cache_creation_tokens=tl.cache_creation,
-                    cache_read_tokens=tl.cache_read,
-                    max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
-                ))
-
-        if not token_log:
-            return ""
-
-        # All enriched agents receive the same context block; take the max (which
-        # equals the single non-zero value) rather than summing to avoid double-counting.
-        context_tokens = max(
-            (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
-            default=0,
-        )
-
-        pricing_file = str(script_dir / "config" / "model-pricing.json")
         pricing_data = load_pricing(pricing_file)
+    except Exception as exc:
+        logger.warning(
+            "token table: could not load pricing file %r: %s", pricing_file, exc, exc_info=True,
+        )
+        return ""
+
+    try:
         table = emit_token_table(
             token_log,
             pricing_data,
@@ -524,10 +531,7 @@ def _build_token_table_accordion(
             sarif_elapsed_s=sarif_elapsed_s,
         )
     except Exception as exc:
-        logger.warning(
-            "token table: could not generate token table (pricing_file=%r): %s",
-            str(script_dir / "config" / "model-pricing.json"), exc, exc_info=True,
-        )
+        logger.warning("token table: could not render table: %s", exc, exc_info=True)
         return ""
 
     return (
