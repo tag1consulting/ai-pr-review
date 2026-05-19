@@ -15,6 +15,7 @@ Provider differences from GitHub:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -49,6 +50,8 @@ from ai_pr_review.vcs.protocol import (
     StaleResult,
     SummaryResult,
 )
+
+logger = logging.getLogger(__name__)
 
 # GitLab MR notes have a ~1MB limit but huge comments are bad UX. Match bash.
 _MAX_GITLAB_BODY_SIZE: Final[int] = 250_000
@@ -409,6 +412,39 @@ class GitLabProvider:
                     f"{resp.text[:200]}"
                 )
                 body_findings.append(f)
+
+        # GitLab has no separate review-body concept: append the token table to
+        # the summary note (fail-soft — table failure must not abort the review).
+        if token_table:
+            try:
+                existing_notes = self._list_summary_notes()
+                if existing_notes:
+                    keep = existing_notes[0]
+                    keep_id = int(keep["id"])
+                    old_body = keep.get("body") or ""
+                    # Avoid doubling if a previous run already appended the table.
+                    details_idx = old_body.find("<details>")
+                    base_body = old_body[:details_idx].rstrip() if details_idx != -1 else old_body.rstrip()
+                    new_body = base_body + "\n\n" + token_table
+                    resp = self.client.request(
+                        "PUT", self._note_url(keep_id), json_body={"body": new_body}
+                    )
+                    if resp.status_code >= 400:
+                        logger.warning(
+                            "[ai-pr-review] WARNING: gitlab: token table: could not update "
+                            "summary note (HTTP %d): %s",
+                            resp.status_code, resp.text[:200],
+                        )
+                else:
+                    logger.warning(
+                        "[ai-pr-review] WARNING: gitlab: token table: no summary note found; "
+                        "skipping token table append"
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[ai-pr-review] WARNING: gitlab: token table: unexpected error: %s",
+                    exc, exc_info=True,
+                )
 
         # The provider returns counts; orchestrator decides what to do with
         # the body_findings list (typically: inject into the summary note via
