@@ -9,9 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from click.testing import CliRunner
 
-from ai_pr_review.cli import _run_compute, cli
+from ai_pr_review.cli import cli
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.diff.compute import DiffResult
+from ai_pr_review.review.compute import run_compute as _run_compute
 
 # ---------------------------------------------------------------------------
 # Helpers

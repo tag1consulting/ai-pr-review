@@ -2,12 +2,11 @@
 
 Subcommands:
 - `compute`: run the compute phase only, writing a JSON payload to
-  AI_PR_REVIEW_COMPUTE_OUTPUT. Retained for backwards compatibility with
-  the Epic 1 handoff path.
+  AI_PR_REVIEW_COMPUTE_OUTPUT. Retained for backwards compatibility.
 - `review`: end-to-end Python pipeline (compute -> dispatch agents ->
   extract findings -> outcome -> post via VcsProvider). Replaces the
   bash post-review scripts when AI_PR_REVIEW_ENGINE=python.
-- `slash`: handle one ``/ai-pr-review`` comment command (Capability C).
+- `slash`: handle one ``/ai-pr-review`` comment command.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
 from ai_pr_review.manifest import ChangedFiles
 from ai_pr_review.orchestrate import ReviewResult
+from ai_pr_review.review.compute import run_compute
 from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
@@ -66,10 +66,7 @@ def cli() -> None:
     help="Path to write compute output JSON (defaults to AI_PR_REVIEW_COMPUTE_OUTPUT env var).",
 )
 def compute(output: str) -> None:
-    """Run the compute phase (diff, manifest, findings) and write handoff JSON.
-
-    Posting remains in bash for Epic 1; Epic 2 (#196) removes this shim.
-    """
+    """Run the compute phase (diff, manifest, findings) and write handoff JSON."""
     try:
         config = ReviewConfig.from_env()
     except ConfigError as exc:
@@ -80,7 +77,7 @@ def compute(output: str) -> None:
     os.environ["AI_PR_REVIEW_CORRELATION_ID"] = correlation_id
     setup_logging(config.log_format, config.log_level, correlation_id, secrets=_secret_set(config))
 
-    payload = _run_compute(config)
+    payload = run_compute(config)
 
     if not output:
         # No output file configured — print to stdout for debugging.
@@ -158,7 +155,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     last_reviewed = provider.get_last_reviewed_sha()
 
     # 2. Run compute phase to get diff + manifest (incremental when SHA available)
-    payload = _run_compute(config, last_reviewed_sha=last_reviewed)
+    payload = run_compute(config, last_reviewed_sha=last_reviewed)
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
         click.echo(f"Skipping review: {reason}", err=True)
@@ -669,77 +666,3 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
     reply = handle_command(result, entry, store)
     if reply:
         click.echo(reply)
-
-
-def _run_compute(
-    config: ReviewConfig,
-    last_reviewed_sha: str | None = None,
-) -> dict[str, object]:
-    """Execute compute phase and return the handoff payload dict.
-
-    Epic 1 scope: diff computation, language detection, manifest building,
-    findings extraction, deduplication, suppression, analyzer bridge,
-    and pricing. Agent LLM calls remain in bash.
-
-    Returns a dict matching the handoff JSON schema (docs/compute-output-schema.md).
-    """
-    from ai_pr_review.diff.compute import compute_diff
-    from ai_pr_review.manifest import build_changed_files, build_manifest_text
-
-    # #313: pass last_reviewed_sha so compute_diff uses the incremental range
-    diff_result = compute_diff(
-        base_ref=config.base_ref,
-        head_sha=config.head_sha,
-        workspace=".",
-        ignore_merge_commits=config.ignore_merge_commits,
-        review_target=config.review_target,
-        last_reviewed_sha="" if config.force_full_diff else (last_reviewed_sha or ""),
-    )
-
-    if not diff_result.changed_files:
-        return {
-            "skip": True,
-            "reason": "no changed files",
-            "diff": "",
-            "changed_files": [],
-            "manifest": "",
-            "findings": [],
-            "token_log": [],
-        }
-
-    # Check diff size limit
-    diff_lines = len(diff_result.diff_text.splitlines())
-    if config.max_diff_lines > 0 and diff_lines > config.max_diff_lines:
-        return {
-            "skip": True,
-            "reason": f"diff too large ({diff_lines} lines > {config.max_diff_lines})",
-            "diff": "",
-            "changed_files": diff_result.changed_files,
-            "manifest": "",
-            "findings": [],
-            "token_log": [],
-        }
-
-    changed = build_changed_files(diff_result.changed_files)
-    manifest_text = build_manifest_text(
-        changed,
-        base_ref=diff_result.base,
-        diff_label=diff_result.diff_label,
-        diff_stat=diff_result.diff_stat,
-    )
-
-    return {
-        "skip": False,
-        "reason": "",
-        "diff": diff_result.diff_text,
-        "changed_files": diff_result.changed_files,
-        "manifest": manifest_text,
-        "diff_label": diff_result.diff_label,
-        "base": diff_result.base,
-        "head": diff_result.head,
-        "is_incremental": diff_result.is_incremental,
-        "languages": changed.languages,
-        "merge_filter_fallback_reason": diff_result.fallback_reason,
-        "findings": [],
-        "token_log": [],
-    }
