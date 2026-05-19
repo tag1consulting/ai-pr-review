@@ -25,13 +25,13 @@ import click
 
 from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
-from ai_pr_review.manifest import ChangedFiles
 from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.review.compute import run_compute
 from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
+    from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +167,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
         )
 
     def _token_renderer(
-        successes: Sequence[_AgentResult], sarif_elapsed_s: float | None
+        successes: Sequence[_AgentResult], _sarif_elapsed_unused: float | None
     ) -> str:
-        return _build_token_table_accordion(successes, sarif_elapsed_s, runtime.script_dir)
+        return _build_token_table_accordion(
+            successes, runtime.sarif_elapsed_s, runtime.script_dir
+        )
 
     # Honour AI_DRY_RUN — assemble is complete but skip VCS posting.
     if rc.dry_run:
@@ -195,7 +197,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     _emit_review_result(result, base_ref=runtime.base_ref, head=runtime.head_sha)
 
     if rc.telemetry_enabled:
-        await _emit_telemetry(result, rc, runtime.feedback_entries_count)
+        await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s)
 
     return 0 if result.ok else 1
 
@@ -204,6 +206,7 @@ async def _emit_telemetry(
     result: ReviewResult,
     config: ReviewConfig,
     feedback_entries_count: int,
+    sarif_elapsed_s: float | None = None,
 ) -> None:
     """Assemble and emit a telemetry event (fail-soft on any error)."""
     import datetime
@@ -238,7 +241,7 @@ async def _emit_telemetry(
             failed_agents=[f.name for f in result.failed_agents],
             token_usage_by_agent=token_usage_by_agent,
             agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results},
-            sarif_elapsed_s=result.sarif_elapsed_s,
+            sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
             telemetry_schema_version="1",
         )
@@ -254,15 +257,13 @@ async def _emit_telemetry(
 
 
 async def _orchestrate_skip(
-    provider: object, reason: str, *, config: ReviewConfig
+    provider: VcsProvider, reason: str, *, config: ReviewConfig
 ) -> ReviewResult:
     """Convenience wrapper to call run_review() with only a skip path."""
     from ai_pr_review.agents.dispatch import DispatchContext
     from ai_pr_review.orchestrate import run_review
-    from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
+    from ai_pr_review.vcs.protocol import DiffContext
 
-    if not isinstance(provider, VcsProvider):
-        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
     diff_path = Path("/tmp/ai-review-skip-diff.txt")
     diff_path.write_text("", encoding="utf-8")
     ctx = DispatchContext(
@@ -286,26 +287,6 @@ async def _orchestrate_skip(
         provider=provider,
         skip_reason=reason,
     )
-
-
-def _make_changed_files(files: list[object]) -> ChangedFiles:
-    """Build a ChangedFiles-like value for the gate evaluator.
-
-    The compute payload may carry `changed_files` either as a list of path
-    strings or a list of dicts (forward-compatible). Normalize and rebuild.
-    """
-    from ai_pr_review.manifest import build_changed_files
-
-    paths: list[str] = []
-    for entry in files:
-        path = (
-            str(entry.get("path") or "") if isinstance(entry, dict) else str(entry)
-        )
-        if path:
-            paths.append(path)
-        else:
-            logger.warning("Skipping malformed changed_files entry: %r", entry)
-    return build_changed_files(paths)
 
 
 _SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"

@@ -113,10 +113,10 @@ class _FakeProvider:
         enable_suggestions: bool = True,
     ) -> FindingsResult:
         self.post_findings_calls.append(findings)
-        return FindingsResult(review_id=1, posted=True, inline_count=0)
+        return FindingsResult(review_id=1, inline_posted=0, body_findings=0, event="COMMENT")
 
     def resolve_stale(self) -> StaleResult:
-        return StaleResult(resolved=0, skipped=0)
+        return StaleResult(threads_resolved=0, reviews_dismissed=0)
 
     def post_skip_comment(self, reason: str) -> SummaryResult:
         return SummaryResult(comment_id=None, created=False, updated=False)
@@ -294,6 +294,42 @@ class TestSarifRoutedViaExtraFindings:
 
         assert isinstance(runtime, ReviewRuntime)
         assert sarif_finding in runtime.orch_config.extra_findings
+
+    def test_sarif_elapsed_s_propagated_to_runtime(self, tmp_path: Path) -> None:
+        """sarif_elapsed_s from load_sarif_files is stored on ReviewRuntime, not discarded."""
+        config = _make_config(sarif_paths=(str(tmp_path / "results.sarif"),))
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch(
+                "ai_pr_review.analyzers.sarif.load_sarif_files",
+                return_value=([], 1.23),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(runtime, ReviewRuntime)
+        assert runtime.sarif_elapsed_s == 1.23
+
+    def test_sarif_elapsed_s_is_none_when_no_sarif_paths(self, tmp_path: Path) -> None:
+        """sarif_elapsed_s is None when no SARIF paths are configured."""
+        config = _make_config()
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(runtime, ReviewRuntime)
+        assert runtime.sarif_elapsed_s is None
 
 
 class TestExplicitConfigNoBashDefaults:

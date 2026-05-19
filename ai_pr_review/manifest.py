@@ -90,6 +90,9 @@ def parse_changed_files_payload(raw: list[object]) -> ChangedFiles:
     _log = logging.getLogger(__name__)
     paths: list[str] = []
     for entry in raw:
+        if entry is None:
+            _log.warning("Skipping malformed changed_files entry: %r", entry)
+            continue
         path = (
             str(entry.get("path") or "") if isinstance(entry, dict) else str(entry)
         )

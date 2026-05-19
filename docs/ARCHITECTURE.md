@@ -349,7 +349,7 @@ To add a test for a new function, call `load_function "$script" "function_name"`
 |---|---|
 | `test_runtime.py` | Assembly boundary: `build_review_runtime()`, `SkipPlan`, SARIF routing, provider factory seam |
 | `test_orchestrate.py` | `run_review()` happy path, skip path, summary/findings failure, token table |
-| `test_cli.py` | `run_compute()`, `compute` command, `slash` command, `_make_changed_files()`, `AI_PR_REVIEW_SCRIPT_DIR` resolution |
+| `test_cli.py` | `run_compute()`, `compute` command, `slash` command, `parse_changed_files_payload()`, `AI_PR_REVIEW_SCRIPT_DIR` resolution |
 | `test_config.py` | `ReviewConfig.from_env()`, `resolve_models()`, unknown-var detection, deprecation warnings |
 | `test_suppress.py`, `test_findings.py` | Suppression pipeline and findings merge |
 | `test_sarif.py`, `test_bridge.py` | SARIF parsing and static analyzer bridge |

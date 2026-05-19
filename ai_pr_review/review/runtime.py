@@ -65,6 +65,7 @@ class ReviewRuntime:
     script_dir: Path
     diff_path: Path
     feedback_entries_count: int
+    sarif_elapsed_s: float | None
 
 
 def build_review_runtime(
@@ -211,10 +212,11 @@ def build_review_runtime(
 
     # 10. Load SARIF findings and merge with analyzer findings into extra_findings.
     sarif_findings: list[_Finding] = []
+    sarif_elapsed_s: float | None = None
     if config.sarif_paths:
         try:
             from ai_pr_review.analyzers.sarif import load_sarif_files
-            sarif_raw, _sarif_elapsed = load_sarif_files(list(config.sarif_paths))
+            sarif_raw, sarif_elapsed_s = load_sarif_files(list(config.sarif_paths))
             sarif_findings = [f for f in sarif_raw if isinstance(f, _Finding)]
             if sarif_findings:
                 logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
@@ -256,4 +258,5 @@ def build_review_runtime(
         script_dir=script_dir,
         diff_path=diff_path,
         feedback_entries_count=feedback_entries_count,
+        sarif_elapsed_s=sarif_elapsed_s,
     )

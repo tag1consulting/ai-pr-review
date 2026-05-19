@@ -101,7 +101,7 @@ async def run_review(
     - diff.diff_text is the unified diff for the review window
     - diff.head_sha is a valid hex SHA
     - summary_text is the pr-summarizer output (may be empty)
-    - agents is the gated/filtered roster (S2 + S4)
+    - agents is the gated/filtered roster (mode-filtered, then gate-filtered by build_review_runtime)
     - llm_call is bound to the configured provider/model
 
     Steps:

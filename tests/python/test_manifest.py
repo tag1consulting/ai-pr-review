@@ -5,6 +5,7 @@ from ai_pr_review.manifest import (
     ChangedFiles,
     build_changed_files,
     build_manifest_text,
+    parse_changed_files_payload,
 )
 
 
@@ -156,3 +157,23 @@ class TestBuildManifestText:
         cf = build_changed_files(["file.unknown"])
         text = build_manifest_text(cf, "main", "HEAD~1..HEAD", "+1/-0")
         assert "unknown" in text
+
+
+class TestParseChangedFilesPayload:
+    """parse_changed_files_payload normalisation."""
+
+    def test_none_entry_is_skipped(self) -> None:
+        """None entries must not produce a 'None' string path (regression for str(None) bug)."""
+        result = parse_changed_files_payload([None, "src/main.py"])
+        assert "None" not in result.all_files
+        assert "src/main.py" in result.all_files
+
+    def test_dict_entry_with_path_key(self) -> None:
+        result = parse_changed_files_payload([{"path": "a.py"}, "b.py"])
+        assert "a.py" in result.all_files
+        assert "b.py" in result.all_files
+
+    def test_empty_path_dict_is_skipped(self) -> None:
+        result = parse_changed_files_payload([{"path": ""}, "c.py"])
+        assert "" not in result.all_files
+        assert "c.py" in result.all_files

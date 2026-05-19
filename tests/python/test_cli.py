@@ -319,24 +319,26 @@ class TestScriptDir:
         assert captured[0].script_dir == expected
 
 
-class TestMakeChangedFiles:
-    """_make_changed_files normalisation and warning (B1)."""
+class TestParseChangedFilesPayload:
+    """parse_changed_files_payload normalisation and warning."""
 
     def test_malformed_entry_emits_warning(self) -> None:
         """Empty-path entries must emit logger.warning, not crash or silently drop."""
+        import logging
         from unittest.mock import patch
 
-        from ai_pr_review.cli import _make_changed_files  # type: ignore[attr-defined]
+        from ai_pr_review.manifest import parse_changed_files_payload
 
-        with patch("ai_pr_review.cli.logger") as mock_logger:
-            _make_changed_files([{"path": ""}, {"path": "src/main.py"}, {}])
-        # Two malformed entries: dict with empty path, and bare empty dict (str("") after normalization)
-        assert mock_logger.warning.call_count == 2
+        with patch.object(logging.getLogger("ai_pr_review.manifest"), "warning") as mock_warn:
+            parse_changed_files_payload([{"path": ""}, {"path": "src/main.py"}, {}])
+        # Two malformed entries: dict with empty path, and bare empty dict
+        assert mock_warn.call_count == 2
 
     def test_valid_entries_are_included(self) -> None:
         """Valid path strings and dicts are included in the result."""
-        from ai_pr_review.cli import _make_changed_files  # type: ignore[attr-defined]
+        from ai_pr_review.manifest import parse_changed_files_payload
 
-        result = _make_changed_files(["a.py", {"path": "b.py"}])
-        # Result is a ChangedFiles; the paths should include both files
+        result = parse_changed_files_payload(["a.py", {"path": "b.py"}])
         assert result is not None
+        assert "a.py" in result.all_files
+        assert "b.py" in result.all_files
