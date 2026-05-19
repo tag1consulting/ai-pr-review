@@ -37,5 +37,5 @@ def load_language_profiles(labels: Iterable[str], script_dir: Path) -> str:
             try:
                 parts.append(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError) as exc:
-                _log.warning("Skipping language profile %s: %s", path, exc)
+                _log.warning("Skipping language profile for %s (%s): %s", label, path, exc, exc_info=True)
     return "\n".join(parts)
