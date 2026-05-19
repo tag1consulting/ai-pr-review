@@ -57,6 +57,14 @@ def _parse_next_link(link_header: str) -> str | None:
     return None
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    """Convert value to int, returning default on ValueError/TypeError."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return default
+
+
 @dataclass(frozen=True)
 class GitHubConfig:
     owner: str
@@ -546,11 +554,11 @@ class GitHubProvider:
 
         # Identify all bot CHANGES_REQUESTED reviews so we can protect the newest.
         bot_cr_ids: list[int] = [
-            int(r["id"])
+            _safe_int(r.get("id"))
             for r in reviews
             if r.get("state") == "CHANGES_REQUESTED"
             and (r.get("user") or {}).get("login") == c.bot_login
-            and int(r.get("id", 0)) > 0
+            and _safe_int(r.get("id")) > 0
         ]
         if len(bot_cr_ids) < 2:
             # Zero reviews: nothing to dismiss.
@@ -579,7 +587,7 @@ class GitHubProvider:
                 continue
             if (review.get("user") or {}).get("login") != c.bot_login:
                 continue
-            rid = int(review.get("id", 0))
+            rid = _safe_int(review.get("id"))
             if rid <= 0:
                 continue
             if rid == newest_id:
