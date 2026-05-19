@@ -146,13 +146,19 @@ async def _run_review_async(config: ReviewConfig) -> int:
     from ai_pr_review.vcs import provider_from_env
     from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
 
+    # #319: fill provider model defaults before any downstream use
+    config = config.resolve_models()
+
     # 1. Build provider from VCS_PROVIDER env
     provider = provider_from_env()
     if not isinstance(provider, VcsProvider):
         raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
 
-    # 2. Run compute phase to get diff + manifest
-    payload = _run_compute(config)
+    # #313: fetch last-reviewed SHA *before* compute so incremental diff works
+    last_reviewed = provider.get_last_reviewed_sha()
+
+    # 2. Run compute phase to get diff + manifest (incremental when SHA available)
+    payload = _run_compute(config, last_reviewed_sha=last_reviewed)
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
         click.echo(f"Skipping review: {reason}", err=True)
@@ -218,10 +224,10 @@ async def _run_review_async(config: ReviewConfig) -> int:
         repo_root=Path("."),
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,
+        max_tokens_per_agent=config.max_tokens_per_agent,  # #316
     )
 
     # 6. Apply conditional gates
-    last_reviewed = provider.get_last_reviewed_sha()
     raw_paths = payload.get("changed_files")
     changed_paths: list[object] = raw_paths if isinstance(raw_paths, list) else []
     cf = _make_changed_files(changed_paths)
@@ -240,6 +246,21 @@ async def _run_review_async(config: ReviewConfig) -> int:
     mode_filtered = [a for a in mode_filtered if a.name != "pr-summarizer"]
     agents = filter_agents(mode_filtered, gates)
 
+    # 6.5. Run native static analyzers (#315) — fail-soft; findings merged later
+    from ai_pr_review.findings.models import Finding as _Finding
+    analyzer_findings: list[_Finding] = []
+    try:
+        from ai_pr_review.analyzers.bridge import run_analyzers
+        analyzer_findings = run_analyzers(
+            cf,
+            diff_file=str(diff_path),
+            script_dir=str(script_dir),
+        )
+        if analyzer_findings:
+            logger.info("analyzers: %d finding(s) from native static analysis", len(analyzer_findings))
+    except Exception as exc:
+        logger.warning("analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True)
+
     # 7. Bind LLM call to the configured provider
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, config.provider)
@@ -255,20 +276,37 @@ async def _run_review_async(config: ReviewConfig) -> int:
             llm_call=_llm_call,
         )
 
-    # 8. Run the orchestrator
+    # 8. Build orchestrator config
+    # #317: load global + local suppression rules
+    from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
+    suppression_rules = tuple(
+        _load_suppression_rules(str(script_dir), workspace=".")
+    )
+
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
         max_inline=config.max_inline,
         enable_suggestions=config.enable_suggestions,
-        semaphore_size=config.parallel,
+        # #314: config.concurrency is an int derived from the parallel bool
+        semaphore_size=config.concurrency,
         sarif_paths=config.sarif_paths,
+        suppression_rules=suppression_rules,
+        # #315: inject native static analyzer findings
+        extra_findings=tuple(analyzer_findings),
     )
 
     from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
 
     def _token_renderer(successes: Sequence[_AgentResult], sarif_elapsed_s: float | None) -> str:
         return _build_token_table_accordion(successes, sarif_elapsed_s, script_dir)
+
+    # #312: honour AI_DRY_RUN — render findings to stdout without VCS posting
+    if config.dry_run:
+        click.echo("[dry-run] review complete — VCS posting suppressed", err=True)
+        click.echo(f"[dry-run] diff: {len(diff_text.splitlines())} lines, {len(agents)} agents selected")
+        click.echo(f"[dry-run] summary_text length: {len(summary_text)} chars")
+        return 0
 
     # 9. Run orchestrator; token table is rendered after dispatch and injected
     # into the review body by the orchestrator (matching bash engine behavior).
@@ -633,7 +671,10 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
         click.echo(reply)
 
 
-def _run_compute(config: ReviewConfig) -> dict[str, object]:
+def _run_compute(
+    config: ReviewConfig,
+    last_reviewed_sha: str | None = None,
+) -> dict[str, object]:
     """Execute compute phase and return the handoff payload dict.
 
     Epic 1 scope: diff computation, language detection, manifest building,
@@ -645,13 +686,14 @@ def _run_compute(config: ReviewConfig) -> dict[str, object]:
     from ai_pr_review.diff.compute import compute_diff
     from ai_pr_review.manifest import build_changed_files, build_manifest_text
 
-    # Compute diff
+    # #313: pass last_reviewed_sha so compute_diff uses the incremental range
     diff_result = compute_diff(
         base_ref=config.base_ref,
         head_sha=config.head_sha,
         workspace=".",
         ignore_merge_commits=config.ignore_merge_commits,
         review_target=config.review_target,
+        last_reviewed_sha="" if config.force_full_diff else (last_reviewed_sha or ""),
     )
 
     if not diff_result.changed_files:

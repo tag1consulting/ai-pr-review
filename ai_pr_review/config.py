@@ -122,6 +122,8 @@ class ReviewConfig(BaseModel):
 
     # --- Agent tuning ---
     parallel: bool = True
+    # Number of concurrent LLM calls. Derived from parallel in resolve_models().
+    concurrency: int = 4
     max_inline: int = 10
     max_tokens_per_agent: int = 4096
     enable_suggestions: bool = True
@@ -356,3 +358,42 @@ class ReviewConfig(BaseModel):
             telemetry_enabled=_bool("AI_TELEMETRY_ENABLED", False),
             telemetry_sink=os.environ.get("AI_TELEMETRY_SINK", ""),
         )
+
+    def resolve_models(self) -> ReviewConfig:
+        """Return a copy with provider model defaults applied.
+
+        Mirrors the provider default table in review.sh so direct Python
+        invocation works without bash pre-filling AI_MODEL_STANDARD.
+        openai-compatible is left as-is (user must specify).
+        """
+        _PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {
+            "anthropic":    ("claude-sonnet-4-6",                   "claude-opus-4-7"),
+            "openai":       ("gpt-5.4-mini",                        "gpt-5.4"),
+            "google":       ("gemini-2.5-flash",                    "gemini-2.5-pro"),
+            "bedrock-proxy": ("us.anthropic.claude-sonnet-4-6",     "global.anthropic.claude-opus-4-7"),
+        }
+        std = self.model_standard
+        prem = self.model_premium
+        if self.provider in _PROVIDER_DEFAULTS:
+            default_std, default_prem = _PROVIDER_DEFAULTS[self.provider]
+            std = std or default_std
+            prem = prem or default_prem
+        elif self.provider == "openai-compatible":
+            # No universal default; keep as-is and let DispatchContext validate.
+            prem = prem or std
+        else:
+            if not std or not prem:
+                valid = list(_PROVIDER_DEFAULTS) + ["openai-compatible"]
+                raise ConfigError(
+                    f"Unknown provider {self.provider!r}; no model defaults available. "
+                    f"Set AI_MODEL_STANDARD and AI_MODEL_PREMIUM. Valid built-in providers: {valid}."
+                )
+
+        # AI_PARALLEL=true → 4 concurrent calls (bash default); false → 1 (serial).
+        concurrency = 4 if self.parallel else 1
+
+        return self.model_copy(update={
+            "model_standard": std,
+            "model_premium": prem,
+            "concurrency": concurrency,
+        })

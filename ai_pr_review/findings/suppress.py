@@ -30,6 +30,8 @@ class SuppressionRule:
     reason: str
     match_file: str = ""
     match_pattern: str = ""
+    match_line: int = 0    # #318: suppress finding on exact line number (0 = any)
+    match_code: str = ""   # #318: suppress finding whose finding text starts with this code
     verify: str = ""
 
 
@@ -69,11 +71,18 @@ def load_rules(
 
 def _parse_rule(raw: dict[str, Any]) -> SuppressionRule:
     match = raw.get("match", {})
+    raw_line = match.get("line", 0)
+    try:
+        match_line = int(raw_line)
+    except (TypeError, ValueError):
+        match_line = 0
     return SuppressionRule(
         id=raw.get("id", ""),
         reason=raw.get("reason", ""),
         match_file=match.get("file", ""),
         match_pattern=match.get("pattern", ""),
+        match_line=match_line,
+        match_code=str(match.get("code", "")),
         verify=raw.get("verify", ""),
     )
 
@@ -129,6 +138,10 @@ def _rule_matches(finding: Finding, rule: SuppressionRule) -> bool:
         combined = f"{finding.finding} {finding.remediation}"
         if not text_pat.search(combined):
             return False
+    if rule.match_line > 0 and finding.line != rule.match_line:
+        return False
+    if rule.match_code and not finding.finding.startswith(rule.match_code):  # noqa: SIM103
+        return False
     return True
 
 
