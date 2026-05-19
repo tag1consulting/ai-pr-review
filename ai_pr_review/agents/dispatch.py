@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import sys
 import tempfile
 import time
@@ -11,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import anyio
+
+_log = logging.getLogger(__name__)
 
 from ai_pr_review.agents.roster import AgentSpec
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
@@ -298,13 +301,16 @@ def _build_user_message(
         ctx_block = build_context_block(defs, max_tokens=context.context_max_tokens)
         if ctx_block:
             ctx_tokens = estimate_tokens(ctx_block)
+            _log.info(
+                "context enrichment: agent=%s refs=%d defs=%d block≈%d tokens",
+                spec.name, len(refs), len(defs), ctx_tokens,
+            )
             return ctx_block + "\n\n" + diff_text, ctx_tokens
     except Exception as exc:
-        import logging
         # exc_info=True so unexpected errors (MemoryError, bugs in
         # build_context_block, etc.) are distinguishable from expected
         # failures (missing grammar, ripgrep absent) in production logs.
-        logging.getLogger(__name__).warning(
+        _log.warning(
             "context enrichment failed for agent %r: %s",
             spec.name, exc, exc_info=True,
         )

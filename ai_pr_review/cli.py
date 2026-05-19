@@ -491,6 +491,10 @@ async def _upsert_token_table(
     On incremental runs, fetches the existing comment body, strips any previous
     <details> accordion, and reposts with the fresh token data — preserving the
     first-run summary written by run_review().
+
+    Note: run_sync uses cancellable=False (the default). On task cancellation
+    the HTTP call completes in its thread; the upsert is idempotent so this is
+    safe.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.agents.roster import AGENTS
