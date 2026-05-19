@@ -158,7 +158,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     last_reviewed = provider.get_last_reviewed_sha()
 
     # 2. Run compute phase to get diff + manifest (incremental when SHA available)
-    payload = _run_compute(config, last_reviewed_sha=last_reviewed or "")
+    payload = _run_compute(config, last_reviewed_sha=last_reviewed)
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
         click.echo(f"Skipping review: {reason}", err=True)
@@ -258,8 +258,6 @@ async def _run_review_async(config: ReviewConfig) -> int:
         )
         if analyzer_findings:
             logger.info("analyzers: %d finding(s) from native static analysis", len(analyzer_findings))
-    except ImportError as exc:
-        logger.error("analyzers: bridge module not importable (packaging error?): %s", exc)
     except Exception as exc:
         logger.warning("analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True)
 
@@ -675,7 +673,7 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
 
 def _run_compute(
     config: ReviewConfig,
-    last_reviewed_sha: str = "",
+    last_reviewed_sha: str | None = None,
 ) -> dict[str, object]:
     """Execute compute phase and return the handoff payload dict.
 
@@ -695,7 +693,7 @@ def _run_compute(
         workspace=".",
         ignore_merge_commits=config.ignore_merge_commits,
         review_target=config.review_target,
-        last_reviewed_sha=last_reviewed_sha if not config.force_full_diff else "",
+        last_reviewed_sha="" if config.force_full_diff else (last_reviewed_sha or ""),
     )
 
     if not diff_result.changed_files:
