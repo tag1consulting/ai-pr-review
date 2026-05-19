@@ -14,5 +14,12 @@
     "match": {
       "pattern": "actions/.{0,200}latest (published )?(stable |major )?(version|release) is v[0-9]+|latest (published )?(stable |major )?(version|release) is v[0-9]+.{0,200}actions/"
     }
+  },
+  {
+    "id": "semgrep-logger-credential-false-positive",
+    "reason": "Semgrep's python-logger-credential-disclosure rule fires on any logger call whose format string contains words like 'token', 'pricing_file', 'secret', etc. — even when those strings are plain error message templates with no actual credential values. All flagged sites in this repo are informational warning messages, not credential logging.",
+    "match": {
+      "pattern": "python-logger-credential-disclosure|python.lang.security.audit.logging.logger-credential-leak"
+    }
   }
 ]

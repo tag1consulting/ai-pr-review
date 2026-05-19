@@ -70,12 +70,29 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
 )
 
 
+# Variables that are accepted without error but have no effect on the engine.
+# A deprecation warning is printed so users know to use the canonical name.
+_DEPRECATED_AI_VAR_ALIASES: dict[str, str] = {
+    # GitHub Actions workflow uses AI_REVIEW_IGNORE_MERGE_COMMITS as a repo
+    # variable name; the engine reads AI_IGNORE_MERGE_COMMITS.
+    "AI_REVIEW_IGNORE_MERGE_COMMITS": "AI_IGNORE_MERGE_COMMITS",
+}
+
+
 def _check_unknown_ai_vars() -> None:
     """Raise ConfigError for any AI_* env var not in the documented set."""
     for key in os.environ:
         if not key.startswith("AI_"):
             continue
         if key in _KNOWN_AI_VARS:
+            continue
+        if key in _DEPRECATED_AI_VAR_ALIASES:
+            canonical = _DEPRECATED_AI_VAR_ALIASES[key]
+            print(
+                f"WARNING: {key!r} is not read by the engine; "
+                f"use {canonical!r} instead.",
+                file=sys.stderr,
+            )
             continue
         # Find closest documented match for a helpful error.
         matches = difflib.get_close_matches(key, _KNOWN_AI_VARS, n=1, cutoff=0.6)
