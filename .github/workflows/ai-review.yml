@@ -51,6 +51,12 @@ jobs:
        (github.event.action != 'labeled' ||
         github.event.label.name == 'ai-review-full' ||
         github.event.label.name == 'ai-review-rescan'))
+    # Share the concurrency group with review so a superseding push cancels
+    # both jobs together, preventing orphaned analyzer runs from completing
+    # and uploading artifacts that will never be consumed.
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number || inputs.pr_number || inputs.branch || 'standalone' }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     # Explicitly drop the workflow-level write grants; this job only needs read
     # access. pull-requests: none + issues: none prevent the elevated permissions
@@ -84,9 +90,11 @@ jobs:
             --exit-zero
 
       # --- Hadolint (Dockerfile) ---
+      # Pinned to commit SHA for supply-chain safety (tag v3.1.0, verified 2026-05-19).
+      # To update: gh api repos/hadolint/hadolint-action/git/ref/tags/<tag> | jq -r '.object.sha'
       - name: Hadolint (SARIF)
         continue-on-error: true  # repo may not have a Dockerfile on every branch
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # tag: v3.1.0, 2026-05-19
         with:
           dockerfile: Dockerfile
           format: sarif
@@ -115,15 +123,19 @@ jobs:
       # CodeQL's analyze step writes (and may wipe) its output directory, so we
       # direct it to a separate staging dir and move the result into sarif-results/
       # afterward to avoid overwriting files produced by earlier steps.
+      # Pinned to commit SHA for supply-chain safety (tag v4.35.5, verified 2026-05-19).
+      # To update: latest=$(gh api repos/github/codeql-action/tags --jq '.[0].name') && \
+      #            tag_sha=$(gh api repos/github/codeql-action/git/ref/tags/$latest --jq '.object.sha') && \
+      #            gh api repos/github/codeql-action/git/tags/$tag_sha --jq '.object.sha'
       - name: Init CodeQL
         continue-on-error: true
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # tag: v4.35.5, 2026-05-19
         with:
           languages: python
           build-mode: none
       - name: Analyze CodeQL
         continue-on-error: true
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # tag: v4.35.5, 2026-05-19
         with:
           output: codeql-staging/
           # Ingest locally via AI review rather than uploading to GitHub Code Scanning.
@@ -131,11 +143,9 @@ jobs:
       - name: Move CodeQL output into results dir
         if: always()
         run: |
-          # codeql-action writes <language>.sarif; rename so downstream path is stable.
-          # Use a glob in case the filename varies across codeql-action versions.
-          for f in codeql-staging/python*.sarif; do
-            [[ -f "$f" ]] && mv "$f" sarif-results/codeql-python.sarif && break
-          done
+          # codeql-action writes python.sarif; move into sarif-results/ for artifact upload.
+          [[ -f codeql-staging/python.sarif ]] && \
+            mv codeql-staging/python.sarif sarif-results/codeql-python.sarif || true
 
       - name: List produced SARIF files
         if: always()
@@ -233,6 +243,18 @@ jobs:
         with:
           name: sarif-results
           path: sarif-results/
+
+      - name: Report SARIF download status
+        if: always()
+        run: |
+          if ls sarif-results/*.sarif >/dev/null 2>&1; then
+            echo "### SARIF files available for ingest" >> "$GITHUB_STEP_SUMMARY"
+            for f in sarif-results/*.sarif; do
+              echo "- \`$(basename "$f")\` ($(wc -c < "$f") bytes)" >> "$GITHUB_STEP_SUMMARY"
+            done
+          else
+            echo "### ⚠️ No SARIF files downloaded — review will run without static analyzer findings" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: ./container-action
         env:
