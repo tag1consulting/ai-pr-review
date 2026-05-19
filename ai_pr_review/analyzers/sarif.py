@@ -46,7 +46,17 @@ def _sanitize_sarif_path(uri: str) -> str:
 
     Handles ``file:///path``, ``file://hostname/path``, percent-encoded URIs,
     and raw relative paths.
+
+    Workspace-root stripping: tools like Ruff emit absolute ``file://`` URIs
+    rooted at the GitHub Actions runner workspace
+    (``/home/runner/work/<owner>/<repo>/``).  After scheme stripping this
+    becomes ``home/runner/work/<owner>/<repo>/src/foo.py``, which never matches
+    repo-relative diff paths.  We detect this pattern and strip the leading
+    ``home/runner/work/<two-segment-repo-path>/`` prefix so the result is the
+    bare repo-relative path that the diff uses.
     """
+    import re as _re
+
     if not uri:
         return ""
 
@@ -80,7 +90,16 @@ def _sanitize_sarif_path(uri: str) -> str:
         logger.warning("SARIF: rejecting path with '..' segments: %r", uri)
         return ""
 
-    return str(pp)
+    # Strip GitHub Actions runner workspace prefix so repo-relative paths
+    # produced by tools (Ruff, etc.) match the diff.
+    # Pattern: home/runner/work/<owner>/<repo>/<rest>
+    #      or: runner/work/<owner>/<repo>/<rest>  (some runner configurations)
+    stripped = _re.sub(
+        r"^(?:home/)?runner/work/[^/]+/[^/]+/",
+        "",
+        str(pp),
+    )
+    return stripped
 
 
 def _parse_sarif_file(path: str) -> list[Finding]:

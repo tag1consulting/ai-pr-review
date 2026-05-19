@@ -102,6 +102,10 @@ jobs:
           no-fail: true
 
       # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
+      # p/secrets catches hardcoded credentials; p/python catches subprocess shell=True
+      # and other Python-specific security issues. p/ci was replaced because it only
+      # includes framework-scoped Python rules (Django/Flask) and fires nothing on
+      # plain Python code.
       # semgrep-action@v1 no longer supports the generateSarif input (removed in
       # recent versions); we install the semgrep CLI directly and run it with
       # --sarif output instead.  pip install is fast (<5s) since Python is already
@@ -113,7 +117,7 @@ jobs:
       - name: Semgrep (SARIF)
         continue-on-error: true
         run: |
-          semgrep scan --config=p/ci --sarif \
+          semgrep scan --config=p/secrets --config=p/python --sarif \
             --output=sarif-results/semgrep.sarif \
             --error \
             . || true
