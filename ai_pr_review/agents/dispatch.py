@@ -14,6 +14,8 @@ from pathlib import Path
 import anyio
 
 from ai_pr_review.agents.roster import AgentSpec
+from ai_pr_review.language_profiles import load_language_profiles
+from ai_pr_review.languages import detect_language
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
 _log = logging.getLogger(__name__)
@@ -320,33 +322,37 @@ def _build_user_message(
     return diff_text, 0
 
 
+def _unique_language_labels(changed_files: list[str]) -> list[str]:
+    """Return ordered unique language labels for changed_files.
+
+    Iterates files in order, emitting each label the first time it appears.
+    Uses detect_language() from ai_pr_review.languages so the mapping stays
+    in sync with the single source of truth (_EXT_MAP).
+    """
+    seen: set[str] = set()
+    labels: list[str] = []
+    for f in changed_files:
+        ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
+        label = detect_language(ext)
+        if label and label not in seen:
+            seen.add(label)
+            labels.append(label)
+    return labels
+
+
 def _detect_primary_language(changed_files: list[str]) -> str:
-    """Return the most common language key from a list of file paths."""
-    _EXT_TO_LANG: dict[str, str] = {
-        "py": "python", "ts": "typescript", "tsx": "tsx",
-        "js": "javascript", "jsx": "javascript",
-        "go": "go",
-        "php": "php", "module": "php", "theme": "php", "inc": "php",
-        "rb": "ruby", "rake": "ruby", "gemspec": "ruby",
-        "rs": "rust",
-        "sh": "bash", "bash": "bash",
-        "java": "java",
-        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp", "h": "c", "c": "c",
-        "kt": "kotlin", "kts": "kotlin",
-        "swift": "swift",
-        "cs": "csharp",
-        "scala": "scala", "sbt": "scala",
-        "tf": "terraform", "tfvars": "terraform",
-        "yaml": "yaml", "yml": "yaml",
-        "sql": "sql",
-        "lua": "lua",
-        "pl": "perl", "pm": "perl",
-    }
+    """Return the most common language key from a list of file paths.
+
+    Delegates to detect_language() so the extension mapping stays in sync
+    with the single source of truth (_EXT_MAP in ai_pr_review.languages).
+    Returns a lowercase label for tree-sitter grammar selection.
+    """
     counts: dict[str, int] = {}
     for f in changed_files:
         ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
-        lang = _EXT_TO_LANG.get(ext, "")
-        if lang:
+        label = detect_language(ext)
+        if label:
+            lang = label.lower()
             counts[lang] = counts.get(lang, 0) + 1
     if not counts:
         return ""
@@ -397,6 +403,12 @@ async def _run_single_agent(
         system_prompt = prompt_path.read_text()
         if context.feedback_addendum:
             system_prompt = system_prompt + "\n\n" + context.feedback_addendum
+
+        # Inject language profile context (mirrors lib/diff.sh:297-306).
+        lang_labels = _unique_language_labels(context.changed_files)
+        lang_context = load_language_profiles(lang_labels, context.script_dir)
+        if lang_context:
+            system_prompt = system_prompt + "\n\n" + lang_context
 
         # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
         max_tokens = (
