@@ -60,7 +60,9 @@ def _parse_next_link(link_header: str) -> str | None:
 def _safe_int(value: object, default: int = 0) -> int:
     """Convert value to int, returning default on ValueError/TypeError."""
     try:
-        return int(value)  # type: ignore[arg-type]
+        if isinstance(value, (int, float, str, bytes)):
+            return int(value)
+        return default
     except (ValueError, TypeError):
         return default
 
