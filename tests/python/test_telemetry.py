@@ -96,6 +96,23 @@ def test_http_4xx_response_logs_warning(caplog: pytest.LogCaptureFixture) -> Non
     assert any("401" in r.message for r in caplog.records)
 
 
+def test_http_5xx_response_logs_server_error(caplog: pytest.LogCaptureFixture) -> None:
+    event = _sample_event()
+    with patch("ai_pr_review.telemetry.httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=503)
+        with caplog.at_level(logging.WARNING):
+            emit_telemetry(event, sink="https://example.com/telemetry")
+    assert any("503" in r.message and "server error" in r.message for r in caplog.records)
+
+
+def test_file_sink_empty_path_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """file:// with no path component logs a clear misconfiguration warning."""
+    event = _sample_event()
+    with caplog.at_level(logging.WARNING):
+        emit_telemetry(event, sink="file://")
+    assert any("empty path" in r.message for r in caplog.records)
+
+
 def test_http_failure_swallowed() -> None:
     import httpx
     event = _sample_event()

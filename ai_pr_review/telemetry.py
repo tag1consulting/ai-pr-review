@@ -65,6 +65,12 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
 
 def _emit_file(event: TelemetryEvent, path: str) -> None:
     """Append one JSON line to *path* (created if absent, appended if exists)."""
+    if not path:
+        logger.warning(
+            "telemetry: file:// sink has empty path; check AI_TELEMETRY_SINK value "
+            "(expected format: file:///absolute/path/to/file.jsonl)"
+        )
+        return
     try:
         payload = json.dumps(dataclasses.asdict(event))
     except (TypeError, ValueError) as exc:
@@ -92,7 +98,12 @@ def _emit_http(event: TelemetryEvent, url: str) -> None:
         logger.warning("telemetry: HTTP POST to %r failed (unexpected: %s): %s",
                        url, type(exc).__name__, exc, exc_info=True)
         return
-    if response.status_code >= 400:
+    if response.status_code >= 500:
+        logger.warning(
+            "telemetry: HTTP POST to %r returned %d; telemetry receiver returned a server error",
+            url, response.status_code,
+        )
+    elif response.status_code >= 400:
         logger.warning(
             "telemetry: HTTP POST to %r returned %d; check endpoint configuration",
             url, response.status_code,
