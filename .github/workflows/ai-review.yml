@@ -34,10 +34,14 @@ jobs:
   # step uses continue-on-error so a single tool failure never blocks the AI
   # review — the Python engine's SARIF ingestor is fail-soft on missing files.
   #
-  # Security note: because this workflow uses pull_request_target the checkout
-  # below targets the PR head (untrusted code from a fork).  The analyzers are
-  # all static (they never execute the analyzed code), so this is safe.  The
-  # SARIF parser also sanitizes artifact URIs before constructing file paths.
+  # ⚠️  SECURITY CONSTRAINT — pull_request_target runs the workflow from the
+  # BASE branch but checks out UNTRUSTED PR HEAD code.  Every tool added to this
+  # job MUST be a static analyzer that never executes the analyzed code.  Do NOT
+  # add: compiled-language CodeQL autobuild, test runners, build systems, npm
+  # install/run, or any other step that could execute attacker-controlled code.
+  # CodeQL for Python is safe here only because Python is interpreted and no
+  # autobuild or manual build step is configured (build-mode: none is explicit).
+  # Any PR that adds a new analyzer to this job requires a security review.
   sarif-prep:
     if: >-
       (github.event_name == 'workflow_dispatch') ||
@@ -76,7 +80,7 @@ jobs:
 
       # --- Hadolint (Dockerfile) ---
       - name: Hadolint (SARIF)
-        continue-on-error: true
+        continue-on-error: true  # repo may not have a Dockerfile on every branch
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
@@ -85,9 +89,14 @@ jobs:
           no-fail: true
 
       # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
+      # Pinned to a specific commit SHA for supply-chain safety.
+      # To update: gh api repos/returntocorp/semgrep-action/git/ref/tags/v1 | jq -r '.object.sha'
+      # semgrep-action writes its SARIF output to semgrep.sarif in the workspace root
+      # (documented at https://github.com/returntocorp/semgrep-action#outputs); the
+      # subsequent step moves it into sarif-results/ for artifact upload.
       - name: Semgrep (SARIF)
         continue-on-error: true
-        uses: returntocorp/semgrep-action@v1
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # v1
         with:
           config: p/ci
           generateSarif: '1'
@@ -97,11 +106,15 @@ jobs:
           if [[ -f semgrep.sarif ]]; then mv semgrep.sarif sarif-results/semgrep.sarif; fi
 
       # --- CodeQL (Python) ---
+      # build-mode: none is required — it prevents CodeQL from running any autobuild
+      # (e.g., setup.py, Makefile) that could execute untrusted PR code under
+      # pull_request_target.  Python does not need a build step for analysis.
       - name: Init CodeQL
         continue-on-error: true
         uses: github/codeql-action/init@v3
         with:
           languages: python
+          build-mode: none
       - name: Analyze CodeQL
         continue-on-error: true
         uses: github/codeql-action/analyze@v3
@@ -133,6 +146,9 @@ jobs:
     needs: sarif-prep
     # always() lets the review run even when sarif-prep fails or is skipped;
     # the SARIF ingestor is fail-soft on missing files.
+    # ⚠️  KEEP IN SYNC with the sarif-prep if: condition above.  GitHub Actions
+    # does not support reusable conditions; both jobs must share the same predicate
+    # so that review never runs on a PR that sarif-prep would have skipped.
     if: >-
       always() &&
       ((github.event_name == 'workflow_dispatch') ||
