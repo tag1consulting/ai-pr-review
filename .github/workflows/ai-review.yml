@@ -273,8 +273,9 @@ jobs:
           context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
           # SARIF findings from the sarif-prep job (Capability B). Paths are
           # workspace-relative; the ingestor silently skips any missing files.
-          sarif-paths: >-
-            sarif-results/ruff.sarif,sarif-results/hadolint.sarif,sarif-results/semgrep.sarif,sarif-results/codeql-python.sarif
+          # vars.AI_REVIEW_SARIF_PATHS allows repo operators to override or extend
+          # the default set without editing this file.
+          sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || 'sarif-results/ruff.sarif,sarif-results/hadolint.sarif,sarif-results/semgrep.sarif,sarif-results/codeql-python.sarif' }}
           # vars.AI_REVIEW_FEEDBACK_LOOP enables the learning loop (Capability C):
           # loads recent <repo-feedback> entries from the ai-pr-review-bot branch
           # and injects them into agent prompts. GitHub-only.
