@@ -506,8 +506,8 @@ def _upsert_token_table(
         if not token_log:
             return
 
-        # Sum context tokens across agents (all enriched agents get the same block;
-        # take the max to avoid double-counting if multiple agents ran).
+        # All enriched agents receive the same context block; take the max (which
+        # equals the single non-zero value) rather than summing to avoid double-counting.
         context_tokens = max(
             (ar.context_tokens_used for ar in result.agent_results
              if isinstance(ar, AgentResult)),

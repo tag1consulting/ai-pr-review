@@ -244,6 +244,26 @@ def test_emit_token_table_sarif_zero_elapsed_shown() -> None:
     assert "0.00s" in table
 
 
+def test_emit_token_table_sarif_nan_omitted() -> None:
+    """sarif_elapsed_s=float('nan') must not produce a row (non-finite guard)."""
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=float("nan"))
+    assert "SARIF ingestion" not in table
+    assert "nan" not in table
+
+
+def test_emit_token_table_sarif_inf_omitted() -> None:
+    """sarif_elapsed_s=float('inf') must not produce a row (non-finite guard)."""
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=float("inf"))
+    assert "SARIF ingestion" not in table
+    assert "inf" not in table
+
+
 def test_emit_token_table_supplementary_rows_not_in_total_cost() -> None:
     log = [
         TokenEntry(agent="a1", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),

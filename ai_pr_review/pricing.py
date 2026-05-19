@@ -7,6 +7,7 @@ format_cost(), emit_token_table().
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -192,7 +193,7 @@ def emit_token_table(
                 " | — | — | — |"
             )
 
-    if sarif_elapsed_s is not None:
+    if sarif_elapsed_s is not None and math.isfinite(sarif_elapsed_s):
         if any_cache:
             # 8-col: Agent | Model | Input | Output(value) | CW | CR | Total | Cost
             lines.append(
