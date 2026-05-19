@@ -297,7 +297,8 @@ def _build_user_message(
         )
         ctx_block = build_context_block(defs, max_tokens=context.context_max_tokens)
         if ctx_block:
-            return ctx_block + "\n\n" + diff_text, estimate_tokens(ctx_block)
+            ctx_tokens = estimate_tokens(ctx_block)
+            return ctx_block + "\n\n" + diff_text, ctx_tokens
     except Exception as exc:
         import logging
         # exc_info=True so unexpected errors (MemoryError, bugs in

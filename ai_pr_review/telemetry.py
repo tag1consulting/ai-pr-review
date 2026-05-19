@@ -47,8 +47,10 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
     """
     if not sink:
         logger.warning(
-            "telemetry: AI_TELEMETRY_SINK is empty; skipping emission. "
-            "Set AI_TELEMETRY_SINK to a file:// path or http(s):// URL to receive events."
+            "telemetry: AI_TELEMETRY_SINK is empty (correlation_id=%s, pr=%s); skipping emission. "
+            "Set AI_TELEMETRY_SINK to a file:// path or http(s):// URL to receive events.",
+            event.correlation_id,
+            event.pr_number,
         )
         return
     if sink.startswith("file://"):
