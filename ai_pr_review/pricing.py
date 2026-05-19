@@ -193,7 +193,7 @@ def emit_token_table(
                 " | — | — | — |"
             )
 
-    if sarif_elapsed_s is not None and math.isfinite(sarif_elapsed_s):
+    if sarif_elapsed_s is not None and math.isfinite(sarif_elapsed_s) and sarif_elapsed_s >= 0:
         if any_cache:
             # 8-col: Agent | Model | Input | Output(value) | CW | CR | Total | Cost
             lines.append(

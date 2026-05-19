@@ -63,17 +63,18 @@ class _FakeProvider:
 def _make_result() -> object:
     """Return a minimal object satisfying what _upsert_token_table reads.
 
-    Only agent_results is accessed inside the function; everything else on
-    ReviewResult is unused by the code under test.
+    Accesses: agent_results (list of AgentResult), sarif_elapsed_s.
     """
     from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
 
     tl = TokenUsage(model="claude-haiku-4-5", input=100, output=50,
                     cache_creation=0, cache_read=0)
-    ar = AgentResult(name="code-reviewer", output="", token_log=tl, truncated=False)
+    ar = AgentResult(name="code-reviewer", output="", token_log=tl,
+                     truncated=False, context_tokens_used=0)
 
     class _FakeResult:
         agent_results = [ar]
+        sarif_elapsed_s = None
 
     return _FakeResult()
 

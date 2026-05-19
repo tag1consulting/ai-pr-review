@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from pathlib import Path
 
 import httpx
 
@@ -75,8 +76,9 @@ def _emit_file(event: TelemetryEvent, path: str, sink: str = "") -> None:
         return
     if not path.startswith("/"):
         logger.warning(
-            "telemetry: file:// sink %r has a relative path; use an absolute path "
-            "(expected format: file:///absolute/path/to/file.jsonl)",
+            "telemetry: file:// sink %r path does not begin with '/'; "
+            "authority-based file:// URIs (e.g. file://host/path) are not supported — "
+            "use the triple-slash form: file:///absolute/path/to/file.jsonl",
             sink or f"file://{path}",
         )
         return
@@ -86,7 +88,7 @@ def _emit_file(event: TelemetryEvent, path: str, sink: str = "") -> None:
         logger.warning("telemetry: could not serialise event to JSON: %s", exc, exc_info=True)
         return
     try:
-        with open(path, "a") as fh:
+        with Path(path).open("a", encoding="utf-8") as fh:
             fh.write(payload + "\n")
     except OSError as exc:
         logger.warning("telemetry: could not write to file %r: %s",

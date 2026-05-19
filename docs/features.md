@@ -7,6 +7,18 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.9.3
+
+**Telemetry hooks — Epic 4, Story 2.** Set `AI_TELEMETRY_ENABLED=true` and `AI_TELEMETRY_SINK=file:///path/to/events.jsonl` (or an `http(s)://` endpoint) to receive one structured JSON event per review run. The event includes outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency, SARIF elapsed time, and the count of learning-store entries loaded. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues. See [Configuration → Telemetry hooks](#telemetry-hooks-epic-4) for the full env-var reference.
+
+**Agent latency tracking — Epic 4, Story 4.** Each agent now records its wall-clock elapsed time (`elapsed_ms`). The value is included in the telemetry event's `agent_latency_ms` map and is available for future cost-table display.
+
+**Token table enhancements — Epic 4, Story 3.** The collapsible token cost table now includes two additional optional rows: a **Context enrichment** row showing the token count of the `<symbol-context>` block (when `AI_CONTEXT_ENRICHMENT=1` and context was non-empty), and a **SARIF ingestion** row showing the wall-clock parse time (when `AI_SARIF_PATHS` is configured). The Output column also displays the configured per-agent output cap when one is set (e.g. `1234 / 4096`).
+
+**`cache_priming` default changed to `false`.** `AI_CACHE_PRIMING` now defaults to `false` in the Python engine, aligning with the bash engine default. Previously the Python engine defaulted to `true`. If you rely on cache priming, add `AI_CACHE_PRIMING=true` explicitly to your workflow.
+
+**`slash-commands.yml` `shell: bash` fix.** The `feedback-command` job in the bundled slash-commands workflow was missing a `shell: bash` declaration, causing step failures on some runner configurations. This is fixed.
+
 ## What's new in v0.9.2
 
 **Token cost table updated on every run (PR #304).** Previously (`engine: python`) the collapsible token cost table was only posted on the first review run and never refreshed. It now updates on every incremental run: the first-run PR summary text is preserved and only the `<details>` accordion is replaced with fresh token data from the latest run.

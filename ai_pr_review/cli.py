@@ -317,12 +317,18 @@ async def _run_review_async(config: ReviewConfig) -> int:
                 findings_by_severity=findings_by_severity,
                 failed_agents=[f.name for f in result.failed_agents],
                 token_usage_by_agent=token_usage_by_agent,
-                agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results if isinstance(ar, _AgentResult)},
+                agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results},
                 sarif_elapsed_s=result.sarif_elapsed_s,
                 learning_store_entries_loaded=feedback_entries_count,
                 telemetry_schema_version="1",
             )
-            emit_telemetry(telemetry_event, sink=config.telemetry_sink)
+        except Exception as exc:
+            logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
+            return 0 if result.ok else 1
+        try:
+            await anyio.to_thread.run_sync(
+                lambda: emit_telemetry(telemetry_event, sink=config.telemetry_sink)
+            )
         except Exception as exc:
             logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
 
@@ -559,7 +565,12 @@ async def _upsert_token_table(
         lines = existing.splitlines(keepends=True)
         if lines and lines[0].startswith("<!-- ai-pr-review-summary"):
             existing = "".join(lines[1:]).lstrip("\n")
-        footer_idx = existing.find("\n\n---\n")
+        else:
+            logger.warning(
+                "token table: existing comment body missing expected marker; "
+                "proceeding but result may have a doubled header: %.100r", existing
+            )
+        footer_idx = existing.find("\n\n---\n*AI Review")
         if footer_idx != -1:
             existing = existing[:footer_idx]
         # Strip any previous <details> accordion and replace with the new one.
