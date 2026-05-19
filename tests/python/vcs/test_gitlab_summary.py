@@ -128,6 +128,36 @@ def test_get_last_reviewed_sha_extracts_from_first_desc() -> None:
     assert prov.get_last_reviewed_sha() == _VALID_SHA
 
 
+def test_get_summary_body_returns_none_when_no_note() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_summary_body() is None
+
+
+def test_get_summary_body_returns_first_desc_note_body() -> None:
+    stored = f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\n## Summary\n\n<details>...</details>"
+    notes = [
+        {"id": 99, "body": stored},
+        {"id": 1, "body": f"{SUMMARY_MARKER_PREFIX} sha=cafe1234 -->\nold"},
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=notes)
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_summary_body() == stored
+
+
+def test_get_summary_body_returns_none_on_api_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_summary_body() is None
+
+
 # ---------------------------------------------------------------------------
 # post_summary
 # ---------------------------------------------------------------------------

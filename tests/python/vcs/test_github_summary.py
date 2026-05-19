@@ -48,7 +48,7 @@ def _make_provider(
 
 
 # ---------------------------------------------------------------------------
-# get_last_reviewed_sha
+# get_last_reviewed_sha / get_summary_body
 # ---------------------------------------------------------------------------
 
 
@@ -83,6 +83,36 @@ def test_get_last_reviewed_sha_handles_api_error() -> None:
     prov, _ = _make_provider(handler)
     # 500 is non-transient; provider should record error and return None.
     assert prov.get_last_reviewed_sha() is None
+
+
+def test_get_summary_body_returns_none_when_no_comment() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_summary_body() is None
+
+
+def test_get_summary_body_returns_latest_comment_body() -> None:
+    stored = f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\n## Summary\n\n<details>...</details>"
+    comments = [
+        {"id": 1, "body": f"{SUMMARY_MARKER_PREFIX} sha=aaa -->\nold"},
+        {"id": 2, "body": stored},
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=comments)
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_summary_body() == stored
+
+
+def test_get_summary_body_returns_none_on_api_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_summary_body() is None
 
 
 # ---------------------------------------------------------------------------
