@@ -77,11 +77,9 @@ class OrchestrationConfig:
     enable_suggestions: bool = True
     semaphore_size: int = 4
     suppression_rules: tuple[SuppressionRule, ...] = ()
-    # --- Epic 3: Capability B — SARIF ingestion ---
-    sarif_paths: tuple[str, ...] = ()
-    # Pre-computed findings to inject alongside LLM/SARIF findings (e.g. from
-    # native static analyzers run before dispatch). Typed as tuple[Finding,...]
-    # but declared as tuple[object,...] to avoid circular import at module level.
+    # Pre-computed findings to inject alongside LLM findings (e.g. from
+    # native static analyzers and SARIF, assembled by the caller).
+    # Typed as tuple[object,...] to avoid a circular import at module level.
     extra_findings: tuple[object, ...] = ()
 
 
@@ -154,14 +152,9 @@ async def run_review(
     else:
         successes, failures = [], []
 
-    # Phase 1.5: inject SARIF findings (Capability B) and extra pre-computed findings
+    # Phase 1.5: inject pre-computed findings (SARIF, native analyzers) assembled by caller.
     raw_findings: list[Finding] = []
     sarif_elapsed_s: float | None = None
-    if cfg.sarif_paths:
-        from ai_pr_review.analyzers.sarif import load_sarif_files
-        sarif_findings, sarif_elapsed_s = load_sarif_files(list(cfg.sarif_paths))
-        raw_findings.extend(sarif_findings)
-        logger.info("SARIF: loaded %d finding(s) from %d file(s)", len(sarif_findings), len(cfg.sarif_paths))
     if cfg.extra_findings:
         from ai_pr_review.findings.models import Finding as _Finding
         injected = 0
