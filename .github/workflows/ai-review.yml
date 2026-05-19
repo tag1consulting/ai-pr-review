@@ -29,10 +29,16 @@ permissions:
   issues: write
 
 jobs:
-  review:
-    concurrency:
-      group: ai-review-${{ github.event.pull_request.number || inputs.pr_number || inputs.branch || 'standalone' }}
-      cancel-in-progress: true
+  # Runs SARIF-producing static analyzers against the PR head and uploads the
+  # results as a workflow artifact for the review job to ingest.  Each analyzer
+  # step uses continue-on-error so a single tool failure never blocks the AI
+  # review — the Python engine's SARIF ingestor is fail-soft on missing files.
+  #
+  # Security note: because this workflow uses pull_request_target the checkout
+  # below targets the PR head (untrusted code from a fork).  The analyzers are
+  # all static (they never execute the analyzed code), so this is safe.  The
+  # SARIF parser also sanitizes artifact URIs before constructing file paths.
+  sarif-prep:
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'pull_request_target' &&
@@ -41,6 +47,104 @@ jobs:
        (github.event.action != 'labeled' ||
         github.event.label.name == 'ai-review-full' ||
         github.event.label.name == 'ai-review-rescan'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Create results dir
+        run: mkdir -p sarif-results
+
+      # --- Ruff (Python) ---
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install ruff
+        run: pip install --quiet ruff
+      - name: Ruff (SARIF)
+        continue-on-error: true
+        run: |
+          ruff check ai_pr_review/ tests/python/ \
+            --output-format=sarif \
+            --output-file=sarif-results/ruff.sarif \
+            --exit-zero
+
+      # --- Hadolint (Dockerfile) ---
+      - name: Hadolint (SARIF)
+        continue-on-error: true
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          format: sarif
+          output-file: sarif-results/hadolint.sarif
+          no-fail: true
+
+      # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
+      - name: Semgrep (SARIF)
+        continue-on-error: true
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/ci
+          generateSarif: '1'
+      - name: Move Semgrep SARIF into results dir
+        if: always()
+        run: |
+          if [[ -f semgrep.sarif ]]; then mv semgrep.sarif sarif-results/semgrep.sarif; fi
+
+      # --- CodeQL (Python) ---
+      - name: Init CodeQL
+        continue-on-error: true
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - name: Analyze CodeQL
+        continue-on-error: true
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: sarif-results/
+          # Ingest locally via AI review rather than uploading to GitHub Code Scanning.
+          upload: false
+      - name: Rename CodeQL output for predictability
+        if: always()
+        run: |
+          # codeql-action writes <language>.sarif; rename so downstream path is stable.
+          if [[ -f sarif-results/python.sarif ]]; then
+            mv sarif-results/python.sarif sarif-results/codeql-python.sarif
+          fi
+
+      - name: List produced SARIF files
+        if: always()
+        run: ls -la sarif-results/ || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sarif-results
+          path: sarif-results/
+          if-no-files-found: warn
+          retention-days: 7
+
+  review:
+    needs: sarif-prep
+    # always() lets the review run even when sarif-prep fails or is skipped;
+    # the SARIF ingestor is fail-soft on missing files.
+    if: >-
+      always() &&
+      ((github.event_name == 'workflow_dispatch') ||
+       (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.draft == false &&
+        !contains(github.event.pull_request.labels.*.name, 'skip-ai-review') &&
+        (github.event.action != 'labeled' ||
+         github.event.label.name == 'ai-review-full' ||
+         github.event.label.name == 'ai-review-rescan')))
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number || inputs.pr_number || inputs.branch || 'standalone' }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       # Check out the PR head commit for diff content, but with persist-credentials
@@ -84,6 +188,15 @@ jobs:
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           echo "base_ref=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
 
+      # Download the SARIF artifacts produced by the sarif-prep job.
+      # continue-on-error so a prep failure or cache miss doesn't block the review.
+      - name: Download SARIF artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: sarif-results
+          path: sarif-results/
+
       - uses: ./container-action
         env:
           FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
@@ -115,6 +228,8 @@ jobs:
           # vars.AI_REVIEW_PARALLEL disables tiered parallel fan-out (default true).
           # Set to 'false' if you hit provider rate limits.
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
+          # vars.AI_PR_REVIEW_ENGINE is set to 'python' in this repo's variables.
+          # SARIF ingestion (sarif-paths below) requires the Python engine.
           engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
           # vars.AI_REVIEW_MAX_DIFF_LINES is a trusted repo variable (not user
           # input from a PR), so it's safe to interpolate directly into the
@@ -133,9 +248,10 @@ jobs:
           # vars.AI_REVIEW_CONTEXT_ENRICHMENT enables tree-sitter symbol-context
           # injection into agent prompts (Capability A). Requires engine=python.
           context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
-          # vars.AI_REVIEW_SARIF_PATHS — comma-separated SARIF 2.1.0 file paths
-          # to ingest as additional findings (Capability B). Empty disables.
-          sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || '' }}
+          # SARIF findings from the sarif-prep job (Capability B). Paths are
+          # workspace-relative; the ingestor silently skips any missing files.
+          sarif-paths: >-
+            sarif-results/ruff.sarif,sarif-results/hadolint.sarif,sarif-results/semgrep.sarif,sarif-results/codeql-python.sarif
           # vars.AI_REVIEW_FEEDBACK_LOOP enables the learning loop (Capability C):
           # loads recent <repo-feedback> entries from the ai-pr-review-bot branch
           # and injects them into agent prompts. GitHub-only.
