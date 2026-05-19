@@ -106,8 +106,10 @@ jobs:
       # recent versions); we install the semgrep CLI directly and run it with
       # --sarif output instead.  pip install is fast (<5s) since Python is already
       # set up by the Ruff step above.
+      # Pin semgrep to an exact version for reproducibility and supply-chain safety.
+      # To update: pip index versions semgrep | head -1  (pick latest stable)
       - name: Install semgrep
-        run: pip install --quiet semgrep
+        run: pip install --quiet "semgrep==1.163.0"
       - name: Semgrep (SARIF)
         continue-on-error: true
         run: |
