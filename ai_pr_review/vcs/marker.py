@@ -4,8 +4,8 @@ The inline marker gates stale-cleanup. S9 (GitHub) and S10 (GitLab) MUST only
 resolve/dismiss comments whose body contains INLINE_MARKER, protecting other
 bots' reviews and threads from being touched by our cleanup paths.
 
-The summary marker format matches the existing bash engine so comments posted
-by bash are still recognized by the Python engine during the transition.
+The summary marker format matches the bash engine so comments posted by bash
+are still recognized by the Python engine.
 """
 
 from __future__ import annotations

@@ -72,13 +72,13 @@ class DispatchContext:
     enable_suggestions: bool = True
     cache_priming_env: str = "false"
     prompt_caching_env: str = "auto"
-    # --- Epic 3: Capability A — context enrichment ---
+    # --- Context enrichment ---
     enable_context_enrichment: bool = False
     context_max_tokens: int = 8192
     context_lookup_lines: int = 8
     repo_root: Path = field(default_factory=Path.cwd)
     changed_files: list[str] = field(default_factory=list)
-    # --- Epic 3: Capability C — feedback loop ---
+    # --- Feedback loop ---
     feedback_addendum: str = ""
     # #316: user-configurable per-agent output cap (0 = use roster default)
     max_tokens_per_agent: int = 0
@@ -390,10 +390,10 @@ async def _run_single_agent(
         use_premium = spec.tier == 2 and context.mode == "full" and bool(context.premium_model)
         model_id = context.premium_model if use_premium else context.standard_model
 
-        # --- Epic 3: Capability A — context enrichment ---
+        # Build user message (includes context enrichment when enabled).
         user_message, context_tokens_used = _build_user_message(diff_text, spec, context)
 
-        # --- Epic 3: Capability C — feedback loop injection ---
+        # Inject feedback addendum into system prompt when available.
         system_prompt = prompt_path.read_text()
         if context.feedback_addendum:
             system_prompt = system_prompt + "\n\n" + context.feedback_addendum

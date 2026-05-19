@@ -505,7 +505,7 @@ def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> No
     help="Rule ID from the original finding (may be empty).",
 )
 def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
-    """Handle one /ai-pr-review comment command (Capability C).
+    """Handle one /ai-pr-review comment command.
 
     Parses the comment body, dispatches to the appropriate handler, and
     prints the reply message to stdout.  The GitHub Actions step in

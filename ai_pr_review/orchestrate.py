@@ -1,11 +1,8 @@
-"""End-to-end review orchestrator: compute → dispatch → post.
+"""End-to-end review orchestrator: dispatch agents, merge findings, post.
 
-Wires the Epic 1 compute layer, Epic 2 agent dispatch + outcome classifier +
-watermark, and the VCS provider posting layer into a single function.
-
-Designed to be unit-testable: callers inject the LLM call, the diff text,
-the agent roster, and a VcsProvider. The CLI subcommand `review` is a
-thin wrapper that builds these from environment.
+All inputs are pre-built by the caller (build_review_runtime). Designed to
+be unit-testable: callers inject the LLM call, the diff text, the agent
+roster, and a VcsProvider.
 """
 
 from __future__ import annotations
@@ -116,9 +113,9 @@ async def run_review(
     """
     cfg = config or OrchestrationConfig()
 
-    # Reset the per-run symbol-lookup cache used by Capability A.  In a
-    # long-lived process (container reuse, future server mode) the cache
-    # would otherwise accumulate state across reviews.
+    # Reset the per-run symbol-lookup cache. In a long-lived process
+    # (container reuse, future server mode) the cache would otherwise
+    # accumulate state across reviews.
     if dispatch_context.enable_context_enrichment:
         from ai_pr_review.context.symbols import _reset_cache
         _reset_cache()
@@ -138,9 +135,9 @@ async def run_review(
             skip_reason=skip_reason,
         )
 
-    # Note: Capability C — feedback addendum is wired by the caller via
-    # DispatchContext.feedback_addendum (see cli._run_review_async).  The
-    # orchestrator does not duplicate that injection.
+    # Note: feedback addendum is wired by the caller via
+    # DispatchContext.feedback_addendum (see review/runtime.py).
+    # The orchestrator does not duplicate that injection.
 
     # Phase 1: dispatch agents
     successes: list[AgentResult]
