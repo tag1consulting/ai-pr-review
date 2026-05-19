@@ -418,14 +418,20 @@ class GitLabProvider:
         if token_table:
             try:
                 existing_notes = self._list_summary_notes()
-                if existing_notes:
-                    keep = existing_notes[0]
-                    keep_id = int(keep["id"])
-                    old_body = keep.get("body") or ""
-                    # Avoid doubling if a previous run already appended the table.
-                    details_idx = old_body.find("<details>")
-                    base_body = old_body[:details_idx].rstrip() if details_idx != -1 else old_body.rstrip()
-                    new_body = base_body + "\n\n" + token_table
+            except Exception as exc:
+                logger.warning(
+                    "gitlab: token table: could not list summary notes: %s", exc, exc_info=True,
+                )
+                existing_notes = []
+            if existing_notes:
+                keep = existing_notes[0]
+                keep_id = int(keep["id"])
+                old_body = keep.get("body") or ""
+                # Avoid doubling if a previous run already appended the table.
+                details_idx = old_body.find("<details>")
+                base_body = old_body[:details_idx].rstrip() if details_idx != -1 else old_body.rstrip()
+                new_body = base_body + "\n\n" + token_table
+                try:
                     resp = self.client.request(
                         "PUT", self._note_url(keep_id), json_body={"body": new_body}
                     )
@@ -434,13 +440,13 @@ class GitLabProvider:
                             "gitlab: token table: could not update summary note (HTTP %d): %s",
                             resp.status_code, resp.text[:200],
                         )
-                else:
+                except Exception as exc:
                     logger.warning(
-                        "gitlab: token table: no summary note found; skipping token table append"
+                        "gitlab: token table: could not PUT summary note: %s", exc, exc_info=True,
                     )
-            except Exception as exc:
+            elif token_table:
                 logger.warning(
-                    "gitlab: token table: unexpected error: %s", exc, exc_info=True,
+                    "gitlab: token table: no summary note found; skipping token table append"
                 )
 
         # The provider returns counts; orchestrator decides what to do with
