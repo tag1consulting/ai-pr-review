@@ -95,13 +95,17 @@ jobs:
 
       # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
       # Pinned to commit SHA for supply-chain safety (tag v1, verified 2026-05-19).
-      # To update: gh api repos/returntocorp/semgrep-action/git/ref/tags/v1 | jq -r '.object.sha'
+      # The org was renamed from returntocorp to semgrep; both currently resolve to the
+      # same SHA but the canonical reference should use the new org going forward.
+      # To update: gh api repos/semgrep/semgrep-action/git/ref/tags/v1 | jq -r '.object.sha'
+      # (The v1 tag is lightweight and points directly to a commit, so .object.sha is
+      # the commit SHA — no tag-object dereference needed for this particular tag.)
       # semgrep-action writes its SARIF output to semgrep.sarif in the workspace root
-      # (documented at https://github.com/returntocorp/semgrep-action#outputs); the
+      # (documented at https://github.com/semgrep/semgrep-action#outputs); the
       # subsequent step moves it into sarif-results/ for artifact upload.
       - name: Semgrep (SARIF)
         continue-on-error: true
-        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # tag: v1, 2026-05-19
+        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # tag: v1, 2026-05-19
         with:
           config: p/ci
           generateSarif: '1'
@@ -131,13 +135,24 @@ jobs:
         if: always()
         run: |
           # codeql-action writes <language>.sarif; rename so downstream path is stable.
-          if [[ -f sarif-results/python.sarif ]]; then
-            mv sarif-results/python.sarif sarif-results/codeql-python.sarif
-          fi
+          # Use a glob in case the filename varies across codeql-action versions.
+          for f in sarif-results/python*.sarif; do
+            [[ -f "$f" && "$f" != "sarif-results/codeql-python.sarif" ]] && \
+              mv "$f" sarif-results/codeql-python.sarif && break
+          done
 
       - name: List produced SARIF files
         if: always()
-        run: ls -la sarif-results/ || true
+        run: |
+          echo "### SARIF analyzer results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| File | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|------|" >> "$GITHUB_STEP_SUMMARY"
+          for f in sarif-results/*.sarif; do
+            [[ -f "$f" ]] && echo "| \`$(basename "$f")\` | $(wc -c < "$f") bytes |" >> "$GITHUB_STEP_SUMMARY" \
+              || true
+          done
+          ls -la sarif-results/ || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -149,15 +164,18 @@ jobs:
 
   review:
     needs: sarif-prep
-    # always() is intentional: the review job must run even when sarif-prep is
-    # skipped (draft PR converted to ready) or fails (transient tool error).
+    # !cancelled() is intentional: the review job must run even when sarif-prep
+    # fails (transient tool error) or is skipped due to sarif-prep's own if:
+    # condition.  Using !cancelled() (rather than always()) prevents the review
+    # from running when the entire workflow run is cancelled by the concurrency
+    # group — wasted spend with no benefit.
     # The SARIF ingestor is fail-soft — missing artifact files produce a WARNING
     # log and zero findings rather than a hard failure.
     # ⚠️  KEEP IN SYNC with the sarif-prep if: condition above.  GitHub Actions
     # does not support reusable conditions; both jobs must share the same predicate
     # so that review never runs on a PR that sarif-prep would have skipped.
     if: >-
-      always() &&
+      !cancelled() &&
       ((github.event_name == 'workflow_dispatch') ||
        (github.event_name == 'pull_request_target' &&
         github.event.pull_request.draft == false &&
