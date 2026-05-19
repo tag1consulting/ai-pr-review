@@ -71,6 +71,13 @@ def _emit_file(event: TelemetryEvent, path: str) -> None:
             "(expected format: file:///absolute/path/to/file.jsonl)"
         )
         return
+    if not path.startswith("/"):
+        logger.warning(
+            "telemetry: file:// sink path %r is relative; use an absolute path "
+            "(expected format: file:///absolute/path/to/file.jsonl)",
+            path,
+        )
+        return
     try:
         payload = json.dumps(dataclasses.asdict(event))
     except (TypeError, ValueError) as exc:

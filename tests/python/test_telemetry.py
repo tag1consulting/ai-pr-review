@@ -113,6 +113,14 @@ def test_file_sink_empty_path_logs_warning(caplog: pytest.LogCaptureFixture) -> 
     assert any("empty path" in r.message for r in caplog.records)
 
 
+def test_file_sink_relative_path_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """file://relative/path is rejected with a clear warning."""
+    event = _sample_event()
+    with caplog.at_level(logging.WARNING):
+        emit_telemetry(event, sink="file://relative/path.jsonl")
+    assert any("relative" in r.message for r in caplog.records)
+
+
 def test_http_failure_swallowed() -> None:
     import httpx
     event = _sample_event()
