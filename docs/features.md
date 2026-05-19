@@ -7,6 +7,14 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.10.0
+
+**Language profiles — 19 languages (PR #322).** Agent prompts now include per-language context blocks for every language detected in the diff. Profiles cover Python, Go, TypeScript, JavaScript, PHP, Shell, Ruby, Rust, Java, C++, Kotlin, Swift, C#, Scala, SQL, Lua, Perl, YAML, and Terraform. Each profile supplies language-specific patterns, common pitfalls, and framework conventions so agents apply targeted checks rather than generic heuristics. Profiles are loaded from `language-profiles/` and injected into the `DispatchContext`; the bash engine reads them from the same directory via `build_file_manifest()`.
+
+**Premature review dismissal fix (PR #324, issue #323).** Fixed a race condition where a stale `CHANGES_REQUESTED` review could be auto-dismissed before the current run finished posting its own review. Both the bash engine (`post-review.sh`) and the Python engine (`vcs/github.py`) now track the total bot-review count and always protect the newest bot review from dismissal. A `_safe_int()` helper guards against non-integer review IDs in both paths.
+
+**Python engine runtime assembly refactor (PR #321).** `_run_review_async()` in `cli.py` has been reduced from ~230 lines to ~65 lines. A new `build_review_runtime()` factory in `ai_pr_review/review/runtime.py` assembles the fully prepared `ReviewRuntime` dataclass — provider construction, diff computation, feedback loading, agent gate evaluation, static analyzer runs, SARIF ingestion, suppression rule loading, and `OrchestrationConfig` construction — and hands it to `orchestrate.run_review()`, which reads no environment and constructs no dependencies. This makes the Python engine's runtime flow reusable for non-CLI entry points (server harness, batch runner). SARIF findings now flow through `OrchestrationConfig.extra_findings` rather than being loaded inline in the orchestrator.
+
 ## What's new in v0.9.4
 
 **Token table moved to review body (`engine: python`).** The collapsible **Token usage by agent** table now appears in the same review comment as the findings (Approved / Changes Requested / Comment), matching the bash engine. Previously the Python engine appended the table to the long-lived PR summary comment, which was rewritten on every incremental run. The summary comment now carries only the first-run walkthrough and is never overwritten on subsequent pushes.

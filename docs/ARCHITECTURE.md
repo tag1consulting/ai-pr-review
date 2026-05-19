@@ -351,8 +351,13 @@ To add a test for a new function, call `load_function "$script" "function_name"`
 | `test_orchestrate.py` | `run_review()` happy path, skip path, summary/findings failure, token table |
 | `test_cli.py` | `run_compute()`, `compute` command, `slash` command, `parse_changed_files_payload()`, `AI_PR_REVIEW_SCRIPT_DIR` resolution |
 | `test_config.py` | `ReviewConfig.from_env()`, `resolve_models()`, unknown-var detection, deprecation warnings |
+| `test_manifest.py` | `build_changed_files()`, `build_manifest_text()`, `parse_changed_files_payload()` (including None-entry guard) |
+| `test_language_profiles.py` | `load_language_profiles()` happy path, OSError fail-soft, missing profile key |
 | `test_suppress.py`, `test_findings.py` | Suppression pipeline and findings merge |
 | `test_sarif.py`, `test_bridge.py` | SARIF parsing and static analyzer bridge |
+| `test_telemetry.py`, `test_logging.py` | Telemetry sink dispatch and structured log formatting |
+| `test_feedback_*.py` | Learning loop: inject, store, retention, models |
+| `vcs/test_github.py`, `vcs/test_gitlab.py` | GitHub and GitLab provider unit tests |
 
 Run with `python -m pytest tests/python/ -q`.
 

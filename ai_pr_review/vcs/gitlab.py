@@ -431,9 +431,17 @@ class GitLabProvider:
                         "gitlab: token table: summary note missing 'id' field; skipping"
                     )
                     existing_notes = []
+                else:
+                    try:
+                        keep_id = int(keep_id_raw)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "gitlab: token table: summary note 'id' not convertible to int: %r; skipping",
+                            keep_id_raw,
+                        )
+                        existing_notes = []
             if existing_notes:
                 keep = existing_notes[0]
-                keep_id = int(keep.get("id"))  # type: ignore[arg-type]  # validated above
                 old_body = keep.get("body") or ""
                 # Avoid doubling if a previous run already appended the table.
                 details_idx = old_body.find("<details>")

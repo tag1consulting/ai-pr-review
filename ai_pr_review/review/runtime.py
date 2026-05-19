@@ -243,11 +243,18 @@ def build_review_runtime(
 
     extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
 
-    # 11. Load global + local suppression rules.
+    # 11. Load global + local suppression rules (fail-soft — malformed rules file
+    # must not abort the review; proceed with no suppressions and log a warning).
     from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
-    suppression_rules = tuple(
-        _load_suppression_rules(str(script_dir), workspace=".")
-    )
+    try:
+        suppression_rules = tuple(
+            _load_suppression_rules(str(script_dir), workspace=".")
+        )
+    except Exception as exc:
+        logger.warning(
+            "suppressions: could not load rules (proceeding without): %s", exc, exc_info=True
+        )
+        suppression_rules = ()
 
     # 12. Build orchestrator config.
     orch_config = OrchestrationConfig(
