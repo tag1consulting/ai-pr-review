@@ -68,6 +68,7 @@ class _FakeProvider:
                 "findings": list(findings),
                 "event": event,
                 "failed_agents": list(failed_agents),
+                "token_table": token_table,
             }
         )
         if not self.findings_ok:
@@ -435,5 +436,59 @@ def test_retry_exhausted_in_post_findings_returns_error_not_raises(tmp_path: Pat
         assert "retry exhausted" in result.findings_post.error
         # stale must NOT run after findings failure
         assert provider.stale_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# token_table_renderer wiring
+# ---------------------------------------------------------------------------
+
+
+def test_token_table_renderer_forwards_to_post_findings(tmp_path: Path) -> None:
+    """token_table_renderer output must be forwarded to provider.post_findings."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    def _renderer(successes: object, sarif_elapsed_s: object) -> str:
+        return "<details>test-token-table</details>"
+
+    async def _run() -> None:
+        await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            token_table_renderer=_renderer,  # type: ignore[arg-type]
+        )
+        assert provider.findings_calls, "post_findings must have been called"
+        assert provider.findings_calls[0]["token_table"] == "<details>test-token-table</details>"
+
+    anyio.run(_run)
+
+
+def test_token_table_renderer_exception_is_failsoft(tmp_path: Path) -> None:
+    """A renderer that raises must not abort the review; post_findings gets token_table=''."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    def _bad_renderer(successes: object, sarif_elapsed_s: object) -> str:
+        raise RuntimeError("renderer exploded")
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            token_table_renderer=_bad_renderer,  # type: ignore[arg-type]
+        )
+        assert result.ok is True
+        assert provider.findings_calls, "post_findings must still have been called"
+        assert provider.findings_calls[0]["token_table"] == ""
+
+    anyio.run(_run)
 
     anyio.run(_run)

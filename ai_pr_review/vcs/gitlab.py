@@ -431,19 +431,16 @@ class GitLabProvider:
                     )
                     if resp.status_code >= 400:
                         logger.warning(
-                            "[ai-pr-review] WARNING: gitlab: token table: could not update "
-                            "summary note (HTTP %d): %s",
+                            "gitlab: token table: could not update summary note (HTTP %d): %s",
                             resp.status_code, resp.text[:200],
                         )
                 else:
                     logger.warning(
-                        "[ai-pr-review] WARNING: gitlab: token table: no summary note found; "
-                        "skipping token table append"
+                        "gitlab: token table: no summary note found; skipping token table append"
                     )
             except Exception as exc:
                 logger.warning(
-                    "[ai-pr-review] WARNING: gitlab: token table: unexpected error: %s",
-                    exc, exc_info=True,
+                    "gitlab: token table: unexpected error: %s", exc, exc_info=True,
                 )
 
         # The provider returns counts; orchestrator decides what to do with

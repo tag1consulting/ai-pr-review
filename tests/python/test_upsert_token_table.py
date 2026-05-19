@@ -78,10 +78,9 @@ def test_sarif_elapsed_forwarded() -> None:
 
     ar = _make_agent_result()
     result = _build_token_table_accordion([ar], 0.42, _REPO_ROOT)
-    # The SARIF row appears when sarif_elapsed_s is non-None; verify the
-    # accordion is still well-formed.
+    # The SARIF row appears when sarif_elapsed_s is non-None.
     assert "<details>" in result
-    assert "</details>" in result
+    assert "SARIF" in result
 
 
 def test_context_tokens_forwarded() -> None:
@@ -93,4 +92,15 @@ def test_context_tokens_forwarded() -> None:
     ar = AgentResult(name="code-reviewer", output="", token_log=tl,
                      truncated=False, context_tokens_used=500)
     result = _build_token_table_accordion([ar], None, _REPO_ROOT)
-    assert "<details>" in result
+    # Context enrichment row appears when context_tokens_used > 0.
+    assert "Context enrichment" in result
+
+
+def test_multiple_agents_both_appear() -> None:
+    from ai_pr_review.cli import _build_token_table_accordion
+
+    ar1 = _make_agent_result("code-reviewer")
+    ar2 = _make_agent_result("security-reviewer")
+    result = _build_token_table_accordion([ar1, ar2], None, _REPO_ROOT)
+    assert "code-reviewer" in result
+    assert "security-reviewer" in result
