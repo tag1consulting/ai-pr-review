@@ -220,3 +220,123 @@ def test_post_findings_400_falls_back_to_body() -> None:
     assert result.inline_posted == 0
     assert result.body_findings == 1
     assert result.error is not None and "all discussion posts failed" in result.error
+
+
+# ---------------------------------------------------------------------------
+# token_table appended to summary note in post_findings
+# ---------------------------------------------------------------------------
+
+_SUMMARY_MARKER = "<!-- ai-pr-review-summary sha=abc -->"
+_EXISTING_NOTE_BODY = f"{_SUMMARY_MARKER}\n## PR Summary\n\nWalkthrough here."
+
+
+def test_post_findings_appends_token_table_to_summary_note() -> None:
+    """When token_table is non-empty, post_findings must PUT the updated summary note."""
+    import json
+
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": _EXISTING_NOTE_BODY}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [Finding(severity="Low", confidence=80, finding="x", file="app.py", line=4)]
+    accordion = "<details>\n<summary>Token usage by agent</summary>\n\ntable\n</details>"
+    prov.post_findings(
+        findings,
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="REQUEST_CHANGES",
+        token_table=accordion,
+    )
+
+    assert put_bodies, "PUT to update summary note must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "## PR Summary" in new_body
+    assert accordion in new_body
+
+
+def test_post_findings_token_table_strips_old_accordion() -> None:
+    """A previous run's accordion must be replaced, not doubled."""
+    import json
+
+    old_accordion = "<details>\n<summary>Token usage by agent</summary>\n\nold\n</details>"
+    stored = f"{_SUMMARY_MARKER}\n## PR Summary\n\n{old_accordion}"
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": stored}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    new_accordion = "<details>\n<summary>Token usage by agent</summary>\n\nnew\n</details>"
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        token_table=new_accordion,
+    )
+
+    assert put_bodies, "PUT must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "old" not in new_body
+    assert "new" in new_body
+
+
+def test_post_findings_token_table_no_summary_note_skips_put() -> None:
+    """When no summary note exists, no PUT is issued."""
+    put_calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[])
+        if req.method == "PUT":
+            put_calls.append(str(req.url))
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        token_table="<details>table</details>",
+    )
+    assert put_calls == [], "no PUT should be issued when no summary note found"
+
+
+def test_post_findings_token_table_http_error_is_failsoft() -> None:
+    """HTTP 4xx on the summary note PUT must not abort post_findings."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": _EXISTING_NOTE_BODY}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            return httpx.Response(403, json={"message": "forbidden"})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [Finding(severity="High", confidence=90, finding="x", file="app.py", line=4)]
+    result = prov.post_findings(
+        findings,
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="REQUEST_CHANGES",
+        token_table="<details>table</details>",
+    )
+    # Review still completes despite PUT failure
+    assert result.error is None
+    assert result.inline_posted == 1

@@ -17,7 +17,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,7 +32,6 @@ from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
-    from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +264,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
         semaphore_size=config.parallel,
         sarif_paths=config.sarif_paths,
     )
+
+    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
+
+    def _token_renderer(successes: Sequence[_AgentResult], sarif_elapsed_s: float | None) -> str:
+        return _build_token_table_accordion(successes, sarif_elapsed_s, script_dir)
+
+    # 9. Run orchestrator; token table is rendered after dispatch and injected
+    # into the review body by the orchestrator (matching bash engine behavior).
     result = await run_review(
         diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
         summary_text=summary_text,
@@ -273,15 +280,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         dispatch_context=dispatch_ctx,
         provider=provider,
         config=orch_config,
+        token_table_renderer=_token_renderer,
     )
-
-    # 9. Append token cost table to the summary comment (upsert).
-    # On incremental runs, fetch the existing comment body and replace only the
-    # <details> accordion so the first-run summary is preserved.
-    if result.agent_results and result.summary and result.summary.ok:
-        await _upsert_token_table(
-            result, provider, head_sha, script_dir, summary_text, is_incremental=is_incremental
-        )
 
     _emit_review_result(result, base_ref=base_ref, head=head_sha)
 
@@ -474,129 +474,74 @@ async def _run_summarizer(
         return _SUMMARIZER_FAILURE_NOTICE
 
 
-async def _upsert_token_table(
-    result: ReviewResult,
-    provider: VcsProvider,
-    head_sha: str,
+def _build_token_table_accordion(
+    successes: Sequence[object],
+    sarif_elapsed_s: float | None,
     script_dir: Path,
-    summary_text: str,
-    *,
-    is_incremental: bool = False,
-) -> None:
-    """Render the token cost table and append it to the posted summary comment.
+) -> str:
+    """Return a <details>-wrapped token cost table string, or "" on no-data/error.
 
-    On first-run reviews, posts summary_text + the accordion (two post_summary
-    calls: one from run_review(), one here).
-
-    On incremental runs, fetches the existing comment body, strips any previous
-    <details> accordion, and reposts with the fresh token data — preserving the
-    first-run summary written by run_review().
-
-    Note: run_sync uses cancellable=False (the default). On task cancellation
-    the HTTP call completes in its thread; the upsert is idempotent so this is
-    safe.
+    Designed to be used as the ``token_table_renderer`` callback passed to
+    ``run_review()``.  All exceptions are caught and logged as WARNING so token
+    table failure never aborts a review.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.agents.roster import AGENTS
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
 
+    _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
+    token_log: list[TokenEntry] = []
+    for ar in successes:
+        if isinstance(ar, AgentResult) and ar.token_log is not None:
+            tl = ar.token_log
+            token_log.append(TokenEntry(
+                agent=ar.name,
+                model=tl.model,
+                input_tokens=tl.input,
+                output_tokens=tl.output,
+                cache_creation_tokens=tl.cache_creation,
+                cache_read_tokens=tl.cache_read,
+                max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
+            ))
+
+    if not token_log:
+        return ""
+
+    # All enriched agents receive the same context block; take the max (which
+    # equals the single non-zero value) rather than summing to avoid double-counting.
+    context_tokens = max(
+        (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+        default=0,
+    )
+
+    pricing_file = str(script_dir / "config" / "model-pricing.json")
     try:
-        _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
-        token_log: list[TokenEntry] = []
-        for ar in result.agent_results:
-            if isinstance(ar, AgentResult) and ar.token_log is not None:
-                tl = ar.token_log
-                token_log.append(TokenEntry(
-                    agent=ar.name,
-                    model=tl.model,
-                    input_tokens=tl.input,
-                    output_tokens=tl.output,
-                    cache_creation_tokens=tl.cache_creation,
-                    cache_read_tokens=tl.cache_read,
-                    max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
-                ))
-
-        if not token_log:
-            return
-
-        # All enriched agents receive the same context block; take the max (which
-        # equals the single non-zero value) rather than summing to avoid double-counting.
-        context_tokens = max(
-            (ar.context_tokens_used for ar in result.agent_results
-             if isinstance(ar, AgentResult)),
-            default=0,
-        )
-
-        pricing_file = str(script_dir / "config" / "model-pricing.json")
         pricing_data = load_pricing(pricing_file)
+    except Exception as exc:
+        logger.warning(
+            "token table: could not load pricing file %r: %s", pricing_file, exc, exc_info=True,
+        )
+        return ""
+
+    try:
         table = emit_token_table(
             token_log,
             pricing_data,
             context_tokens=context_tokens,
-            sarif_elapsed_s=result.sarif_elapsed_s,
+            sarif_elapsed_s=sarif_elapsed_s,
         )
     except Exception as exc:
         logger.warning(
-            "token table: could not generate token table (pricing_file=%r): %s",
-            str(script_dir / "config" / "model-pricing.json"), exc, exc_info=True,
+            "token table: could not render table (pricing_file=%r): %s",
+            pricing_file, exc, exc_info=True,
         )
-        return
+        return ""
 
-    accordion = (
+    return (
         "<details>\n<summary>Token usage by agent</summary>\n\n"
         + table
         + "\n</details>"
     )
-
-    if is_incremental:
-        # Fetch the existing comment body and replace the old accordion so the
-        # first-run summary text is preserved.
-        try:
-            existing = await anyio.to_thread.run_sync(provider.get_summary_body)
-        except Exception as exc:
-            logger.warning(
-                "token table: could not fetch existing summary body: %s: %s",
-                type(exc).__name__, exc, exc_info=True,
-            )
-            return
-        if existing is None:
-            logger.warning("token table: no existing summary comment found; skipping incremental upsert")
-            return
-        # The stored body is: "{marker}\n{content}\n\n---\n*footer*"
-        # post_summary() re-adds the marker and footer, so strip them here
-        # to avoid doubling up.  Strip the first line (marker), then the
-        # trailing "\n\n---\n..." footer added by post_summary.
-        lines = existing.splitlines(keepends=True)
-        if lines and lines[0].startswith("<!-- ai-pr-review-summary"):
-            existing = "".join(lines[1:]).lstrip("\n")
-        else:
-            logger.warning(
-                "token table: existing comment body missing expected marker; "
-                "proceeding but result may have a doubled header: %.100r", existing
-            )
-        footer_idx = existing.find("\n\n---\n*AI Review")
-        if footer_idx != -1:
-            existing = existing[:footer_idx]
-        # Strip any previous <details> accordion and replace with the new one.
-        details_idx = existing.find("<details>")
-        base = existing[:details_idx].rstrip() if details_idx != -1 else existing.rstrip()
-        new_body = base + "\n\n" + accordion
-    else:
-        new_body = (summary_text.strip() or "## AI Review").rstrip() + "\n\n" + accordion
-
-    # post_summary is a marker-keyed upsert — the second call replaces the
-    # first comment body in-place. Run in a thread: blocking I/O.
-    try:
-        sr = await anyio.to_thread.run_sync(lambda: provider.post_summary(new_body, head_sha))
-        if not sr.ok:
-            logger.warning(
-                "token table: post_summary returned an error: %s", sr.error,
-            )
-    except Exception as exc:
-        logger.warning(
-            "token table: could not post token table to PR comment: %s: %s",
-            type(exc).__name__, exc, exc_info=True,
-        )
 
 
 def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:

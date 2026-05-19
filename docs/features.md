@@ -7,6 +7,10 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.9.4
+
+**Token table moved to review body (`engine: python`).** The collapsible **Token usage by agent** table now appears in the same review comment as the findings (Approved / Changes Requested / Comment), matching the bash engine. Previously the Python engine appended the table to the long-lived PR summary comment, which was rewritten on every incremental run. The summary comment now carries only the first-run walkthrough and is never overwritten on subsequent pushes.
+
 ## What's new in v0.9.3
 
 **Telemetry hooks — Epic 4, Story 2.** Set `AI_TELEMETRY_ENABLED=true` and `AI_TELEMETRY_SINK=file:///path/to/events.jsonl` (or an `http(s)://` endpoint) to receive one structured JSON event per review run. The event includes outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency, SARIF elapsed time, and the count of learning-store entries loaded. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues. See [Configuration → Telemetry hooks](#telemetry-hooks-epic-4) for the full env-var reference.
@@ -139,7 +143,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the summary comment (`engine: python`) or the review body (`engine: bash`). On the Python engine, the table is refreshed on every run — incremental reviews update the token data in place while preserving the first-run PR summary above it.
+After each review run, a collapsible **Token usage by agent** table is appended to the **review body** — the same comment that carries the findings (Approved / Changes Requested / Comment). Both the Python and bash engines now behave identically in this regard. The long-lived PR summary comment carries only the first-run walkthrough and is not rewritten on subsequent runs.
 
 The table layout adapts based on cache activity:
 

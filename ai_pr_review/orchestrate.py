@@ -11,7 +11,7 @@ thin wrapper that builds these from environment.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from ai_pr_review.agents.dispatch import (
@@ -81,6 +81,9 @@ class OrchestrationConfig:
     sarif_paths: tuple[str, ...] = ()
 
 
+TokenTableRenderer = Callable[[Sequence[AgentResult], float | None], str]
+
+
 async def run_review(
     *,
     diff: DiffContext,
@@ -91,6 +94,7 @@ async def run_review(
     provider: VcsProvider,
     config: OrchestrationConfig | None = None,
     skip_reason: str = "",
+    token_table_renderer: TokenTableRenderer | None = None,
 ) -> ReviewResult:
     """End-to-end review: compute is upstream; this runs dispatch + post.
 
@@ -173,6 +177,14 @@ async def run_review(
         cfg.mode,
     )
 
+    # Phase 3.5: render token table (fail-soft; "" disables insertion).
+    token_table = ""
+    if token_table_renderer is not None:
+        try:
+            token_table = token_table_renderer(successes, sarif_elapsed_s)
+        except Exception as exc:
+            logger.warning("token table renderer raised: %s", exc, exc_info=True)
+
     # Phase 4: post summary then findings (AC5 ordering)
     try:
         summary_result = provider.post_summary(
@@ -192,6 +204,7 @@ async def run_review(
                 diff,
                 event=outcome.event,
                 failed_agents=[f.name for f in failures],
+                token_table=token_table,
                 max_inline=cfg.max_inline,
                 enable_suggestions=cfg.enable_suggestions,
             )
