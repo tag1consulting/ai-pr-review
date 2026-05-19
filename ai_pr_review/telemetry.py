@@ -75,7 +75,7 @@ def _emit_file(event: TelemetryEvent, path: str) -> None:
             fh.write(payload + "\n")
     except OSError as exc:
         logger.warning("telemetry: could not write to file %r (%s): %s",
-                       path, type(exc).__name__, exc)
+                       path, type(exc).__name__, exc, exc_info=True)
 
 
 def _emit_http(event: TelemetryEvent, url: str) -> None:
@@ -90,7 +90,7 @@ def _emit_http(event: TelemetryEvent, url: str) -> None:
         return
     except Exception as exc:
         logger.warning("telemetry: HTTP POST to %r failed (unexpected: %s): %s",
-                       url, type(exc).__name__, exc)
+                       url, type(exc).__name__, exc, exc_info=True)
         return
     if response.status_code >= 400:
         logger.warning(

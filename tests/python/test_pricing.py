@@ -106,9 +106,10 @@ def test_emit_token_table_max_output_tokens_shown() -> None:
     ]
     table = emit_token_table(log, _SAMPLE_PRICING)
     assert "1234 / 16384" in table
-    # Total row must use raw integer
-    assert "**1234**" in table
-    assert "1234 / 16384" not in table.split("**Total**")[1]
+    # Total row must use raw integer, not the formatted "N / cap" string
+    total_line = next(line for line in table.splitlines() if "**Total**" in line)
+    assert "**1234**" in total_line
+    assert "16384" not in total_line
 
 
 def test_emit_token_table_max_output_tokens_zero_omitted() -> None:
@@ -253,8 +254,8 @@ def test_emit_token_table_supplementary_rows_not_in_total_cost() -> None:
         log, _SAMPLE_PRICING, context_tokens=500, sarif_elapsed_s=1.5
     )
     # Extract Total row from each; cost should be identical
-    base_total_line = [l for l in base_table.splitlines() if "**Total**" in l][0]
-    aug_total_line = [l for l in augmented_table.splitlines() if "**Total**" in l][0]
+    base_total_line = next(ln for ln in base_table.splitlines() if "**Total**" in ln)
+    aug_total_line = next(ln for ln in augmented_table.splitlines() if "**Total**" in ln)
     assert base_total_line == aug_total_line
     # Raw token totals unchanged
     assert "**150**" in aug_total_line  # total_out = 150
