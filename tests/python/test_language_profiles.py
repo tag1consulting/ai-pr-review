@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from ai_pr_review.language_profiles import load_language_profiles
 
 

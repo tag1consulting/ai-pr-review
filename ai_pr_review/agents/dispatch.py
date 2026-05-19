@@ -341,32 +341,18 @@ def _unique_language_labels(changed_files: list[str]) -> list[str]:
 
 
 def _detect_primary_language(changed_files: list[str]) -> str:
-    """Return the most common language key from a list of file paths."""
-    _EXT_TO_LANG: dict[str, str] = {
-        "py": "python", "ts": "typescript", "tsx": "tsx",
-        "js": "javascript", "jsx": "javascript",
-        "go": "go",
-        "php": "php", "module": "php", "theme": "php", "inc": "php",
-        "rb": "ruby", "rake": "ruby", "gemspec": "ruby",
-        "rs": "rust",
-        "sh": "bash", "bash": "bash",
-        "java": "java",
-        "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp", "h": "c", "c": "c",
-        "kt": "kotlin", "kts": "kotlin",
-        "swift": "swift",
-        "cs": "csharp",
-        "scala": "scala", "sbt": "scala",
-        "tf": "terraform", "tfvars": "terraform",
-        "yaml": "yaml", "yml": "yaml",
-        "sql": "sql",
-        "lua": "lua",
-        "pl": "perl", "pm": "perl",
-    }
+    """Return the most common language key from a list of file paths.
+
+    Delegates to detect_language() so the extension mapping stays in sync
+    with the single source of truth (_EXT_MAP in ai_pr_review.languages).
+    Returns a lowercase label for tree-sitter grammar selection.
+    """
     counts: dict[str, int] = {}
     for f in changed_files:
         ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
-        lang = _EXT_TO_LANG.get(ext, "")
-        if lang:
+        label = detect_language(ext)
+        if label:
+            lang = label.lower()
             counts[lang] = counts.get(lang, 0) + 1
     if not counts:
         return ""

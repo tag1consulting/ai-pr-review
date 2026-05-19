@@ -9,8 +9,11 @@ matching the bash engine's behaviour.  The '+' character in labels (e.g.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 def load_language_profiles(labels: Iterable[str], script_dir: Path) -> str:
@@ -31,5 +34,8 @@ def load_language_profiles(labels: Iterable[str], script_dir: Path) -> str:
     for label in labels:
         path = profiles_dir / f"{label.lower()}.md"
         if path.is_file():
-            parts.append(path.read_text(encoding="utf-8"))
+            try:
+                parts.append(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError) as exc:
+                _log.warning("Skipping language profile %s: %s", path, exc)
     return "\n".join(parts)
