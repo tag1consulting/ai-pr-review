@@ -147,7 +147,13 @@ def build_review_runtime(
         else Path(__file__).resolve().parent.parent.parent
     )
     diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
-    diff_path.write_text(diff_text, encoding="utf-8")
+    try:
+        diff_path.write_text(diff_text, encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            f"Failed to write diff staging file {diff_path}: {exc}. "
+            "Check AI_PR_REVIEW_DIFF_FILE or /tmp permissions."
+        ) from exc
 
     raw_paths: list[object] = (
         payload.get("changed_files")  # type: ignore[assignment]
@@ -190,6 +196,12 @@ def build_review_runtime(
     # pr-summarizer is dispatched separately; exclude from generic dispatch.
     mode_filtered = [a for a in mode_filtered if a.name != "pr-summarizer"]
     agents = filter_agents(mode_filtered, gates)
+    if not agents:
+        logger.warning(
+            "review proceeding with 0 agents after gate filtering "
+            "(gates=%s); only pre-computed findings will be posted",
+            list(gates),
+        )
 
     # 9. Run native static analyzers — fail-soft; findings merged via extra_findings.
     analyzer_findings: list[_Finding] = []
@@ -218,6 +230,12 @@ def build_review_runtime(
             from ai_pr_review.analyzers.sarif import load_sarif_files
             sarif_raw, sarif_elapsed_s = load_sarif_files(list(config.sarif_paths))
             sarif_findings = [f for f in sarif_raw if isinstance(f, _Finding)]
+            dropped = len(sarif_raw) - len(sarif_findings)
+            if dropped:
+                logger.warning(
+                    "SARIF: dropped %d non-Finding entries (schema mismatch in %s)",
+                    dropped, config.sarif_paths,
+                )
             if sarif_findings:
                 logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
         except Exception as exc:
