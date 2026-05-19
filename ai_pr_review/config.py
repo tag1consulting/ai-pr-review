@@ -382,11 +382,10 @@ class ReviewConfig(BaseModel):
             # No universal default; keep as-is and let DispatchContext validate.
             prem = prem or std
         else:
-            import sys as _sys
-            print(
-                f"WARNING: unknown provider {self.provider!r}; model defaults not applied. "
-                "Set AI_MODEL_STANDARD and AI_MODEL_PREMIUM explicitly.",
-                file=_sys.stderr,
+            valid = list(_PROVIDER_DEFAULTS) + ["openai-compatible"]
+            raise ConfigError(
+                f"Unknown provider {self.provider!r}. Valid providers: {valid}. "
+                "Set AI_MODEL_STANDARD and AI_MODEL_PREMIUM explicitly if using a custom provider."
             )
 
         # AI_PARALLEL=true → 4 concurrent calls (bash default); false → 1 (serial).

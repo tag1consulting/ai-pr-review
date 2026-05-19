@@ -158,7 +158,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     last_reviewed = provider.get_last_reviewed_sha()
 
     # 2. Run compute phase to get diff + manifest (incremental when SHA available)
-    payload = _run_compute(config, last_reviewed_sha=last_reviewed)
+    payload = _run_compute(config, last_reviewed_sha=last_reviewed or "")
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
         click.echo(f"Skipping review: {reason}", err=True)
@@ -258,6 +258,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         )
         if analyzer_findings:
             logger.info("analyzers: %d finding(s) from native static analysis", len(analyzer_findings))
+    except ImportError as exc:
+        logger.error("analyzers: bridge module not importable (packaging error?): %s", exc)
     except Exception as exc:
         logger.warning("analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True)
 
