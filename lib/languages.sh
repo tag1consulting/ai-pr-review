@@ -21,6 +21,13 @@ detect_language() {
     rs) echo "Rust" ;;
     java) echo "Java" ;;
     c|h|cpp|hpp|cc|cxx) echo "C++" ;;
+    kt|kts) echo "Kotlin" ;;
+    swift) echo "Swift" ;;
+    cs) echo "CSharp" ;;
+    scala|sbt) echo "Scala" ;;
+    sql) echo "SQL" ;;
+    lua) echo "Lua" ;;
+    pl|pm) echo "Perl" ;;
     *) echo "" ;;
   esac
 }
