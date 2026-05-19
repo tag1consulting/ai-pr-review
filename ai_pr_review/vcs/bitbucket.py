@@ -149,6 +149,12 @@ class BitbucketProvider:
             body, context_hint=f"bitbucket_comment#{latest.get('id')}"
         )
 
+    def get_summary_body(self) -> str | None:
+        comments = self._list_summary_comments()
+        if not comments:
+            return None
+        return ((comments[0].get("content") or {}).get("raw")) or None
+
     # ------------------------------------------------------------------
     # post_summary / post_skip_comment / advance_sha_watermark
     # (delegated to module-level helpers for readability)

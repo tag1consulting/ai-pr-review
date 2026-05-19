@@ -101,6 +101,10 @@ class VcsProvider(Protocol):
         """Return the SHA embedded in the previous summary marker, or None."""
         ...
 
+    def get_summary_body(self) -> str | None:
+        """Return the current body of the summary comment, or None if not yet posted."""
+        ...
+
     def post_summary(self, summary_body: str, head_sha: str) -> SummaryResult:
         """Upsert the one-per-PR summary comment, keyed by SUMMARY_MARKER_PREFIX."""
         ...

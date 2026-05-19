@@ -274,10 +274,12 @@ async def _run_review_async(config: ReviewConfig) -> int:
     )
 
     # 9. Append token cost table to the summary comment (upsert).
-    # Skip on incremental runs: the summarizer is skipped so summary_text holds
-    # at most a merge-filter fallback note; upsert would clobber the first-run summary.
-    if not is_incremental and result.agent_results and result.summary and result.summary.ok:
-        await _upsert_token_table(result, provider, head_sha, script_dir, summary_text)
+    # On incremental runs, fetch the existing comment body and replace only the
+    # <details> accordion so the first-run summary is preserved.
+    if result.agent_results and result.summary and result.summary.ok:
+        await _upsert_token_table(
+            result, provider, head_sha, script_dir, summary_text, is_incremental=is_incremental
+        )
 
     _emit_review_result(result, base_ref=base_ref, head=head_sha)
     return 0 if result.ok else 1
@@ -428,22 +430,17 @@ async def _upsert_token_table(
     head_sha: str,
     script_dir: Path,
     summary_text: str,
+    *,
+    is_incremental: bool = False,
 ) -> None:
     """Render the token cost table and append it to the posted summary comment.
 
-    Design: run_review() posts summary_text (or "## AI Review") as the summary
-    comment via post_summary().  After dispatch completes and token logs are
-    available, this function calls post_summary() a second time with the same
-    base text plus the token-table accordion.  post_summary() is a marker-keyed
-    upsert (<!-- ai-pr-review-summary sha=... -->), so the second call replaces
-    the first comment body in-place — no duplicate comment is created.
+    On first-run reviews, posts summary_text + the accordion (two post_summary
+    calls: one from run_review(), one here).
 
-    Agent findings are posted separately by post_findings() as a GitHub PR
-    review object, which is unaffected by this upsert.
-
-    Only called on non-incremental runs: on incremental runs the summarizer is
-    skipped, so upsert would clobber the first-run summary with at most the
-    merge-filter fallback note plus the accordion header.
+    On incremental runs, fetches the existing comment body, strips any previous
+    <details> accordion, and reposts with the fresh token data — preserving the
+    first-run summary written by run_review().
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
@@ -480,10 +477,41 @@ async def _upsert_token_table(
         + table
         + "\n</details>"
     )
-    # post_summary is an upsert — calling it again updates the same comment.
-    # Run in a thread: provider.post_summary is synchronous blocking I/O.
-    try:
+
+    if is_incremental:
+        # Fetch the existing comment body and replace the old accordion so the
+        # first-run summary text is preserved.
+        try:
+            existing = await anyio.to_thread.run_sync(provider.get_summary_body)
+        except Exception as exc:
+            logger.warning(
+                "token table: could not fetch existing summary body: %s: %s",
+                type(exc).__name__, exc, exc_info=True,
+            )
+            return
+        if existing is None:
+            logger.warning("token table: no existing summary comment found; skipping incremental upsert")
+            return
+        # The stored body is: "{marker}\n{content}\n\n---\n*footer*"
+        # post_summary() re-adds the marker and footer, so strip them here
+        # to avoid doubling up.  Strip the first line (marker), then the
+        # trailing "\n\n---\n..." footer added by post_summary.
+        lines = existing.splitlines(keepends=True)
+        if lines and lines[0].startswith("<!-- ai-pr-review-summary"):
+            existing = "".join(lines[1:]).lstrip("\n")
+        footer_idx = existing.find("\n\n---\n")
+        if footer_idx != -1:
+            existing = existing[:footer_idx]
+        # Strip any previous <details> accordion and replace with the new one.
+        details_idx = existing.find("<details>")
+        base = existing[:details_idx].rstrip() if details_idx != -1 else existing.rstrip()
+        new_body = base + "\n\n" + accordion
+    else:
         new_body = (summary_text.strip() or "## AI Review").rstrip() + "\n\n" + accordion
+
+    # post_summary is a marker-keyed upsert — the second call replaces the
+    # first comment body in-place. Run in a thread: blocking I/O.
+    try:
         sr = await anyio.to_thread.run_sync(lambda: provider.post_summary(new_body, head_sha))
         if not sr.ok:
             logger.warning(

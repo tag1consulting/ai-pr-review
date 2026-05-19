@@ -153,6 +153,12 @@ class GitHubProvider:
             context_hint=f"issue_comment#{latest.get('id')}",
         )
 
+    def get_summary_body(self) -> str | None:
+        comments = self._list_summary_comments()
+        if not comments:
+            return None
+        return comments[-1].get("body") or None
+
     # ------------------------------------------------------------------
     # post_summary — upsert the single summary comment keyed by marker
     # ------------------------------------------------------------------

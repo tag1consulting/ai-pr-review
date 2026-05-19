@@ -239,6 +239,12 @@ class GitLabProvider:
             context_hint=f"gitlab_note#{latest.get('id')}",
         )
 
+    def get_summary_body(self) -> str | None:
+        notes = self._list_summary_notes()
+        if not notes:
+            return None
+        return notes[0].get("body") or None
+
     # ------------------------------------------------------------------
     # post_summary — upsert single combined note keyed by marker
     # ------------------------------------------------------------------
