@@ -1,0 +1,256 @@
+"""Review runtime assembly: builds fully-prepared inputs for orchestrate.run_review().
+
+All env reads, provider construction, compute, and dependency wiring live here.
+`build_review_runtime()` is the boundary between env-driven configuration and
+pure orchestration. `orchestrate.run_review()` receives only the assembled
+`ReviewRuntime` and constructs no dependencies of its own.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from ai_pr_review.agents.dispatch import DispatchContext
+from ai_pr_review.config import ReviewConfig
+from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
+from ai_pr_review.orchestrate import OrchestrationConfig
+from ai_pr_review.review.compute import run_compute
+from ai_pr_review.vcs import provider_from_env
+from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
+
+if TYPE_CHECKING:
+    from ai_pr_review.agents.roster import AgentSpec
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SkipPlan:
+    """Compute returned skip — caller posts a skip comment and returns 0."""
+
+    reason: str
+    provider: VcsProvider
+
+
+@dataclass(frozen=True)
+class ReviewRuntime:
+    """Fully prepared inputs for orchestrate.run_review() and the CLI layer.
+
+    All fields are pre-built. The orchestrator reads no environment and
+    constructs no dependencies.
+
+    `summary_text`, `script_dir`, `diff_path`, `manifest_text`, `is_incremental`,
+    `base_ref`, `head_sha`, and `feedback_entries_count` are also used by the
+    CLI layer to run the pr-summarizer and assemble telemetry.
+    """
+
+    provider: VcsProvider
+    diff: DiffContext
+    # Prefix portion of summary_text (merge-filter note); CLI appends summarizer output.
+    summary_prefix: str
+    is_incremental: bool
+    manifest_text: str
+    base_ref: str
+    head_sha: str
+    agents: tuple[AgentSpec, ...]
+    changed_files: ChangedFiles
+    dispatch_context: DispatchContext
+    orch_config: OrchestrationConfig
+    # script_dir exposed so CLI can build the token-table renderer closure.
+    script_dir: Path
+    diff_path: Path
+    feedback_entries_count: int
+
+
+def build_review_runtime(
+    config: ReviewConfig,
+    *,
+    provider_factory: Callable[[], VcsProvider] = provider_from_env,
+) -> ReviewRuntime | SkipPlan:
+    """Assemble all prepared inputs for run_review().
+
+    Reads env only for SCRIPT_DIR / DIFF_FILE conventions. All other
+    configuration flows through the validated ReviewConfig. Pure of Click
+    and exit-code concerns.
+
+    The `provider_factory` seam lets tests inject a fake VcsProvider without
+    requiring env vars.
+    """
+    from ai_pr_review.agents.gates import evaluate_gates, filter_agents
+    from ai_pr_review.agents.roster import AGENTS
+    from ai_pr_review.findings.models import Finding as _Finding
+
+    # Resolve provider model defaults before any downstream use.
+    config = config.resolve_models()
+
+    # 1. Build provider.
+    provider = provider_factory()
+    if not isinstance(provider, VcsProvider):
+        raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
+
+    # 2. Fetch last-reviewed SHA *before* compute so incremental diff works.
+    last_reviewed = provider.get_last_reviewed_sha()
+
+    # 3. Run compute phase (incremental when SHA available).
+    payload = run_compute(config, last_reviewed_sha=last_reviewed)
+    if payload.get("skip"):
+        reason = str(payload.get("reason") or "no changes")
+        return SkipPlan(reason=reason, provider=provider)
+
+    diff_text = str(payload.get("diff") or "")
+    head_sha = str(payload.get("head") or config.head_sha)
+    base_ref = str(payload.get("base") or config.base_ref)
+    manifest_text = str(payload.get("manifest") or "")
+    is_incremental = bool(payload.get("is_incremental"))
+
+    # 4. Build summary prefix — prepend merge-filter fallback note when present.
+    merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
+    summary_prefix = ""
+    if merge_filter_fallback:
+        summary_prefix = (
+            f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
+            "diff may include upstream changes._\n\n"
+        )
+
+    # 5. Build feedback addendum when AI_FEEDBACK_LOOP=1 (before dispatch context).
+    feedback_addendum = ""
+    feedback_entries_count = 0
+    if config.enable_feedback_loop:
+        try:
+            from ai_pr_review.feedback.inject import build_feedback_addendum
+            from ai_pr_review.feedback.store import make_store
+            store = make_store(config)
+            entries = store.load_recent()
+            feedback_entries_count = len(entries)
+            feedback_addendum = build_feedback_addendum(
+                entries, diff_text, max_tokens=config.feedback_max_tokens
+            )
+        except Exception as exc:
+            logger.warning(
+                "feedback loop: could not load feedback store: %s", exc, exc_info=True
+            )
+
+    # 6. Resolve script_dir / diff_path from env conventions.
+    # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
+    # can locate prompts/language-profiles when installed as a pip package.
+    _env_script_dir = os.environ.get("AI_PR_REVIEW_SCRIPT_DIR")
+    script_dir = (
+        Path(_env_script_dir) if _env_script_dir
+        else Path(__file__).resolve().parent.parent.parent
+    )
+    diff_path = Path(os.environ.get("AI_PR_REVIEW_DIFF_FILE") or "/tmp/ai-review-diff.txt")
+    diff_path.write_text(diff_text, encoding="utf-8")
+
+    raw_paths: list[object] = (
+        payload.get("changed_files")  # type: ignore[assignment]
+        if isinstance(payload.get("changed_files"), list)
+        else []
+    )
+    cf = parse_changed_files_payload(raw_paths)
+    _changed_list = cf.all_files
+
+    # 7. Build dispatch context.
+    dispatch_ctx = DispatchContext(
+        script_dir=script_dir,
+        mode=config.review_mode,
+        diff_path=diff_path,
+        provider=config.provider,
+        standard_model=config.model_standard,
+        premium_model=config.model_premium,
+        enable_suggestions=config.enable_suggestions,
+        cache_priming_env="true" if config.cache_priming else "false",
+        prompt_caching_env=config.llm_prompt_caching,
+        enable_context_enrichment=config.enable_context_enrichment,
+        context_max_tokens=config.context_max_tokens,
+        context_lookup_lines=config.context_lookup_lines,
+        repo_root=Path("."),
+        changed_files=_changed_list,
+        feedback_addendum=feedback_addendum,
+        max_tokens_per_agent=config.max_tokens_per_agent,
+    )
+
+    # 8. Evaluate gates and filter agent roster.
+    gates = evaluate_gates(
+        diff_text=diff_text,
+        changed_files=cf,
+        env=os.environ,
+        last_reviewed_sha=last_reviewed,
+    )
+    mode_filtered = [
+        a for a in AGENTS if not a.full_mode_only or config.review_mode == "full"
+    ]
+    # pr-summarizer is dispatched separately; exclude from generic dispatch.
+    mode_filtered = [a for a in mode_filtered if a.name != "pr-summarizer"]
+    agents = filter_agents(mode_filtered, gates)
+
+    # 9. Run native static analyzers — fail-soft; findings merged via extra_findings.
+    analyzer_findings: list[_Finding] = []
+    try:
+        from ai_pr_review.analyzers.bridge import run_analyzers
+        analyzer_findings = run_analyzers(
+            cf,
+            diff_file=str(diff_path),
+            script_dir=str(script_dir),
+        )
+        if analyzer_findings:
+            logger.info(
+                "analyzers: %d finding(s) from native static analysis",
+                len(analyzer_findings),
+            )
+    except Exception as exc:
+        logger.warning(
+            "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
+        )
+
+    # 10. Load SARIF findings and merge with analyzer findings into extra_findings.
+    sarif_findings: list[_Finding] = []
+    if config.sarif_paths:
+        try:
+            from ai_pr_review.analyzers.sarif import load_sarif_files
+            sarif_raw, _sarif_elapsed = load_sarif_files(list(config.sarif_paths))
+            sarif_findings = [f for f in sarif_raw if isinstance(f, _Finding)]
+            if sarif_findings:
+                logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
+        except Exception as exc:
+            logger.warning("SARIF: load failed (fail-soft): %s", exc, exc_info=True)
+
+    extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
+
+    # 11. Load global + local suppression rules.
+    from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
+    suppression_rules = tuple(
+        _load_suppression_rules(str(script_dir), workspace=".")
+    )
+
+    # 12. Build orchestrator config.
+    orch_config = OrchestrationConfig(
+        mode=config.review_mode,  # type: ignore[arg-type]
+        confidence_threshold=config.confidence_threshold,
+        max_inline=config.max_inline,
+        enable_suggestions=config.enable_suggestions,
+        semaphore_size=config.concurrency,
+        suppression_rules=suppression_rules,
+        extra_findings=extra_findings,
+    )
+
+    return ReviewRuntime(
+        provider=provider,
+        diff=DiffContext(diff_text=diff_text, head_sha=head_sha),
+        summary_prefix=summary_prefix,
+        is_incremental=is_incremental,
+        manifest_text=manifest_text,
+        base_ref=base_ref,
+        head_sha=head_sha,
+        agents=tuple(agents),
+        changed_files=cf,
+        dispatch_context=dispatch_ctx,
+        orch_config=orch_config,
+        script_dir=script_dir,
+        diff_path=diff_path,
+        feedback_entries_count=feedback_entries_count,
+    )
