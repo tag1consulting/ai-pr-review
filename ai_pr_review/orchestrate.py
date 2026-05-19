@@ -164,10 +164,17 @@ async def run_review(
         logger.info("SARIF: loaded %d finding(s) from %d file(s)", len(sarif_findings), len(cfg.sarif_paths))
     if cfg.extra_findings:
         from ai_pr_review.findings.models import Finding as _Finding
+        injected = 0
         for f in cfg.extra_findings:
             if isinstance(f, _Finding):
                 raw_findings.append(f)
-        logger.info("analyzers: injected %d pre-computed finding(s)", len(cfg.extra_findings))
+                injected += 1
+            else:
+                logger.warning(
+                    "orchestrate: dropped extra_finding of unexpected type %s",
+                    type(f).__name__,
+                )
+        logger.info("analyzers: injected %d pre-computed finding(s)", injected)
 
     # Phase 2: extract + merge + suppress
     for s in successes:

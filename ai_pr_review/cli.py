@@ -247,10 +247,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
     agents = filter_agents(mode_filtered, gates)
 
     # 6.5. Run native static analyzers (#315) — fail-soft; findings merged later
-    analyzer_findings: list[object] = []
+    from ai_pr_review.findings.models import Finding as _Finding
+    analyzer_findings: list[_Finding] = []
     try:
         from ai_pr_review.analyzers.bridge import run_analyzers
-        analyzer_findings = run_analyzers(  # type: ignore[assignment]
+        analyzer_findings = run_analyzers(
             cf,
             diff_file=str(diff_path),
             script_dir=str(script_dir),

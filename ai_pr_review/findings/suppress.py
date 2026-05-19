@@ -140,7 +140,9 @@ def _rule_matches(finding: Finding, rule: SuppressionRule) -> bool:
             return False
     if rule.match_line > 0 and finding.line != rule.match_line:
         return False
-    return not (rule.match_code and not finding.finding.startswith(rule.match_code))
+    if rule.match_code and not finding.finding.startswith(rule.match_code):  # noqa: SIM103
+        return False
+    return True
 
 
 def _verify_version(finding: Finding, verify_type: str) -> bool:
