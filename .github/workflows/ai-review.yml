@@ -37,10 +37,8 @@ jobs:
   # ⚠️  SECURITY CONSTRAINT — pull_request_target runs the workflow from the
   # BASE branch but checks out UNTRUSTED PR HEAD code.  Every tool added to this
   # job MUST be a static analyzer that never executes the analyzed code.  Do NOT
-  # add: compiled-language CodeQL autobuild, test runners, build systems, npm
-  # install/run, or any other step that could execute attacker-controlled code.
-  # CodeQL for Python is safe here only because Python is interpreted and no
-  # autobuild or manual build step is configured (build-mode: none is explicit).
+  # add: test runners, build systems, npm install/run, or any other step that
+  # could execute attacker-controlled code.
   # Any PR that adds a new analyzer to this job requires a security review.
   sarif-prep:
     if: >-
@@ -102,6 +100,10 @@ jobs:
           no-fail: true
 
       # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
+      # p/secrets catches hardcoded credentials; p/python catches subprocess shell=True
+      # and other Python-specific security issues. p/ci was replaced because it only
+      # includes framework-scoped Python rules (Django/Flask) and fires nothing on
+      # plain Python code.
       # semgrep-action@v1 no longer supports the generateSarif input (removed in
       # recent versions); we install the semgrep CLI directly and run it with
       # --sarif output instead.  pip install is fast (<5s) since Python is already
@@ -113,41 +115,10 @@ jobs:
       - name: Semgrep (SARIF)
         continue-on-error: true
         run: |
-          semgrep scan --config=p/ci --sarif \
+          semgrep scan --config=p/secrets --config=p/python --sarif \
             --output=sarif-results/semgrep.sarif \
             --error \
             . || true
-
-      # --- CodeQL (Python) ---
-      # build-mode: none is required — it prevents CodeQL from running any autobuild
-      # (e.g., setup.py, Makefile) that could execute untrusted PR code under
-      # pull_request_target.  Python does not need a build step for analysis.
-      # CodeQL's analyze step writes (and may wipe) its output directory, so we
-      # direct it to a separate staging dir and move the result into sarif-results/
-      # afterward to avoid overwriting files produced by earlier steps.
-      # Pinned to commit SHA for supply-chain safety (tag v4.35.5, verified 2026-05-19).
-      # To update: latest=$(gh api repos/github/codeql-action/tags --jq '.[0].name') && \
-      #            tag_sha=$(gh api repos/github/codeql-action/git/ref/tags/$latest --jq '.object.sha') && \
-      #            gh api repos/github/codeql-action/git/tags/$tag_sha --jq '.object.sha'
-      - name: Init CodeQL
-        continue-on-error: true
-        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # tag: v4.35.5, 2026-05-19
-        with:
-          languages: python
-          build-mode: none
-      - name: Analyze CodeQL
-        continue-on-error: true
-        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # tag: v4.35.5, 2026-05-19
-        with:
-          output: codeql-staging/
-          # Ingest locally via AI review rather than uploading to GitHub Code Scanning.
-          upload: false
-      - name: Move CodeQL output into results dir
-        if: always()
-        run: |
-          # codeql-action writes python.sarif; move into sarif-results/ for artifact upload.
-          [[ -f codeql-staging/python.sarif ]] && \
-            mv codeql-staging/python.sarif sarif-results/codeql-python.sarif || true
 
       - name: List produced SARIF files
         if: always()
@@ -313,7 +284,7 @@ jobs:
           # workspace-relative; the ingestor silently skips any missing files.
           # vars.AI_REVIEW_SARIF_PATHS allows repo operators to override or extend
           # the default set without editing this file.
-          sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || 'sarif-results/ruff.sarif,sarif-results/hadolint.sarif,sarif-results/semgrep.sarif,sarif-results/codeql-python.sarif' }}
+          sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || 'sarif-results/ruff.sarif,sarif-results/hadolint.sarif,sarif-results/semgrep.sarif' }}
           # vars.AI_REVIEW_FEEDBACK_LOOP enables the learning loop (Capability C):
           # loads recent <repo-feedback> entries from the ai-pr-review-bot branch
           # and injects them into agent prompts. GitHub-only.

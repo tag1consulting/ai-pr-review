@@ -288,6 +288,29 @@ def test_sanitize_sarif_path_rejects_extra_leading_slashes() -> None:
     assert _sanitize_sarif_path("file://///abs/path") == ""
 
 
+def test_sanitize_sarif_path_strips_github_actions_workspace_prefix() -> None:
+    """Ruff emits file:///home/runner/work/<owner>/<repo>/src/foo.py.
+    After scheme stripping this is home/runner/work/<owner>/<repo>/src/foo.py,
+    which must be reduced to src/foo.py to match diff paths."""
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_strips_runner_prefix_without_home() -> None:
+    """Some runner configurations omit /home, giving runner/work/... directly."""
+    uri = "file:///runner/work/myorg/myrepo/src/bar.py"
+    assert _sanitize_sarif_path(uri) == "src/bar.py"
+
+
+def test_sanitize_sarif_path_does_not_strip_non_runner_paths() -> None:
+    """Paths that look like workspace dirs but aren't the runner pattern
+    must not be silently truncated."""
+    # Plain relative path — unchanged
+    assert _sanitize_sarif_path("ai_pr_review/sarif_smoke_test.py") == "ai_pr_review/sarif_smoke_test.py"
+    # file:// with a non-runner absolute path — stripped of scheme/slash only
+    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
+
+
 def test_finding_with_traversal_uri_drops_file_field() -> None:
     """End-to-end: a SARIF result with '../../etc/passwd' should produce a
     Finding with file="" (not the traversal path)."""
