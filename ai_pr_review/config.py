@@ -39,6 +39,10 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_DISABLE_GATE_EDGE_CASE",
         "AI_DRY_RUN",
         "AI_IGNORE_MERGE_COMMITS",
+        # Legacy alias used in some CI variable stores (e.g. GitLab project
+        # variables set via the GitHub workflow convention). The engine reads
+        # AI_IGNORE_MERGE_COMMITS; this entry prevents a false ConfigError.
+        "AI_REVIEW_IGNORE_MERGE_COMMITS",
         "AI_PR_REVIEW_RECORD_DIR",
         "AI_PR_REVIEW_ENGINE",
         "AI_PR_REVIEW_COMPUTE_OUTPUT",
