@@ -7,6 +7,7 @@ successful post (2.FR-10).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -37,6 +38,8 @@ from ai_pr_review.vcs.protocol import (
     SummaryResult,
 )
 
+_log = logging.getLogger(__name__)
+
 _BOT_LOGIN_DEFAULT: Final[str] = "github-actions[bot]"
 
 _GRAPHQL_PATH: Final[str] = "/graphql"
@@ -58,13 +61,19 @@ def _parse_next_link(link_header: str) -> str | None:
 
 
 def _safe_int(value: object, default: int = 0) -> int:
-    """Convert value to int, returning default on ValueError/TypeError."""
+    """Convert value to int, returning default on ValueError/TypeError.
+
+    Logs a warning when a non-None value cannot be converted, so unexpected
+    API payloads (schema changes, malformed responses) are visible in logs.
+    """
     try:
         if isinstance(value, (int, float, str, bytes)):
             return int(value)
-        return default
     except (ValueError, TypeError):
-        return default
+        pass
+    if value is not None:
+        _log.warning("_safe_int: unexpected non-integer review ID %r; skipping", value)
+    return default
 
 
 @dataclass(frozen=True)
