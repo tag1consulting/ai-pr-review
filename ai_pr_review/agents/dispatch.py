@@ -80,6 +80,8 @@ class DispatchContext:
     changed_files: list[str] = field(default_factory=list)
     # --- Epic 3: Capability C — feedback loop ---
     feedback_addendum: str = ""
+    # #316: user-configurable per-agent output cap (0 = use roster default)
+    max_tokens_per_agent: int = 0
 
     def __post_init__(self) -> None:
         if not self.standard_model:
@@ -396,11 +398,17 @@ async def _run_single_agent(
         if context.feedback_addendum:
             system_prompt = system_prompt + "\n\n" + context.feedback_addendum
 
+        # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
+        max_tokens = (
+            context.max_tokens_per_agent
+            if context.max_tokens_per_agent > 0
+            else spec.max_output_tokens
+        )
         request = LLMRequest(
             model_id=model_id,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=spec.max_output_tokens,
+            max_tokens=max_tokens,
         )
         async with limiter:
             response = await llm_call(request)

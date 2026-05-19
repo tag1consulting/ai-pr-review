@@ -79,6 +79,10 @@ class OrchestrationConfig:
     suppression_rules: tuple[SuppressionRule, ...] = ()
     # --- Epic 3: Capability B — SARIF ingestion ---
     sarif_paths: tuple[str, ...] = ()
+    # Pre-computed findings to inject alongside LLM/SARIF findings (e.g. from
+    # native static analyzers run before dispatch). Typed as tuple[Finding,...]
+    # but declared as tuple[object,...] to avoid circular import at module level.
+    extra_findings: tuple[object, ...] = ()
 
 
 TokenTableRenderer = Callable[[Sequence[AgentResult], float | None], str]
@@ -150,7 +154,7 @@ async def run_review(
     else:
         successes, failures = [], []
 
-    # Phase 1.5: inject SARIF findings (Capability B)
+    # Phase 1.5: inject SARIF findings (Capability B) and extra pre-computed findings
     raw_findings: list[Finding] = []
     sarif_elapsed_s: float | None = None
     if cfg.sarif_paths:
@@ -158,6 +162,12 @@ async def run_review(
         sarif_findings, sarif_elapsed_s = load_sarif_files(list(cfg.sarif_paths))
         raw_findings.extend(sarif_findings)
         logger.info("SARIF: loaded %d finding(s) from %d file(s)", len(sarif_findings), len(cfg.sarif_paths))
+    if cfg.extra_findings:
+        from ai_pr_review.findings.models import Finding as _Finding
+        for f in cfg.extra_findings:
+            if isinstance(f, _Finding):
+                raw_findings.append(f)
+        logger.info("analyzers: injected %d pre-computed finding(s)", len(cfg.extra_findings))
 
     # Phase 2: extract + merge + suppress
     for s in successes:
