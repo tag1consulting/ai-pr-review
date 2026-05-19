@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 import ai_pr_review.config as _config_module
-from ai_pr_review.config import _DEPRECATED_AI_VAR_ALIASES, _KNOWN_AI_VARS, ConfigError, ReviewConfig
+from ai_pr_review.config import (
+    _DEPRECATED_AI_VAR_ALIASES,
+    _KNOWN_AI_VARS,
+    ConfigError,
+    ReviewConfig,
+)
 
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
