@@ -96,7 +96,7 @@ jobs:
         continue-on-error: true  # repo may not have a Dockerfile on every branch
         uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # tag: v3.1.0, 2026-05-19
         with:
-          dockerfile: Dockerfile
+          dockerfile: Dockerfile.sarif-smoke-test
           format: sarif
           output-file: sarif-results/hadolint.sarif
           no-fail: true

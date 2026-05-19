@@ -1,0 +1,19 @@
+# Deliberately flawed Dockerfile to exercise Hadolint SARIF output.
+# DO NOT build or use — this file exists solely to trigger hadolint findings
+# in the sarif-prep CI job so we can verify end-to-end SARIF ingestion.
+
+# DL3006: always tag the version of an image explicitly
+FROM ubuntu:latest
+
+# DL3008: pin versions in apt-get install
+# DL3009: delete apt-get lists after installing
+RUN apt-get update && apt-get install -y curl git
+
+# DL3020: use COPY instead of ADD for files/folders
+ADD https://example.com/app.tar.gz /app/
+
+# DL4006: set the SHELL option -o pipefail before RUN with a pipe
+RUN curl -s https://example.com/setup.sh | bash
+
+# DL3025: use arguments JSON notation for CMD and ENTRYPOINT
+CMD python app.py
