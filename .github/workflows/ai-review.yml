@@ -94,51 +94,47 @@ jobs:
           no-fail: true
 
       # --- Semgrep (Python, YAML, Bash, Dockerfile) ---
-      # Pinned to commit SHA for supply-chain safety (tag v1, verified 2026-05-19).
-      # The org was renamed from returntocorp to semgrep; both currently resolve to the
-      # same SHA but the canonical reference should use the new org going forward.
-      # To update: gh api repos/semgrep/semgrep-action/git/ref/tags/v1 | jq -r '.object.sha'
-      # (The v1 tag is lightweight and points directly to a commit, so .object.sha is
-      # the commit SHA — no tag-object dereference needed for this particular tag.)
-      # semgrep-action writes its SARIF output to semgrep.sarif in the workspace root
-      # (documented at https://github.com/semgrep/semgrep-action#outputs); the
-      # subsequent step moves it into sarif-results/ for artifact upload.
+      # semgrep-action@v1 no longer supports the generateSarif input (removed in
+      # recent versions); we install the semgrep CLI directly and run it with
+      # --sarif output instead.  pip install is fast (<5s) since Python is already
+      # set up by the Ruff step above.
+      - name: Install semgrep
+        run: pip install --quiet semgrep
       - name: Semgrep (SARIF)
         continue-on-error: true
-        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # tag: v1, 2026-05-19
-        with:
-          config: p/ci
-          generateSarif: '1'
-      - name: Move Semgrep SARIF into results dir
-        if: always()
         run: |
-          if [[ -f semgrep.sarif ]]; then mv semgrep.sarif sarif-results/semgrep.sarif; fi
+          semgrep scan --config=p/ci --sarif \
+            --output=sarif-results/semgrep.sarif \
+            --error \
+            . || true
 
       # --- CodeQL (Python) ---
       # build-mode: none is required — it prevents CodeQL from running any autobuild
       # (e.g., setup.py, Makefile) that could execute untrusted PR code under
       # pull_request_target.  Python does not need a build step for analysis.
+      # CodeQL's analyze step writes (and may wipe) its output directory, so we
+      # direct it to a separate staging dir and move the result into sarif-results/
+      # afterward to avoid overwriting files produced by earlier steps.
       - name: Init CodeQL
         continue-on-error: true
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: python
           build-mode: none
       - name: Analyze CodeQL
         continue-on-error: true
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
-          output: sarif-results/
+          output: codeql-staging/
           # Ingest locally via AI review rather than uploading to GitHub Code Scanning.
           upload: false
-      - name: Rename CodeQL output for predictability
+      - name: Move CodeQL output into results dir
         if: always()
         run: |
           # codeql-action writes <language>.sarif; rename so downstream path is stable.
           # Use a glob in case the filename varies across codeql-action versions.
-          for f in sarif-results/python*.sarif; do
-            [[ -f "$f" && "$f" != "sarif-results/codeql-python.sarif" ]] && \
-              mv "$f" sarif-results/codeql-python.sarif && break
+          for f in codeql-staging/python*.sarif; do
+            [[ -f "$f" ]] && mv "$f" sarif-results/codeql-python.sarif && break
           done
 
       - name: List produced SARIF files
@@ -154,7 +150,7 @@ jobs:
           done
           ls -la sarif-results/ || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: sarif-results
@@ -232,7 +228,7 @@ jobs:
       # Download the SARIF artifacts produced by the sarif-prep job.
       # continue-on-error so a prep failure or cache miss doesn't block the review.
       - name: Download SARIF artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: sarif-results
