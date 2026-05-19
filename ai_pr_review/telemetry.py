@@ -14,6 +14,8 @@ import dataclasses
 import json
 import logging
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +54,8 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
         _emit_http(event, sink)
     else:
         logger.warning(
-            "telemetry: unrecognised sink scheme %r; expected file:// or http(s)://",
+            "telemetry: unrecognised sink scheme %r; supported schemes: file://, http://, https://. "
+            "Telemetry will not be emitted.",
             sink,
         )
 
@@ -60,16 +63,29 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
 def _emit_file(event: TelemetryEvent, path: str) -> None:
     """Append one JSON line to *path* (created if absent, appended if exists)."""
     try:
+        payload = json.dumps(dataclasses.asdict(event))
+    except (TypeError, ValueError) as exc:
+        logger.warning("telemetry: could not serialise event to JSON: %s", exc, exc_info=True)
+        return
+    try:
         with open(path, "a") as fh:
-            fh.write(json.dumps(dataclasses.asdict(event)) + "\n")
+            fh.write(payload + "\n")
     except OSError as exc:
         logger.warning("telemetry: could not write to file %r: %s", path, exc)
 
 
 def _emit_http(event: TelemetryEvent, url: str) -> None:
-    """POST *event* as JSON to *url*. Swallows all errors."""
+    """POST *event* as JSON to *url*. Swallows network and HTTP errors."""
     try:
-        import httpx
-        httpx.post(url, json=dataclasses.asdict(event), timeout=5.0)
-    except Exception as exc:
+        response = httpx.post(url, json=dataclasses.asdict(event), timeout=5.0)
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        logger.warning("telemetry: HTTP POST to %r failed (transient): %s", url, exc)
+        return
+    except httpx.HTTPError as exc:
         logger.warning("telemetry: HTTP POST to %r failed: %s", url, exc)
+        return
+    if response.status_code >= 400:
+        logger.warning(
+            "telemetry: HTTP POST to %r returned %d; check endpoint configuration",
+            url, response.status_code,
+        )

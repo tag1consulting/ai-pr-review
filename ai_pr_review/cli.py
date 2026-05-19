@@ -282,16 +282,16 @@ async def _run_review_async(config: ReviewConfig) -> int:
     _emit_review_result(result, base_ref=base_ref, head=head_sha)
 
     if config.telemetry_enabled:
+        import datetime
+        from collections import Counter
+
+        from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
+        from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
+
         try:
-            import datetime
-            from collections import Counter
-
-            from ai_pr_review.agents.dispatch import AgentResult
-            from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
-
             token_usage_by_agent: dict[str, dict[str, object]] = {}
             for ar in result.agent_results:
-                if isinstance(ar, AgentResult) and ar.token_log is not None:
+                if isinstance(ar, _AgentResult) and ar.token_log is not None:
                     tl = ar.token_log
                     token_usage_by_agent[ar.name] = {
                         "input": tl.input,
@@ -321,7 +321,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
             )
             emit_telemetry(telemetry_event, sink=config.telemetry_sink)
         except Exception as exc:
-            logger.warning("[ai-pr-review] telemetry emission failed: %s", exc)
+            logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
 
     return 0 if result.ok else 1
 

@@ -67,7 +67,7 @@ def test_file_sink_appends_on_multiple_calls(tmp_path: Path) -> None:
 
 def test_http_sink_posts_json() -> None:
     event = _sample_event()
-    with patch("httpx.post") as mock_post:
+    with patch("ai_pr_review.telemetry.httpx.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
         emit_telemetry(event, sink="https://example.com/telemetry")
     mock_post.assert_called_once()
@@ -78,10 +78,28 @@ def test_http_sink_posts_json() -> None:
     assert body["telemetry_schema_version"] == "1"
 
 
+def test_http_sink_plain_http_scheme() -> None:
+    event = _sample_event()
+    with patch("ai_pr_review.telemetry.httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        emit_telemetry(event, sink="http://internal.example.com/telemetry")
+    mock_post.assert_called_once()
+    assert mock_post.call_args[0][0] == "http://internal.example.com/telemetry"
+
+
+def test_http_4xx_response_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    event = _sample_event()
+    with patch("ai_pr_review.telemetry.httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=401)
+        with caplog.at_level(logging.WARNING):
+            emit_telemetry(event, sink="https://example.com/telemetry")
+    assert any("401" in r.message for r in caplog.records)
+
+
 def test_http_failure_swallowed() -> None:
     import httpx
     event = _sample_event()
-    with patch("httpx.post", side_effect=httpx.NetworkError("connection refused")):
+    with patch("ai_pr_review.telemetry.httpx.post", side_effect=httpx.NetworkError("connection refused")):
         # must not raise
         emit_telemetry(event, sink="https://example.com/telemetry")
 
@@ -89,7 +107,7 @@ def test_http_failure_swallowed() -> None:
 def test_http_timeout_swallowed() -> None:
     import httpx
     event = _sample_event()
-    with patch("httpx.post", side_effect=httpx.TimeoutException("timeout")):
+    with patch("ai_pr_review.telemetry.httpx.post", side_effect=httpx.TimeoutException("timeout")):
         emit_telemetry(event, sink="https://example.com/telemetry")
 
 
@@ -146,3 +164,28 @@ def test_file_sink_oserror_swallowed(tmp_path: Path, caplog: pytest.LogCaptureFi
         emit_telemetry(_sample_event(), sink=sink)
     # Should not raise; warning should appear
     assert any("telemetry" in r.message.lower() or "file" in r.message.lower() for r in caplog.records)
+
+
+def test_file_sink_serialization_error_swallowed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A TypeError from json.dumps (non-serialisable field) is logged and not re-raised."""
+    from unittest.mock import patch as _patch
+    import json as _json
+    sink = f"file://{tmp_path}/t.jsonl"
+    with caplog.at_level(logging.WARNING):
+        with _patch.object(_json, "dumps", side_effect=TypeError("not serialisable")):
+            emit_telemetry(_sample_event(), sink=sink)
+    assert not (tmp_path / "t.jsonl").exists()
+    assert any("serialis" in r.message.lower() or "json" in r.message.lower() for r in caplog.records)
+
+
+def test_config_telemetry_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """telemetry_enabled defaults to False — no AI_TELEMETRY_ENABLED set."""
+    for k in list(os.environ):
+        if k.startswith("AI_"):
+            monkeypatch.delenv(k, raising=False)
+    from ai_pr_review.config import ReviewConfig
+    config = ReviewConfig.from_env()
+    assert config.telemetry_enabled is False
+    assert config.telemetry_sink == ""
