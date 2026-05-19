@@ -121,6 +121,18 @@ def test_file_sink_relative_path_logs_warning(caplog: pytest.LogCaptureFixture) 
     assert any("relative" in r.message for r in caplog.records)
 
 
+def test_http_invalid_url_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """httpx.InvalidURL (permanent config error) is logged distinctly from transient failures."""
+    import httpx
+    event = _sample_event()
+    with (
+        patch("ai_pr_review.telemetry.httpx.post", side_effect=httpx.InvalidURL("bad url")),
+        caplog.at_level(logging.WARNING),
+    ):
+        emit_telemetry(event, sink="https://not-a-valid-url")
+    assert any("valid URL" in r.message or "not a valid" in r.message.lower() for r in caplog.records)
+
+
 def test_http_failure_swallowed() -> None:
     import httpx
     event = _sample_event()

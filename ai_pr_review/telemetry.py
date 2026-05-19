@@ -52,7 +52,7 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
         )
         return
     if sink.startswith("file://"):
-        _emit_file(event, sink[len("file://"):])
+        _emit_file(event, sink[len("file://"):], sink)
     elif sink.startswith("http://") or sink.startswith("https://"):
         _emit_http(event, sink)
     else:
@@ -63,7 +63,7 @@ def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
         )
 
 
-def _emit_file(event: TelemetryEvent, path: str) -> None:
+def _emit_file(event: TelemetryEvent, path: str, sink: str = "") -> None:
     """Append one JSON line to *path* (created if absent, appended if exists)."""
     if not path:
         logger.warning(
@@ -73,9 +73,9 @@ def _emit_file(event: TelemetryEvent, path: str) -> None:
         return
     if not path.startswith("/"):
         logger.warning(
-            "telemetry: file:// sink path %r is relative; use an absolute path "
+            "telemetry: file:// sink %r has a relative path; use an absolute path "
             "(expected format: file:///absolute/path/to/file.jsonl)",
-            path,
+            sink or f"file://{path}",
         )
         return
     try:
@@ -97,6 +97,13 @@ def _emit_http(event: TelemetryEvent, url: str) -> None:
         response = httpx.post(url, json=dataclasses.asdict(event), timeout=5.0)
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         logger.warning("telemetry: HTTP POST to %r failed (transient): %s", url, exc)
+        return
+    except httpx.InvalidURL as exc:
+        logger.warning(
+            "telemetry: AI_TELEMETRY_SINK %r is not a valid URL; telemetry will not be "
+            "emitted until the sink is corrected: %s",
+            url, exc,
+        )
         return
     except httpx.HTTPError as exc:
         logger.warning("telemetry: HTTP POST to %r failed: %s", url, exc)
