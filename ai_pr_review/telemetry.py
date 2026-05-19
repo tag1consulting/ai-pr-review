@@ -89,8 +89,8 @@ def _emit_file(event: TelemetryEvent, path: str, sink: str = "") -> None:
         with open(path, "a") as fh:
             fh.write(payload + "\n")
     except OSError as exc:
-        logger.warning("telemetry: could not write to file %r (%s): %s",
-                       path, type(exc).__name__, exc, exc_info=True)
+        logger.warning("telemetry: could not write to file %r: %s",
+                       path, exc, exc_info=True)
 
 
 def _emit_http(event: TelemetryEvent, url: str) -> None:

@@ -38,8 +38,9 @@ def _sample_event(**overrides: object) -> TelemetryEvent:
         learning_store_entries_loaded=5,
         telemetry_schema_version="1",
     )
-    for k, v in overrides.items():
-        setattr(base, k, v)
+    if overrides:
+        import dataclasses as _dc
+        return _dc.replace(base, **overrides)
     return base
 
 
