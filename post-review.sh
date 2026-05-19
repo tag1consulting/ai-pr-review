@@ -514,6 +514,18 @@ dismiss_stale_reviews() {
     return 0
   fi
 
+  # Protect the newest bot review (highest ID) — it represents the current run
+  # and must never be dismissed, even if all its threads are resolved.
+  # Only reviews older than the newest are eligible for dismissal.
+  local newest_review_id
+  newest_review_id=$(echo "$review_ids" | sort -n | tail -1)
+  local review_count
+  review_count=$(echo "$review_ids" | wc -l | tr -d ' ')
+  if [[ "$review_count" -lt 2 ]]; then
+    echo "Only one bot CHANGES_REQUESTED review exists — nothing to dismiss." >&2
+    return 0
+  fi
+
   # Fetch all review threads (paginated) to count unresolved threads per review
   local all_threads="[]"
   local cursor=""
@@ -564,6 +576,10 @@ dismiss_stale_reviews() {
     [[ -z "$review_id" ]] && continue
     if ! [[ "$review_id" =~ ^[0-9]+$ ]]; then
       echo "WARNING: skipping non-numeric review_id: ${review_id}" >&2
+      continue
+    fi
+    # Never dismiss the newest (current) bot review.
+    if [[ "$review_id" == "$newest_review_id" ]]; then
       continue
     fi
     # Count unresolved threads belonging to this review from pre-fetched data

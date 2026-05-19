@@ -176,19 +176,29 @@ def test_resolve_stale_already_resolved_skipped_silently() -> None:
     assert result.threads_skipped_no_marker == 0
 
 
-def test_resolve_stale_dismisses_only_our_changes_requested_with_all_threads_resolved() -> None:
-    """Dismiss our CHANGES_REQUESTED review only after all of OUR threads are resolved."""
-    # Our review #42 had one markered thread, now resolved
+def test_resolve_stale_dismisses_older_review_when_newer_exists() -> None:
+    """Dismiss an older bot review only when a newer bot review supersedes it."""
+    # Review #41 is the previous run (old); review #42 is the current run (new).
+    # Old run's thread is resolved; new run's thread is unresolved.
+    # Expected: #41 is dismissed, #42 is protected.
     nodes = [
         _thread(
-            "T42",
+            "T41",
             resolved=True,
             body=f"old finding\n{INLINE_MARKER}",
+            author="github-actions[bot]",
+            review_db_id=41,
+        ),
+        _thread(
+            "T42",
+            resolved=False,
+            body=f"new finding\n{INLINE_MARKER}",
             author="github-actions[bot]",
             review_db_id=42,
         ),
     ]
     reviews = [
+        {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
         {"id": 42, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
         # someone else's review — must NOT be dismissed
         {"id": 43, "state": "CHANGES_REQUESTED", "user": {"login": "other-bot[bot]"}},
@@ -196,7 +206,14 @@ def test_resolve_stale_dismisses_only_our_changes_requested_with_all_threads_res
     dismissed: list[str] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
         if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T42", "isResolved": True}}}}
+                )
             return httpx.Response(200, json=_threads_response(nodes))
         if req.method == "GET" and "/reviews" in str(req.url):
             return httpx.Response(200, json=reviews)
@@ -209,7 +226,43 @@ def test_resolve_stale_dismisses_only_our_changes_requested_with_all_threads_res
     result = prov.resolve_stale()
     assert result.reviews_dismissed == 1
     assert len(dismissed) == 1
-    assert "/reviews/42/dismissals" in dismissed[0]
+    assert "/reviews/41/dismissals" in dismissed[0]
+    # The newest review (#42) must never be dismissed.
+    assert not any("/reviews/42/dismissals" in d for d in dismissed)
+
+
+def test_resolve_stale_never_dismisses_sole_bot_review() -> None:
+    """When only one bot CHANGES_REQUESTED review exists, never dismiss it.
+
+    This is the key regression guard for issue #323: a single-review scenario
+    (first run on a PR, or author hasn't pushed a fix yet) must not dismiss the
+    only active review just because its threads were resolved by housekeeping.
+    """
+    nodes = [
+        _thread(
+            "T42",
+            resolved=True,
+            body=f"finding\n{INLINE_MARKER}",
+            author="github-actions[bot]",
+            review_db_id=42,
+        ),
+    ]
+    reviews = [
+        {"id": 42, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=reviews)
+        if req.method == "PUT":
+            raise AssertionError("PUT dismiss must not be called for the sole bot review")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.reviews_dismissed == 0
 
 
 def test_resolve_stale_wont_dismiss_when_unresolved_markered_thread_exists() -> None:
@@ -297,14 +350,17 @@ def test_fetch_review_threads_graphql_200_with_errors_recorded() -> None:
 
 def test_dismiss_stale_reviews_paginates_reviews_list() -> None:
     """_dismiss_stale_reviews must follow Link: rel=next headers when listing reviews."""
-    # All threads are resolved so dismiss logic proceeds
+    # All threads are resolved so dismiss logic proceeds.
+    # Review #41 is the old run (to be dismissed); review #42 is the current run
+    # (newest, protected).  They span two pages to exercise pagination.
     nodes: list[dict] = []
 
-    # Page 1: no matching reviews
+    # Page 1: non-matching review + the old bot review to dismiss
     reviews_page1 = [
         {"id": 10, "state": "APPROVED", "user": {"login": "github-actions[bot]"}},
+        {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
     ]
-    # Page 2: the CHANGES_REQUESTED review we should dismiss
+    # Page 2: the newest (current) bot review — must NOT be dismissed
     reviews_page2 = [
         {"id": 42, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
     ]
@@ -329,4 +385,5 @@ def test_dismiss_stale_reviews_paginates_reviews_list() -> None:
     prov, _ = _make_provider(handler)
     result = prov.resolve_stale()
     assert result.reviews_dismissed == 1
-    assert any("/reviews/42/dismissals" in d for d in dismissed)
+    assert any("/reviews/41/dismissals" in d for d in dismissed)
+    assert not any("/reviews/42/dismissals" in d for d in dismissed)

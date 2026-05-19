@@ -7,6 +7,7 @@ successful post (2.FR-10).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -37,6 +38,8 @@ from ai_pr_review.vcs.protocol import (
     SummaryResult,
 )
 
+_log = logging.getLogger(__name__)
+
 _BOT_LOGIN_DEFAULT: Final[str] = "github-actions[bot]"
 
 _GRAPHQL_PATH: Final[str] = "/graphql"
@@ -55,6 +58,22 @@ def _parse_next_link(link_header: str) -> str | None:
         if 'rel="next"' in rels:
             return url
     return None
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    """Convert value to int, returning default on ValueError/TypeError.
+
+    Logs a warning when a non-None value cannot be converted, so unexpected
+    API payloads (schema changes, malformed responses) are visible in logs.
+    """
+    try:
+        if isinstance(value, (int, float, str, bytes)):
+            return int(value)
+    except (ValueError, TypeError):
+        pass
+    if value is not None:
+        _log.warning("_safe_int: unexpected non-integer review ID %r; skipping", value)
+    return default
 
 
 @dataclass(frozen=True)
@@ -522,7 +541,13 @@ class GitHubProvider:
     def _dismiss_stale_reviews(self, threads: Sequence[dict[str, Any]]) -> int:
         """Dismiss CHANGES_REQUESTED reviews from our bot whose threads are all
         resolved, but only when at least one such thread was authored by us
-        (marker gate via thread-body check already applied above)."""
+        (marker gate via thread-body check already applied above).
+
+        The newest bot CHANGES_REQUESTED review (highest ID) is never dismissed
+        — it represents the current run and must remain until superseded by a
+        future run.  Only older reviews with zero unresolved markered threads
+        are eligible.
+        """
         c = self.config
         reviews: list[dict[str, Any]] = []
         url: str | None = f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews"
@@ -537,6 +562,21 @@ class GitHubProvider:
             reviews.extend(resp.json() or [])
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None
+
+        # Identify all bot CHANGES_REQUESTED reviews so we can protect the newest.
+        bot_cr_ids: list[int] = [
+            _safe_int(r.get("id"))
+            for r in reviews
+            if r.get("state") == "CHANGES_REQUESTED"
+            and (r.get("user") or {}).get("login") == c.bot_login
+            and _safe_int(r.get("id")) > 0
+        ]
+        if len(bot_cr_ids) < 2:
+            # Zero reviews: nothing to dismiss.
+            # Exactly one review: it is the current run — never dismiss it.
+            return 0
+        newest_id = max(bot_cr_ids)
+
         # Map review id -> unresolved thread count, only counting threads
         # where the comment body carries OUR inline marker.
         unresolved_by_review: dict[int, int] = {}
@@ -558,9 +598,11 @@ class GitHubProvider:
                 continue
             if (review.get("user") or {}).get("login") != c.bot_login:
                 continue
-            rid = int(review.get("id", 0))
+            rid = _safe_int(review.get("id"))
             if rid <= 0:
                 continue
+            if rid == newest_id:
+                continue  # never dismiss the current run
             if unresolved_by_review.get(rid, 0) > 0:
                 continue
             resp = self.client.request(
