@@ -425,7 +425,15 @@ class GitLabProvider:
                 existing_notes = []
             if existing_notes:
                 keep = existing_notes[0]
-                keep_id = int(keep["id"])
+                keep_id_raw = keep.get("id")
+                if keep_id_raw is None:
+                    logger.warning(
+                        "gitlab: token table: summary note missing 'id' field; skipping"
+                    )
+                    existing_notes = []
+            if existing_notes:
+                keep = existing_notes[0]
+                keep_id = int(keep.get("id"))  # type: ignore[arg-type]  # validated above
                 old_body = keep.get("body") or ""
                 # Avoid doubling if a previous run already appended the table.
                 details_idx = old_body.find("<details>")

@@ -531,7 +531,10 @@ def _build_token_table_accordion(
             sarif_elapsed_s=sarif_elapsed_s,
         )
     except Exception as exc:
-        logger.warning("token table: could not render table: %s", exc, exc_info=True)
+        logger.warning(
+            "token table: could not render table (pricing_file=%r): %s",
+            pricing_file, exc, exc_info=True,
+        )
         return ""
 
     return (
