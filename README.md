@@ -417,7 +417,7 @@ CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, 
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the review comment. The table uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
+After each review run, a collapsible **Token usage by agent** table is appended to the summary comment (`engine: python`) or the review body (`engine: bash`). On incremental runs the table is refreshed in place — the first-run PR summary is preserved and only the token data is replaced. The table uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
 
 | Column | Description |
 |--------|-------------|

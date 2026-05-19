@@ -7,11 +7,19 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.9.2
+
+**Token cost table updated on every run (PR #304).** Previously (`engine: python`) the collapsible token cost table was only posted on the first review run and never refreshed. It now updates on every incremental run: the first-run PR summary text is preserved and only the `<details>` accordion is replaced with fresh token data from the latest run.
+
+**Token table upsert bug fixes.** Fixed two bugs introduced in v0.9.1: (1) `_upsert_token_table` was a synchronous call inside an async function, blocking the anyio event loop during the GitHub API call; converted to `async def` with `anyio.to_thread.run_sync`. (2) HTTP-level errors from the VCS provider (403, 404, 422) were silently swallowed because providers return `SummaryResult(ok=False)` rather than raising — the return value is now checked and logged as a warning.
+
+**`phpstan_level` default aligned to bash engine.** The Python engine was defaulting to `PHPSTAN_LEVEL=5`; the bash engine and documentation both specify `3`. Both are now `3`.
+
 ## What's new in v0.9.1
 
 **Language detection expanded to 23 languages (PR #297).** The Python engine (`engine: python`) now detects Kotlin, Swift, C#, Scala, Terraform, YAML, SQL, Lua, Perl, plus Drupal PHP extensions (`.module`, `.theme`, `.inc`) and Ruby build files (`.rake`, `.gemspec`). Tree-sitter context enrichment (Capability A) covers all 23 language keys.
 
-**PR summarizer and token cost table wired (PR #299).** On first-run reviews (`engine: python`), the engine now automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. Skipped on incremental runs (SHA watermark active).
+**PR summarizer and token cost table wired (PR #299).** On first-run reviews (`engine: python`), the engine now automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. The token cost table is updated on every run (see v0.9.2 below); the PR summary is posted on first run only.
 
 **Structured logging — Epic 4, Story 1 (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](#structured-logging-epic-4) for the full env-var reference.
 
@@ -119,7 +127,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the review comment showing:
+After each review run, a collapsible **Token usage by agent** table is appended to the summary comment (`engine: python`) or the review body (`engine: bash`). On the Python engine, the table is refreshed on every run — incremental reviews update the token data in place while preserving the first-run PR summary above it.
 
 The table layout adapts based on cache activity:
 
