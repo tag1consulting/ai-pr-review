@@ -45,13 +45,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes.
 
 ## Adding a language profile
 
+The canonical language list lives in `ai_pr_review/languages.py:_EXT_MAP`; `lib/languages.sh:detect_language()` is a port and must stay in sync with it.
+
 Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `lib/languages.sh`).
 
 | Extension(s) | Language key | Profile file |
 |---|---|---|
 | `go` | `Go` | `language-profiles/go.md` |
 | `py` | `Python` | `language-profiles/python.md` |
-| `js`, `jsx` | `JavaScript` | *(no profile)* |
+| `js`, `jsx` | `JavaScript` | `language-profiles/javascript.md` |
 | `ts`, `tsx` | `TypeScript` | `language-profiles/typescript.md` |
 | `php`, `module`, `theme`, `inc` | `PHP` | `language-profiles/php.md` |
 | `sh`, `bash` | `Shell` | `language-profiles/shell.md` |
@@ -59,15 +61,15 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 | `rs` | `Rust` | `language-profiles/rust.md` |
 | `java` | `Java` | `language-profiles/java.md` |
 | `c`, `h`, `cpp`, `hpp`, `cc`, `cxx` | `C++` | `language-profiles/c++.md` |
-| `tf`, `tfvars` | `Terraform` | *(no profile)* |
-| `yaml`, `yml` | `YAML` | *(no profile)* |
-| `kt`, `kts` | `Kotlin` | *(no profile)* |
-| `swift` | `Swift` | *(no profile)* |
-| `cs` | `CSharp` | *(no profile)* |
-| `scala`, `sbt` | `Scala` | *(no profile)* |
-| `sql` | `SQL` | *(no profile)* |
-| `lua` | `Lua` | *(no profile)* |
-| `pl`, `pm` | `Perl` | *(no profile)* |
+| `tf`, `tfvars` | `Terraform` | `language-profiles/terraform.md` |
+| `yaml`, `yml` | `YAML` | `language-profiles/yaml.md` |
+| `kt`, `kts` | `Kotlin` | `language-profiles/kotlin.md` |
+| `swift` | `Swift` | `language-profiles/swift.md` |
+| `cs` | `CSharp` | `language-profiles/csharp.md` |
+| `scala`, `sbt` | `Scala` | `language-profiles/scala.md` |
+| `sql` | `SQL` | `language-profiles/sql.md` |
+| `lua` | `Lua` | `language-profiles/lua.md` |
+| `pl`, `pm` | `Perl` | `language-profiles/perl.md` |
 
 ## Test-file detection
 
