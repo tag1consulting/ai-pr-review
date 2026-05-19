@@ -59,7 +59,7 @@ def test_basic_error_result() -> None:
         ]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert len(findings) == 1
     f = findings[0]
     assert f.severity == "High"
@@ -76,7 +76,7 @@ def test_warning_maps_to_medium() -> None:
         results=[{"level": "warning", "message": {"text": "Style issue"}}]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].severity == "Medium"
 
 
@@ -85,7 +85,7 @@ def test_note_maps_to_low() -> None:
         results=[{"level": "note", "message": {"text": "Suggestion"}}]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].severity == "Low"
 
 
@@ -94,7 +94,7 @@ def test_none_level_maps_to_low() -> None:
         results=[{"level": "none", "message": {"text": "Informational"}}]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].severity == "Low"
 
 
@@ -103,7 +103,7 @@ def test_missing_level_defaults_to_medium() -> None:
         results=[{"message": {"text": "No level"}}]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].severity == "Medium"
 
 
@@ -113,7 +113,7 @@ def test_rule_help_used_as_remediation() -> None:
         results=[{"ruleId": "SEC001", "message": {"text": "SQL injection"}}],
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].remediation == "Use parameterized queries."
 
 
@@ -133,7 +133,7 @@ def test_file_uri_prefix_stripped() -> None:
         ]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].file == "workspace/src/x.py"
 
 
@@ -152,7 +152,7 @@ def test_multiple_runs_merged() -> None:
         ],
     }
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert len(findings) == 2
     sources = {f.source for f in findings}
     assert "sarif:lintA" in sources
@@ -164,7 +164,7 @@ def test_multiple_files_aggregated() -> None:
     sarif_b = _minimal_sarif(driver_name="B", results=[{"message": {"text": "b1"}}])
     path_a = _write_sarif(sarif_a)
     path_b = _write_sarif(sarif_b)
-    findings = load_sarif_files([path_a, path_b])
+    findings, _ = load_sarif_files([path_a, path_b])
     assert len(findings) == 2
 
 
@@ -173,7 +173,7 @@ def test_multiple_files_aggregated() -> None:
 # ---------------------------------------------------------------------------
 
 def test_missing_file_returns_empty(tmp_path: Path) -> None:
-    findings = load_sarif_files([str(tmp_path / "nonexistent.sarif")])
+    findings, _ = load_sarif_files([str(tmp_path / "nonexistent.sarif")])
     assert findings == []
 
 
@@ -183,19 +183,19 @@ def test_invalid_json_returns_empty() -> None:
     ) as f:
         f.write("NOT JSON{")
         path = f.name
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings == []
 
 
 def test_non_dict_root_returns_empty() -> None:
     path = _write_sarif([1, 2, 3])
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings == []
 
 
 def test_no_runs_key_returns_empty() -> None:
     path = _write_sarif({"version": "2.1.0"})
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings == []
 
 
@@ -204,7 +204,7 @@ def test_empty_message_skips_result() -> None:
         results=[{"level": "error", "message": {"text": ""}}]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings == []
 
 
@@ -213,13 +213,27 @@ def test_result_without_location_has_empty_file() -> None:
         results=[{"level": "warning", "message": {"text": "global issue"}}]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert findings[0].file == ""
     assert findings[0].line is None
 
 
 def test_load_empty_paths_list() -> None:
-    assert load_sarif_files([]) == []
+    findings, elapsed = load_sarif_files([])
+    assert findings == []
+    assert elapsed >= 0.0
+
+
+def test_load_sarif_files_returns_elapsed() -> None:
+    findings, elapsed = load_sarif_files([])
+    assert isinstance(findings, list)
+    assert isinstance(elapsed, float)
+    assert elapsed >= 0.0
+
+    # Nonexistent file: fail-soft returns empty list with timing
+    findings2, elapsed2 = load_sarif_files(["nonexistent_file.sarif"])
+    assert findings2 == []
+    assert elapsed2 >= 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +306,7 @@ def test_finding_with_traversal_uri_drops_file_field() -> None:
         ]
     )
     path = _write_sarif(sarif)
-    findings = load_sarif_files([path])
+    findings, _ = load_sarif_files([path])
     assert len(findings) == 1
     assert findings[0].file == "", "traversal path must be dropped"
 
@@ -307,7 +321,7 @@ def test_unreadable_sarif_logs_warning(tmp_path, caplog):
 
     missing = tmp_path / "ghost.sarif"
     with caplog.at_level(logging.WARNING, logger="ai_pr_review.analyzers.sarif"):
-        result = load_sarif_files([str(missing)])
+        result, _ = load_sarif_files([str(missing)])
     assert result == []
     assert any("[ai-pr-review] WARNING:" in r.message for r in caplog.records)
 
@@ -318,6 +332,6 @@ def test_invalid_json_sarif_logs_warning(tmp_path, caplog):
     bad = tmp_path / "bad.sarif"
     bad.write_text("NOT JSON{", encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="ai_pr_review.analyzers.sarif"):
-        result = load_sarif_files([str(bad)])
+        result, _ = load_sarif_files([str(bad)])
     assert result == []
     assert any("[ai-pr-review] WARNING:" in r.message for r in caplog.records)

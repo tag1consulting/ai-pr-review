@@ -63,6 +63,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # Set by the engine at startup and inherited by analyzer subprocesses;
         # not a user-configured input but must be known to avoid ConfigError.
         "AI_PR_REVIEW_CORRELATION_ID",
+        # --- Epic 4: Capability 2 — telemetry hooks ---
+        "AI_TELEMETRY_ENABLED",
+        "AI_TELEMETRY_SINK",
     }
 )
 
@@ -105,7 +108,7 @@ class ReviewConfig(BaseModel):
     max_inline: int = 10
     max_tokens_per_agent: int = 4096
     enable_suggestions: bool = True
-    cache_priming: bool = True
+    cache_priming: bool = False
     llm_prompt_caching: str = "auto"
     confidence_threshold: int = 75
     max_diff_lines: int = 5000
@@ -173,6 +176,10 @@ class ReviewConfig(BaseModel):
     # --- Epic 4: Capability 1 — structured logging ---
     log_format: str = "human"
     log_level: str = "WARNING"
+
+    # --- Epic 4: Capability 2 — telemetry hooks ---
+    telemetry_enabled: bool = False
+    telemetry_sink: str = ""
 
     @field_validator("review_mode")
     @classmethod
@@ -277,7 +284,7 @@ class ReviewConfig(BaseModel):
             max_inline=_int("AI_MAX_INLINE", 10),
             max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 4096),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
-            cache_priming=_bool("AI_CACHE_PRIMING", True),
+            cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),
             confidence_threshold=_int("AI_CONFIDENCE_THRESHOLD", 75),
             max_diff_lines=_int("MAX_DIFF_LINES", 5000),
@@ -329,4 +336,6 @@ class ReviewConfig(BaseModel):
             compute_output=os.environ.get("AI_PR_REVIEW_COMPUTE_OUTPUT", ""),
             log_format=os.environ.get("AI_LOG_FORMAT", "human"),
             log_level=os.environ.get("AI_LOG_LEVEL", "WARNING"),
+            telemetry_enabled=_bool("AI_TELEMETRY_ENABLED", False),
+            telemetry_sink=os.environ.get("AI_TELEMETRY_SINK", ""),
         )

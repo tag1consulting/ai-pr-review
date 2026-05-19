@@ -19,9 +19,13 @@ from ai_pr_review.context.symbols import (
 )
 
 
-def _estimate_tokens(text: str) -> int:
+def estimate_tokens(text: str) -> int:
     """Rough token estimate: 4 chars ≈ 1 token, with a 10% safety margin."""
     return int(len(text) / 4 * 1.1)
+
+
+# Backward-compatible alias for internal callers that used the private name.
+_estimate_tokens = estimate_tokens
 
 
 def _format_definition(d: Definition) -> str:

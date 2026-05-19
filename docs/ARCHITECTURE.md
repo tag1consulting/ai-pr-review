@@ -214,14 +214,20 @@ messages: [{ role: "user", content: "Please perform your review now." }]
 
 Weighted across typical PR traffic (70% cold / 25% hot): **~47% cheaper on average**.
 
-#### Cache priming (issue #144) — opt-in tuning knob
+#### Cache priming (issues #144, #153) — opt-in tuning knob
 
 `AI_CACHE_PRIMING=true` serializes 1-2 cache-writing calls before Tier 1 fan-out so remaining agents hit a guaranteed-warm cache:
 
 1. `code-reviewer` (Sonnet primer for CODE_CONTEXT_MSG cohort) concurrently with
 2. `security-reviewer` (Opus primer, pulled forward from Tier 2 in full mode)
 
-**Default is `false`.** Live benchmarks showed priming was cost-neutral vs the unprimed baseline and added +30s wall-clock latency. Left as an opt-in knob for environments where opportunistic hits fail (strict rate limits, proxy serialization).
+**Default is `false`.** Investigation (#153) concluded that opportunistic cache hits from the parallel fan-out are sufficient in normal environments:
+
+- The 7-agent fan-out has ~100-500ms natural stagger between calls (different system-prompt sizes 5-35 KB, different model TTFT, HTTP connection-pool serialization), which is enough time for the first cache write to become visible before subsequent agents reach the Anthropic API.
+- A single-sample benchmark (PR #137, ~1185 diff lines, 8 agents, Bedrock Sonnet/Opus proxy) showed **zero cost difference** vs unprimed, with priming adding **+30s wall-clock (+20%)** overhead from the serial barrier.
+- Anthropic's cache becomes visible faster than worst-case documentation suggests; agents starting within a few hundred milliseconds typically see each other's cache writes.
+
+Cache priming remains as an opt-in for environments where opportunistic hits fail — strict rate-limit policies that serialize concurrent requests, proxy implementations that queue rather than multiplex, or single-agent sequential dispatch modes. See [configuration reference](configuration.md) for `AI_CACHE_PRIMING`.
 
 #### Semantic change
 

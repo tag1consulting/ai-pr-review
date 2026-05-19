@@ -628,6 +628,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Resolve event-type endpoints
         id: endpoints

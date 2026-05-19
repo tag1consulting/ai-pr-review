@@ -40,6 +40,14 @@ class AgentResult:
     prompt was incomplete — callers may want to surface this to the user
     or exclude the output from downstream consumers that require the
     missing capability."""
+    context_tokens_used: int = 0
+    """Token count of the <symbol-context> block prepended for this agent.
+    Zero when context enrichment was disabled or produced no context.
+    E4.S3: used by the CLI to populate the Context enrichment row in the
+    token cost table."""
+    elapsed_ms: int = 0
+    """Wall-clock milliseconds from call start to response received.
+    E4.S4: used by cli.py to populate agent_latency_ms in TelemetryEvent."""
 
 
 @dataclass(frozen=True)
@@ -258,19 +266,19 @@ def _build_user_message(
     diff_text: str,
     spec: AgentSpec,
     context: DispatchContext,
-) -> str:
+) -> tuple[str, int]:
     """Build the user message for an agent, optionally prepending symbol context.
 
-    When context enrichment is enabled and the agent is eligible, extracts
-    symbol references from the diff, looks up their definitions via ripgrep,
-    and prepends a ``<symbol-context>`` block.  Falls back to raw diff on any
-    error (fail-soft).
+    Returns ``(message, context_tokens_used)``.  When context enrichment is
+    enabled and the agent is eligible, extracts symbol references from the diff,
+    looks up their definitions via ripgrep, and prepends a ``<symbol-context>``
+    block.  Falls back to raw diff on any error (fail-soft).
     """
     if not (context.enable_context_enrichment and spec.context_enrichment_eligible):
-        return diff_text
+        return diff_text, 0
 
     try:
-        from ai_pr_review.context.budget import build_context_block
+        from ai_pr_review.context.budget import build_context_block, estimate_tokens
         from ai_pr_review.context.symbols import lookup_definitions
         from ai_pr_review.context.treesitter import extract_symbol_refs
 
@@ -278,7 +286,7 @@ def _build_user_message(
         language = _detect_primary_language(context.changed_files)
         refs = extract_symbol_refs(diff_text, language)
         if not refs:
-            return diff_text
+            return diff_text, 0
 
         defs = lookup_definitions(
             refs,
@@ -289,7 +297,8 @@ def _build_user_message(
         )
         ctx_block = build_context_block(defs, max_tokens=context.context_max_tokens)
         if ctx_block:
-            return ctx_block + "\n\n" + diff_text
+            ctx_tokens = estimate_tokens(ctx_block)
+            return ctx_block + "\n\n" + diff_text, ctx_tokens
     except Exception as exc:
         import logging
         # exc_info=True so unexpected errors (MemoryError, bugs in
@@ -300,7 +309,7 @@ def _build_user_message(
             spec.name, exc, exc_info=True,
         )
 
-    return diff_text
+    return diff_text, 0
 
 
 def _detect_primary_language(changed_files: list[str]) -> str:
@@ -374,7 +383,7 @@ async def _run_single_agent(
         model_id = context.premium_model if use_premium else context.standard_model
 
         # --- Epic 3: Capability A — context enrichment ---
-        user_message = _build_user_message(diff_text, spec, context)
+        user_message, context_tokens_used = _build_user_message(diff_text, spec, context)
 
         # --- Epic 3: Capability C — feedback loop injection ---
         system_prompt = prompt_path.read_text()
@@ -397,12 +406,15 @@ async def _run_single_agent(
             model=model_id,
         )
         truncated = response.stop_reason in ("max_tokens", "length", "MAX_TOKENS")
+        elapsed = int((time.monotonic() - start) * 1000)
         results.append(AgentResult(
             name=spec.name,
             output=response.text,
             token_log=usage,
             truncated=truncated,
             prompt_degraded=prompt_degraded,
+            context_tokens_used=context_tokens_used,
+            elapsed_ms=elapsed,
         ))
     except BaseException as exc:
         # Catch BaseException (not Exception) so SystemExit from llm/client.py

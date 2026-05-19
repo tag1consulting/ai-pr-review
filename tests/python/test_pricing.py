@@ -92,3 +92,191 @@ def test_parse_token_log_entry() -> None:
     assert te.output_tokens == 500
     assert te.cache_creation_tokens == 100
     assert te.cache_read_tokens == 50
+
+
+def test_emit_token_table_max_output_tokens_shown() -> None:
+    log = [
+        TokenEntry(
+            agent="code-reviewer",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=1234,
+            max_output_tokens=16384,
+        ),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING)
+    assert "1234 / 16384" in table
+    # Total row must use raw integer, not the formatted "N / cap" string
+    total_line = next(line for line in table.splitlines() if "**Total**" in line)
+    assert "**1234**" in total_line
+    assert "16384" not in total_line
+
+
+def test_emit_token_table_max_output_tokens_zero_omitted() -> None:
+    log = [
+        TokenEntry(
+            agent="code-reviewer",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=500,
+            max_output_tokens=0,
+        ),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING)
+    assert " / " not in table
+
+
+def test_emit_token_table_context_enrichment_row() -> None:
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, context_tokens=2048)
+    assert "Context enrichment" in table
+    assert "2048" in table
+    assert "*(context)*" in table
+
+
+def test_emit_token_table_context_enrichment_zero_omitted() -> None:
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, context_tokens=0)
+    assert "Context enrichment" not in table
+
+
+def test_emit_token_table_sarif_row() -> None:
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=0.34)
+    assert "SARIF ingestion" in table
+    assert "0.34s" in table
+    assert "*(timing)*" in table
+
+
+def test_emit_token_table_sarif_none_omitted() -> None:
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=None)
+    assert "SARIF ingestion" not in table
+
+
+def test_emit_token_table_baseline_6col_unchanged() -> None:
+    """Default params produce byte-for-byte identical 6-col output (story 4-3 guardrail)."""
+    log = [
+        TokenEntry(agent="code-reviewer", model="claude-sonnet-4-6", input_tokens=1000, output_tokens=500),
+    ]
+    expected = (
+        "| Agent | Model | Input | Output | Total | Est. Cost |\n"
+        "|-------|-------|------:|-------:|------:|----------:|\n"
+        "| code-reviewer | Sonnet 4.6 | 1000 | 500 | 1500 | $0.0105 |\n"
+        "| **Total** | | **1000** | **500** | **1500** | **$0.0105** |"
+    )
+    assert emit_token_table(log, _SAMPLE_PRICING) == expected
+
+
+def test_emit_token_table_baseline_8col_unchanged() -> None:
+    """Default params produce byte-for-byte identical 8-col output (story 4-3 guardrail)."""
+    log = [
+        TokenEntry(
+            agent="security-reviewer",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=200,
+            cache_read_tokens=50,
+        ),
+    ]
+    expected = (
+        "| Agent | Model | Input | Output | Cache Write | Cache Read | Total | Est. Cost |\n"
+        "|-------|-------|------:|-------:|------------:|-----------:|------:|----------:|\n"
+        "| security-reviewer | Sonnet 4.6 | 1000 | 500 | 200 | 50 | 1750 | $0.0112 |\n"
+        "| **Total** | | **1000** | **500** | **200** | **50** | **1750** | **$0.0112** |"
+    )
+    assert emit_token_table(log, _SAMPLE_PRICING) == expected
+
+
+def test_emit_token_table_supplementary_rows_8col_column_count() -> None:
+    log = [
+        TokenEntry(
+            agent="a",
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+            cache_creation_tokens=10,
+            cache_read_tokens=5,
+        ),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, context_tokens=512, sarif_elapsed_s=0.5)
+    lines = table.splitlines()
+    header_pipes = lines[0].count("|")
+    for line in lines[4:]:  # supplementary rows after Total
+        assert line.count("|") == header_pipes, f"Column mismatch in supplementary row: {line!r}"
+
+
+def test_emit_token_table_max_output_tokens_8col_total_row() -> None:
+    log = [
+        TokenEntry(
+            agent="a",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=1234,
+            cache_creation_tokens=200,
+            cache_read_tokens=50,
+            max_output_tokens=16384,
+        ),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING)
+    assert "1234 / 16384" in table
+    total_line = [ln for ln in table.splitlines() if "**Total**" in ln][0]
+    assert "1234 / 16384" not in total_line
+    assert "**1234**" in total_line
+
+
+def test_emit_token_table_sarif_zero_elapsed_shown() -> None:
+    """sarif_elapsed_s=0.0 is not None — row must appear."""
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=0.0)
+    assert "SARIF ingestion" in table
+    assert "0.00s" in table
+
+
+def test_emit_token_table_sarif_nan_omitted() -> None:
+    """sarif_elapsed_s=float('nan') must not produce a row (non-finite guard)."""
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=float("nan"))
+    assert "SARIF ingestion" not in table
+    assert "nan" not in table
+
+
+def test_emit_token_table_sarif_inf_omitted() -> None:
+    """sarif_elapsed_s=float('inf') must not produce a row (non-finite guard)."""
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=float("inf"))
+    assert "SARIF ingestion" not in table
+    assert "inf" not in table
+
+
+def test_emit_token_table_supplementary_rows_not_in_total_cost() -> None:
+    log = [
+        TokenEntry(agent="a1", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+        TokenEntry(agent="a2", model="claude-sonnet-4-6", input_tokens=200, output_tokens=100),
+    ]
+    base_table = emit_token_table(log, _SAMPLE_PRICING)
+    augmented_table = emit_token_table(
+        log, _SAMPLE_PRICING, context_tokens=500, sarif_elapsed_s=1.5
+    )
+    # Extract Total row from each; cost should be identical
+    base_total_line = next(ln for ln in base_table.splitlines() if "**Total**" in ln)
+    aug_total_line = next(ln for ln in augmented_table.splitlines() if "**Total**" in ln)
+    assert base_total_line == aug_total_line
+    # Raw token totals unchanged
+    assert "**150**" in aug_total_line  # total_out = 150
+    assert "**300**" in aug_total_line  # total_in = 300

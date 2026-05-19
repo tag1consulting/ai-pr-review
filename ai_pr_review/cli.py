@@ -176,12 +176,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     # 4. Build feedback addendum when AI_FEEDBACK_LOOP=1 (before dispatch context)
     feedback_addendum = ""
+    feedback_entries_count = 0
     if config.enable_feedback_loop:
         try:
             from ai_pr_review.feedback.inject import build_feedback_addendum
             from ai_pr_review.feedback.store import make_store
             store = make_store(config)
             entries = store.load_recent()
+            feedback_entries_count = len(entries)
             feedback_addendum = build_feedback_addendum(
                 entries, diff_text, max_tokens=config.feedback_max_tokens
             )
@@ -209,8 +211,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         standard_model=config.model_standard,
         premium_model=config.model_premium,
         enable_suggestions=config.enable_suggestions,
-        cache_priming_env=os.environ.get("AI_CACHE_PRIMING") or "false",
-        prompt_caching_env=os.environ.get("LLM_PROMPT_CACHING") or "auto",
+        cache_priming_env="true" if config.cache_priming else "false",
+        prompt_caching_env=config.llm_prompt_caching,
         enable_context_enrichment=config.enable_context_enrichment,
         context_max_tokens=config.context_max_tokens,
         context_lookup_lines=config.context_lookup_lines,
@@ -282,6 +284,48 @@ async def _run_review_async(config: ReviewConfig) -> int:
         )
 
     _emit_review_result(result, base_ref=base_ref, head=head_sha)
+
+    if config.telemetry_enabled:
+        import datetime
+        from collections import Counter
+
+        from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
+        from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
+
+        try:
+            token_usage_by_agent: dict[str, dict[str, object]] = {}
+            for ar in result.agent_results:
+                if isinstance(ar, _AgentResult) and ar.token_log is not None:
+                    tl = ar.token_log
+                    token_usage_by_agent[ar.name] = {
+                        "input": tl.input,
+                        "output": tl.output,
+                        "cache_creation": tl.cache_creation,
+                        "cache_read": tl.cache_read,
+                        "model": tl.model,
+                    }
+
+            findings_by_severity: dict[str, int] = dict(Counter(f.severity for f in result.findings))
+
+            telemetry_event = TelemetryEvent(
+                correlation_id=os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""),
+                timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                repository=config.github_repository,
+                pr_number=str(config.pr_number),
+                outcome=result.outcome.event,
+                findings_count=len(result.findings),
+                findings_by_severity=findings_by_severity,
+                failed_agents=[f.name for f in result.failed_agents],
+                token_usage_by_agent=token_usage_by_agent,
+                agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results if isinstance(ar, _AgentResult)},
+                sarif_elapsed_s=result.sarif_elapsed_s,
+                learning_store_entries_loaded=feedback_entries_count,
+                telemetry_schema_version="1",
+            )
+            emit_telemetry(telemetry_event, sink=config.telemetry_sink)
+        except Exception as exc:
+            logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
+
     return 0 if result.ok else 1
 
 
@@ -443,9 +487,11 @@ async def _upsert_token_table(
     first-run summary written by run_review().
     """
     from ai_pr_review.agents.dispatch import AgentResult
+    from ai_pr_review.agents.roster import AGENTS
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
 
     try:
+        _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
         token_log: list[TokenEntry] = []
         for ar in result.agent_results:
             if isinstance(ar, AgentResult) and ar.token_log is not None:
@@ -457,14 +503,28 @@ async def _upsert_token_table(
                     output_tokens=tl.output,
                     cache_creation_tokens=tl.cache_creation,
                     cache_read_tokens=tl.cache_read,
+                    max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
                 ))
 
         if not token_log:
             return
 
+        # All enriched agents receive the same context block; take the max (which
+        # equals the single non-zero value) rather than summing to avoid double-counting.
+        context_tokens = max(
+            (ar.context_tokens_used for ar in result.agent_results
+             if isinstance(ar, AgentResult)),
+            default=0,
+        )
+
         pricing_file = str(script_dir / "config" / "model-pricing.json")
         pricing_data = load_pricing(pricing_file)
-        table = emit_token_table(token_log, pricing_data)
+        table = emit_token_table(
+            token_log,
+            pricing_data,
+            context_tokens=context_tokens,
+            sarif_elapsed_s=result.sarif_elapsed_s,
+        )
     except Exception as exc:
         logger.warning(
             "token table: could not generate token table (pricing_file=%r): %s",

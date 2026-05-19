@@ -56,6 +56,7 @@ class ReviewResult:
     agent_results: list[AgentResult] = field(default_factory=list)
     skipped: bool = False
     skip_reason: str = ""
+    sarif_elapsed_s: float | None = None
 
     @property
     def ok(self) -> bool:
@@ -147,9 +148,10 @@ async def run_review(
 
     # Phase 1.5: inject SARIF findings (Capability B)
     raw_findings: list[Finding] = []
+    sarif_elapsed_s: float | None = None
     if cfg.sarif_paths:
         from ai_pr_review.analyzers.sarif import load_sarif_files
-        sarif_findings = load_sarif_files(list(cfg.sarif_paths))
+        sarif_findings, sarif_elapsed_s = load_sarif_files(list(cfg.sarif_paths))
         raw_findings.extend(sarif_findings)
         logger.info("SARIF: loaded %d finding(s) from %d file(s)", len(sarif_findings), len(cfg.sarif_paths))
 
@@ -241,6 +243,7 @@ async def run_review(
         findings_post=findings_result,
         stale=stale_result,
         agent_results=successes,
+        sarif_elapsed_s=sarif_elapsed_s,
     )
 
 
