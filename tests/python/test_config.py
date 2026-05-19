@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import ai_pr_review.config as _config_module
-from ai_pr_review.config import _KNOWN_AI_VARS, ConfigError, ReviewConfig
+from ai_pr_review.config import _DEPRECATED_AI_VAR_ALIASES, _KNOWN_AI_VARS, ConfigError, ReviewConfig
 
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,6 +53,30 @@ def test_unknown_ai_var_typo_suggestion(monkeypatch: pytest.MonkeyPatch) -> None
         ReviewConfig.from_env()
 
 
+def test_deprecated_alias_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AI_REVIEW_IGNORE_MERGE_COMMITS is accepted without ConfigError."""
+    monkeypatch.setenv("AI_REVIEW_IGNORE_MERGE_COMMITS", "true")
+    ReviewConfig.from_env()  # must not raise
+    stderr = capsys.readouterr().err
+    assert "AI_REVIEW_IGNORE_MERGE_COMMITS" in stderr
+    assert "AI_IGNORE_MERGE_COMMITS" in stderr
+
+
+def test_deprecated_aliases_are_disjoint_from_known_vars() -> None:
+    """Deprecated aliases must NOT be in _KNOWN_AI_VARS.
+
+    If a key appears in both, _check_unknown_ai_vars hits the _KNOWN_AI_VARS
+    branch first and skips the deprecation warning entirely.
+    """
+    overlap = set(_DEPRECATED_AI_VAR_ALIASES) & _KNOWN_AI_VARS
+    assert not overlap, (
+        f"Keys in both _DEPRECATED_AI_VAR_ALIASES and _KNOWN_AI_VARS "
+        f"(warning will never fire): {overlap}"
+    )
+
+
 def test_invalid_review_mode() -> None:
     with pytest.raises(ValueError):
         ReviewConfig.model_validate({"review_mode": "invalid"})
@@ -78,10 +102,13 @@ def test_all_ai_vars_read_in_from_env_are_known() -> None:
     source = Path(_config_module.__file__).read_text()
     # Extract all "AI_..." string literals from the source
     ai_vars_in_source = set(re.findall(r'"(AI_[A-Z_]+)"', source))
-    # _KNOWN_AI_VARS must be a superset (internal vars like AI_AGENT are allowed extras)
-    missing = ai_vars_in_source - _KNOWN_AI_VARS
+    # Both _KNOWN_AI_VARS and _DEPRECATED_AI_VAR_ALIASES are valid homes
+    # (internal vars like AI_AGENT are allowed extras in _KNOWN_AI_VARS)
+    covered = _KNOWN_AI_VARS | set(_DEPRECATED_AI_VAR_ALIASES)
+    missing = ai_vars_in_source - covered
     assert not missing, (
-        f"AI_* vars referenced in config.py but missing from _KNOWN_AI_VARS: {missing}"
+        f"AI_* vars referenced in config.py but missing from both "
+        f"_KNOWN_AI_VARS and _DEPRECATED_AI_VAR_ALIASES: {missing}"
     )
 
 
