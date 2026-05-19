@@ -274,8 +274,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
     )
 
     # 9. Append token cost table to the summary comment (upsert).
-    # Skip on incremental runs: summary_text is empty (summarizer was skipped),
-    # so upsert would overwrite the first-run summary with just "## AI Review".
+    # Skip on incremental runs: the summarizer is skipped so summary_text holds
+    # at most a merge-filter fallback note; upsert would clobber the first-run summary.
     if not is_incremental and result.agent_results and result.summary and result.summary.ok:
         await _upsert_token_table(result, provider, head_sha, script_dir, summary_text)
 
@@ -441,9 +441,9 @@ async def _upsert_token_table(
     Agent findings are posted separately by post_findings() as a GitHub PR
     review object, which is unaffected by this upsert.
 
-    Only called on non-incremental runs: on incremental runs summary_text is
-    empty (summarizer was skipped), and posting would overwrite the first-run
-    summary comment with just the accordion header.
+    Only called on non-incremental runs: on incremental runs the summarizer is
+    skipped, so upsert would clobber the first-run summary with at most the
+    merge-filter fallback note plus the accordion header.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
@@ -484,7 +484,11 @@ async def _upsert_token_table(
     # Run in a thread: provider.post_summary is synchronous blocking I/O.
     try:
         new_body = (summary_text.strip() or "## AI Review").rstrip() + "\n\n" + accordion
-        await anyio.to_thread.run_sync(lambda: provider.post_summary(new_body, head_sha))
+        sr = await anyio.to_thread.run_sync(lambda: provider.post_summary(new_body, head_sha))
+        if not sr.ok:
+            logger.warning(
+                "token table: post_summary returned an error: %s", sr.error,
+            )
     except Exception as exc:
         logger.warning(
             "token table: could not post token table to PR comment: %s: %s",
