@@ -428,7 +428,7 @@ async def _run_summarizer(
         system_prompt = build_summarizer_system_prompt(prompt_path, include_diagram=True)
 
         commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"{base_ref}..HEAD"]
+        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
         proc: subprocess.CompletedProcess[str] | None = None
         try:
             # Run in a thread to avoid blocking the anyio event loop.
