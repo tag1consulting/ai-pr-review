@@ -124,7 +124,7 @@ class ReviewConfig(BaseModel):
     # Number of concurrent LLM calls. Derived from parallel in resolve_models().
     concurrency: int = 4
     max_inline: int = 10
-    max_tokens_per_agent: int = 4096
+    max_tokens_per_agent: int = 8192
     enable_suggestions: bool = True
     cache_priming: bool = False
     llm_prompt_caching: str = "auto"
@@ -300,7 +300,7 @@ class ReviewConfig(BaseModel):
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
             max_inline=_int("AI_MAX_INLINE", 10),
-            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 4096),
+            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 8192),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
             cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),
