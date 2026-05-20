@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class TelemetryEvent:
-    """Structured event emitted after each review run (schema version 1)."""
+    """Structured event emitted after each review run (schema version 2).
+
+    Schema version history:
+      1 — initial fields
+      2 — added provider, model_standard, model_premium, review_mode,
+          is_incremental; failed_agent_latency_ms
+    """
 
     correlation_id: str
     timestamp: str
@@ -37,6 +43,13 @@ class TelemetryEvent:
     sarif_elapsed_s: float | None
     learning_store_entries_loaded: int
     telemetry_schema_version: str
+    # Schema v2 additions
+    provider: str = ""
+    model_standard: str = ""
+    model_premium: str = ""
+    review_mode: str = ""
+    is_incremental: bool = False
+    failed_agent_latency_ms: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:

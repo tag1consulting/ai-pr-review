@@ -250,3 +250,90 @@ def test_event_agent_latency_ms_populated(tmp_path: Path) -> None:
     emit_telemetry(event, sink=sink)
     data = json.loads((tmp_path / "t.jsonl").read_text())
     assert data["agent_latency_ms"] == {"code-reviewer": 1250, "security-reviewer": 3400}
+
+
+# ---------------------------------------------------------------------------
+# Schema v2 additions
+# ---------------------------------------------------------------------------
+
+def test_schema_version_v2(tmp_path: Path) -> None:
+    """Default _sample_event carries schema version 2 fields."""
+    event = _sample_event(
+        telemetry_schema_version="2",
+        provider="anthropic",
+        model_standard="claude-sonnet-4-6",
+        model_premium="claude-opus-4-7",
+        review_mode="full",
+        is_incremental=False,
+        failed_agent_latency_ms={},
+    )
+    sink = f"file://{tmp_path}/t.jsonl"
+    emit_telemetry(event, sink=sink)
+    data = json.loads((tmp_path / "t.jsonl").read_text())
+    assert data["telemetry_schema_version"] == "2"
+    assert data["provider"] == "anthropic"
+    assert data["model_standard"] == "claude-sonnet-4-6"
+    assert data["model_premium"] == "claude-opus-4-7"
+    assert data["review_mode"] == "full"
+    assert data["is_incremental"] is False
+    assert data["failed_agent_latency_ms"] == {}
+
+
+def test_failed_agent_latency_ms_populated(tmp_path: Path) -> None:
+    """failed_agent_latency_ms captures elapsed_ms from failed agents."""
+    event = _sample_event(
+        telemetry_schema_version="2",
+        failed_agents=["security-reviewer"],
+        failed_agent_latency_ms={"security-reviewer": 750},
+    )
+    sink = f"file://{tmp_path}/t.jsonl"
+    emit_telemetry(event, sink=sink)
+    data = json.loads((tmp_path / "t.jsonl").read_text())
+    assert data["failed_agent_latency_ms"] == {"security-reviewer": 750}
+
+
+def test_event_v2_has_all_fields() -> None:
+    """TelemetryEvent includes all schema v2 fields."""
+    event = _sample_event(
+        telemetry_schema_version="2",
+        provider="anthropic",
+        model_standard="claude-sonnet-4-6",
+        model_premium="claude-opus-4-7",
+        review_mode="quick",
+        is_incremental=True,
+        failed_agent_latency_ms={"edge-case-hunter": 200},
+    )
+    d = asdict(event)
+    v2_fields = {"provider", "model_standard", "model_premium", "review_mode",
+                 "is_incremental", "failed_agent_latency_ms"}
+    assert v2_fields <= d.keys()
+    assert d["is_incremental"] is True
+    assert d["failed_agent_latency_ms"] == {"edge-case-hunter": 200}
+
+
+def test_skip_outcome_roundtrips(tmp_path: Path) -> None:
+    """'skipped' outcome string roundtrips through file sink."""
+    event = _sample_event(
+        telemetry_schema_version="2",
+        outcome="skipped",
+        findings_count=0,
+        findings_by_severity={},
+    )
+    sink = f"file://{tmp_path}/t.jsonl"
+    emit_telemetry(event, sink=sink)
+    data = json.loads((tmp_path / "t.jsonl").read_text())
+    assert data["outcome"] == "skipped"
+
+
+def test_dry_run_outcome_roundtrips(tmp_path: Path) -> None:
+    """'dry_run' outcome string roundtrips through file sink."""
+    event = _sample_event(
+        telemetry_schema_version="2",
+        outcome="dry_run",
+        findings_count=0,
+        findings_by_severity={},
+    )
+    sink = f"file://{tmp_path}/t.jsonl"
+    emit_telemetry(event, sink=sink)
+    data = json.loads((tmp_path / "t.jsonl").read_text())
+    assert data["outcome"] == "dry_run"

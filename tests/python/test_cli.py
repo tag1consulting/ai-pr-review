@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from ai_pr_review.cli import cli
@@ -342,3 +343,101 @@ class TestParseChangedFilesPayload:
         assert result is not None
         assert "a.py" in result.all_files
         assert "b.py" in result.all_files
+
+
+class TestWriteStepSummary:
+    """Tests for _write_step_summary (E4.S3 — GITHUB_STEP_SUMMARY output)."""
+
+    def _make_runtime(self, tmp_path: Path) -> object:
+        """Build a minimal ReviewRuntime-like object for step summary tests."""
+        from pathlib import Path as _Path
+        from unittest.mock import MagicMock
+
+        from ai_pr_review.manifest import parse_changed_files_payload
+
+        rt = MagicMock()
+        rt.changed_files = parse_changed_files_payload(["foo.py", "bar.py"])
+        rt.config.review_mode = "full"
+        rt.agents = [MagicMock(), MagicMock()]
+        rt.sarif_elapsed_s = None
+        rt.script_dir = _Path(".")
+        rt.dispatch_context.max_tokens_per_agent = 8192
+        return rt
+
+    def _make_result(self) -> object:
+        from unittest.mock import MagicMock
+
+        from ai_pr_review.findings.models import Finding
+        result = MagicMock()
+        result.findings = [
+            Finding(severity="High", file="foo.py", line=1,
+                    finding="x", remediation="y", agent="code-reviewer",
+                    source="code-reviewer", confidence=90),
+        ]
+        result.failed_agents = []
+        result.agent_results = []
+        result.skipped = False
+        return result
+
+    def test_writes_to_step_summary_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When GITHUB_STEP_SUMMARY is set, a summary file is written."""
+        from ai_pr_review.cli import _write_step_summary
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        _write_step_summary(self._make_result(), self._make_runtime(tmp_path), "PR summary text")
+
+        content = summary_path.read_text()
+        assert "## AI PR Review Results" in content
+        assert "**Mode:** full" in content
+        assert "**Findings:** 1" in content
+        assert "PR summary text" in content
+
+    def test_no_op_when_env_unset(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When GITHUB_STEP_SUMMARY is not set, no file is created."""
+        from ai_pr_review.cli import _write_step_summary
+
+        monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+        # Should not raise and should not create any file
+        _write_step_summary(self._make_result(), self._make_runtime(tmp_path), "summary")
+        assert not list(tmp_path.glob("*.md"))
+
+    def test_non_runtime_object_is_noop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-ReviewRuntime runtime arg is silently skipped."""
+        from ai_pr_review.cli import _write_step_summary
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+        _write_step_summary(self._make_result(), object(), "summary")
+        assert not summary_path.exists()
+
+    def test_failed_agents_listed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Failed agent names appear in the step summary."""
+        from unittest.mock import MagicMock
+
+        from ai_pr_review.cli import _write_step_summary
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        result = self._make_result()
+        fa = MagicMock()
+        fa.name = "security-reviewer"
+        result.failed_agents = [fa]
+
+        _write_step_summary(result, self._make_runtime(tmp_path), "")
+        content = summary_path.read_text()
+        assert "security-reviewer" in content
+
+    def test_oserror_is_swallowed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                  caplog: pytest.LogCaptureFixture) -> None:
+        """An OSError writing the file logs a warning and does not propagate."""
+        import logging
+
+        from ai_pr_review.cli import _write_step_summary
+
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", "/nonexistent/dir/step_summary.md")
+        with caplog.at_level(logging.WARNING):
+            _write_step_summary(self._make_result(), self._make_runtime(tmp_path), "")
+        assert any("step summary" in r.message.lower() for r in caplog.records)

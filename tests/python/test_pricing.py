@@ -280,3 +280,66 @@ def test_emit_token_table_supplementary_rows_not_in_total_cost() -> None:
     # Raw token totals unchanged
     assert "**150**" in aug_total_line  # total_out = 150
     assert "**300**" in aug_total_line  # total_in = 300
+
+
+# ---------------------------------------------------------------------------
+# E4.S3: effective_max_tokens in _build_token_table_accordion
+# ---------------------------------------------------------------------------
+
+def test_build_token_table_accordion_effective_max_tokens(tmp_path: object) -> None:
+    """effective_max_tokens overrides the roster default in the output cap column."""
+    from pathlib import Path
+    from unittest.mock import patch as _patch
+
+    from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+
+    ar = AgentResult(
+        name="code-reviewer",
+        output="findings output",
+        token_log=TokenUsage(
+            input=100, output=80, cache_creation=0, cache_read=0, model="claude-sonnet-4-6"
+        ),
+        truncated=False,
+        elapsed_ms=1000,
+        context_tokens_used=0,
+    )
+
+    # Patch load_pricing at its source module; script_dir is arbitrary (pricing file not read)
+    import ai_pr_review.cli as _cli
+    with _patch("ai_pr_review.pricing.load_pricing", return_value=_SAMPLE_PRICING):
+        result = _cli._build_token_table_accordion(
+            [ar],
+            None,
+            Path("."),
+            effective_max_tokens=4096,
+        )
+    # The output cell should render "80 / 4096" not "80 / 16384" (roster default)
+    assert "80 / 4096" in result
+    assert "80 / 16384" not in result
+
+
+def test_build_token_table_accordion_falls_back_to_roster_default() -> None:
+    """When effective_max_tokens=0, the roster default is used."""
+    from pathlib import Path
+    from unittest.mock import patch as _patch
+
+    from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+    from ai_pr_review.agents.roster import AGENTS
+
+    roster_cap = next(s.max_output_tokens for s in AGENTS if s.name == "code-reviewer")
+
+    ar = AgentResult(
+        name="code-reviewer",
+        output="findings output",
+        token_log=TokenUsage(
+            input=100, output=80, cache_creation=0, cache_read=0, model="claude-sonnet-4-6"
+        ),
+        truncated=False,
+        elapsed_ms=1000,
+        context_tokens_used=0,
+    )
+
+    import ai_pr_review.cli as _cli
+    with _patch("ai_pr_review.pricing.load_pricing", return_value=_SAMPLE_PRICING):
+        result = _cli._build_token_table_accordion([ar], None, Path("."), effective_max_tokens=0)
+    assert f"80 / {roster_cap}" in result
