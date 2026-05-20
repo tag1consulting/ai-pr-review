@@ -29,9 +29,18 @@ def load_language_profiles(labels: Iterable[str], script_dir: Path) -> str:
         Newline-joined content of all found profile files, or an empty
         string when no profiles are found.
     """
+    label_list = list(labels)
     parts: list[str] = []
     profiles_dir = script_dir / "language-profiles"
-    for label in labels:
+    if not profiles_dir.is_dir():
+        if label_list:
+            _log.warning(
+                "language_profiles: profiles directory not found (%s); "
+                "check AI_PR_REVIEW_SCRIPT_DIR (%s)",
+                profiles_dir, script_dir,
+            )
+        return ""
+    for label in label_list:
         path = profiles_dir / f"{label.lower()}.md"
         if path.is_file():
             try:

@@ -190,7 +190,10 @@ async def run_review(
         try:
             token_table = token_table_renderer(successes, sarif_elapsed_s)
         except Exception as exc:
-            logger.warning("token table renderer raised: %s", exc, exc_info=True)
+            logger.warning(
+                "token table renderer raised (head_sha=%s): %s",
+                diff.head_sha, exc, exc_info=True,
+            )
 
     # Phase 4: post summary then findings (AC5 ordering)
     try:

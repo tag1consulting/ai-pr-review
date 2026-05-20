@@ -565,11 +565,12 @@ class GitHubProvider:
 
         # Identify all bot CHANGES_REQUESTED reviews so we can protect the newest.
         bot_cr_ids: list[int] = [
-            _safe_int(r.get("id"))
+            rid
             for r in reviews
             if r.get("state") == "CHANGES_REQUESTED"
             and (r.get("user") or {}).get("login") == c.bot_login
-            and _safe_int(r.get("id")) > 0
+            for rid in (_safe_int(r.get("id")),)
+            if rid > 0
         ]
         if len(bot_cr_ids) < 2:
             # Zero reviews: nothing to dismiss.
@@ -605,6 +606,7 @@ class GitHubProvider:
                 continue  # never dismiss the current run
             if unresolved_by_review.get(rid, 0) > 0:
                 continue
+            _log.debug("github: dismissing stale review %d", rid)
             resp = self.client.request(
                 "PUT",
                 self._dismiss_url(rid),
@@ -613,6 +615,10 @@ class GitHubProvider:
             if resp.status_code < 400:
                 dismissed += 1
             else:
+                _log.warning(
+                    "github: failed to dismiss review %d: HTTP %d",
+                    rid, resp.status_code,
+                )
                 self._errors.append(
                     f"dismiss review {rid}: HTTP {resp.status_code}: {resp.text[:200]}"
                 )
