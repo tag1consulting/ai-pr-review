@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from ai_pr_review.cli import cli
@@ -349,8 +350,9 @@ class TestWriteStepSummary:
 
     def _make_runtime(self, tmp_path: Path) -> object:
         """Build a minimal ReviewRuntime-like object for step summary tests."""
-        from unittest.mock import MagicMock
         from pathlib import Path as _Path
+        from unittest.mock import MagicMock
+
         from ai_pr_review.manifest import parse_changed_files_payload
 
         rt = MagicMock()
@@ -364,6 +366,7 @@ class TestWriteStepSummary:
 
     def _make_result(self) -> object:
         from unittest.mock import MagicMock
+
         from ai_pr_review.findings.models import Finding
         result = MagicMock()
         result.findings = [
@@ -412,6 +415,7 @@ class TestWriteStepSummary:
     def test_failed_agents_listed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Failed agent names appear in the step summary."""
         from unittest.mock import MagicMock
+
         from ai_pr_review.cli import _write_step_summary
 
         summary_path = tmp_path / "step_summary.md"
@@ -430,6 +434,7 @@ class TestWriteStepSummary:
                                   caplog: pytest.LogCaptureFixture) -> None:
         """An OSError writing the file logs a warning and does not propagate."""
         import logging
+
         from ai_pr_review.cli import _write_step_summary
 
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", "/nonexistent/dir/step_summary.md")

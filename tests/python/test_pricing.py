@@ -288,8 +288,9 @@ def test_emit_token_table_supplementary_rows_not_in_total_cost() -> None:
 
 def test_build_token_table_accordion_effective_max_tokens(tmp_path: object) -> None:
     """effective_max_tokens overrides the roster default in the output cap column."""
-    from unittest.mock import patch as _patch
     from pathlib import Path
+    from unittest.mock import patch as _patch
+
     from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
 
     ar = AgentResult(
@@ -319,8 +320,9 @@ def test_build_token_table_accordion_effective_max_tokens(tmp_path: object) -> N
 
 def test_build_token_table_accordion_falls_back_to_roster_default() -> None:
     """When effective_max_tokens=0, the roster default is used."""
-    from unittest.mock import patch as _patch
     from pathlib import Path
+    from unittest.mock import patch as _patch
+
     from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
     from ai_pr_review.agents.roster import AGENTS
 

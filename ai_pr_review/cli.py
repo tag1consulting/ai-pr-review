@@ -146,7 +146,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
         click.echo(f"Skipping review: {runtime.reason}", err=True)
         result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config)
         if config.telemetry_enabled:
-            await _emit_telemetry(result, config, 0, outcome_override="skipped")
+            try:
+                resolved_cfg = config.resolve_models()
+            except Exception:
+                resolved_cfg = config
+            await _emit_telemetry(result, resolved_cfg, 0, outcome_override="skipped")
         return 0 if result.ok else 1
 
     # Use the post-resolve_models() config stored on the runtime for all downstream use.
@@ -223,7 +227,8 @@ async def _emit_telemetry(
     import datetime
     from collections import Counter
 
-    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult, FailedAgent as _FailedAgent
+    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
+    from ai_pr_review.agents.dispatch import FailedAgent as _FailedAgent
     from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
 
     try:
