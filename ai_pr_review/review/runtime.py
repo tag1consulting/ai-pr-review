@@ -133,7 +133,7 @@ def build_review_runtime(
             feedback_addendum = build_feedback_addendum(
                 entries, diff_text, max_tokens=config.feedback_max_tokens
             )
-        except ModuleNotFoundError:
+        except ImportError:
             raise
         except Exception as exc:
             logger.warning(
@@ -219,7 +219,7 @@ def build_review_runtime(
                 "analyzers: %d finding(s) from native static analysis",
                 len(analyzer_findings),
             )
-    except ModuleNotFoundError:
+    except ImportError:
         raise
     except Exception as exc:
         logger.warning(
