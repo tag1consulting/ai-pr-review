@@ -39,7 +39,7 @@ render_with_liquid: false
 
 ## What's new in v0.9.3
 
-**Telemetry hooks — Epic 4, Story 2.** Set `AI_TELEMETRY_ENABLED=true` and `AI_TELEMETRY_SINK=file:///path/to/events.jsonl` (or an `http(s)://` endpoint) to receive one structured JSON event per review run. The event includes outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency, SARIF elapsed time, and the count of learning-store entries loaded. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues. See [Configuration → Telemetry hooks](#telemetry-hooks-epic-4) for the full env-var reference.
+**Telemetry hooks — Epic 4, Story 2.** Set `AI_TELEMETRY_ENABLED=true` and `AI_TELEMETRY_SINK=file:///path/to/events.jsonl` (or an `http(s)://` endpoint) to receive one structured JSON event per review run. The event includes outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency, SARIF elapsed time, and the count of learning-store entries loaded. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues. See [Configuration → Telemetry hooks](configuration#telemetry-hooks) for the full env-var reference.
 
 **Agent latency tracking — Epic 4, Story 4.** Each agent now records its wall-clock elapsed time (`elapsed_ms`). The value is included in the telemetry event's `agent_latency_ms` map and is available for future cost-table display.
 
@@ -63,7 +63,7 @@ render_with_liquid: false
 
 **PR summarizer and token cost table wired (PR #299).** On first-run reviews (`engine: python`), the engine now automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. The token cost table is updated on every run (see v0.9.2 below); the PR summary is posted on first run only.
 
-**Structured logging — Epic 4, Story 1 (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](#structured-logging-epic-4) for the full env-var reference.
+**Structured logging — Epic 4, Story 1 (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](configuration#structured-logging) for the full env-var reference.
 
 **Error surface polish — Epic 4, Story 5 (PR #300).** All internal exceptions now use a typed hierarchy (`AiPrReviewError` → `ConfigError` / `ProviderError` / `CapabilityError` / `AnalyzerError` / `EngineError`). Warning messages follow a consistent `[ai-pr-review] WARNING: <component>: <message>` format across all modules.
 
