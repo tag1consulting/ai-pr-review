@@ -133,6 +133,8 @@ def build_review_runtime(
             feedback_addendum = build_feedback_addendum(
                 entries, diff_text, max_tokens=config.feedback_max_tokens
             )
+        except ImportError:
+            raise
         except Exception as exc:
             logger.warning(
                 "feedback loop: could not load feedback store: %s", exc, exc_info=True
@@ -217,6 +219,8 @@ def build_review_runtime(
                 "analyzers: %d finding(s) from native static analysis",
                 len(analyzer_findings),
             )
+    except ImportError:
+        raise
     except Exception as exc:
         logger.warning(
             "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
@@ -239,7 +243,10 @@ def build_review_runtime(
             if sarif_findings:
                 logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
         except Exception as exc:
-            logger.warning("SARIF: load failed (fail-soft): %s", exc, exc_info=True)
+            logger.warning(
+                "SARIF: load failed (fail-soft) for %s: %s",
+                list(config.sarif_paths), exc, exc_info=True,
+            )
 
     extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
 

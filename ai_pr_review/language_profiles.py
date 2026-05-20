@@ -29,13 +29,19 @@ def load_language_profiles(labels: Iterable[str], script_dir: Path) -> str:
         Newline-joined content of all found profile files, or an empty
         string when no profiles are found.
     """
+    label_list = list(labels)
     parts: list[str] = []
     profiles_dir = script_dir / "language-profiles"
-    for label in labels:
+    for label in label_list:
         path = profiles_dir / f"{label.lower()}.md"
         if path.is_file():
             try:
                 parts.append(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError) as exc:
                 _log.warning("Skipping language profile for %s (%s): %s", label, path, exc, exc_info=True)
+    if not parts and label_list:
+        _log.warning(
+            "language_profiles: no profiles loaded for %s; check AI_PR_REVIEW_SCRIPT_DIR (%s)",
+            label_list, script_dir,
+        )
     return "\n".join(parts)
