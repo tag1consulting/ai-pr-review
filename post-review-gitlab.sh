@@ -65,6 +65,7 @@ resolve_project_id() {
 
 GL_API="${GITLAB_API_URL:-https://gitlab.com/api/v4}"
 MARKER_PREFIX="<!-- ai-pr-review-summary"
+INLINE_MARKER="<!-- ai-pr-review-inline -->"
 
 # ---------------------------------------------------------------------------
 # Temp file bookkeeping.
@@ -694,11 +695,12 @@ resolve_stale_discussions() {
     }
 
     local discussion_ids
-    discussion_ids=$(echo "$discussions_json" | jq -r --arg bot "$bot_username" '
+    discussion_ids=$(echo "$discussions_json" | jq -r --arg bot "$bot_username" --arg marker "<!-- ai-pr-review-inline -->" '
       .[] | select(
-        any(.notes[]; .author.username == $bot) and
+        (.notes[0].author.username == $bot) and
         (.notes[0].resolvable // false) == true and
-        (.notes[0].resolved // false) == false
+        (.notes[0].resolved // false) == false and
+        ((.notes[0].body // "") | contains($marker))
       ) | .id
     ' 2>/dev/null) || true
 
@@ -918,6 +920,10 @@ ${suggested_code}
       fi
 
       # Build the position JSON and post the discussion
+      comment_body="${comment_body}
+
+${INLINE_MARKER}"
+
       local position_json
       position_json=$(jq -n \
         --arg base_sha "$diff_base_sha" \

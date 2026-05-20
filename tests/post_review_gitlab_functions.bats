@@ -391,9 +391,159 @@ DIFF
   [ "${#gl_out}" -eq 65000 ] || { echo "GitLab should pass through: got ${#gl_out}" >&2; return 1; }
   [[ "$gl_out" != *"truncated"* ]] || { echo "GitLab should not truncate 65000 bytes" >&2; return 1; }
 }
+# ---------------------------------------------------------------------------
+# resolve_stale_discussions — marker gate
+# ---------------------------------------------------------------------------
 
+_load_resolve_stale() {
+  load_function "${PROJECT_ROOT}/post-review-gitlab.sh" resolve_stale_discussions
+  PROJECT_ID="123"
+  MR_NUMBER="1"
+  INLINE_MARKER="<!-- ai-pr-review-inline -->"
+  # Stub sleep to keep tests fast
+  sleep() { :; }
+}
 
+_disc_json() {
+  # Build a minimal discussions JSON array for stubbing gl_api.
+  # Args: <disc_id> <author> <body> <resolvable> <resolved>
+  local disc_id="$1" author="$2" body="$3" resolvable="$4" resolved="$5"
+  jq -n \
+    --arg id "$disc_id" \
+    --arg author "$author" \
+    --arg body "$body" \
+    --argjson resolvable "$resolvable" \
+    --argjson resolved "$resolved" \
+    '[{
+      "id": $id,
+      "notes": [{
+        "author": {"username": $author},
+        "body": $body,
+        "resolvable": $resolvable,
+        "resolved": $resolved
+      }]
+    }]'
+}
 
+@test "resolve_stale_discussions: resolves owned discussion with marker" {
+  _load_resolve_stale
 
+  gl_api() {
+    local method="$1" path="$2"
+    case "$method" in
+      GET)
+        if [[ "$path" == */user ]]; then
+          echo '{"username":"bot"}'
+        else
+          _disc_json "disc1" "bot" "finding text
+<!-- ai-pr-review-inline -->" true false
+        fi
+        ;;
+      PUT) return 0 ;;
+    esac
+  }
+
+  run resolve_stale_discussions
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Resolved 1 stale discussion" ]]
+}
+
+@test "resolve_stale_discussions: skips owned discussion without marker" {
+  _load_resolve_stale
+
+  gl_api() {
+    local method="$1" path="$2"
+    case "$method" in
+      GET)
+        if [[ "$path" == */user ]]; then
+          echo '{"username":"bot"}'
+        else
+          _disc_json "disc2" "bot" "unrelated bot comment — no marker" true false
+        fi
+        ;;
+      PUT) return 1 ;;  # should never be called
+    esac
+  }
+
+  run resolve_stale_discussions
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No stale discussions" ]]
+}
+
+@test "resolve_stale_discussions: skips already-resolved discussion with marker" {
+  _load_resolve_stale
+
+  gl_api() {
+    local method="$1" path="$2"
+    case "$method" in
+      GET)
+        if [[ "$path" == */user ]]; then
+          echo '{"username":"bot"}'
+        else
+          _disc_json "disc3" "bot" "finding text
+<!-- ai-pr-review-inline -->" true true
+        fi
+        ;;
+      PUT) return 1 ;;  # should never be called
+    esac
+  }
+
+  run resolve_stale_discussions
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No stale discussions" ]]
+}
+
+@test "resolve_stale_discussions: skips discussion by different user even with marker" {
+  _load_resolve_stale
+
+  gl_api() {
+    local method="$1" path="$2"
+    case "$method" in
+      GET)
+        if [[ "$path" == */user ]]; then
+          echo '{"username":"bot"}'
+        else
+          _disc_json "disc4" "otherbot" "finding
+<!-- ai-pr-review-inline -->" true false
+        fi
+        ;;
+      PUT) return 1 ;;  # should never be called
+    esac
+  }
+
+  run resolve_stale_discussions
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No stale discussions" ]]
+}
+
+@test "resolve_stale_discussions: skips when bot is reply author but not first-note author" {
+  _load_resolve_stale
+
+  # Discussion where notes[0] is from 'human', notes[1] is a bot reply with the
+  # marker. The old any(.notes[]) check would have matched; notes[0] check does not.
+  gl_api() {
+    local method="$1" path="$2"
+    case "$method" in
+      GET)
+        if [[ "$path" == */user ]]; then
+          echo '{"username":"bot"}'
+        else
+          echo '[{
+            "id": "disc5",
+            "notes": [
+              {"author": {"username": "human"}, "body": "original comment", "resolvable": true, "resolved": false},
+              {"author": {"username": "bot"}, "body": "bot reply\n<!-- ai-pr-review-inline -->", "resolvable": false, "resolved": false}
+            ]
+          }]'
+        fi
+        ;;
+      PUT) return 1 ;;  # should never be called
+    esac
+  }
+
+  run resolve_stale_discussions
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No stale discussions" ]]
+}
 
 
