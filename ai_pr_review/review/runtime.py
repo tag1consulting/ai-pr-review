@@ -133,7 +133,7 @@ def build_review_runtime(
             feedback_addendum = build_feedback_addendum(
                 entries, diff_text, max_tokens=config.feedback_max_tokens
             )
-        except ImportError:
+        except ModuleNotFoundError:
             raise
         except Exception as exc:
             logger.warning(
@@ -219,7 +219,7 @@ def build_review_runtime(
                 "analyzers: %d finding(s) from native static analysis",
                 len(analyzer_findings),
             )
-    except ImportError:
+    except ModuleNotFoundError:
         raise
     except Exception as exc:
         logger.warning(
@@ -230,22 +230,23 @@ def build_review_runtime(
     sarif_findings: list[_Finding] = []
     sarif_elapsed_s: float | None = None
     if config.sarif_paths:
+        sarif_paths = list(config.sarif_paths)
         try:
             from ai_pr_review.analyzers.sarif import load_sarif_files
-            sarif_raw, sarif_elapsed_s = load_sarif_files(list(config.sarif_paths))
+            sarif_raw, sarif_elapsed_s = load_sarif_files(sarif_paths)
             sarif_findings = [f for f in sarif_raw if isinstance(f, _Finding)]
             dropped = len(sarif_raw) - len(sarif_findings)
             if dropped:
                 logger.warning(
                     "SARIF: dropped %d non-Finding entries (schema mismatch in %s)",
-                    dropped, config.sarif_paths,
+                    dropped, sarif_paths,
                 )
             if sarif_findings:
                 logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
         except Exception as exc:
             logger.warning(
                 "SARIF: load failed (fail-soft) for %s: %s",
-                list(config.sarif_paths), exc, exc_info=True,
+                sarif_paths, exc, exc_info=True,
             )
 
     extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
