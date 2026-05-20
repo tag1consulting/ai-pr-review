@@ -7,6 +7,24 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.10.1
+
+**`max_tokens_per_agent` default corrected (PR #337, issue #334).** The Python engine's `config.py` defaulted to 4096 while `action.yml` documented 8192. Both now agree on 8192. Consumers relying on the Python engine default were getting half the intended token budget per agent.
+
+**GitLab stale discussion resolution scoped to bot-owned discussions (PR #338, issue #184).** `resolve_stale_discussions` previously matched any discussion where the bot appeared as _any_ note author, including reply threads started by other users. It now only resolves discussions where the bot is the first-note author and the body contains the `<!-- ai-pr-review-inline -->` inline marker. The marker is appended to all newly posted inline discussions, so existing discussions are unaffected.
+
+**Bash `dismiss_stale_reviews` hardened against silent failures (PR #342, issues #329, #325).** A jq parse failure on the GitHub reviews API response now emits a warning and returns early instead of silently continuing with an empty review ID list. An empty `newest_review_id` is similarly guarded.
+
+**Python engine observability and correctness improvements (PR #341, issues #327–#333).**
+- `ImportError` is no longer swallowed in the feedback loop and analyzer bridge fail-soft blocks — genuine import failures now propagate.
+- `_safe_int` is no longer called twice per review ID in `github.py`'s bot review collection loop.
+- SARIF load failure log now includes the file paths being loaded.
+- Token table renderer failure log now includes `head_sha` for context.
+- GitHub stale review dismissal now emits per-review-ID debug/warning log lines.
+- Missing `language-profiles/` directory now logs a structured warning pointing to `AI_PR_REVIEW_SCRIPT_DIR` rather than returning silently.
+
+**Language profiles loaded once per run (PR #343, issue #326).** The Python engine previously called `load_language_profiles()` on every agent dispatch. Profiles are now loaded once in `build_review_runtime()` and passed via `DispatchContext.language_profile_text`, eliminating redundant disk reads proportional to agent count.
+
 ## What's new in v0.10.0
 
 **Language profiles — 19 languages (PR #322).** Agent prompts now include per-language context blocks for every language detected in the diff. Profiles cover Python, Go, TypeScript, JavaScript, PHP, Shell, Ruby, Rust, Java, C++, Kotlin, Swift, C#, Scala, SQL, Lua, Perl, YAML, and Terraform. Each profile supplies language-specific patterns, common pitfalls, and framework conventions so agents apply targeted checks rather than generic heuristics. Profiles are loaded from `language-profiles/` and injected into the `DispatchContext`; the bash engine reads them from the same directory via `build_file_manifest()`.
