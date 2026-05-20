@@ -14,7 +14,6 @@ from pathlib import Path
 import anyio
 
 from ai_pr_review.agents.roster import AgentSpec
-from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.languages import detect_language
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
@@ -84,6 +83,9 @@ class DispatchContext:
     feedback_addendum: str = ""
     # #316: user-configurable per-agent output cap (0 = use roster default)
     max_tokens_per_agent: int = 0
+    # Pre-loaded language profile markdown (concatenated). Loaded once per run
+    # in build_review_runtime() and passed here to avoid per-agent disk reads.
+    language_profile_text: str = ""
 
     def __post_init__(self) -> None:
         if not self.standard_model:
@@ -405,10 +407,9 @@ async def _run_single_agent(
             system_prompt = system_prompt + "\n\n" + context.feedback_addendum
 
         # Inject language profile context (mirrors lib/diff.sh:297-306).
-        lang_labels = _unique_language_labels(context.changed_files)
-        lang_context = load_language_profiles(lang_labels, context.script_dir)
-        if lang_context:
-            system_prompt = system_prompt + "\n\n" + lang_context
+        # Profiles are pre-loaded once per run in build_review_runtime().
+        if context.language_profile_text:
+            system_prompt = system_prompt + "\n\n" + context.language_profile_text
 
         # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
         max_tokens = (

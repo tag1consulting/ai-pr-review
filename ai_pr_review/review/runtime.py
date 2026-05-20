@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ai_pr_review.agents.dispatch import DispatchContext
+from ai_pr_review.agents.dispatch import DispatchContext, _unique_language_labels
 from ai_pr_review.config import ReviewConfig
+from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
@@ -163,7 +164,11 @@ def build_review_runtime(
     cf = parse_changed_files_payload(raw_paths)
     _changed_list = cf.all_files
 
-    # 7. Build dispatch context.
+    # 7. Load language profiles once for the whole run (avoid per-agent disk reads).
+    _lang_labels = _unique_language_labels(_changed_list)
+    _language_profile_text = load_language_profiles(_lang_labels, script_dir)
+
+    # 8. Build dispatch context.
     dispatch_ctx = DispatchContext(
         script_dir=script_dir,
         mode=config.review_mode,
@@ -181,9 +186,10 @@ def build_review_runtime(
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,
         max_tokens_per_agent=config.max_tokens_per_agent,
+        language_profile_text=_language_profile_text,
     )
 
-    # 8. Evaluate gates and filter agent roster.
+    # 9. Evaluate gates and filter agent roster.
     gates = evaluate_gates(
         diff_text=diff_text,
         changed_files=cf,
@@ -203,7 +209,7 @@ def build_review_runtime(
             list(gates),
         )
 
-    # 9. Run native static analyzers — fail-soft; findings merged via extra_findings.
+    # 10. Run native static analyzers — fail-soft; findings merged via extra_findings.
     analyzer_findings: list[_Finding] = []
     try:
         from ai_pr_review.analyzers.bridge import run_analyzers
@@ -222,7 +228,7 @@ def build_review_runtime(
             "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
         )
 
-    # 10. Load SARIF findings and merge with analyzer findings into extra_findings.
+    # 11. Load SARIF findings and merge with analyzer findings into extra_findings.
     sarif_findings: list[_Finding] = []
     sarif_elapsed_s: float | None = None
     if config.sarif_paths:
@@ -243,7 +249,7 @@ def build_review_runtime(
 
     extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
 
-    # 11. Load global + local suppression rules (fail-soft — malformed rules file
+    # 12. Load global + local suppression rules (fail-soft — malformed rules file
     # must not abort the review; proceed with no suppressions and log a warning).
     from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
     try:
@@ -256,7 +262,7 @@ def build_review_runtime(
         )
         suppression_rules = ()
 
-    # 12. Build orchestrator config.
+    # 13. Build orchestrator config.
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
