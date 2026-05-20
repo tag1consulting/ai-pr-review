@@ -697,7 +697,7 @@ resolve_stale_discussions() {
     local discussion_ids
     discussion_ids=$(echo "$discussions_json" | jq -r --arg bot "$bot_username" --arg marker "<!-- ai-pr-review-inline -->" '
       .[] | select(
-        any(.notes[]; .author.username == $bot) and
+        (.notes[0].author.username == $bot) and
         (.notes[0].resolvable // false) == true and
         (.notes[0].resolved // false) == false and
         ((.notes[0].body // "") | contains($marker))

@@ -516,4 +516,34 @@ _disc_json() {
   [[ "$output" =~ "No stale discussions" ]]
 }
 
+@test "resolve_stale_discussions: skips when bot is reply author but not first-note author" {
+  _load_resolve_stale
+
+  # Discussion where notes[0] is from 'human', notes[1] is a bot reply with the
+  # marker. The old any(.notes[]) check would have matched; notes[0] check does not.
+  gl_api() {
+    local method="$1" path="$2"
+    case "$method" in
+      GET)
+        if [[ "$path" == */user ]]; then
+          echo '{"username":"bot"}'
+        else
+          echo '[{
+            "id": "disc5",
+            "notes": [
+              {"author": {"username": "human"}, "body": "original comment", "resolvable": true, "resolved": false},
+              {"author": {"username": "bot"}, "body": "bot reply\n<!-- ai-pr-review-inline -->", "resolvable": false, "resolved": false}
+            ]
+          }]'
+        fi
+        ;;
+      PUT) return 1 ;;  # should never be called
+    esac
+  }
+
+  run resolve_stale_discussions
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No stale discussions" ]]
+}
+
 
