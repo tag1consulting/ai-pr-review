@@ -143,6 +143,17 @@ These variables enable optional capabilities that are off by default. All requir
 
 > **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
 
+### Telemetry hooks
+
+These variables configure the Python engine's telemetry system (`engine: python` only). Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_TELEMETRY_ENABLED` | `false` | Set to `true` to emit a structured JSON event per review run. |
+| `AI_TELEMETRY_SINK` | — | Where to send telemetry. Accepts `file:///absolute/path/events.jsonl` (appended line-by-line) or an `http(s)://` endpoint (POST). |
+
+Each event includes: outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency (`agent_latency_ms`), SARIF elapsed time, and the count of learning-store entries loaded.
+
 ### Structured logging
 
 These variables configure the Python engine's logging system (`engine: python` only). Set them in your workflow `env:` block.

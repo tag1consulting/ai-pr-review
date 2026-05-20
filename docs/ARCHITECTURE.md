@@ -36,6 +36,7 @@ When `AI_PR_REVIEW_ENGINE=python`, the entrypoint is `ai_pr_review.cli:review`. 
    - Builds the VCS provider via `provider_from_env`.
    - Fetches the last-reviewed SHA and computes the diff (`ai_pr_review/review/compute.py`).
    - Returns `SkipPlan` if compute reports no changes.
+   - Detects changed file languages and loads language profiles once via `load_language_profiles()`. The concatenated markdown is stored in `DispatchContext.language_profile_text` so each agent dispatch reads from memory rather than disk.
    - Loads the feedback store, runs native analyzers, loads SARIF findings (via `config.sarif_paths`), loads suppression rules, evaluates gates, and builds the `DispatchContext` and `OrchestrationConfig`. All pre-computed findings are merged into `OrchestrationConfig.extra_findings`.
 2. Runs `pr-summarizer` on first (non-incremental) reviews.
 3. If `AI_DRY_RUN=1`, short-circuits after assembly without posting.

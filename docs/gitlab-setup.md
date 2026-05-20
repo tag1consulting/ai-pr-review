@@ -20,7 +20,7 @@ fences that the MR author can apply with one click.
 - Inline MR discussion threads on changed lines
 - Suggestion fences in inline discussions (GitLab's `suggestion` syntax)
 - Incremental-diff SHA watermark (same HTML-comment marker as GitHub)
-- Stale discussion resolution (prior bot threads are auto-resolved)
+- Stale discussion resolution (prior bot inline threads are auto-resolved; gated on bot first-note authorship and the `<!-- ai-pr-review-inline -->` marker)
 - MR approval / unapproval based on risk classification (no Critical/High
   findings → approve; Critical/High present → remove prior approval)
 - All existing AI agents and static analyzers (same container image)
