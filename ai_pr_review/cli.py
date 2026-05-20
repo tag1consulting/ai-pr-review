@@ -145,6 +145,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
         result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config)
+        if config.telemetry_enabled:
+            await _emit_telemetry(result, config, 0, outcome_override="skipped")
         return 0 if result.ok else 1
 
     # Use the post-resolve_models() config stored on the runtime for all downstream use.
@@ -170,7 +172,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         successes: Sequence[_AgentResult], _sarif_elapsed_unused: float | None
     ) -> str:
         return _build_token_table_accordion(
-            successes, runtime.sarif_elapsed_s, runtime.script_dir
+            successes, runtime.sarif_elapsed_s, runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
         )
 
     # Honour AI_DRY_RUN — assemble is complete but skip VCS posting.
@@ -181,6 +184,9 @@ async def _run_review_async(config: ReviewConfig) -> int:
             f"{len(runtime.agents)} agents selected"
         )
         click.echo(f"[dry-run] summary_text length: {len(summary_text)} chars")
+        if rc.telemetry_enabled:
+            await _emit_telemetry_minimal(rc, outcome_override="dry_run",
+                                         is_incremental=runtime.is_incremental)
         return 0
 
     result = await run_review(
@@ -195,9 +201,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
     )
 
     _emit_review_result(result, base_ref=runtime.base_ref, head=runtime.head_sha)
+    _write_step_summary(result, runtime, summary_text)
 
     if rc.telemetry_enabled:
-        await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s)
+        await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,
+                              is_incremental=runtime.is_incremental)
 
     return 0 if result.ok else 1
 
@@ -207,12 +215,15 @@ async def _emit_telemetry(
     config: ReviewConfig,
     feedback_entries_count: int,
     sarif_elapsed_s: float | None = None,
+    *,
+    is_incremental: bool = False,
+    outcome_override: str = "",
 ) -> None:
     """Assemble and emit a telemetry event (fail-soft on any error)."""
     import datetime
     from collections import Counter
 
-    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult
+    from ai_pr_review.agents.dispatch import AgentResult as _AgentResult, FailedAgent as _FailedAgent
     from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
 
     try:
@@ -235,7 +246,7 @@ async def _emit_telemetry(
             timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
             repository=config.github_repository,
             pr_number=str(config.pr_number),
-            outcome=result.outcome.event,
+            outcome=outcome_override or result.outcome.event,
             findings_count=len(result.findings),
             findings_by_severity=findings_by_severity,
             failed_agents=[f.name for f in result.failed_agents],
@@ -243,7 +254,60 @@ async def _emit_telemetry(
             agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results},
             sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
-            telemetry_schema_version="1",
+            telemetry_schema_version="2",
+            provider=config.provider,
+            model_standard=config.model_standard,
+            model_premium=config.model_premium,
+            review_mode=config.review_mode,
+            is_incremental=is_incremental,
+            failed_agent_latency_ms={
+                f.name: f.elapsed_ms
+                for f in result.failed_agents
+                if isinstance(f, _FailedAgent)
+            },
+        )
+    except Exception as exc:
+        logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
+        return
+    try:
+        await anyio.to_thread.run_sync(
+            lambda: emit_telemetry(telemetry_event, sink=config.telemetry_sink)
+        )
+    except Exception as exc:
+        logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
+
+
+async def _emit_telemetry_minimal(
+    config: ReviewConfig,
+    *,
+    outcome_override: str,
+    is_incremental: bool = False,
+) -> None:
+    """Emit a minimal telemetry event when there are no agent results (skip/dry-run)."""
+    import datetime
+
+    from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
+    try:
+        telemetry_event = TelemetryEvent(
+            correlation_id=os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""),
+            timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+            repository=config.github_repository,
+            pr_number=str(config.pr_number),
+            outcome=outcome_override,
+            findings_count=0,
+            findings_by_severity={},
+            failed_agents=[],
+            token_usage_by_agent={},
+            agent_latency_ms={},
+            sarif_elapsed_s=None,
+            learning_store_entries_loaded=0,
+            telemetry_schema_version="2",
+            provider=config.provider,
+            model_standard=config.model_standard,
+            model_premium=config.model_premium,
+            review_mode=config.review_mode,
+            is_incremental=is_incremental,
+            failed_agent_latency_ms={},
         )
     except Exception as exc:
         logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
@@ -377,22 +441,32 @@ def _build_token_table_accordion(
     successes: Sequence[object],
     sarif_elapsed_s: float | None,
     script_dir: Path,
+    *,
+    effective_max_tokens: int = 0,
 ) -> str:
     """Return a <details>-wrapped token cost table string, or "" on no-data/error.
 
     Designed to be used as the ``token_table_renderer`` callback passed to
     ``run_review()``.  All exceptions are caught and logged as WARNING so token
     table failure never aborts a review.
+
+    ``effective_max_tokens`` is the user-configured cap from
+    ``DispatchContext.max_tokens_per_agent`` (i.e. ``AI_MAX_TOKENS_PER_AGENT``).
+    When > 0 it overrides the per-agent roster default so the table reflects
+    the actual cap sent to the LLM rather than the hard-coded roster value.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.agents.roster import AGENTS
     from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
 
-    _max_tokens_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
+    _roster_max_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
     token_log: list[TokenEntry] = []
     for ar in successes:
         if isinstance(ar, AgentResult) and ar.token_log is not None:
             tl = ar.token_log
+            # Use the effective user-configured cap when set; fall back to the
+            # per-agent roster default so the table matches what was actually sent.
+            cap = effective_max_tokens if effective_max_tokens > 0 else _roster_max_by_name.get(ar.name, 0)
             token_log.append(TokenEntry(
                 agent=ar.name,
                 model=tl.model,
@@ -400,7 +474,7 @@ def _build_token_table_accordion(
                 output_tokens=tl.output,
                 cache_creation_tokens=tl.cache_creation,
                 cache_read_tokens=tl.cache_read,
-                max_output_tokens=_max_tokens_by_name.get(ar.name, 0),
+                max_output_tokens=cap,
             ))
 
     if not token_log:
@@ -441,6 +515,75 @@ def _build_token_table_accordion(
         + table
         + "\n</details>"
     )
+
+
+def _write_step_summary(
+    result: ReviewResult,
+    runtime: object,
+    summary_text: str,
+) -> None:
+    """Write a concise run summary to GITHUB_STEP_SUMMARY when available.
+
+    Mirrors the bash engine's Phase 4 step-summary block. Fail-soft: any
+    error is logged as WARNING and the review result is unaffected.
+    """
+    step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+    if not step_summary_path:
+        return
+    if not hasattr(runtime, "changed_files") or not hasattr(runtime, "config"):
+        return
+    try:
+        cf = runtime.changed_files
+        rc = runtime.config
+        languages = ", ".join(cf.languages) if cf.languages else "none detected"
+        file_count = len(cf.all_files)
+        n_findings = len(result.findings)
+        n_failed = len(result.failed_agents)
+        failed_line = (
+            f"\n**Failed agents:** {', '.join(f.name for f in result.failed_agents)}"
+            if result.failed_agents else ""
+        )
+
+        token_table_md = _build_token_table_accordion(
+            result.agent_results,
+            runtime.sarif_elapsed_s,
+            runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+        )
+        token_section = (
+            f"\n### Token Usage\n\n{token_table_md}\n\n"
+            "_Prices are public list rates and do not reflect discounts, "
+            "commitments, or proxy markups._\n"
+            if token_table_md else ""
+        )
+
+        lines = [
+            "## AI PR Review Results",
+            "",
+            f"**Mode:** {rc.review_mode} | **Files:** {file_count}",
+            f"**Languages:** {languages}",
+            f"**Agents:** {len(runtime.agents)} finding agents",
+        ]
+        if failed_line:
+            lines.append(failed_line.lstrip())
+        lines += [
+            "",
+            f"**Findings:** {n_findings}"
+            + (f" ({n_failed} agent(s) failed)" if n_failed else ""),
+            "",
+        ]
+        if token_section:
+            lines.append(token_section)
+        if summary_text.strip():
+            lines += ["### Summary", "", summary_text.strip(), ""]
+
+        content = "\n".join(lines)
+        with open(step_summary_path, "a", encoding="utf-8") as fh:
+            fh.write(content + "\n")
+    except Exception as exc:
+        logger.warning(
+            "step summary: could not write to GITHUB_STEP_SUMMARY: %s", exc, exc_info=True
+        )
 
 
 def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
