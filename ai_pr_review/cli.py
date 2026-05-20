@@ -31,6 +31,7 @@ from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
+    from ai_pr_review.review.runtime import ReviewRuntime
     from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
@@ -533,7 +534,7 @@ def _build_token_table_accordion(
 
 def _write_step_summary(
     result: ReviewResult,
-    runtime: object,
+    runtime: ReviewRuntime,
     summary_text: str,
     token_table_md: str = "",
 ) -> None:
@@ -548,12 +549,6 @@ def _write_step_summary(
     """
     step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
     if not step_summary_path:
-        return
-    if not hasattr(runtime, "changed_files") or not hasattr(runtime, "config"):
-        logger.warning(
-            "step summary: runtime missing expected attributes (changed_files/config), "
-            "skipping step summary"
-        )
         return
     try:
         cf = runtime.changed_files
