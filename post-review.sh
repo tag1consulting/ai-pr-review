@@ -507,7 +507,10 @@ dismiss_stale_reviews() {
   }
 
   local review_ids
-  review_ids=$(echo "$reviews_json" | jq -r '.[].id' 2>/dev/null) || true
+  if ! review_ids=$(echo "$reviews_json" | jq -r '.[].id' 2>/dev/null); then
+    echo "WARNING: jq parse failed on reviews response; skipping dismiss." >&2
+    return 0
+  fi
 
   if [[ -z "$review_ids" ]]; then
     echo "No stale CHANGES_REQUESTED reviews to dismiss." >&2
@@ -519,6 +522,10 @@ dismiss_stale_reviews() {
   # Only reviews older than the newest are eligible for dismissal.
   local newest_review_id
   newest_review_id=$(echo "$review_ids" | sort -n | tail -1)
+  if [[ -z "$newest_review_id" ]]; then
+    echo "WARNING: Could not determine newest review ID; skipping dismiss." >&2
+    return 0
+  fi
   local review_count
   review_count=$(echo "$review_ids" | wc -l | tr -d ' ')
   if [[ "$review_count" -lt 2 ]]; then

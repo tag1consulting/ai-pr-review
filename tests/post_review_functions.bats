@@ -664,3 +664,99 @@ setup_build_agent_prompt() {
   [[ "$output" == *'Around line 5: Issue found'* ]]
   [[ "$output" != *'null'* ]]
 }
+
+# ---------------------------------------------------------------------------
+# dismiss_stale_reviews — guard logic
+# ---------------------------------------------------------------------------
+
+_load_dismiss_stale() {
+  load_function "${PROJECT_ROOT}/post-review.sh" dismiss_stale_reviews
+  OWNER="org"
+  REPO="repo"
+  PR_NUMBER="1"
+  # Stub sleep to keep tests fast
+  sleep() { :; }
+}
+
+@test "dismiss_stale_reviews: single bot review — guard fires, nothing dismissed" {
+  _load_dismiss_stale
+
+  gh() {
+    # Return one CHANGES_REQUESTED review
+    echo '[{"id":101}]'
+  }
+
+  run dismiss_stale_reviews
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Only one bot CHANGES_REQUESTED review" ]]
+}
+
+@test "dismiss_stale_reviews: empty review list — nothing to dismiss" {
+  _load_dismiss_stale
+
+  gh() {
+    echo '[]'
+  }
+
+  run dismiss_stale_reviews
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No stale CHANGES_REQUESTED reviews" ]]
+}
+
+@test "dismiss_stale_reviews: jq parse failure — skips dismiss with warning" {
+  _load_dismiss_stale
+
+  gh() {
+    # gh api succeeds but returns a non-JSON body (e.g. 403 HTML)
+    echo 'not json'
+  }
+
+  run dismiss_stale_reviews
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "WARNING" ]]
+}
+
+@test "dismiss_stale_reviews: two reviews — oldest eligible, newest protected" {
+  _load_dismiss_stale
+
+  # Track which review IDs gh api is called with for dismissals
+  DISMISSED_IDS=()
+
+  gh() {
+    local subcmd="$1"
+    if [[ "$subcmd" == "api" && "$2" == *"/reviews"* && "$2" != *"/dismissals"* && "$2" != *"graphql"* ]]; then
+      echo '[{"id":100},{"id":200}]'
+    elif [[ "$subcmd" == "api" && "$2" == *"graphql"* ]]; then
+      # Return empty threads so all reviews have 0 unresolved
+      echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+    elif [[ "$subcmd" == "api" && "$2" == *"/dismissals"* ]]; then
+      # Extract review ID from path and record it
+      local rid
+      rid=$(echo "$2" | grep -oE '[0-9]+/dismissals' | grep -oE '^[0-9]+')
+      DISMISSED_IDS+=("$rid")
+      return 0
+    fi
+  }
+
+  run dismiss_stale_reviews
+  [ "$status" -eq 0 ]
+  # review 100 (older) should be dismissed; 200 (newest) should be protected
+  [[ "$output" =~ "Dismissed 1 stale review" ]]
+}
+
+@test "dismiss_stale_reviews: non-numeric review ID is skipped with warning" {
+  _load_dismiss_stale
+
+  gh() {
+    local subcmd="$1"
+    if [[ "$subcmd" == "api" && "$2" == *"/reviews"* && "$2" != *"graphql"* ]]; then
+      # One valid ID and one non-numeric
+      printf '100\nnull'
+    elif [[ "$subcmd" == "api" && "$2" == *"graphql"* ]]; then
+      echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+    fi
+  }
+
+  run dismiss_stale_reviews
+  [ "$status" -eq 0 ]
+}
