@@ -189,8 +189,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
         )
         click.echo(f"[dry-run] summary_text length: {len(summary_text)} chars")
         if rc.telemetry_enabled:
-            await _emit_telemetry_minimal(rc, outcome_override="dry_run",
-                                         is_incremental=runtime.is_incremental)
+            try:
+                await _emit_telemetry_minimal(rc, outcome_override="dry_run",
+                                              is_incremental=runtime.is_incremental)
+            except Exception as _tel_exc:
+                logger.warning("[ai-pr-review] dry-run telemetry failed: %s", _tel_exc)
         return 0
 
     result = await run_review(
@@ -205,7 +208,13 @@ async def _run_review_async(config: ReviewConfig) -> int:
     )
 
     _emit_review_result(result, base_ref=runtime.base_ref, head=runtime.head_sha)
-    _write_step_summary(result, runtime, summary_text)
+    _write_step_summary(
+        result, runtime, summary_text,
+        token_table_md=_build_token_table_accordion(
+            result.agent_results, runtime.sarif_elapsed_s, runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+        ),
+    )
 
     if rc.telemetry_enabled:
         await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,
@@ -526,16 +535,25 @@ def _write_step_summary(
     result: ReviewResult,
     runtime: object,
     summary_text: str,
+    token_table_md: str = "",
 ) -> None:
     """Write a concise run summary to GITHUB_STEP_SUMMARY when available.
 
     Mirrors the bash engine's Phase 4 step-summary block. Fail-soft: any
     error is logged as WARNING and the review result is unaffected.
+
+    ``token_table_md`` should be the pre-built accordion string from
+    ``_build_token_table_accordion()`` so the step summary matches the PR
+    comment exactly and avoids a second pricing-file read.
     """
     step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
     if not step_summary_path:
         return
     if not hasattr(runtime, "changed_files") or not hasattr(runtime, "config"):
+        logger.warning(
+            "step summary: runtime missing expected attributes (changed_files/config), "
+            "skipping step summary"
+        )
         return
     try:
         cf = runtime.changed_files
@@ -549,12 +567,6 @@ def _write_step_summary(
             if result.failed_agents else ""
         )
 
-        token_table_md = _build_token_table_accordion(
-            result.agent_results,
-            runtime.sarif_elapsed_s,
-            runtime.script_dir,
-            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
-        )
         token_section = (
             f"\n### Token Usage\n\n{token_table_md}\n\n"
             "_Prices are public list rates and do not reflect discounts, "
@@ -587,7 +599,7 @@ def _write_step_summary(
             fh.write(content + "\n")
     except Exception as exc:
         logger.warning(
-            "step summary: could not write to GITHUB_STEP_SUMMARY: %s", exc, exc_info=True
+            "step summary: unexpected error building/writing step summary: %s", exc, exc_info=True
         )
 
 
