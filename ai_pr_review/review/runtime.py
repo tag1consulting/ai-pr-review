@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ai_pr_review.agents.dispatch import DispatchContext, _unique_language_labels
-from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.config import ReviewConfig
+from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
