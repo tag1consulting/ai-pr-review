@@ -205,9 +205,11 @@ EOF
   [ "$output" = "$base" ]
 }
 
-# Helper: populate MOCK_DIR with all three shared trailer files.
+# Helper: populate MOCK_DIR with the shared trailer files (governance,
+# knowledge-cutoff, findings-trailer, suggestion-addendum).
 _install_shared_trailers() {
   mkdir -p "${MOCK_DIR}/prompts"
+  echo "GOVERNANCE_CONTENT"       > "${MOCK_DIR}/prompts/_governance.md"
   echo "KNOWLEDGE_CUTOFF_CONTENT" > "${MOCK_DIR}/prompts/_knowledge-cutoff.md"
   echo "FINDINGS_TRAILER_CONTENT" > "${MOCK_DIR}/prompts/_trailer-findings.md"
   echo "ADDENDUM_CONTENT"         > "${MOCK_DIR}/prompts/suggestion-addendum.md"
@@ -226,6 +228,7 @@ _install_shared_trailers() {
   [ -f "$output" ]
   TMPFILES+=("$output")
   grep -q "BASE CONTENT" "$output"
+  grep -q "GOVERNANCE_CONTENT" "$output"
   grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
   grep -q "FINDINGS_TRAILER_CONTENT" "$output"
   grep -q "ADDENDUM_CONTENT" "$output"
@@ -244,6 +247,7 @@ _install_shared_trailers() {
   [ "$output" != "$base" ]
   [ -f "$output" ]
   TMPFILES+=("$output")
+  grep -q "GOVERNANCE_CONTENT" "$output"
   grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
   grep -q "FINDINGS_TRAILER_CONTENT" "$output"
   # Suggestion addendum must be absent when suggestions are disabled
@@ -264,6 +268,7 @@ _install_shared_trailers() {
     [ "$output" != "$base" ]
     [ -f "$output" ]
     TMPFILES+=("$output")
+    grep -q "GOVERNANCE_CONTENT" "$output"
     grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
     grep -q "FINDINGS_TRAILER_CONTENT" "$output"
     ! grep -q "ADDENDUM_CONTENT" "$output"
@@ -284,16 +289,19 @@ _install_shared_trailers() {
     [ -f "$output" ]
     TMPFILES+=("$output")
     grep -q "BASE CONTENT" "$output"
+    grep -q "GOVERNANCE_CONTENT" "$output"
     grep -q "KNOWLEDGE_CUTOFF_CONTENT" "$output"
     grep -q "FINDINGS_TRAILER_CONTENT" "$output"
     grep -q "ADDENDUM_CONTENT" "$output"
   done
 }
 
-@test "effective_prompt: composition order is base, knowledge-cutoff, findings, addendum" {
+@test "effective_prompt: composition order is base, governance, knowledge-cutoff, findings, addendum" {
   # The order matters for cache-friendliness of future prompt layouts —
   # shared tails need to be in the same order every time so they compose
-  # to byte-identical suffixes across agents.
+  # to byte-identical suffixes across agents. Governance leads the shared
+  # tail; the cutoff/trailer/addendum bytes stay byte-identical to keep
+  # existing prompt-cache locality intact.
   _install_shared_trailers
   local base
   base=$(mktemp); TMPFILES+=("$base")
@@ -305,13 +313,29 @@ _install_shared_trailers() {
 
   # Extract markers in order of appearance
   local order
-  order=$(grep -oE 'BASE CONTENT|KNOWLEDGE_CUTOFF_CONTENT|FINDINGS_TRAILER_CONTENT|ADDENDUM_CONTENT' "$output" | tr '\n' ',')
-  [ "$order" = "BASE CONTENT,KNOWLEDGE_CUTOFF_CONTENT,FINDINGS_TRAILER_CONTENT,ADDENDUM_CONTENT," ]
+  order=$(grep -oE 'BASE CONTENT|GOVERNANCE_CONTENT|KNOWLEDGE_CUTOFF_CONTENT|FINDINGS_TRAILER_CONTENT|ADDENDUM_CONTENT' "$output" | tr '\n' ',')
+  [ "$order" = "BASE CONTENT,GOVERNANCE_CONTENT,KNOWLEDGE_CUTOFF_CONTENT,FINDINGS_TRAILER_CONTENT,ADDENDUM_CONTENT," ]
+}
+
+@test "effective_prompt: falls back to base when governance file is missing" {
+  # No prompts/ subdir created — all shared trailers are missing.
+  # governance is checked first in the composition order, so its absence
+  # is the reported cause.
+  local base
+  base=$(mktemp); TMPFILES+=("$base")
+  echo "BASE CONTENT" > "$base"
+
+  AI_ENABLE_SUGGESTIONS=true run --separate-stderr effective_prompt "code-reviewer" "$base"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$base" ]
+  [[ "$stderr" == *"governance trailer missing"* ]]
 }
 
 @test "effective_prompt: falls back to base when knowledge-cutoff file is missing" {
-  # No prompts/ subdir created — all shared trailers are missing.
-  # knowledge-cutoff is checked first, so its absence is the reported cause.
+  # governance present, knowledge-cutoff missing.
+  mkdir -p "${MOCK_DIR}/prompts"
+  echo "GOVERNANCE_CONTENT" > "${MOCK_DIR}/prompts/_governance.md"
+
   local base
   base=$(mktemp); TMPFILES+=("$base")
   echo "BASE CONTENT" > "$base"
@@ -323,8 +347,9 @@ _install_shared_trailers() {
 }
 
 @test "effective_prompt: falls back to base when findings trailer is missing" {
-  # knowledge-cutoff present, findings trailer missing.
+  # governance + knowledge-cutoff present, findings trailer missing.
   mkdir -p "${MOCK_DIR}/prompts"
+  echo "GOVERNANCE_CONTENT"       > "${MOCK_DIR}/prompts/_governance.md"
   echo "KNOWLEDGE_CUTOFF_CONTENT" > "${MOCK_DIR}/prompts/_knowledge-cutoff.md"
 
   local base

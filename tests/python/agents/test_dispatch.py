@@ -52,6 +52,7 @@ def _make_context(tmp_path: Path) -> DispatchContext:
     # Create minimal prompts directory so effective_prompt() can resolve files.
     prompts = tmp_path / "prompts"
     prompts.mkdir(exist_ok=True)
+    (prompts / "_governance.md").write_text("## governance\n")
     (prompts / "_knowledge-cutoff.md").write_text("## cutoff\n")
     (prompts / "_trailer-findings.md").write_text("## trailer\n")
     (prompts / "suggestion-addendum.md").write_text("## suggestions\n")
@@ -410,6 +411,7 @@ def _make_prompt_dir(tmp_path: Path) -> tuple[Path, Path]:
     """Create a minimal prompts directory under tmp_path; return (script_dir, base_prompt)."""
     prompts = tmp_path / "prompts"
     prompts.mkdir()
+    (prompts / "_governance.md").write_text("## governance posture\n")
     (prompts / "_knowledge-cutoff.md").write_text("## knowledge cutoff\n")
     (prompts / "_trailer-findings.md").write_text("## findings trailer\n")
     (prompts / "suggestion-addendum.md").write_text("## suggestion addendum\n")
@@ -419,17 +421,50 @@ def _make_prompt_dir(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_effective_prompt_finding_agent_gets_trailers(tmp_path: Path) -> None:
-    """Finding-producing agents get knowledge-cutoff + findings-trailer appended."""
+    """Finding-producing agents get governance + knowledge-cutoff + findings-trailer appended."""
     script_dir, base = _make_prompt_dir(tmp_path)
     path, degraded = effective_prompt(
         "code-reviewer", base, script_dir, enable_suggestions=False
     )
     content = path.read_text()
     assert "code reviewer base" in content
+    assert "governance posture" in content
     assert "knowledge cutoff" in content
     assert "findings trailer" in content
     assert "suggestion addendum" not in content
     assert degraded is False
+
+
+def test_effective_prompt_governance_order(tmp_path: Path) -> None:
+    """Composition order: base → governance → knowledge-cutoff → trailer.
+
+    Locks in the cache-friendly tail layout so a future refactor cannot
+    silently reorder fragments.
+    """
+    script_dir, base = _make_prompt_dir(tmp_path)
+    path, _ = effective_prompt(
+        "code-reviewer", base, script_dir, enable_suggestions=True
+    )
+    content = path.read_text()
+    base_idx = content.index("code reviewer base")
+    gov_idx = content.index("governance posture")
+    cutoff_idx = content.index("knowledge cutoff")
+    trailer_idx = content.index("findings trailer")
+    suggestion_idx = content.index("suggestion addendum")
+    assert base_idx < gov_idx < cutoff_idx < trailer_idx < suggestion_idx
+
+
+def test_effective_prompt_summarizer_gets_no_governance(tmp_path: Path) -> None:
+    """pr-summarizer is excluded from the governance partial — passthrough only."""
+    script_dir, _ = _make_prompt_dir(tmp_path)
+    base = script_dir / "prompts" / "pr-summarizer.md"
+    base.write_text("## summarizer base\n")
+    path, _ = effective_prompt(
+        "pr-summarizer", base, script_dir, enable_suggestions=False
+    )
+    content = path.read_text()
+    assert "summarizer base" in content
+    assert "governance posture" not in content
 
 
 def test_effective_prompt_summarizer_passthrough(tmp_path: Path) -> None:
@@ -497,6 +532,14 @@ def test_effective_prompt_missing_cutoff_raises(tmp_path: Path) -> None:
     script_dir, base = _make_prompt_dir(tmp_path)
     (script_dir / "prompts" / "_knowledge-cutoff.md").unlink()
     with pytest.raises(FileNotFoundError, match="knowledge-cutoff"):
+        effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
+
+
+def test_effective_prompt_missing_governance_raises(tmp_path: Path) -> None:
+    """Missing governance fragment raises FileNotFoundError — it's a required file."""
+    script_dir, base = _make_prompt_dir(tmp_path)
+    (script_dir / "prompts" / "_governance.md").unlink()
+    with pytest.raises(FileNotFoundError, match="governance"):
         effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
 
 

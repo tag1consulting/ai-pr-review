@@ -149,9 +149,16 @@ def effective_prompt(
         )
 
     prompts_dir = script_dir / "prompts"
+    governance_path = prompts_dir / "_governance.md"
     cutoff_path = prompts_dir / "_knowledge-cutoff.md"
     trailer_path = prompts_dir / "_trailer-findings.md"
     suggestion_path = prompts_dir / "suggestion-addendum.md"
+
+    if not governance_path.exists():
+        raise FileNotFoundError(
+            f"governance fragment not found: {governance_path}; "
+            "this file is required for agents that produce findings"
+        )
 
     if not trailer_path.exists():
         raise FileNotFoundError(
@@ -165,8 +172,12 @@ def effective_prompt(
             "this file is required for agents that produce findings"
         )
 
+    # Composition order: base → _governance → _knowledge-cutoff → _trailer-findings → (suggestion).
+    # Governance leads the shared tail; cutoff/trailer/suggestion bytes stay
+    # byte-identical to preserve prompt-cache locality.
     parts = [
         base_prompt_path.read_text(),
+        governance_path.read_text(),
         cutoff_path.read_text(),
         trailer_path.read_text(),
     ]
