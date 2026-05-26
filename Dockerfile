@@ -42,6 +42,11 @@ FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194
 
 ARG TARGETARCH
 
+# Python minor version shipped by the base image. Declared once and propagated
+# to dist-packages COPY paths below so a future base-image bump is a one-line
+# change. Ubuntu 24.04 ships Python 3.12.
+ARG PYTHON_VERSION=3.12
+
 ARG GH_VERSION=2.91.0
 ARG GH_SHA256_AMD64=304a0d2460f4a8847d2f192bad4e2a32cd9420d28716e7ae32198181b65b5f9c
 ARG GH_SHA256_ARM64=ccbed39c472d3dc1c501d1e164a9cffd934c5f6fce1012811a1a59d24cb7d7c6
@@ -93,8 +98,8 @@ RUN case "${TARGETARCH}" in \
 
 # semgrep, checkov, and the ai_pr_review Python engine via pip.
 # --break-system-packages required on Ubuntu 24.04 (PEP 668). Installs land in
-# /usr/local/lib/python3.12/dist-packages plus /usr/local/bin entry points; both
-# are COPYied into the final stage below alongside semgrep/checkov.
+# /usr/local/lib/python${PYTHON_VERSION}/dist-packages plus /usr/local/bin entry
+# points; both are COPYied into the final stage below alongside semgrep/checkov.
 COPY ai_pr_review/ /opt/ai-pr-review/ai_pr_review/
 COPY pyproject.toml /opt/ai-pr-review/pyproject.toml
 RUN pip3 install --no-cache-dir --break-system-packages \
@@ -135,6 +140,10 @@ RUN curl -fsSL -o /usr/local/bin/composer \
 # Final stage
 # ==============================================================================
 FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
+
+# ARG must be re-declared in this stage; multi-stage Dockerfiles do not share
+# ARG scope. Default must match the builder stage above.
+ARG PYTHON_VERSION=3.12
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -182,10 +191,10 @@ COPY --from=ruff         /ruff                    /usr/local/bin/ruff
 # below since it's build-time-only. The single-binary tools copied above are
 # overwritten here — that's fine, same binaries.
 #
-# /usr/local/lib/python3.12/dist-packages carries the actual Python code for
-# semgrep, checkov and their transitive dependencies.
+# /usr/local/lib/python${PYTHON_VERSION}/dist-packages carries the actual Python
+# code for semgrep, checkov and their transitive dependencies.
 COPY --from=builder /usr/local/bin                          /usr/local/bin
-COPY --from=builder /usr/local/lib/python3.12/dist-packages /usr/local/lib/python3.12/dist-packages
+COPY --from=builder /usr/local/lib/python${PYTHON_VERSION}/dist-packages /usr/local/lib/python${PYTHON_VERSION}/dist-packages
 
 # Composer is build-time-only; drop its phar from the final image.
 RUN rm -f /usr/local/bin/composer
