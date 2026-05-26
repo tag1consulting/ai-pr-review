@@ -249,8 +249,12 @@ cache_priming_effective() {
 
 # --- Build effective prompt path (composes shared trailers with the base) ---
 #
-# Composes three shared blocks onto the base agent prompt depending on agent
+# Composes four shared blocks onto the base agent prompt depending on agent
 # eligibility:
+#   * prompts/_governance.md        — Governance posture: Asimov severity lens,
+#                                     don't-reinvent-the-wheel/DRY, verify-
+#                                     before-naming + secret redaction. Applied
+#                                     to all 7 finding-producing agents.
 #   * prompts/_knowledge-cutoff.md  — HARD CONSTRAINT against version-existence
 #                                     hallucinations. Applied to all 7
 #                                     finding-producing agents.
@@ -266,11 +270,11 @@ cache_priming_effective() {
 # pr-summarizer is NOT eligible — its prompt has a different output contract
 # (no findings, no version checks) and is passed through verbatim.
 #
-# Composition order: base prompt + knowledge-cutoff + findings-trailer +
-# (optional) suggestion-addendum. This puts agent-specific voice first and
-# shared trailers last, which keeps the trailer bytes identical across the
-# eligible agents — making those bytes cache-friendly when a future change
-# positions the cache_control marker inside the user message.
+# Composition order: base prompt + governance + knowledge-cutoff +
+# findings-trailer + (optional) suggestion-addendum. Governance leads the
+# shared tail; the cutoff/trailer/addendum bytes stay byte-identical to keep
+# the existing prompt-cache locality intact when the cache_control marker
+# is positioned inside the user message.
 #
 # Note: the returned path is cleaned up in the parent trap via a glob match
 # on EFFECTIVE_PROMPT_PREFIX since TMPFILES+= would not propagate back through
@@ -329,10 +333,15 @@ effective_prompt() {
   # a missing shared trailer should fall back to the base prompt, not ship
   # a truncated composition.
   local -a parts=("$base_prompt")
+  local gv="${SCRIPT_DIR}/prompts/_governance.md"
   local kc="${SCRIPT_DIR}/prompts/_knowledge-cutoff.md"
   local ft="${SCRIPT_DIR}/prompts/_trailer-findings.md"
   local sa="${SCRIPT_DIR}/prompts/suggestion-addendum.md"
   if [[ "$want_trailers" -eq 1 ]]; then
+    if [[ ! -f "$gv" ]]; then
+      echo "WARNING: Shared governance trailer missing at ${gv}; using base prompt for ${agent_name}." >&2
+      echo "$base_prompt"; return
+    fi
     if [[ ! -f "$kc" ]]; then
       echo "WARNING: Shared knowledge-cutoff trailer missing at ${kc}; using base prompt for ${agent_name}." >&2
       echo "$base_prompt"; return
@@ -341,7 +350,7 @@ effective_prompt() {
       echo "WARNING: Shared findings trailer missing at ${ft}; using base prompt for ${agent_name}." >&2
       echo "$base_prompt"; return
     fi
-    parts+=("$kc" "$ft")
+    parts+=("$gv" "$kc" "$ft")
   fi
   if [[ "$want_suggestion" -eq 1 ]]; then
     if [[ ! -f "$sa" ]]; then
