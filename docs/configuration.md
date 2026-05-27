@@ -152,7 +152,15 @@ These variables configure the Python engine's telemetry system (`engine: python`
 | `AI_TELEMETRY_ENABLED` | `false` | Set to `true` to emit a structured JSON event per review run. |
 | `AI_TELEMETRY_SINK` | — | Where to send telemetry. Accepts `file:///absolute/path/events.jsonl` (appended line-by-line) or an `http(s)://` endpoint (POST). |
 
-Each event includes: outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency (`agent_latency_ms`), SARIF elapsed time, and the count of learning-store entries loaded.
+Each event (schema version `"2"`) includes:
+
+- Identity and run context: `correlation_id`, `timestamp`, `repository`, `pr_number`, `telemetry_schema_version`.
+- Outcome: `outcome` (one of `"success"`, `"failure"`, `"skipped"`, `"dry_run"`), `findings_count`, `findings_by_severity`, `failed_agents`.
+- Per-agent metrics: `token_usage_by_agent`, `agent_latency_ms`, `failed_agent_latency_ms`.
+- Configuration shape (v2 additions): `provider`, `model_standard`, `model_premium`, `review_mode`, `is_incremental`.
+- Other: `sarif_elapsed_s`, `learning_store_entries_loaded`.
+
+All v2 additions are forward-compatible: consumers parsing v1 events that ignore unknown keys continue to work. Consumers that switch on `telemetry_schema_version` should add `"2"` to their accepted set, and consumers that switch on `outcome` should handle the new `"skipped"` and `"dry_run"` values.
 
 ### Structured logging
 

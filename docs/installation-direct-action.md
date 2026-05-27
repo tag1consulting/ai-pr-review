@@ -110,7 +110,7 @@ jobs:
 ```
 
 Pin to a specific version by replacing `@main` with a tag or commit SHA
-(e.g. `@v0.10.1` or `@d613707`).
+(e.g. `@v0.11.0` or `@cb9d7ee`).
 
 ## 2. Configure secrets and variables
 
