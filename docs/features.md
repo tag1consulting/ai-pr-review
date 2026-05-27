@@ -7,6 +7,20 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.11.0
+
+**Governance posture for LLM reviewers (PR #350).** A new shared prompt partial `prompts/_governance.md` is injected into all seven finding-producing agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `edge-case-hunter`, `blind-hunter`, `adversarial-general`, `silent-failure-hunter`). It encodes three principles: an Asimov-style severity lens (calibrate severity by harm to users/systems, not abstract "code smell"), don't-reinvent-the-wheel detection (flag duplication of existing utilities visible in the diff or manifest), and verify-before-naming with secret redaction (any flag/function/path named in a finding must appear in the supplied diff or manifest, and any secret-shaped value visible in the diff must be replaced with `<secret-redacted>` in finding and remediation text). Always-on, no env var toggle. Composition order is `base → _governance → _knowledge-cutoff → _trailer-findings → (suggestion-addendum)` to preserve prompt-cache locality.
+
+**Telemetry schema v2 (PR #345, issues #242, #243).** The telemetry event payload bumps from schema version `"1"` to `"2"` with six additive fields: `provider`, `model_standard`, `model_premium`, `review_mode`, `is_incremental`, and `failed_agent_latency_ms`. The `outcome` enum gains `"skipped"` and `"dry_run"` values for runs where no agent dispatch occurs. All additions are forward-compatible — v1 consumers ignoring unknown keys continue to work; consumers switching on `telemetry_schema_version` should add v2 to their accepted list.
+
+**GitHub Actions step summary (PR #345).** When `GITHUB_STEP_SUMMARY` is set (always true on GitHub-hosted runners), the Python engine now writes a concise markdown block to the step summary showing review mode, file/language counts, agent roster, findings tally by severity, failed agents, and the token cost table. Same layout as the PR comment, so operators see key metrics at a glance without opening the PR. Fail-soft — write errors are logged at WARNING and the review continues.
+
+**Effective `max_tokens_per_agent` in cost table (PR #345).** When a user overrides the roster default via `AI_MAX_TOKENS_PER_AGENT`, the token cost table's Output column now displays the effective cap (e.g. `80 / 4096`) instead of the roster default (`80 / 16384`). Makes per-run token budgeting transparent.
+
+**Dockerfile Python version centralized (PRs #340, #348, issue #340).** Hardcoded `python3.12` paths are replaced with `${PYTHON_VERSION}` interpolation driven by a single `ARG PYTHON_VERSION=3.12` declared in both build stages. Future Python bumps require changing one default instead of five hardcoded sites. No runtime behavior change for action consumers.
+
+**Dependency updates.** Renovate updates: `ruff` 0.15.13 → 0.15.14 (#346), `ruby` 4.0.4 → 4.0.5 (#347).
+
 ## What's new in v0.10.1
 
 **`max_tokens_per_agent` default corrected (PR #337, issue #334).** The Python engine's `config.py` defaulted to 4096 while `action.yml` documented 8192. Both now agree on 8192. Consumers relying on the Python engine default were getting half the intended token budget per agent.

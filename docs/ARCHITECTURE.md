@@ -146,12 +146,13 @@ When `enable-suggestions` is `true` (the default), eligible LLM agents emit an o
 
 Not eligible: `architecture-reviewer`, `adversarial-general`, `pr-summarizer`. Static analyzers never emit suggestions.
 
-**Prompt composition.** `effective_prompt()` in `lib/agents.sh` composes the base prompt with up to three shared trailers at runtime:
+**Prompt composition.** `effective_prompt()` in `lib/agents.sh` composes the base prompt with up to four shared trailers at runtime:
+- `prompts/_governance.md` — Asimov-style severity lens, don't-reinvent-the-wheel detection, and verify-before-naming + secret-redaction posture. Applied to all 7 finding-producing agents (not `pr-summarizer`). Always-on; no env var toggle.
 - `prompts/_knowledge-cutoff.md` — HARD CONSTRAINT block against version-existence hallucinations. Applied to all 7 finding-producing agents (not `pr-summarizer`).
 - `prompts/_trailer-findings.md` — `json-findings` schema instruction. Applied to all 7 finding-producing agents.
 - `prompts/suggestion-addendum.md` — "Apply suggestion" formatting. Gated by `AI_ENABLE_SUGGESTIONS`; applied only to the 5 eligible agents.
 
-Composition order: base prompt + knowledge-cutoff + findings-trailer + (optional) suggestion-addendum. The composed output is written to a temp file under `${EFFECTIVE_PROMPT_PREFIX}-*.md`.
+Composition order: base prompt + governance + knowledge-cutoff + findings-trailer + (optional) suggestion-addendum. The order is deliberate for Anthropic prompt-cache locality — the existing `_knowledge-cutoff → _trailer-findings → suggestion-addendum` byte sequence at the tail is preserved unchanged. The composed output is written to a temp file under `${EFFECTIVE_PROMPT_PREFIX}-*.md`.
 
 **Validation guards** (applied in `post-review.sh` and `post-review-gitlab.sh`):
 1. `start_line` must match `^[1-9][0-9]*$` (positive integer, no leading zeros or 0) and be <= `line`.
