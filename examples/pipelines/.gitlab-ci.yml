@@ -12,7 +12,8 @@
 #   AI_PROVIDER             (default: anthropic)
 #   AI_REVIEW_MODE          (default: quick; set to 'full' for deep agents)
 #   AI_REVIEW_IMAGE_TAG     (default: latest; set to 'dev' to dogfood pre-release
-#                            builds, or pin to a version like 'v0.8.0')
+#                            builds, or pin to a release like '0.11.0' — image
+#                            tags strip the 'v' prefix from the git tag)
 #   AI_PR_REVIEW_ENGINE     (default: bash; set to 'python' to opt into the
 #                            Epic 3 capabilities below)
 #   AI_IGNORE_MERGE_COMMITS (default: false; strip base-branch merges from diff)
@@ -36,7 +37,9 @@ image:
   # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.  Defaulted
   # below in the `variables:` block to 'latest'; override by setting the
   # variable in project CI/CD settings (e.g. 'dev' to dogfood pre-release
-  # builds, or 'v0.8.0' to pin a release).
+  # builds, or '0.11.0' to pin a release — image tags strip the 'v' prefix
+  # from the git tag, per docker/metadata-action's semver pattern in
+  # publish-image.yml).
   #
   # NOTE: GitLab Runner expands $VAR / ${VAR} in image.name via Go's
   # os.Expand(), which does NOT support bash-style ${VAR:-default}
