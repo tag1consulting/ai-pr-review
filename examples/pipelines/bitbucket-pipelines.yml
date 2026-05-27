@@ -11,7 +11,8 @@
 #                                    Repository:Read + PR:Write scopes.
 #   AI_REVIEW_IMAGE_TAG (plain)    — Container tag to pull. Recommended:
 #                                    'latest' (stable), 'dev' (pre-release),
-#                                    or a pinned release like 'v0.8.0'.
+#                                    or a pinned release like '0.11.0'
+#                                    (image tags strip the 'v' prefix).
 #                                    Bitbucket Pipelines does not support
 #                                    bash-style defaults in image.name, so
 #                                    this must be set explicitly.
@@ -42,7 +43,10 @@ image:
   # AI_REVIEW_IMAGE_TAG as a repository variable; recommended values:
   #   'latest' — stable
   #   'dev'    — dogfood pre-release builds
-  #   'v0.8.0' (or similar) — pin a specific release
+  #   '0.11.0' (or similar) — pin a specific release.
+  #   Note: image tags strip the 'v' prefix from the git tag (publish-image.yml
+  #   uses docker/metadata-action's semver pattern), so the git tag v0.11.0
+  #   publishes image tags 0.11.0, 0.11, and 0.
   name: ghcr.io/tag1consulting/ai-pr-review:$AI_REVIEW_IMAGE_TAG
   # For private pulls (ai-pr-review is currently public — use the public
   # pull below unless/until you host your own mirror). If you fork to a
