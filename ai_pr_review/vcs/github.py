@@ -333,7 +333,15 @@ class GitHubProvider:
         # alike — so the ID counter is consistent regardless of where a finding
         # ends up rendered. Users can then reference any finding by its F<n> ID
         # from a top-level comment, not just body-level ones.
-        prior_bodies = self._list_prior_bot_review_bodies() if findings else []
+        prior_bodies: list[str] = []
+        if findings:
+            try:
+                prior_bodies = self._list_prior_bot_review_bodies()
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "github: failed to fetch prior review bodies for ID map; "
+                    "body-finding IDs may not be stable: %s", exc,
+                )
         id_map = assemble_id_map(prior_bodies, list(findings))
 
         inline_comments: list[dict[str, Any]] = []
@@ -381,8 +389,14 @@ class GitHubProvider:
         # dismiss workflow can reconstruct which fingerprint → ID associations
         # exist on this PR without needing to parse rendered bullet text.
         from ai_pr_review.vcs.marker import build_id_map_marker
-        id_map_marker = build_id_map_marker(id_map)
-        body = append_inline_marker(truncate_body(body)) + "\n" + id_map_marker
+        id_map_marker = ""
+        try:
+            id_map_marker = build_id_map_marker(id_map)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("github: failed to build id-map marker: %s", exc)
+        body = append_inline_marker(truncate_body(body))
+        if id_map_marker:
+            body += "\n" + id_map_marker
 
         # GitHub disallows inline comments on an APPROVE review. When approving
         # with inline findings, post them as COMMENT first then APPROVE body-only.

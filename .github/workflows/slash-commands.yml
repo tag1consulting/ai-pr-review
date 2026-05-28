@@ -378,7 +378,7 @@ jobs:
           ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
           ACTOR: ${{ inputs.actor-login }}
           FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
-          COMMAND: ${{ needs.handle-command.outputs.command }}
+          COMMAND: ${{ needs.handle-command.outputs.command || 'dismiss' }}
         run: |
           # Fetch all bot review bodies to search for the finding ID.
           all_bodies=$(gh api \
@@ -397,12 +397,12 @@ jobs:
                      select(.body | contains("### Findings not attached to specific lines"))] |
                      sort_by(.id) | last | .body // ""' 2>/dev/null || echo "")
             active_ids=$(printf '%s\n' "$newest_body" \
-              | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' \
+              | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
               | sort -n | uniq | tr '\n' ',' | sed 's/,$//' || true)
             if [[ -n "$active_ids" ]]; then
               id_list=$(printf '%s\n' "$newest_body" \
                 | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
-                | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' \
+                | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
                 | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//')
               if [[ -z "$id_list" ]]; then
                 reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline. Reply directly to a finding comment with \`/ai-pr-review ${COMMAND}\`."
@@ -446,9 +446,24 @@ jobs:
 
           if [[ -z "$matching_line" ]]; then
             # Check if the ID exists in the full marker (i.e. it's an inline finding).
-            id_in_marker=$(printf '%s\n' "$all_bodies" | jq -r '.[]' \
-              | grep -oP '<!-- ai-pr-review-id-map: \K\{[^}]+\}' | tail -1 \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if any(v == ${FINDING_ID} for v in d.values()) else 'no')" 2>/dev/null || echo "no")
+            # Extract the id-map JSON from the review body, then check with python3.
+            id_map_json=$(printf '%s\n' "$all_bodies" | jq -r '.[]' \
+              | grep -oE '<!-- ai-pr-review-id-map: \{[^>]+\} -->' \
+              | tail -1 \
+              | sed 's/<!-- ai-pr-review-id-map: //;s/ -->//' || true)
+            id_in_marker="no"
+            if [[ -n "$id_map_json" ]]; then
+              py_err=$(mktemp)
+              id_in_marker=$(ID_MAP_JSON="$id_map_json" FINDING_ID="$FINDING_ID" \
+                python3 -c \
+                'import json,os; d=json.loads(os.environ["ID_MAP_JSON"]); fid=int(os.environ["FINDING_ID"]); print("yes" if any(int(v)==fid for v in d.values()) else "no")' \
+                2>"$py_err") || true
+              if [[ -s "$py_err" ]]; then
+                echo "::warning::id-map check failed: $(cat "$py_err")" >&2
+                id_in_marker="no"
+              fi
+              rm -f "$py_err"
+            fi
             if [[ "$id_in_marker" == "yes" ]]; then
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
@@ -463,14 +478,17 @@ jobs:
           fi
 
           # Extract source, file, line, and finding text for the feedback store.
+          # Remove the F-token, then grab the first [...] group for the source.
           source=$(printf '%s' "$matching_line" \
-            | grep -oP '\*\*\[F[0-9]+\]\*\* \[\K[^\]]+' | head -1 \
+            | sed 's/\*\*\[F[0-9]*\]\*\* //' \
+            | grep -oE '\[[^]]+\]' | head -1 | tr -d '[]' \
             | sed 's/,.*//' | tr -d ' ' || true)
+          # Extract the backtick-quoted location from *(at `...`...)* or — `...`
           file_line=$(printf '%s' "$matching_line" \
-            | grep -oP '`\K[^`]+(?=`[^`]*\*)' | head -1 || true)
+            | grep -oE '`[^`]+`[^*]*\*' | head -1 | sed 's/`//g;s/[^`]*\*$//' || true)
           if [[ -z "$file_line" ]]; then
             file_line=$(printf '%s' "$matching_line" \
-              | grep -oP '— `\K[^`]+' | head -1 || true)
+              | grep -oE '-- `[^`]+' | head -1 | sed 's/-- `//' || true)
           fi
           finding_file="${file_line%:*}"
           finding_line_num="${file_line##*:}"
@@ -613,18 +631,23 @@ jobs:
           ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
           FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
           COMMAND: ${{ needs.handle-command.outputs.command }}
+          ENABLE_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
         run: |
           gh api \
             "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content="+1"
+          persisted_note=""
+          if [[ "$ENABLE_FEEDBACK_LOOP" != "true" ]]; then
+            persisted_note=" (feedback loop disabled — not persisted to learning store)"
+          fi
           case "$COMMAND" in
             wont-fix)
               gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
-                --body "**AI Review**: F${FINDING_ID} recorded as *won't fix*. Thank you for the feedback."
+                --body "**AI Review**: F${FINDING_ID} recorded as *won't fix*${persisted_note}. Thank you for the feedback."
               ;;
             false-positive|dismiss)
               gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
-                --body "**AI Review**: F${FINDING_ID} recorded as *false positive*. Thank you for the feedback."
+                --body "**AI Review**: F${FINDING_ID} recorded as *false positive*${persisted_note}. Thank you for the feedback."
               ;;
             explain)
               gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
@@ -1050,11 +1073,11 @@ jobs:
           #   token[3] = SARIF ruleId, only present when source starts with sarif:
           first_line=$(echo "$parent_body" | head -1)
           source=$(echo "$first_line" \
-            | grep -oP '\[[^\]]+\]' | sed -n '2p' | tr -d '[]')
+            | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]')
           rule_id=""
           if [[ "$source" == sarif:* ]]; then
             rule_id=$(echo "$first_line" \
-              | grep -oP '\[[^\]]+\]' | sed -n '3p' | tr -d '[]')
+              | grep -oE '\[[^]]+\]' | sed -n '3p' | tr -d '[]')
           fi
           if [[ -z "$source" ]]; then
             export_missing "could not parse source tag from parent comment header"

@@ -118,6 +118,9 @@ class _FakeProvider:
     def resolve_stale(self) -> StaleResult:
         return StaleResult(threads_resolved=0, reviews_dismissed=0)
 
+    def advance_sha_watermark(self, new_sha: str) -> bool:
+        return False
+
     def post_skip_comment(self, reason: str) -> SummaryResult:
         return SummaryResult(comment_id=None, created=False, updated=False)
 

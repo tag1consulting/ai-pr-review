@@ -791,7 +791,7 @@ post_findings() {
       echo "WARNING: Skipping finding with non-numeric line: ${file}:${line}" >&2
       # Accumulate structured body-finding for ID assignment (rendered later).
       printf '%s\n' "$(jq -cn \
-        --arg sev "$severity" --arg src "${source_tag:1:-1}" \
+        --arg sev "$severity" --arg src "$(printf '%s' "$source_tag" | tr -d '[]')" \
         --arg file "$file" --arg line "$line" \
         --arg text "$finding" --arg rem "$remediation" \
         --arg loc_note "" \
@@ -921,7 +921,7 @@ ${suggested_code}
       fi
       # Accumulate structured body-finding for ID assignment (rendered later).
       printf '%s\n' "$(jq -cn \
-        --arg sev "$severity" --arg src "${source_tag:1:-1}" \
+        --arg sev "$severity" --arg src "$(printf '%s' "$source_tag" | tr -d '[]')" \
         --arg file "$file" --arg line "$line" \
         --arg text "$finding" --arg rem "$remediation" \
         --arg loc_note "$loc_note" --arg sugg "$suggested_code" \

@@ -1,33 +1,23 @@
 #!/usr/bin/env bash
 # lib/finding-ids.sh — Stable per-PR body-finding ID assignment.
 #
-# Body-level findings are assigned monotonically-increasing, fingerprint-stable
-# numeric IDs (**[F1]**, **[F2]**, …). IDs are scoped to the pull request:
-# the same finding keeps its ID across review cycles, and new findings get
-# the next unused ID. There is no persistent ID store — IDs are reconstructed
-# at render time by scanning prior bot review bodies.
+# Uses only POSIX-compatible grep (-E, not -P) so it works on macOS/BSD
+# as well as Linux.  The Python side uses a machine-readable id-map marker
+# in the review body as the authoritative source; this bash helper is only
+# invoked for the legacy bash engine (still default until Epic 5).
 #
 # Functions exported:
 #   finding_ids_max_from_bodies  BODIES_FILE → prints max ID seen (0 if none)
-#   finding_ids_assign           SOURCE FILE LINE TEXT BODIES_FILE → prints ID
-#
-# The BODIES_FILE argument is a file containing all prior bot review bodies,
-# one per line (newlines within a body are escaped as \n — use jq -r to write).
-# Callers are responsible for fetching the bodies before calling these functions.
-#
-# Fingerprint contract (must match ai_pr_review/vcs/_finding_ids.py):
-#   fingerprint = "${source}|${file}|${line}|${sha256_12_hex}"
-# where sha256_12_hex is the first 12 hex characters of the SHA-256 of the
-# finding text (after stripping leading/trailing whitespace).
+#   finding_ids_build_map        BODIES_FILE MAP_FILE
+#   finding_ids_get              SOURCE FILE LINE TEXT MAP_FILE NEXT_ID_FILE → prints ID
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# _text_hash: first 12 hex chars of SHA-256 of stdin text.
+# _text_hash: first 12 hex chars of SHA-256 of a string.
 # ---------------------------------------------------------------------------
 _text_hash() {
-  local text="$1"
-  printf '%s' "$text" | sha256sum | cut -c1-12
+  printf '%s' "$1" | sha256sum | cut -c1-12
 }
 
 # ---------------------------------------------------------------------------
@@ -41,10 +31,19 @@ _make_fingerprint() {
 }
 
 # ---------------------------------------------------------------------------
+# _extract_fid LINE → print the numeric part of **[F<n>]**, or nothing
+# ---------------------------------------------------------------------------
+_extract_fid() {
+  # grep -oE is POSIX-compatible; extract token then strip the F prefix.
+  printf '%s' "$1" \
+    | grep -oE '\*\*\[F[0-9]+\]\*\*' \
+    | head -1 \
+    | grep -oE '[0-9]+' \
+    || true
+}
+
+# ---------------------------------------------------------------------------
 # finding_ids_max_from_bodies BODIES_FILE → print max seen ID (0 if none)
-#
-# Scans all body text in BODIES_FILE (one escaped body per line) and returns
-# the highest **[F<n>]** ID seen across any of the bodies.
 # ---------------------------------------------------------------------------
 finding_ids_max_from_bodies() {
   local bodies_file="${1:-}"
@@ -55,17 +54,17 @@ finding_ids_max_from_bodies() {
 
   local max_id=0
   local id
-  # Each line in bodies_file is a single review body with \n for newlines.
   while IFS= read -r encoded_body; do
-    # Replace literal \n escape sequences with actual newlines for parsing.
     local body
     body=$(printf '%b' "$encoded_body")
-    # Extract all **[F<n>]** tokens and track the maximum.
     while IFS= read -r id; do
       if [[ -n "$id" && "$id" =~ ^[0-9]+$ && "$id" -gt "$max_id" ]]; then
         max_id="$id"
       fi
-    done < <(printf '%s\n' "$body" | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' || true)
+    done < <(printf '%s\n' "$body" \
+      | grep -oE '\*\*\[F[0-9]+\]\*\*' \
+      | grep -oE '[0-9]+' \
+      || true)
   done < "$bodies_file"
 
   echo "$max_id"
@@ -73,14 +72,10 @@ finding_ids_max_from_bodies() {
 
 # ---------------------------------------------------------------------------
 # finding_ids_build_map BODIES_FILE MAP_FILE
-#
-# Parse all prior review bodies and write a "fingerprint TAB id" map to
-# MAP_FILE. The caller uses this map to look up existing IDs before assigning
-# new ones.
 # ---------------------------------------------------------------------------
 finding_ids_build_map() {
   local bodies_file="${1:-}" map_file="$2"
-  : > "$map_file"  # truncate/create
+  : > "$map_file"
   if [[ -z "$bodies_file" || ! -f "$bodies_file" ]]; then
     return
   fi
@@ -92,39 +87,36 @@ finding_ids_build_map() {
     local in_section=false
     while IFS= read -r line; do
       if [[ "$line" == *"### Findings not attached to specific lines"* ]]; then
-        in_section=true
-        continue
+        in_section=true; continue
       fi
-      # Any level-3 heading ends the section.
       if $in_section && [[ "$line" =~ ^"###" ]]; then
-        in_section=false
-        continue
+        in_section=false; continue
       fi
       $in_section || continue
-      # Must start with a bullet.
       [[ "$line" =~ ^"- " ]] || continue
 
-      # Extract ID.
       local finding_id
-      finding_id=$(printf '%s' "$line" | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' | head -1 || true)
+      finding_id=$(_extract_fid "$line")
       [[ -n "$finding_id" ]] || continue
 
-      # Extract source: first [bracketed] group after the ID token.
-      local source
-      source=$(printf '%s' "$line" | grep -oP '\*\*\[F[0-9]+\]\*\* \[\K[^\]]+' | head -1 || true)
-      source="${source%%,*}"  # take first source if comma-separated
-      source="${source// /}"  # strip spaces
+      # Extract source: first [bracketed] group after the **[F<n>]** token.
+      # Remove the F-token first, then grab the first [...] group.
+      local after_fid source
+      after_fid=$(printf '%s' "$line" | sed 's/\*\*\[F[0-9]*\]\*\* //')
+      source=$(printf '%s' "$after_fid" | grep -oE '\[[^]]+\]' | head -1 | tr -d '[]' || true)
+      source="${source%%,*}"
+      source="${source// /}"
 
-      # Extract file:line from *(at `...`) or — `...` annotation.
+      # Extract file:line from location annotation.
       local file_line file part_line
-      file_line=$(printf '%s' "$line" | grep -oP '`\K[^`]+(?=`[^`]*\*)' | head -1 || true)
+      # Matches: *(at `file:line`...) or — `file:line`
+      file_line=$(printf '%s' "$line" | grep -oE '`[^`]+`[^`]*\*' | head -1 | tr -d '`' | sed 's/[^`]*\*$//' || true)
       if [[ -z "$file_line" ]]; then
-        file_line=$(printf '%s' "$line" | grep -oP '— `\K[^`]+' | head -1 || true)
+        file_line=$(printf '%s' "$line" | grep -oE '— `[^`]+' | head -1 | sed 's/— `//' || true)
       fi
       if [[ "$file_line" == *":"* ]]; then
         file="${file_line%:*}"
         part_line="${file_line##*:}"
-        # Validate that part_line is numeric; otherwise treat entire string as file.
         if ! [[ "$part_line" =~ ^[0-9]+$ ]]; then
           file="$file_line"
           part_line=""
@@ -134,23 +126,21 @@ finding_ids_build_map() {
         part_line=""
       fi
 
-      # Extract finding text: content after the source tag and before the location.
+      # Extract finding text: strip bullet, icon, severity, F-ID, source tag, location.
       local text
-      # Remove bullet prefix, icon, severity, ID token, and source tag.
       text=$(printf '%s' "$line" \
         | sed 's/^- //' \
         | sed 's/[🚨🔴🟡🔵✅❔] //' \
         | sed 's/\*\*\[[^]]*\]\*\* //g' \
         | sed 's/\[[^]]*\] //' \
         | sed 's/ — `[^`]*`.*$//' \
-        | sed 's/ \*(at `[^`]*`.*$//') || true
-      text=$(printf '%s' "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        | sed 's/ \*(at `[^`]*`.*$//' \
+        | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') || true
 
       [[ -n "$text" ]] || continue
 
       local fp
       fp=$(_make_fingerprint "$source" "$file" "$part_line" "$text")
-      # Write to map only if not already present (first/oldest review wins).
       if ! grep -qF "$fp	" "$map_file" 2>/dev/null; then
         printf '%s\t%s\n' "$fp" "$finding_id" >> "$map_file"
       fi
@@ -159,14 +149,7 @@ finding_ids_build_map() {
 }
 
 # ---------------------------------------------------------------------------
-# finding_ids_lookup SOURCE FILE LINE TEXT MAP_FILE MAX_ID_VAR NEXT_ID_VAR
-#   → print the assigned ID for this finding
-#
-# Looks up the fingerprint in MAP_FILE. If found, returns the existing ID.
-# If not found, returns the value of NEXT_ID_VAR and increments it.
-#
-# Usage: call with nameref vars is bash-4+ only; we use a simpler file-based
-# approach — the caller maintains a counter file (NEXT_ID_FILE) and passes it.
+# finding_ids_get SOURCE FILE LINE TEXT MAP_FILE NEXT_ID_FILE → print ID
 # ---------------------------------------------------------------------------
 finding_ids_get() {
   local source="$1" file="$2" line="$3" text="$4" map_file="$5" next_id_file="$6"
@@ -182,9 +165,13 @@ finding_ids_get() {
     fi
   fi
 
-  # New finding — assign next ID.
+  # New finding — validate and consume the counter file.
   local next_id
-  next_id=$(cat "$next_id_file" 2>/dev/null || echo 1)
+  next_id=$(cat "$next_id_file" 2>/dev/null || true)
+  if ! [[ "$next_id" =~ ^[0-9]+$ ]] || [[ "$next_id" -lt 1 ]]; then
+    echo "::error::finding-ids: next_id_file '${next_id_file}' is missing or corrupt (value: '${next_id}'). Cannot safely assign body-finding IDs." >&2
+    exit 1
+  fi
   echo "$next_id"
   echo $((next_id + 1)) > "$next_id_file"
 }

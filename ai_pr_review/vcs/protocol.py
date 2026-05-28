@@ -128,6 +128,13 @@ class VcsProvider(Protocol):
         """Resolve/dismiss stale threads or reviews — marker-gated."""
         ...
 
+    def advance_sha_watermark(self, new_sha: str) -> bool:
+        """Patch the sha= field in the existing summary marker without changing the body.
+
+        Returns True if the comment was found and patched, False otherwise.
+        """
+        ...
+
     def post_skip_comment(self, reason: str) -> SummaryResult:
         """Post a no-op PR comment on skip paths (marker-bearing)."""
         ...

@@ -103,17 +103,31 @@ def build_id_map_marker(id_map: dict[str, int]) -> str:
 def extract_id_map(body: str) -> dict[str, int]:
     """Extract the finding ID map from a review body.
 
-    Returns an empty dict when no marker is present or the JSON is malformed.
+    Returns an empty dict when no marker is present. Logs a warning and
+    returns an empty dict when a marker is present but the JSON is malformed,
+    so callers can distinguish "no marker" from "corrupt marker" via the log.
+
+    Accepts both integer and whole-number float JSON values (e.g. ``1.0``)
+    to tolerate serializer rounding.
     """
+    import logging
     match = _ID_MAP_MARKER_RE.search(body)
     if not match:
         return {}
     try:
         data = json.loads(match.group(1))
         if isinstance(data, dict):
-            return {str(k): int(v) for k, v in data.items() if isinstance(v, int)}
-    except (json.JSONDecodeError, ValueError):
-        pass
+            result: dict[str, int] = {}
+            for k, v in data.items():
+                if isinstance(v, int):
+                    result[str(k)] = v
+                elif isinstance(v, float) and v.is_integer():
+                    result[str(k)] = int(v)
+            return result
+    except (json.JSONDecodeError, ValueError) as exc:
+        logging.getLogger(__name__).warning(
+            "ai-pr-review: id-map marker present but unparseable: %s", exc
+        )
     return {}
 
 

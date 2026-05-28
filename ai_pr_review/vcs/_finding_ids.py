@@ -43,10 +43,14 @@ reconstruction.
 from __future__ import annotations
 
 import hashlib
+import html as _html
+import logging
 import re
 from collections.abc import Sequence
 
 from ai_pr_review.findings.models import Finding
+
+_log = logging.getLogger(__name__)
 
 # Matches a body-finding ID token, e.g. **[F3]** (case-insensitive for
 # robustness, though we always emit upper-case F).
@@ -145,9 +149,18 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
             if loc_idx >= 0:
                 text = text[:loc_idx]
             text = text.strip()
+            # HTML-unescape so that entities like &amp; match the original
+            # finding text that was HTML-escaped when written to the body.
+            text = _html.unescape(text)
             text_hash = hashlib.sha256(text.encode()).hexdigest()[:12]
 
             fp = f"{source}|{file_}|{line_no}|{text_hash}"
+            if not any([source, file_, line_no, text]):
+                _log.warning(
+                    "finding-ids: could not extract fingerprint fields from bullet: %r",
+                    stripped,
+                )
+                continue
             if fp not in fp_to_id:
                 fp_to_id[fp] = finding_id
 
