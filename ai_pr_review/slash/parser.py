@@ -14,7 +14,9 @@ Supported commands:
   explain                   — re-invoke originating agent with detailed explanation
   revise <hint>             — re-invoke agent with a revision hint
   feedback <text>           — store free-form feedback
-  dismiss [reason]          — alias for false-positive (backward compat)
+  dismiss [F<n>] [reason]   — alias for false-positive (backward compat); F<n> targets body-level finding
+  explain [F<n>]            — re-invoke originating agent for explanation; F<n> targets body-level finding
+  revise [F<n>] <hint>      — re-invoke agent with revision hint; F<n> targets body-level finding
 
 The ``author_association`` guard (OWNER/MEMBER/COLLABORATOR) is enforced at
 the GitHub Actions workflow level before this parser is called; the parser
@@ -147,11 +149,11 @@ def parse_command(body: str) -> SlashCommand | ParseError | None:
             raw_body=body,
         )
 
-    # For "dismiss F<n>", "false-positive F<n>", or "wont-fix F<n>" — extract
-    # the optional body-finding ID so callers can dismiss body-level findings
-    # from a top-level PR comment without an inline thread to reply to.
+    # For feedback/action commands — extract optional F<n> finding ID so
+    # body-level findings can be acted on from a top-level PR comment.
+    # Applies to: dismiss, false-positive, wont-fix, explain, revise.
     finding_id: int | None = None
-    if command in ("dismiss", "false-positive", "wont-fix") and raw_reason:
+    if command in ("dismiss", "false-positive", "wont-fix", "explain", "revise") and raw_reason:
         # The first word may be a finding ID like "F3" or "f3".
         id_parts = raw_reason.split(None, 1)
         if re.match(r"^[Ff]\d+$", id_parts[0]):

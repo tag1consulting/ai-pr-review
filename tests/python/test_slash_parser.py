@@ -121,6 +121,34 @@ def test_false_positive_without_finding_id_unchanged() -> None:
     assert cmd.reason == "this is noise"
 
 
+def test_explain_with_finding_id() -> None:
+    cmd = parse_command("/ai-pr-review explain F4")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 4
+    assert cmd.reason == ""
+
+
+def test_explain_without_finding_id() -> None:
+    cmd = parse_command("/ai-pr-review explain")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id is None
+
+
+def test_revise_with_finding_id_and_hint() -> None:
+    cmd = parse_command("/ai-pr-review revise F2 focus on the icon card variant")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 2
+    assert cmd.reason == "focus on the icon card variant"
+
+
+def test_revise_without_finding_id_hint_only() -> None:
+    # Without F<n>, hint goes into reason as before
+    cmd = parse_command("/ai-pr-review revise focus on performance")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id is None
+    assert cmd.reason == "focus on performance"
+
+
 def test_multiline_body_only_first_line() -> None:
     body = "/ai-pr-review feedback good\nsome other text\nmore lines"
     cmd = parse_command(body)

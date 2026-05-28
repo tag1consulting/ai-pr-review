@@ -164,9 +164,9 @@ jobs:
               echo "command=$command" >> "$GITHUB_OUTPUT"
               echo "valid=true"       >> "$GITHUB_OUTPUT"
               ;;
-            dismiss|false-positive|wont-fix)
-              # Dismiss / false-positive / wont-fix from a top-level PR comment.
-              # Handled by dismiss-body-finding job when an F<n> ID is present.
+            dismiss|false-positive|wont-fix|explain|revise)
+              # These commands accept an optional F<n> body-finding ID from a
+              # top-level PR comment. Handled by dismiss-body-finding job.
               echo "command=$command" >> "$GITHUB_OUTPUT"
               echo "valid=true"       >> "$GITHUB_OUTPUT"
               # Extract optional finding ID (e.g. "F3" or "f3") from second token.
@@ -214,8 +214,8 @@ jobs:
           - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings
           - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings
           - `/ai-pr-review feedback <text>` — store free-form feedback in the learning loop
-          - `/ai-pr-review explain` — request a detailed explanation from the originating agent
-          - `/ai-pr-review revise <hint>` — request the agent to revise its finding with a hint
+          - `/ai-pr-review explain [F<n>]` — request a detailed explanation from the originating agent; use `F<n>` for body-level findings
+          - `/ai-pr-review revise [F<n>] <hint>` — request the agent to revise its finding with a hint; use `F<n>` for body-level findings
           - `/ai-pr-review help` — show this message
           HELP
           )"
@@ -352,7 +352,7 @@ jobs:
     if: |
       inputs.event-name == 'issue_comment' &&
       inputs.is-pull-request == 'true' &&
-      contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command) &&
+      contains(fromJSON('["dismiss","false-positive","wont-fix","explain","revise"]'), needs.handle-command.outputs.command) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
     needs: handle-command
     runs-on: ubuntu-latest
@@ -403,20 +403,17 @@ jobs:
                 | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' \
                 | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//')
               if [[ -z "$id_list" ]]; then
-                gh pr comment "$ISSUE_NUMBER" \
-                  --repo "$REPOSITORY" \
-                  --body "**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline — reply directly to a finding comment with \`/ai-pr-review dismiss\`."
+                reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline. Reply directly to a finding comment with \`/ai-pr-review dismiss\`."
               else
-                gh pr comment "$ISSUE_NUMBER" \
-                  --repo "$REPOSITORY" \
-                  --body "**AI Review**: to dismiss a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**
-
-Example: \`/ai-pr-review dismiss F1\`
-
-These IDs are stable across review cycles — \`F1\` always refers to the same finding on this PR.
-
-To dismiss an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review dismiss\`."
+                reply_body="$(printf '%s\n\n%s\n\n%s\n\n%s' \
+                  "**AI Review**: to dismiss a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
+                  "Example: \`/ai-pr-review dismiss F1\`" \
+                  "These IDs are stable across review cycles -- \`F1\` always refers to the same finding on this PR." \
+                  "To dismiss an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review dismiss\`.")"
               fi
+              gh pr comment "$ISSUE_NUMBER" \
+                --repo "$REPOSITORY" \
+                --body "$reply_body"
             fi
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -457,9 +454,7 @@ To dismiss an **inline** finding (anchored to a diff line), reply directly to it
             else
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
-                --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect.
-
-To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
+                --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect. To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
             fi
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -498,7 +493,10 @@ To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
           echo "finding_text=${finding_text}" >> "$GITHUB_OUTPUT"
 
       - name: Record false-positive in feedback store
-        if: steps.lookup.outputs.valid == 'true' && inputs.enable-feedback-loop == 'true'
+        if: |
+          steps.lookup.outputs.valid == 'true' &&
+          inputs.enable-feedback-loop == 'true' &&
+          !contains(fromJSON('["explain","revise"]'), needs.handle-command.outputs.command)
         uses: tag1consulting/ai-pr-review/container-action@main
         with:
           image-tag: ${{ inputs.image-tag }}
@@ -521,7 +519,9 @@ To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
           SLASH_ACTOR: ${{ inputs.actor-login }}
 
       - name: Dismiss CHANGES_REQUESTED review if all findings resolved
-        if: steps.lookup.outputs.valid == 'true'
+        if: |
+          steps.lookup.outputs.valid == 'true' &&
+          contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
         env:
           GH_TOKEN: ${{ secrets.github-token }}
           OWNER: ${{ inputs.repository-owner }}
@@ -616,13 +616,23 @@ To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
             "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content="+1"
           case "$COMMAND" in
-            wont-fix)       label="won't fix" ;;
-            false-positive) label="false positive" ;;
-            *)              label="false positive" ;;
+            wont-fix)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} recorded as *won't fix*. Thank you for the feedback."
+              ;;
+            false-positive|dismiss)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} recorded as *false positive*. Thank you for the feedback."
+              ;;
+            explain)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: explanation re-invocation for F${FINDING_ID} is not yet implemented. Please file an issue or open a discussion if you need more detail."
+              ;;
+            revise)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: revision for F${FINDING_ID} is not yet implemented. Please file an issue or open a discussion if you would like this feature."
+              ;;
           esac
-          gh pr comment "$ISSUE_NUMBER" \
-            --repo "$REPOSITORY" \
-            --body "**AI Review**: F${FINDING_ID} recorded as *${label}*. Thank you for the feedback."
 
       - name: React — not applicable (no ID given)
         if: steps.lookup.outputs.valid == 'false'
