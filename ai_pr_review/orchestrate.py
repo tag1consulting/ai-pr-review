@@ -195,11 +195,28 @@ async def run_review(
                 diff.head_sha, exc, exc_info=True,
             )
 
-    # Phase 4: post summary then findings (AC5 ordering)
+    # Phase 4: post summary then findings (AC5 ordering).
+    #
+    # When summary_text is empty (incremental run — summarizer was skipped),
+    # advance the SHA watermark in the existing summary comment rather than
+    # overwriting its body with the fallback "## AI Review" placeholder.
+    # On the first review (no existing comment) summary_text will always be
+    # non-empty, so advance_sha_watermark is never called when there is nothing
+    # to advance.
     try:
-        summary_result = provider.post_summary(
-            summary_text or "## AI Review", diff.head_sha
-        )
+        if not summary_text:
+            # Incremental run — don't overwrite the existing summary body.
+            # Just advance the SHA watermark so the next incremental run has
+            # the correct baseline. Treat this as a successful no-op so
+            # findings can still be posted.
+            provider.advance_sha_watermark(diff.head_sha)
+            summary_result = SummaryResult(
+                comment_id=None, created=False, updated=False
+            )
+        else:
+            summary_result = provider.post_summary(
+                summary_text, diff.head_sha
+            )
     except RetryExhaustedError as exc:
         err = f"post_summary retry exhausted: {exc}"
         logger.error(err)

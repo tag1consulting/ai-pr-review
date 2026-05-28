@@ -378,6 +378,7 @@ jobs:
           ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
           ACTOR: ${{ inputs.actor-login }}
           FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
+          COMMAND: ${{ needs.handle-command.outputs.command }}
         run: |
           # Fetch all bot review bodies to search for the finding ID.
           all_bodies=$(gh api \
@@ -387,7 +388,8 @@ jobs:
                    .body]' 2>/dev/null || echo "[]")
 
           if [[ -z "$FINDING_ID" ]]; then
-            # No ID supplied — list active IDs from the newest bot CR review body.
+            # No ID supplied — list active body-level IDs and show correct syntax
+            # for the command that was issued (dismiss/false-positive/wont-fix/explain/revise).
             newest_body=$(gh api \
               "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
               --jq '[.[] | select(.user.login == "github-actions[bot]") |
@@ -403,13 +405,13 @@ jobs:
                 | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' \
                 | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//')
               if [[ -z "$id_list" ]]; then
-                reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline. Reply directly to a finding comment with \`/ai-pr-review dismiss\`."
+                reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline. Reply directly to a finding comment with \`/ai-pr-review ${COMMAND}\`."
               else
                 reply_body="$(printf '%s\n\n%s\n\n%s\n\n%s' \
-                  "**AI Review**: to dismiss a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
-                  "Example: \`/ai-pr-review dismiss F1\`" \
+                  "**AI Review**: to act on a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
+                  "Example: \`/ai-pr-review ${COMMAND} F1\`" \
                   "These IDs are stable across review cycles -- \`F1\` always refers to the same finding on this PR." \
-                  "To dismiss an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review dismiss\`.")"
+                  "To act on an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`.")"
               fi
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
@@ -450,11 +452,11 @@ jobs:
             if [[ "$id_in_marker" == "yes" ]]; then
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
-                --body "**AI Review**: F${FINDING_ID} is an **inline** finding anchored to a diff line. To dismiss it, reply directly to its review-thread comment with \`/ai-pr-review dismiss\`."
+                --body "**AI Review**: F${FINDING_ID} is an **inline** finding anchored to a diff line. To act on it, reply directly to its review-thread comment with \`/ai-pr-review ${COMMAND}\`."
             else
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
-                --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect. To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
+                --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect. To see active body-level IDs, post \`/ai-pr-review ${COMMAND}\` (without an ID)."
             fi
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0

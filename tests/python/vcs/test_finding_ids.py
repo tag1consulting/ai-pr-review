@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
 from ai_pr_review.findings.models import Finding
@@ -88,8 +86,10 @@ def test_empty_findings_returns_empty_map() -> None:
 # assemble_id_map() — with prior reviews
 # ---------------------------------------------------------------------------
 
-def _render_body(findings: list[Finding], prior_bodies: list[str] = []) -> str:
+def _render_body(findings: list[Finding], prior_bodies: list[str] | None = None) -> str:
     """Render a body-findings section for test fixtures."""
+    if prior_bodies is None:
+        prior_bodies = []
     id_map = assemble_id_map(prior_bodies, findings)
     bullets = [
         format_body_finding(f, finding_id=id_map.get(fingerprint(f)))
