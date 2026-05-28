@@ -338,13 +338,15 @@ class GitHubProvider:
             try:
                 prior_bodies = self._list_prior_bot_review_bodies()
             except Exception as exc:  # noqa: BLE001
-                # Use the GitHub Actions ::warning:: annotation so the degradation
-                # is visible in the Actions UI, not just in the Python log.
-                print(
-                    f"::warning::ai-pr-review: failed to fetch prior review bodies; "
-                    f"body-finding IDs may not be stable this cycle: {exc}",
-                    flush=True,
-                )
+                import os as _os
+                # Emit a GitHub Actions ::warning:: annotation only when running
+                # inside GitHub Actions to avoid polluting local/test output.
+                if _os.environ.get("GITHUB_ACTIONS") == "true":
+                    print(
+                        f"::warning::ai-pr-review: failed to fetch prior review bodies; "
+                        f"body-finding IDs may not be stable this cycle: {exc}",
+                        flush=True,
+                    )
                 _log.warning(
                     "github: failed to fetch prior review bodies for ID map; "
                     "body-finding IDs may not be stable: %s", exc,

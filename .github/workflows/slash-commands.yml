@@ -449,14 +449,16 @@ jobs:
             # Pass the full bodies JSON to python3 via stdin to extract the marker
             # robustly — avoids regex truncation on fingerprints containing '>' or ' -->'.
             id_in_marker="no"
-            py_script=$(mktemp --suffix=.py)
+            py_script=$(mktemp --suffix=.py) || { echo "::error::mktemp failed for id-map check script" >&2; exit 1; }
             py_err=$(mktemp)
             # Write the script using printf to avoid YAML-hostile heredoc syntax.
+            # F23: re.DOTALL so the pattern matches markers spanning newlines.
+            # F24: pipe $all_bodies (a JSON array) directly so json.load() gets an array.
             printf '%s\n' \
               "import json,os,sys,re" \
               "bodies=json.load(sys.stdin)" \
               "fid=int(os.environ['FINDING_ID'])" \
-              "pat=re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->')" \
+              "pat=re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->',re.DOTALL)" \
               "for body in bodies:" \
               "    m=pat.search(body)" \
               "    if not m: continue" \
@@ -466,10 +468,14 @@ jobs:
               "    except Exception: pass" \
               "print('no')" \
               > "$py_script"
-            id_in_marker=$(printf '%s\n' "$all_bodies" | FINDING_ID="$FINDING_ID" \
+            id_in_marker=$(printf '%s' "$all_bodies" | FINDING_ID="$FINDING_ID" \
               python3 "$py_script" 2>"$py_err") || true
             if [[ -s "$py_err" ]]; then
               echo "::warning::id-map check failed: $(cat "$py_err")" >&2
+              id_in_marker="no"
+            fi
+            if [[ -z "$id_in_marker" ]]; then
+              echo "::warning::id-map python check returned empty output; treating as no" >&2
               id_in_marker="no"
             fi
             rm -f "$py_script" "$py_err"
@@ -499,6 +505,9 @@ jobs:
             # Fallback: em-dash prefix used in bash-engine renders (— `file:line`)
             file_line=$(printf '%s' "$matching_line" \
               | grep -oE '— `[^`]+' | head -1 | sed 's/— `//' || true)
+          fi
+          if [[ -z "$file_line" ]]; then
+            echo "::warning::Could not extract file:line for finding F${FINDING_ID}; feedback entry will have empty file/line fields" >&2
           fi
           finding_file="${file_line%:*}"
           finding_line_num="${file_line##*:}"
