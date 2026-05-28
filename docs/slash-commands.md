@@ -134,13 +134,27 @@ Requires the same setup as `false-positive`.
 
 Stores free-form feedback in the learning loop — not tied to a specific finding verdict. Useful for noting that a certain category of finding is too noisy for this repository.
 
-### `/ai-pr-review explain`
+### `/ai-pr-review explain [F<n>]`
 
 Requests a more detailed explanation from the originating agent. Currently stubbed — the command is recognized and acknowledged, but full agent re-invocation is not yet implemented. Posts a canned reply.
 
-### `/ai-pr-review revise <hint>`
+**For inline findings:** Post as a reply on the AI's inline review-comment thread.
+
+**For body-level findings:** Post as a top-level PR comment with the finding's stable ID:
+```
+/ai-pr-review explain F2
+```
+
+### `/ai-pr-review revise [F<n>] <hint>`
 
 Requests the originating agent to revise its finding with the provided hint. Currently stubbed — same as `explain`.
+
+**For inline findings:** Post as a reply on the AI's inline review-comment thread.
+
+**For body-level findings:** Post as a top-level PR comment with the finding's stable ID and hint:
+```
+/ai-pr-review revise F3 focus on the icon card variant specifically
+```
 
 ### `/ai-pr-review help`
 
