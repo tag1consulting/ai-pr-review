@@ -59,6 +59,9 @@ class SlashCommand:
     name: str
     reason: str  # sanitized
     raw_body: str
+    # For "dismiss F<n>" — the numeric body-finding ID (e.g. 1 for [F1]).
+    # None when no ID was supplied (inline dismiss) or command is not dismiss.
+    finding_id: int | None = None
 
     @property
     def canonical_name(self) -> str:
@@ -144,6 +147,17 @@ def parse_command(body: str) -> SlashCommand | ParseError | None:
             raw_body=body,
         )
 
+    # For "dismiss F<n>", "false-positive F<n>", or "wont-fix F<n>" — extract
+    # the optional body-finding ID so callers can dismiss body-level findings
+    # from a top-level PR comment without an inline thread to reply to.
+    finding_id: int | None = None
+    if command in ("dismiss", "false-positive", "wont-fix") and raw_reason:
+        # The first word may be a finding ID like "F3" or "f3".
+        id_parts = raw_reason.split(None, 1)
+        if re.match(r"^[Ff]\d+$", id_parts[0]):
+            finding_id = int(id_parts[0][1:])
+            raw_reason = id_parts[1] if len(id_parts) > 1 else ""
+
     reason = _sanitize_reason(raw_reason)
 
-    return SlashCommand(name=command, reason=reason, raw_body=body)
+    return SlashCommand(name=command, reason=reason, raw_body=body, finding_id=finding_id)

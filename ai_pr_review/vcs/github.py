@@ -158,6 +158,41 @@ class GitHubProvider:
         return results
 
     # ------------------------------------------------------------------
+    # Prior bot review bodies — used for body-finding ID reconstruction
+    # ------------------------------------------------------------------
+    def _list_prior_bot_review_bodies(self) -> list[str]:
+        """Return the body text of all prior bot CHANGES_REQUESTED reviews.
+
+        Used by the body-finding ID-map assembler to reconstruct which
+        ``[F<n>]`` IDs have already been assigned on this PR.  On error,
+        returns an empty list so rendering degrades gracefully (IDs restart
+        at 1 rather than failing).
+        """
+        c = self.config
+        bodies: list[str] = []
+        url: str | None = self._reviews_url()
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                _log.warning(
+                    "github: could not list reviews for ID-map assembly: HTTP %d",
+                    resp.status_code,
+                )
+                return []
+            for review in resp.json() or []:
+                if (review.get("user") or {}).get("login") != c.bot_login:
+                    continue
+                if review.get("state") not in ("CHANGES_REQUESTED", "COMMENTED"):
+                    continue
+                body = review.get("body") or ""
+                if "### Findings not attached to specific lines" in body:
+                    bodies.append(body)
+            url = _parse_next_link(resp.headers.get("link", ""))
+            params = None
+        return bodies
+
+    # ------------------------------------------------------------------
     # get_last_reviewed_sha
     # ------------------------------------------------------------------
     def get_last_reviewed_sha(self) -> str | None:
@@ -287,6 +322,7 @@ class GitHubProvider:
     ) -> FindingsResult:
         from ai_pr_review.diff.linemap import parse_added_lines, parse_new_file_lines
         from ai_pr_review.vcs._body import format_body_finding, join_findings
+        from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
 
         eligible_new = {(lr.file, lr.line) for lr in parse_added_lines(diff.diff_text)}
         eligible_ctx = {
@@ -295,7 +331,7 @@ class GitHubProvider:
 
         inline_comments: list[dict[str, Any]] = []
         original_inline_comments: list[dict[str, Any]] = []
-        body_bullets: list[str] = []
+        body_findings: list[Finding] = []
         for f in findings:
             if len(inline_comments) < max_inline:
                 payload = _build_inline_comment_payload(
@@ -308,10 +344,24 @@ class GitHubProvider:
                     inline_comments.append(payload)
                     continue
             # Fell through to body-findings
+            body_findings.append(f)
+
+        # Assign stable per-PR IDs to body-level findings.
+        prior_bodies = self._list_prior_bot_review_bodies() if body_findings else []
+        id_map = assemble_id_map(prior_bodies, body_findings)
+
+        body_bullets: list[str] = []
+        for f in body_findings:
             loc_note = ""
             if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
                 loc_note = " *(line not in diff)*"
-            body_bullets.append(format_body_finding(f, location_note=loc_note))
+            body_bullets.append(
+                format_body_finding(
+                    f,
+                    location_note=loc_note,
+                    finding_id=id_map.get(fingerprint(f)),
+                )
+            )
 
         # Build body
         body = _render_review_body(

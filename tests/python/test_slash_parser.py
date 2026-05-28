@@ -61,6 +61,64 @@ def test_dismiss_alias() -> None:
     assert isinstance(cmd, SlashCommand)
     assert cmd.name == "dismiss"
     assert cmd.canonical_name == "false-positive"
+    assert cmd.finding_id is None
+
+
+def test_dismiss_with_finding_id() -> None:
+    cmd = parse_command("/ai-pr-review dismiss F3")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 3
+    assert cmd.reason == ""
+
+
+def test_dismiss_with_finding_id_lowercase() -> None:
+    cmd = parse_command("/ai-pr-review dismiss f7")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 7
+
+
+def test_dismiss_with_finding_id_and_reason() -> None:
+    cmd = parse_command("/ai-pr-review dismiss F1 this is a false positive")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 1
+    assert cmd.reason == "this is a false positive"
+
+
+def test_dismiss_without_id() -> None:
+    cmd = parse_command("/ai-pr-review dismiss")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id is None
+
+
+def test_dismiss_with_non_id_reason() -> None:
+    # "garbage" is not an F<n> token — should be treated as plain reason
+    cmd = parse_command("/ai-pr-review dismiss not an ID")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id is None
+    assert cmd.reason == "not an ID"
+
+
+def test_false_positive_with_finding_id() -> None:
+    # false-positive and wont-fix have parity with dismiss for body-level findings
+    cmd = parse_command("/ai-pr-review false-positive F2 it was documented elsewhere")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 2
+    assert cmd.reason == "it was documented elsewhere"
+
+
+def test_wont_fix_with_finding_id() -> None:
+    cmd = parse_command("/ai-pr-review wont-fix F5 intentional design choice")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 5
+    assert cmd.reason == "intentional design choice"
+
+
+def test_false_positive_without_finding_id_unchanged() -> None:
+    # Without F<n>, false-positive still works as before — finding_id is None
+    cmd = parse_command("/ai-pr-review false-positive this is noise")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id is None
+    assert cmd.reason == "this is noise"
 
 
 def test_multiline_body_only_first_line() -> None:

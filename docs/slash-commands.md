@@ -13,7 +13,11 @@ nav_order: 7
 > (manual pipeline triggers, CI variables), see
 > [GitLab setup — slash command alternatives](gitlab-setup#slash-command-alternatives).
 
-AI PR Review supports commands posted as PR comments. The workflow listens on both `issue_comment` (top-level PR comments) and `pull_request_review_comment` (replies on inline review threads) events. Commands that operate on a specific finding (`dismiss`, `false-positive`, `wont-fix`) are normally posted as **replies on inline review-thread comments** so the workflow can resolve the right thread automatically; the learning-loop commands (`false-positive`, `wont-fix`, `feedback`, `explain`, `revise`) also accept top-level PR comments for cases where there is no specific finding to attach them to.
+AI PR Review supports commands posted as PR comments. The workflow listens on both `issue_comment` (top-level PR comments) and `pull_request_review_comment` (replies on inline review threads) events.
+
+**Two classes of findings:**
+- **Inline findings** are anchored to a specific diff line. They appear as review-thread comments. Use `/ai-pr-review dismiss` (or `false-positive`, `wont-fix`) as a **reply** on the thread to dismiss them.
+- **Body-level findings** appear in the `### Findings not attached to specific lines` section of the review body. They have no thread to reply to. Each one is labeled with a stable ID like `**[F1]**`. Use `/ai-pr-review dismiss F1` (or `false-positive F1`, `wont-fix F1`) as a **top-level PR comment** to dismiss them.
 
 ## Quick start
 
@@ -39,7 +43,7 @@ The starter template passes `secrets.GH_TOKEN` as the GitHub token. This **must*
 
 Then add it as a repository secret named `GH_TOKEN` (Settings → Secrets and variables → Actions → New repository secret).
 
-> **Note:** The `rescan`, `review-full`, `skip`, and `help` commands work with `GITHUB_TOKEN`. Only `dismiss` requires a PAT. If you don't use the `dismiss` command, you can pass `github.token` instead — but the dismiss command will fail.
+> **Note:** The `rescan`, `review-full`, `skip`, and `help` commands work with `GITHUB_TOKEN`. Both dismiss paths (`/ai-pr-review dismiss` as a thread reply and `/ai-pr-review dismiss F<n>` as a top-level comment) require a PAT. If you don't use either dismiss command, you can pass `github.token` instead — but all dismiss functionality will fail.
 
 ### 3. Verify your API key secret
 
@@ -74,29 +78,57 @@ Adds the `skip-ai-review` label to the PR, suppressing the next automated review
 
 ### `/ai-pr-review dismiss`
 
-Marks a specific AI review finding as a false positive. **Must be posted as a reply to an inline review comment from the bot** — it will not work as a top-level PR comment.
+Marks a specific AI review finding as a false positive.
 
-When invoked:
+#### For inline findings (reply on the review thread)
+
+Post as a **reply to the bot's inline review comment**. When invoked:
 1. Validates that the parent comment was posted by `github-actions[bot]`
 2. Resolves the review thread containing that finding
 3. Checks whether any unresolved threads remain on the same review
 4. If all threads are resolved, dismisses the `CHANGES_REQUESTED` review with an attribution message
 
-This allows selective dismissal — if a review has three findings and only one is a false positive, dismissing that one leaves the `CHANGES_REQUESTED` state in place until the remaining threads are also resolved (either by pushing a fix or dismissing them individually).
+This allows selective dismissal — if a review has three findings and only one is a false positive, dismissing that one leaves the `CHANGES_REQUESTED` state in place until the remaining threads are also resolved.
 
-### `/ai-pr-review false-positive [reason]`
+#### For body-level findings (top-level PR comment with `F<n>`)
+
+Body-level findings appear in the `### Findings not attached to specific lines` section. Each is labeled with a **stable per-PR ID** like `**[F1]**`, `**[F2]**`, etc. To dismiss one:
+
+```
+/ai-pr-review dismiss F1
+```
+
+IDs are **PR-wide and stable across review cycles** — if `F1` was assigned to a finding in the first review, it refers to the same finding in every subsequent review. New findings introduced by later reviews get the next unused ID (IDs are never re-used). A gap like `F1, F3` (no `F2`) signals that `F2` was dismissed in a prior cycle.
+
+If you post `/ai-pr-review dismiss` without an ID as a top-level PR comment, the bot replies with the list of active body-level finding IDs and the correct syntax.
+
+When all body-level findings are dismissed **and** all inline threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — same behavior as the inline path.
+
+### `/ai-pr-review false-positive [F<n>] [reason]`
 
 Records the finding as a false positive in the learning loop. The `[reason]` is optional but encouraged — it helps future reviews avoid the same finding in similar contexts.
 
-**Where to post it:** As a reply on the AI's inline review-comment thread for the specific finding (recommended — the workflow also resolves the thread on success, same UX as `/ai-pr-review dismiss`), **or** as a top-level PR comment when there's no specific finding to attach to. In review-thread replies the workflow auto-extracts the source / file / rule_id from the parent comment for the `FeedbackEntry`.
+**For inline findings:** Post as a reply on the AI's inline review-comment thread. The workflow auto-extracts source / file / rule_id from the parent comment and resolves the thread on success.
+
+**For body-level findings:** Post as a top-level PR comment with the finding's stable ID:
+```
+/ai-pr-review false-positive F2 documented via JSDoc, not the shortcode param block
+```
 
 Requires `AI_FEEDBACK_LOOP=true` on the action input and a `GH_TOKEN` with `contents:write` on the feedback branch (default: `ai-pr-review-bot`). The entry is persisted to `.ai-pr-review/learnings.jsonl` on that branch.
 
-### `/ai-pr-review wont-fix [reason]`
+### `/ai-pr-review wont-fix [F<n>] [reason]`
 
 Records the finding as intentional / won't-fix. Use this when the finding is valid but the pattern is deliberate in this codebase (e.g. intentional use of MD5 for non-security checksums, intentional exception swallowing in a specific error handler).
 
-Same posting and threading rules as `false-positive` (above): review-thread reply preferred, top-level PR comment accepted. Requires the same setup.
+**For inline findings:** Reply on the thread (same rules as `false-positive`).
+
+**For body-level findings:** Top-level PR comment with finding ID:
+```
+/ai-pr-review wont-fix F3 intentional behavior — see design doc
+```
+
+Requires the same setup as `false-positive`.
 
 ### `/ai-pr-review feedback <text>`
 

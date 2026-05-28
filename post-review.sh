@@ -350,6 +350,8 @@ TMPFILES=()
 # their truncation message is provider-specific.
 # shellcheck source=vcs/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcs/common.sh"
+# shellcheck source=lib/finding-ids.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/finding-ids.sh"
 
 trap cleanup EXIT
 
@@ -750,6 +752,9 @@ post_findings() {
   # Partition findings into inline (valid diff line) and body (everything else)
   local inline_comments="[]"
   local body_findings=""
+  # Structured accumulator for body findings — used to assign stable IDs.
+  local body_findings_ndjson_file
+  body_findings_ndjson_file=$(mktemp_tracked /tmp/body-findings-ndjson-XXXXXXXX.ndjson)
   local inline_count=0
   local max_inline
   local _raw_mi="${AI_MAX_INLINE:-25}"
@@ -784,8 +789,14 @@ post_findings() {
     # Validate line is a positive integer (LLM may return non-numeric values)
     if ! [[ "$line" =~ ^[0-9]+$ ]]; then
       echo "WARNING: Skipping finding with non-numeric line: ${file}:${line}" >&2
-      body_findings="${body_findings}
-$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "" "$remediation")"
+      # Accumulate structured body-finding for ID assignment (rendered later).
+      printf '%s\n' "$(jq -cn \
+        --arg sev "$severity" --arg src "${source_tag:1:-1}" \
+        --arg file "$file" --arg line "$line" \
+        --arg text "$finding" --arg rem "$remediation" \
+        --arg loc_note "" \
+        '{severity:$sev, source:$src, file:$file, line:$line, finding:$text, remediation:$rem, loc_note:$loc_note}')" \
+        >> "$body_findings_ndjson_file"
       continue
     fi
 
@@ -908,10 +919,59 @@ ${suggested_code}
       if [[ -n "$suggested_code" ]]; then
         echo "WARNING: Suggestion for ${file}:${line} not rendered inline (${drop_reason}); rendering as code fence in review body instead." >&2
       fi
-      body_findings="${body_findings}
-$(format_body_finding "$severity" "$source_tag" "$finding" "${file}:${line}" "$loc_note" "$remediation" "$suggested_code")"
+      # Accumulate structured body-finding for ID assignment (rendered later).
+      printf '%s\n' "$(jq -cn \
+        --arg sev "$severity" --arg src "${source_tag:1:-1}" \
+        --arg file "$file" --arg line "$line" \
+        --arg text "$finding" --arg rem "$remediation" \
+        --arg loc_note "$loc_note" --arg sugg "$suggested_code" \
+        '{severity:$sev, source:$src, file:$file, line:$line, finding:$text, remediation:$rem, loc_note:$loc_note, suggested_code:$sugg}')" \
+        >> "$body_findings_ndjson_file"
     fi
   done <<< "$findings_ndjson"
+
+  # Assign stable per-PR IDs to body findings and render them.
+  if [[ -s "$body_findings_ndjson_file" ]]; then
+    # Fetch prior bot review bodies for ID reconstruction.
+    local prior_bodies_file
+    prior_bodies_file=$(mktemp_tracked /tmp/prior-review-bodies-XXXXXXXX.txt)
+    # Each line in prior_bodies_file is one review body with \n replaced by literal \n.
+    gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+      --jq '.[] | select(.user.login == "github-actions[bot]") |
+             select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED") |
+             select(.body | contains("### Findings not attached to specific lines")) |
+             .body | gsub("\n"; "\\n")' \
+      >> "$prior_bodies_file" 2>/dev/null || true
+
+    local id_map_file next_id_file
+    id_map_file=$(mktemp_tracked /tmp/finding-id-map-XXXXXXXX.tsv)
+    next_id_file=$(mktemp_tracked /tmp/finding-next-id-XXXXXXXX.txt)
+    finding_ids_build_map "$prior_bodies_file" "$id_map_file"
+    local max_id
+    max_id=$(finding_ids_max_from_bodies "$prior_bodies_file")
+    echo $((max_id + 1)) > "$next_id_file"
+
+    # Render each body finding with its assigned ID.
+    while IFS= read -r bf_obj; do
+      [[ -z "$bf_obj" ]] && continue
+      local bf_sev bf_src bf_file bf_line bf_text bf_rem bf_loc_note bf_sugg
+      bf_sev=$(printf '%s' "$bf_obj"   | jq -r '.severity')
+      bf_src=$(printf '%s' "$bf_obj"   | jq -r '.source')
+      bf_file=$(printf '%s' "$bf_obj"  | jq -r '.file')
+      bf_line=$(printf '%s' "$bf_obj"  | jq -r '.line')
+      bf_text=$(printf '%s' "$bf_obj"  | jq -r '.finding')
+      bf_rem=$(printf '%s' "$bf_obj"   | jq -r '.remediation')
+      bf_loc_note=$(printf '%s' "$bf_obj" | jq -r '.loc_note')
+      bf_sugg=$(printf '%s' "$bf_obj"  | jq -r '.suggested_code')
+
+      local bf_src_tag="[${bf_src}]"
+      local bf_id
+      bf_id=$(finding_ids_get "$bf_src" "$bf_file" "$bf_line" "$bf_text" "$id_map_file" "$next_id_file")
+
+      body_findings="${body_findings}
+$(format_body_finding "$bf_sev" "$bf_src_tag" "$bf_text" "${bf_file}:${bf_line}" "$bf_loc_note" "$bf_rem" "$bf_sugg" "$bf_id")"
+    done < "$body_findings_ndjson_file"
+  fi
 
   # Determine overall risk and review event from highest severity found
   #   No findings          → APPROVE
