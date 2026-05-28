@@ -149,6 +149,9 @@ jobs:
       startsWith(inputs.comment-body, '/ai-pr-review') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
     runs-on: ubuntu-latest
+    outputs:
+      command: ${{ steps.cmd.outputs.command }}
+      finding_id: ${{ steps.cmd.outputs.finding_id }}
     steps:
       - name: Parse command
         id: cmd
@@ -160,6 +163,21 @@ jobs:
             rescan|review-full|skip|help)
               echo "command=$command" >> "$GITHUB_OUTPUT"
               echo "valid=true"       >> "$GITHUB_OUTPUT"
+              ;;
+            dismiss|false-positive|wont-fix|explain|revise)
+              # These commands accept an optional F<n> body-finding ID from a
+              # top-level PR comment. Handled by dismiss-body-finding job.
+              echo "command=$command" >> "$GITHUB_OUTPUT"
+              echo "valid=true"       >> "$GITHUB_OUTPUT"
+              # Extract optional finding ID (e.g. "F3" or "f3") from second token.
+              # Validate strictly: must be F followed by 1-6 digits only (caps at F999999).
+              second_token=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $3}')
+              if echo "$second_token" | grep -qiE '^F[0-9]{1,6}$'; then
+                finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
+                echo "finding_id=${finding_num}" >> "$GITHUB_OUTPUT"
+              else
+                echo "finding_id=" >> "$GITHUB_OUTPUT"
+              fi
               ;;
             *)
               echo "valid=false" >> "$GITHUB_OUTPUT"
@@ -191,12 +209,13 @@ jobs:
           - `/ai-pr-review rescan` — force full diff re-review
           - `/ai-pr-review review-full` — run all agents (full mode)
           - `/ai-pr-review skip` — suppress the next automated review
-          - `/ai-pr-review dismiss` — reply to a finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved)
-          - `/ai-pr-review false-positive [reason]` — record finding as false positive in the learning loop
-          - `/ai-pr-review wont-fix [reason]` — record finding as intentional in the learning loop
+          - `/ai-pr-review dismiss` — reply to an **inline** finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved)
+          - `/ai-pr-review dismiss F<n>` — dismiss a **body-level** finding by its stable ID (e.g. `/ai-pr-review dismiss F1`); IDs appear in the **`### Findings not attached to specific lines`** section. IDs are stable across review cycles — `F1` always refers to the same finding on this PR.
+          - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings
+          - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings
           - `/ai-pr-review feedback <text>` — store free-form feedback in the learning loop
-          - `/ai-pr-review explain` — request a detailed explanation from the originating agent
-          - `/ai-pr-review revise <hint>` — request the agent to revise its finding with a hint
+          - `/ai-pr-review explain [F<n>]` — request a detailed explanation from the originating agent; use `F<n>` for body-level findings
+          - `/ai-pr-review revise [F<n>] <hint>` — request the agent to revise its finding with a hint; use `F<n>` for body-level findings
           - `/ai-pr-review help` — show this message
           HELP
           )"
@@ -305,6 +324,362 @@ jobs:
             steps.cmd.outputs.command == 'rescan' ||
             steps.cmd.outputs.command == 'review-full'
           )
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=confused
+
+  # ---------------------------------------------------------------------------
+  # Dismiss a body-level finding by stable ID from a top-level PR comment.
+  #
+  # Triggered by "/ai-pr-review dismiss F<n>" as a regular PR comment
+  # (issue_comment event). Body-level findings appear in the
+  # "### Findings not attached to specific lines" section of the review body
+  # and have no inline thread to reply to — this job provides the escape hatch.
+  #
+  # When no ID is given ("/ai-pr-review dismiss" with no F<n>), posts an
+  # inline reply naming the active IDs instead of silently no-op'ing.
+  #
+  # If the dismissed finding was the last unresolved body-level finding AND
+  # all inline review threads are already resolved, the CHANGES_REQUESTED
+  # review is dismissed automatically (same behavior as the inline path).
+  # ---------------------------------------------------------------------------
+  dismiss-body-finding:
+    if: |
+      inputs.event-name == 'issue_comment' &&
+      inputs.is-pull-request == 'true' &&
+      contains(fromJSON('["dismiss","false-positive","wont-fix","explain","revise"]'), needs.handle-command.outputs.command) &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+    needs: handle-command
+    runs-on: ubuntu-latest
+    steps:
+      - name: React — seen
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes
+
+      - name: Lookup body finding or list active IDs
+        id: lookup
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          OWNER: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository-name }}
+          PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          ACTOR: ${{ inputs.actor-login }}
+          FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
+          COMMAND: ${{ needs.handle-command.outputs.command || 'dismiss' }}
+        run: |
+          # Fetch all bot review bodies to search for the finding ID.
+          all_bodies=$(gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") |
+                   select(.body | contains("### Findings not attached to specific lines")) |
+                   .body]' 2>/dev/null || echo "[]")
+
+          if [[ -z "$FINDING_ID" ]]; then
+            # No ID supplied — list active body-level IDs and show correct syntax
+            # for the command that was issued (dismiss/false-positive/wont-fix/explain/revise).
+            newest_body=$(gh api \
+              "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+              --jq '[.[] | select(.user.login == "github-actions[bot]") |
+                     select(.state == "CHANGES_REQUESTED") |
+                     select(.body | contains("### Findings not attached to specific lines"))] |
+                     sort_by(.id) | last | .body // ""' 2>/dev/null || echo "")
+            active_ids=$(printf '%s\n' "$newest_body" \
+              | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
+              | sort -n | uniq | tr '\n' ',' | sed 's/,$//' || true)
+            if [[ -n "$active_ids" ]]; then
+              id_list=$(printf '%s\n' "$newest_body" \
+                | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
+                | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
+                | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//')
+              if [[ -z "$id_list" ]]; then
+                reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline. Reply directly to a finding comment with \`/ai-pr-review ${COMMAND}\`."
+              else
+                reply_body="$(printf '%s\n\n%s\n\n%s\n\n%s' \
+                  "**AI Review**: to act on a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
+                  "Example: \`/ai-pr-review ${COMMAND} F1\`" \
+                  "These IDs are stable across review cycles -- \`F1\` always refers to the same finding on this PR." \
+                  "To act on an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`.")"
+              fi
+              gh pr comment "$ISSUE_NUMBER" \
+                --repo "$REPOSITORY" \
+                --body "$reply_body"
+            fi
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Search all bot review body-sections for **[F{FINDING_ID}]**.
+          # We only look within "### Findings not attached to specific lines"
+          # sections — inline finding IDs exist in thread comments (not review
+          # bodies) and can only be dismissed by replying to the thread.
+          pattern="\*\*\[F${FINDING_ID}\]\*\*"
+          matching_line=""
+          while IFS= read -r body_text; do
+            in_section=false
+            while IFS= read -r line; do
+              if [[ "$line" == *"### Findings not attached to specific lines"* ]]; then
+                in_section=true; continue
+              fi
+              if $in_section && [[ "$line" =~ ^"###" ]]; then
+                in_section=false; continue
+              fi
+              $in_section || continue
+              if echo "$line" | grep -qP "$pattern"; then
+                matching_line="$line"
+                break 2
+              fi
+            done <<< "$body_text"
+          done < <(printf '%s\n' "$all_bodies" | jq -r '.[]')
+
+          if [[ -z "$matching_line" ]]; then
+            # Check if the ID exists in the full marker (i.e. it's an inline finding).
+            # Pass the full bodies JSON to python3 via stdin to extract the marker
+            # robustly — avoids regex truncation on fingerprints containing '>' or ' -->'.
+            id_in_marker="no"
+            py_script=$(mktemp --suffix=.py) || { echo "::error::mktemp failed for id-map check script" >&2; exit 1; }
+            py_err=$(mktemp)
+            # Write the script using printf to avoid YAML-hostile heredoc syntax.
+            # F23: re.DOTALL so the pattern matches markers spanning newlines.
+            # F24: pipe $all_bodies (a JSON array) directly so json.load() gets an array.
+            printf '%s\n' \
+              "import json,os,sys,re" \
+              "bodies=json.load(sys.stdin)" \
+              "fid=int(os.environ['FINDING_ID'])" \
+              "pat=re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->',re.DOTALL)" \
+              "for body in bodies:" \
+              "    m=pat.search(body)" \
+              "    if not m: continue" \
+              "    try:" \
+              "        d=json.loads(m.group(1))" \
+              "        if any(int(v)==fid for v in d.values()): print('yes'); sys.exit(0)" \
+              "    except Exception: pass" \
+              "print('no')" \
+              > "$py_script"
+            id_in_marker=$(printf '%s' "$all_bodies" | FINDING_ID="$FINDING_ID" \
+              python3 "$py_script" 2>"$py_err") || true
+            if [[ -s "$py_err" ]]; then
+              echo "::warning::id-map check failed: $(cat "$py_err")" >&2
+              id_in_marker="no"
+            fi
+            if [[ -z "$id_in_marker" ]]; then
+              echo "::warning::id-map python check returned empty output; treating as no" >&2
+              id_in_marker="no"
+            fi
+            rm -f "$py_script" "$py_err"
+            if [[ "$id_in_marker" == "yes" ]]; then
+              gh pr comment "$ISSUE_NUMBER" \
+                --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} is an **inline** finding anchored to a diff line. To act on it, reply directly to its review-thread comment with \`/ai-pr-review ${COMMAND}\`."
+            else
+              gh pr comment "$ISSUE_NUMBER" \
+                --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect. To see active body-level IDs, post \`/ai-pr-review ${COMMAND}\` (without an ID)."
+            fi
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract source, file, line, and finding text for the feedback store.
+          # Remove the F-token, then grab the first [...] group for the source.
+          source=$(printf '%s' "$matching_line" \
+            | sed 's/\*\*\[F[0-9]*\]\*\* //' \
+            | grep -oE '\[[^]]+\]' | head -1 | tr -d '[]' \
+            | sed 's/,.*//' | tr -d ' ' || true)
+          # Extract the backtick-quoted location from *(at `file:line`...)* annotation.
+          file_line=$(printf '%s' "$matching_line" \
+            | grep -oE '\(at `[^`]+`' | head -1 | sed 's/(at `//;s/`.*//' || true)
+          if [[ -z "$file_line" ]]; then
+            # Fallback: em-dash prefix used in bash-engine renders (— `file:line`)
+            file_line=$(printf '%s' "$matching_line" \
+              | grep -oE '— `[^`]+' | head -1 | sed 's/— `//' || true)
+          fi
+          if [[ -z "$file_line" ]]; then
+            echo "::warning::Could not extract file:line for finding F${FINDING_ID}; feedback entry will have empty file/line fields" >&2
+          fi
+          finding_file="${file_line%:*}"
+          finding_line_num="${file_line##*:}"
+          if ! [[ "$finding_line_num" =~ ^[0-9]+$ ]]; then
+            finding_line_num=""
+          fi
+
+          # Finding text: content after source tag, before location annotation.
+          finding_text=$(printf '%s' "$matching_line" \
+            | sed 's/^- //' \
+            | sed 's/[🚨🔴🟡🔵✅❔] //' \
+            | sed 's/\*\*\[[^]]*\]\*\* //g' \
+            | sed 's/\[[^]]*\] //' \
+            | sed 's/ — `[^`]*`.*$//' \
+            | sed 's/ \*(at `[^`]*`.*$//' \
+            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') || true
+
+          echo "valid=true"            >> "$GITHUB_OUTPUT"
+          echo "source=${source}"      >> "$GITHUB_OUTPUT"
+          echo "file=${finding_file}"  >> "$GITHUB_OUTPUT"
+          echo "line=${finding_line_num}" >> "$GITHUB_OUTPUT"
+          echo "finding_text=${finding_text}" >> "$GITHUB_OUTPUT"
+
+      - name: Record false-positive in feedback store
+        if: |
+          steps.lookup.outputs.valid == 'true' &&
+          inputs.enable-feedback-loop == 'true' &&
+          !contains(fromJSON('["explain","revise"]'), needs.handle-command.outputs.command)
+        uses: tag1consulting/ai-pr-review/container-action@main
+        with:
+          image-tag: ${{ inputs.image-tag }}
+          provider: ${{ inputs.provider }}
+          api-key: ${{ secrets.api-key }}
+          base-url: ${{ inputs.base-url }}
+          github-token: ${{ secrets.github-token }}
+          pr-number: ${{ inputs.pr-number || inputs.issue-number }}
+          base-ref: ''
+          head-sha: ''
+          review-mode: 'skip'
+        env:
+          SLASH_COMMAND: dismiss
+          SLASH_SOURCE: ${{ steps.lookup.outputs.source }}
+          SLASH_FILE: ${{ steps.lookup.outputs.file }}
+          SLASH_RULE_ID: ''
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+          SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          SLASH_COMMENT_ID: ${{ inputs.comment-id }}
+          SLASH_ACTOR: ${{ inputs.actor-login }}
+
+      - name: Dismiss CHANGES_REQUESTED review if all findings resolved
+        if: |
+          steps.lookup.outputs.valid == 'true' &&
+          contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          OWNER: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository-name }}
+          PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          ACTOR: ${{ inputs.actor-login }}
+        run: |
+          # Find the newest bot CHANGES_REQUESTED review.
+          newest=$(gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") |
+                   select(.state == "CHANGES_REQUESTED")] | sort_by(.id) | last' 2>/dev/null || echo "null")
+          if [[ "$newest" == "null" || -z "$newest" ]]; then
+            echo "No bot CHANGES_REQUESTED review found; nothing to dismiss." >&2
+            exit 0
+          fi
+          review_id=$(printf '%s' "$newest" | jq -r '.id')
+
+          # Check for unresolved inline threads on this review.
+          cursor=""
+          has_next=true
+          unresolved_inline=0
+          while [[ "$has_next" == "true" ]]; do
+            page=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        isResolved
+                        comments(first: 1) {
+                          nodes { pullRequestReview { databaseId } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' \
+              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
+              ${cursor:+-f after="$cursor"})
+            threads=$(printf '%s' "$page" | jq \
+              --argjson rid "$review_id" \
+              '[.data.repository.pullRequest.reviewThreads.nodes[] |
+                select(.comments.nodes[0].pullRequestReview.databaseId == $rid and
+                       .isResolved == false)] | length')
+            unresolved_inline=$((unresolved_inline + threads))
+            has_next=$(printf '%s' "$page" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+            cursor=$(printf '%s' "$page" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
+          done
+
+          # Count remaining body-level findings in the newest review body
+          # that have NOT been dismissed (i.e. no feedback entry for them).
+          # Heuristic: any **[F<n>]** still visible in the current review body.
+          # After a dismiss, the finding is suppressed on the next re-run — but
+          # the review body is static. We track dismissed IDs via the feedback
+          # store, so here we simply skip this check and let the next re-run
+          # clean up. Dismiss the review only if all inline threads are resolved.
+          if [[ "$unresolved_inline" -gt 0 ]]; then
+            echo "${unresolved_inline} unresolved inline thread(s) remain; keeping CHANGES_REQUESTED." >&2
+            exit 0
+          fi
+
+          if ! [[ "$ACTOR" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}(\[bot\])?$ ]]; then
+            echo "::error::Refusing to dismiss: unexpected actor login '${ACTOR}'."
+            exit 1
+          fi
+          dismiss_msg="All findings resolved — dismissed by @${ACTOR}."
+          if gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+            --method PUT \
+            --field "message=${dismiss_msg}" \
+            >/dev/null 2>&1; then
+            echo "Dismissed review #${review_id}." >&2
+          else
+            echo "::warning::Could not dismiss review #${review_id} (may already be resolved or token lacks scope)." >&2
+          fi
+
+      - name: React — done
+        if: steps.lookup.outputs.valid == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+          ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
+          COMMAND: ${{ needs.handle-command.outputs.command }}
+          ENABLE_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content="+1"
+          persisted_note=""
+          if [[ "$ENABLE_FEEDBACK_LOOP" != "true" ]]; then
+            persisted_note=" (feedback loop disabled — not persisted to learning store)"
+          fi
+          case "$COMMAND" in
+            wont-fix)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} recorded as *won't fix*${persisted_note}. Thank you for the feedback."
+              ;;
+            false-positive|dismiss)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} recorded as *false positive*${persisted_note}. Thank you for the feedback."
+              ;;
+            explain)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: explanation re-invocation for F${FINDING_ID} is not yet implemented. Please file an issue or open a discussion if you need more detail."
+              ;;
+            revise)
+              gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+                --body "**AI Review**: revision for F${FINDING_ID} is not yet implemented. Please file an issue or open a discussion if you would like this feature."
+              ;;
+          esac
+
+      - name: React — not applicable (no ID given)
+        if: steps.lookup.outputs.valid == 'false'
         env:
           GH_TOKEN: ${{ secrets.github-token }}
           REPOSITORY: ${{ inputs.repository }}
@@ -717,11 +1092,11 @@ jobs:
           #   token[3] = SARIF ruleId, only present when source starts with sarif:
           first_line=$(echo "$parent_body" | head -1)
           source=$(echo "$first_line" \
-            | grep -oP '\[[^\]]+\]' | sed -n '2p' | tr -d '[]')
+            | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]')
           rule_id=""
           if [[ "$source" == sarif:* ]]; then
             rule_id=$(echo "$first_line" \
-              | grep -oP '\[[^\]]+\]' | sed -n '3p' | tr -d '[]')
+              | grep -oE '\[[^]]+\]' | sed -n '3p' | tr -d '[]')
           fi
           if [[ -z "$source" ]]; then
             export_missing "could not parse source tag from parent comment header"

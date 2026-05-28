@@ -46,8 +46,17 @@ def format_body_finding(
     *,
     location_note: str = "",
     include_suggestion: bool = False,
+    finding_id: int | None = None,
 ) -> str:
-    """Render a finding as a single Markdown bullet for the review body."""
+    """Render a finding as a single Markdown bullet for the review body.
+
+    Parameters
+    ----------
+    finding_id:
+        Optional stable per-PR numeric ID (e.g. 1 → ``**[F1]**``).  When
+        provided, the ID token is inserted between the severity and source
+        tags so users can reference it in ``/ai-pr-review dismiss F1``.
+    """
     icon = severity_icon(finding.severity)
     source_tag = format_source_tag(finding)
     location = ""
@@ -57,6 +66,8 @@ def format_body_finding(
             loc_parts.append(str(finding.line))
         location = ":".join(loc_parts)
     header_parts = [icon, f"**[{finding.severity}]**"]
+    if finding_id is not None:
+        header_parts.append(f"**[F{finding_id}]**")
     if source_tag:
         header_parts.append(source_tag)
     header_parts.append(finding.finding)

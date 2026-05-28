@@ -158,6 +158,41 @@ class GitHubProvider:
         return results
 
     # ------------------------------------------------------------------
+    # Prior bot review bodies — used for body-finding ID reconstruction
+    # ------------------------------------------------------------------
+    def _list_prior_bot_review_bodies(self) -> list[str]:
+        """Return the body text of all prior bot CHANGES_REQUESTED reviews.
+
+        Used by the body-finding ID-map assembler to reconstruct which
+        ``[F<n>]`` IDs have already been assigned on this PR.  On error,
+        returns an empty list so rendering degrades gracefully (IDs restart
+        at 1 rather than failing).
+        """
+        c = self.config
+        bodies: list[str] = []
+        url: str | None = self._reviews_url()
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                _log.warning(
+                    "github: could not list reviews for ID-map assembly: HTTP %d",
+                    resp.status_code,
+                )
+                return []
+            for review in resp.json() or []:
+                if (review.get("user") or {}).get("login") != c.bot_login:
+                    continue
+                if review.get("state") not in ("CHANGES_REQUESTED", "COMMENTED"):
+                    continue
+                body = review.get("body") or ""
+                if "### Findings not attached to specific lines" in body:
+                    bodies.append(body)
+            url = _parse_next_link(resp.headers.get("link", ""))
+            params = None
+        return bodies
+
+    # ------------------------------------------------------------------
     # get_last_reviewed_sha
     # ------------------------------------------------------------------
     def get_last_reviewed_sha(self) -> str | None:
@@ -287,15 +322,40 @@ class GitHubProvider:
     ) -> FindingsResult:
         from ai_pr_review.diff.linemap import parse_added_lines, parse_new_file_lines
         from ai_pr_review.vcs._body import format_body_finding, join_findings
+        from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
 
         eligible_new = {(lr.file, lr.line) for lr in parse_added_lines(diff.diff_text)}
         eligible_ctx = {
             (lr.file, lr.line) for lr in parse_new_file_lines(diff.diff_text)
         }
 
+        # Assign stable per-PR IDs to ALL findings upfront — inline and body
+        # alike — so the ID counter is consistent regardless of where a finding
+        # ends up rendered. Users can then reference any finding by its F<n> ID
+        # from a top-level comment, not just body-level ones.
+        prior_bodies: list[str] = []
+        if findings:
+            try:
+                prior_bodies = self._list_prior_bot_review_bodies()
+            except Exception as exc:  # noqa: BLE001
+                import os as _os
+                # Emit a GitHub Actions ::warning:: annotation only when running
+                # inside GitHub Actions to avoid polluting local/test output.
+                if _os.environ.get("GITHUB_ACTIONS") == "true":
+                    print(
+                        f"::warning::ai-pr-review: failed to fetch prior review bodies; "
+                        f"body-finding IDs may not be stable this cycle: {exc}",
+                        flush=True,
+                    )
+                _log.warning(
+                    "github: failed to fetch prior review bodies for ID map; "
+                    "body-finding IDs may not be stable: %s", exc,
+                )
+        id_map = assemble_id_map(prior_bodies, list(findings))
+
         inline_comments: list[dict[str, Any]] = []
         original_inline_comments: list[dict[str, Any]] = []
-        body_bullets: list[str] = []
+        body_findings: list[Finding] = []
         for f in findings:
             if len(inline_comments) < max_inline:
                 payload = _build_inline_comment_payload(
@@ -303,15 +363,26 @@ class GitHubProvider:
                     eligible_new=eligible_new,
                     eligible_context=eligible_ctx,
                     enable_suggestions=enable_suggestions,
+                    finding_id=id_map.get(fingerprint(f)),
                 )
                 if payload is not None:
                     inline_comments.append(payload)
                     continue
             # Fell through to body-findings
+            body_findings.append(f)
+
+        body_bullets: list[str] = []
+        for f in body_findings:
             loc_note = ""
             if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
                 loc_note = " *(line not in diff)*"
-            body_bullets.append(format_body_finding(f, location_note=loc_note))
+            body_bullets.append(
+                format_body_finding(
+                    f,
+                    location_note=loc_note,
+                    finding_id=id_map.get(fingerprint(f)),
+                )
+            )
 
         # Build body
         body = _render_review_body(
@@ -323,7 +394,18 @@ class GitHubProvider:
             token_table=token_table,
             agent_prompt=agent_prompt,
         )
+        # Embed the ID map as a hidden HTML comment so future reviews and the
+        # dismiss workflow can reconstruct which fingerprint → ID associations
+        # exist on this PR without needing to parse rendered bullet text.
+        from ai_pr_review.vcs.marker import build_id_map_marker
+        id_map_marker = ""
+        try:
+            id_map_marker = build_id_map_marker(id_map)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("github: failed to build id-map marker: %s", exc)
         body = append_inline_marker(truncate_body(body))
+        if id_map_marker:
+            body += "\n" + id_map_marker
 
         # GitHub disallows inline comments on an APPROVE review. When approving
         # with inline findings, post them as COMMENT first then APPROVE body-only.
@@ -704,13 +786,23 @@ def _render_review_body(
     return body
 
 
-def _build_inline_comment_body(f: Finding) -> str:
-    """Render the markdown body for a GitHub inline review comment."""
+def _build_inline_comment_body(f: Finding, *, finding_id: int | None = None) -> str:
+    """Render the markdown body for a GitHub inline review comment.
+
+    Parameters
+    ----------
+    finding_id:
+        Optional stable per-PR ID (e.g. 3 → ``**[F3]**``).  When provided,
+        the token is inserted between severity and source tag, mirroring
+        the body-finding render so all findings have a consistent ID token
+        regardless of whether they are anchored inline or fall to the body.
+    """
     from ai_pr_review.vcs._body import format_source_tag, severity_icon
 
     icon = severity_icon(f.severity)
     tag = format_source_tag(f)
-    header = f"{icon} **[{f.severity}]** {tag} {f.finding}".strip()
+    id_token = f" **[F{finding_id}]**" if finding_id is not None else ""
+    header = f"{icon} **[{f.severity}]**{id_token} {tag} {f.finding}".strip()
     parts = [header]
     if f.remediation:
         parts.append(f"\n**Remediation:** {f.remediation}")
@@ -727,6 +819,7 @@ def _build_inline_comment_payload(
     eligible_new: set[tuple[str, int]],
     eligible_context: set[tuple[str, int]],
     enable_suggestions: bool,
+    finding_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Return a GitHub reviews-API inline-comment dict, or None if ineligible.
 
@@ -736,7 +829,7 @@ def _build_inline_comment_payload(
     if not is_inline_eligible(f, eligible_new):
         return None
 
-    body = _build_inline_comment_body(f)
+    body = _build_inline_comment_body(f, finding_id=finding_id)
     payload: dict[str, Any] = {"path": f.file, "line": f.line, "body": body}
 
     if (

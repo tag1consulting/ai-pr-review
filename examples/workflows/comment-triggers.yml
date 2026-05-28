@@ -11,19 +11,22 @@
 #   /ai-pr-review rescan                  — force full diff, re-run review
 #   /ai-pr-review review-full             — run in full mode (all agents)
 #   /ai-pr-review skip                    — add skip-ai-review label to suppress next review
-#   /ai-pr-review dismiss                 — reply to an inline finding (false-positive alias)
+#   /ai-pr-review dismiss                 — reply to an INLINE finding to dismiss it
+#   /ai-pr-review dismiss F<n>            — dismiss a BODY-LEVEL finding by its stable ID
+#                                           (e.g. /ai-pr-review dismiss F1)
 #   /ai-pr-review help                    — post the command list as a reply
 #
+# Body-level findings (in "### Findings not attached to specific lines") carry stable
+# per-PR IDs (**[F1]**, **[F2]**, etc.) that persist across review cycles. Use F<n>
+# variants of any command to target them from a top-level PR comment.
+#
 # Epic 3 learning-loop commands (require enable-feedback-loop: 'true' below, plus
-# a GH_TOKEN with contents:write on the ai-pr-review-bot branch; OWNER/MEMBER only;
-# accept both review-thread replies AND top-level PR comments — review-thread
-# replies are recommended for false-positive / wont-fix since the workflow
-# auto-resolves the parent thread on success):
-#   /ai-pr-review false-positive [reason] — persist a false-positive verdict
-#   /ai-pr-review wont-fix [reason]       — persist a "won't fix" verdict
-#   /ai-pr-review feedback <text>         — persist free-form feedback for future reviews
-#   /ai-pr-review explain                 — request an expanded explanation (stub for now)
-#   /ai-pr-review revise <hint>           — request a revised verdict (stub for now)
+# a GH_TOKEN with contents:write on the ai-pr-review-bot branch; OWNER/MEMBER only):
+#   /ai-pr-review false-positive [F<n>] [reason] — persist a false-positive verdict
+#   /ai-pr-review wont-fix [F<n>] [reason]       — persist a "won't fix" verdict
+#   /ai-pr-review feedback <text>                — persist free-form feedback
+#   /ai-pr-review explain [F<n>]                 — request an expanded explanation (stub)
+#   /ai-pr-review revise [F<n>] <hint>           — request a revised verdict (stub)
 #
 # Requirements:
 #   - ANTHROPIC_API_KEY secret (or your provider's key)

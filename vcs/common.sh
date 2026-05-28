@@ -235,8 +235,15 @@ parse_diff_new_lines() {
 format_body_finding() {
   local severity="$1" source_tag="$2" finding="$3" location="$4" loc_note="$5" remediation="$6"
   local suggested_code="${7:-}"
+  # Optional arg 8: stable per-PR finding ID integer (e.g. "1" → **[F1]**).
+  # Empty string or unset means no ID token is emitted.
+  local finding_id="${8:-}"
+  local id_token=""
+  if [[ -n "$finding_id" && "$finding_id" =~ ^[0-9]+$ ]]; then
+    id_token=" **[F${finding_id}]**"
+  fi
   local bullet
-  bullet="- $(severity_icon "$severity") **[${severity}]** ${source_tag} ${finding} — \`${location}\`${loc_note}"
+  bullet="- $(severity_icon "$severity") **[${severity}]**${id_token} ${source_tag} ${finding} — \`${location}\`${loc_note}"
   if [[ -n "$remediation" || -n "$suggested_code" ]]; then
     local details=""
     if [[ -n "$remediation" ]]; then
