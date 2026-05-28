@@ -91,6 +91,10 @@ class _FakeProvider:
         self.stale_calls += 1
         return StaleResult()
 
+    def advance_sha_watermark(self, new_sha: str) -> bool:
+        self.last_call_order.append("advance_sha_watermark")
+        return True
+
     def post_skip_comment(self, reason: str) -> SummaryResult:
         self.last_call_order.append("post_skip_comment")
         self.skip_calls.append(reason)

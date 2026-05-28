@@ -384,7 +384,7 @@ jobs:
           all_bodies=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq '[.[] | select(.user.login == "github-actions[bot]") |
-                   select(.body | contains("### Findings not attached to specific lines")) |
+                   select(.body != null and (.body | contains("### Findings not attached to specific lines"))) |
                    .body]' 2>/dev/null || echo "[]")
 
           if [[ -z "$FINDING_ID" ]]; then
@@ -394,29 +394,25 @@ jobs:
               "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
               --jq '[.[] | select(.user.login == "github-actions[bot]") |
                      select(.state == "CHANGES_REQUESTED") |
-                     select(.body | contains("### Findings not attached to specific lines"))] |
+                     select(.body != null and (.body | contains("### Findings not attached to specific lines")))] |
                      sort_by(.id) | last | .body // ""' 2>/dev/null || echo "")
-            active_ids=$(printf '%s\n' "$newest_body" \
+            # Extract IDs only from the body-findings section, not the full body.
+            id_list=$(printf '%s\n' "$newest_body" \
+              | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
               | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
-              | sort -n | uniq | tr '\n' ',' | sed 's/,$//' || true)
-            if [[ -n "$active_ids" ]]; then
-              id_list=$(printf '%s\n' "$newest_body" \
-                | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
-                | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
-                | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//')
-              if [[ -z "$id_list" ]]; then
-                reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline. Reply directly to a finding comment with \`/ai-pr-review ${COMMAND}\`."
-              else
-                reply_body="$(printf '%s\n\n%s\n\n%s\n\n%s' \
-                  "**AI Review**: to act on a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
-                  "Example: \`/ai-pr-review ${COMMAND} F1\`" \
-                  "These IDs are stable across review cycles -- \`F1\` always refers to the same finding on this PR." \
-                  "To act on an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`.")"
-              fi
-              gh pr comment "$ISSUE_NUMBER" \
-                --repo "$REPOSITORY" \
-                --body "$reply_body"
+              | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//' || true)
+            if [[ -n "$id_list" ]]; then
+              reply_body="$(printf '%s\n\n%s\n\n%s\n\n%s' \
+                "**AI Review**: to act on a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
+                "Example: \`/ai-pr-review ${COMMAND} F1\`" \
+                "These IDs are stable across review cycles -- \`F1\` always refers to the same finding on this PR." \
+                "To act on an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`.")"
+            else
+              reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. To act on an inline finding, reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`."
             fi
+            gh pr comment "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "$reply_body"
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -437,7 +433,7 @@ jobs:
                 in_section=false; continue
               fi
               $in_section || continue
-              if echo "$line" | grep -qP "$pattern"; then
+              if echo "$line" | grep -qE "$pattern"; then
                 matching_line="$line"
                 break 2
               fi
@@ -548,7 +544,7 @@ jobs:
           head-sha: ''
           review-mode: 'skip'
         env:
-          SLASH_COMMAND: dismiss
+          SLASH_COMMAND: ${{ needs.handle-command.outputs.command }}
           SLASH_SOURCE: ${{ steps.lookup.outputs.source }}
           SLASH_FILE: ${{ steps.lookup.outputs.file }}
           SLASH_RULE_ID: ''
@@ -584,6 +580,7 @@ jobs:
           has_next=true
           unresolved_inline=0
           while [[ "$has_next" == "true" ]]; do
+            gql_err=$(mktemp)
             page=$(gh api graphql -f query='
               query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
                 repository(owner: $owner, name: $repo) {
@@ -601,7 +598,16 @@ jobs:
                 }
               }' \
               -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-              ${cursor:+-f after="$cursor"})
+              ${cursor:+-f after="$cursor"} 2>"$gql_err") || {
+              echo "::error::Could not fetch review threads for dismissal check: $(cat "$gql_err")"
+              rm -f "$gql_err"
+              exit 1
+            }
+            rm -f "$gql_err"
+            if printf '%s' "$page" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL errors fetching review threads: $(printf '%s' "$page" | jq -c '.errors')"
+              exit 1
+            fi
             threads=$(printf '%s' "$page" | jq \
               --argjson rid "$review_id" \
               '[.data.repository.pullRequest.reviewThreads.nodes[] |

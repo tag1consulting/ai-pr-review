@@ -12,9 +12,12 @@ are still recognized by the Python engine.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 from typing import Final
+
+_log = logging.getLogger(__name__)
 
 INLINE_MARKER: Final[str] = "<!-- ai-pr-review-inline -->"
 SUMMARY_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-summary"
@@ -110,7 +113,6 @@ def extract_id_map(body: str) -> dict[str, int]:
     Accepts both integer and whole-number float JSON values (e.g. ``1.0``)
     to tolerate serializer rounding.
     """
-    import logging
     match = _ID_MAP_MARKER_RE.search(body)
     if not match:
         return {}
@@ -125,7 +127,7 @@ def extract_id_map(body: str) -> dict[str, int]:
                     result[str(k)] = int(v)
             return result
     except (json.JSONDecodeError, ValueError) as exc:
-        logging.getLogger(__name__).warning(
+        _log.warning(
             "ai-pr-review: id-map marker present but unparseable: %s — raw: %.200s",
             exc,
             match.group(1),

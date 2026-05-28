@@ -102,7 +102,7 @@ IDs are **PR-wide and stable across review cycles** — if `F1` was assigned to 
 
 If you post `/ai-pr-review dismiss` without an ID as a top-level PR comment, the bot replies with the list of active body-level finding IDs and the correct syntax.
 
-When all body-level findings are dismissed **and** all inline threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — same behavior as the inline path.
+When all **inline** review threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — the same behavior as the inline path. Remaining body-level findings will be suppressed on the next re-review run once they are recorded in the feedback store.
 
 ### `/ai-pr-review false-positive [F<n>] [reason]`
 

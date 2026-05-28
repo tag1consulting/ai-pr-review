@@ -209,7 +209,14 @@ async def run_review(
             # Just advance the SHA watermark so the next incremental run has
             # the correct baseline. Treat this as a successful no-op so
             # findings can still be posted.
-            provider.advance_sha_watermark(diff.head_sha)
+            advanced = provider.advance_sha_watermark(diff.head_sha)
+            if not advanced:
+                logger.warning(
+                    "orchestrate: advance_sha_watermark returned False "
+                    "(no existing summary comment or no-op replacement) for head_sha=%s; "
+                    "next incremental run may re-diff from an older baseline",
+                    diff.head_sha,
+                )
             summary_result = SummaryResult(
                 comment_id=None, created=False, updated=False
             )
