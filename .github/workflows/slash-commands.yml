@@ -446,24 +446,33 @@ jobs:
 
           if [[ -z "$matching_line" ]]; then
             # Check if the ID exists in the full marker (i.e. it's an inline finding).
-            # Extract the id-map JSON from the review body, then check with python3.
-            id_map_json=$(printf '%s\n' "$all_bodies" | jq -r '.[]' \
-              | grep -oE '<!-- ai-pr-review-id-map: \{[^>]+\} -->' \
-              | tail -1 \
-              | sed 's/<!-- ai-pr-review-id-map: //;s/ -->//' || true)
+            # Pass the full bodies JSON to python3 via stdin to extract the marker
+            # robustly — avoids regex truncation on fingerprints containing '>' or ' -->'.
             id_in_marker="no"
-            if [[ -n "$id_map_json" ]]; then
-              py_err=$(mktemp)
-              id_in_marker=$(ID_MAP_JSON="$id_map_json" FINDING_ID="$FINDING_ID" \
-                python3 -c \
-                'import json,os; d=json.loads(os.environ["ID_MAP_JSON"]); fid=int(os.environ["FINDING_ID"]); print("yes" if any(int(v)==fid for v in d.values()) else "no")' \
-                2>"$py_err") || true
-              if [[ -s "$py_err" ]]; then
-                echo "::warning::id-map check failed: $(cat "$py_err")" >&2
-                id_in_marker="no"
-              fi
-              rm -f "$py_err"
+            py_script=$(mktemp --suffix=.py)
+            py_err=$(mktemp)
+            # Write the script using printf to avoid YAML-hostile heredoc syntax.
+            printf '%s\n' \
+              "import json,os,sys,re" \
+              "bodies=json.load(sys.stdin)" \
+              "fid=int(os.environ['FINDING_ID'])" \
+              "pat=re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->')" \
+              "for body in bodies:" \
+              "    m=pat.search(body)" \
+              "    if not m: continue" \
+              "    try:" \
+              "        d=json.loads(m.group(1))" \
+              "        if any(int(v)==fid for v in d.values()): print('yes'); sys.exit(0)" \
+              "    except Exception: pass" \
+              "print('no')" \
+              > "$py_script"
+            id_in_marker=$(printf '%s\n' "$all_bodies" | FINDING_ID="$FINDING_ID" \
+              python3 "$py_script" 2>"$py_err") || true
+            if [[ -s "$py_err" ]]; then
+              echo "::warning::id-map check failed: $(cat "$py_err")" >&2
+              id_in_marker="no"
             fi
+            rm -f "$py_script" "$py_err"
             if [[ "$id_in_marker" == "yes" ]]; then
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
@@ -483,12 +492,13 @@ jobs:
             | sed 's/\*\*\[F[0-9]*\]\*\* //' \
             | grep -oE '\[[^]]+\]' | head -1 | tr -d '[]' \
             | sed 's/,.*//' | tr -d ' ' || true)
-          # Extract the backtick-quoted location from *(at `...`...)* or — `...`
+          # Extract the backtick-quoted location from *(at `file:line`...)* annotation.
           file_line=$(printf '%s' "$matching_line" \
-            | grep -oE '`[^`]+`[^*]*\*' | head -1 | sed 's/`//g;s/[^`]*\*$//' || true)
+            | grep -oE '\(at `[^`]+`' | head -1 | sed 's/(at `//;s/`.*//' || true)
           if [[ -z "$file_line" ]]; then
+            # Fallback: em-dash prefix used in bash-engine renders (— `file:line`)
             file_line=$(printf '%s' "$matching_line" \
-              | grep -oE '-- `[^`]+' | head -1 | sed 's/-- `//' || true)
+              | grep -oE '— `[^`]+' | head -1 | sed 's/— `//' || true)
           fi
           finding_file="${file_line%:*}"
           finding_line_num="${file_line##*:}"

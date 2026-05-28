@@ -126,7 +126,9 @@ def extract_id_map(body: str) -> dict[str, int]:
             return result
     except (json.JSONDecodeError, ValueError) as exc:
         logging.getLogger(__name__).warning(
-            "ai-pr-review: id-map marker present but unparseable: %s", exc
+            "ai-pr-review: id-map marker present but unparseable: %s — raw: %.200s",
+            exc,
+            match.group(1),
         )
     return {}
 

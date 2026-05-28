@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint

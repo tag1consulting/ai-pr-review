@@ -107,11 +107,11 @@ finding_ids_build_map() {
       source="${source%%,*}"
       source="${source// /}"
 
-      # Extract file:line from location annotation.
+      # Extract file:line from location annotation: *(at `file:line`...)*
       local file_line file part_line
-      # Matches: *(at `file:line`...) or — `file:line`
-      file_line=$(printf '%s' "$line" | grep -oE '`[^`]+`[^`]*\*' | head -1 | tr -d '`' | sed 's/[^`]*\*$//' || true)
+      file_line=$(printf '%s' "$line" | grep -oE '\(at `[^`]+`' | head -1 | sed 's/(at `//;s/`.*//' || true)
       if [[ -z "$file_line" ]]; then
+        # Fallback for bash-engine bullets that use em-dash prefix: — `file:line`
         file_line=$(printf '%s' "$line" | grep -oE '— `[^`]+' | head -1 | sed 's/— `//' || true)
       fi
       if [[ "$file_line" == *":"* ]]; then
