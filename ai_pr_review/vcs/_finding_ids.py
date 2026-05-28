@@ -76,21 +76,35 @@ def fingerprint(f: Finding) -> str:
 def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
     """Scan prior review bodies and return a fingerprint → ID mapping.
 
-    Each line that contains ``**[F<n>]**`` is treated as a body-finding
-    bullet.  We reconstruct the fingerprint from the bullet text.
+    Prefers the machine-readable ``<!-- ai-pr-review-id-map: {...} -->``
+    marker embedded in each review body.  Falls back to parsing ``**[F<n>]**``
+    bullet tokens when the marker is absent (backward compatibility with
+    reviews posted before this feature was added).
 
     Lines that cannot be parsed are skipped silently — partial information
     is better than aborting the render.
     """
+    from ai_pr_review.vcs.marker import extract_id_map
+
     fp_to_id: dict[str, int] = {}
     for body in bodies:
+        # Fast path: authoritative map embedded by the renderer.
+        marker_map = extract_id_map(body)
+        if marker_map:
+            for fp, fid in marker_map.items():
+                if fp not in fp_to_id:
+                    fp_to_id[fp] = fid
+            continue
+
+        # Fallback: parse **[F<n>]** tokens from body-findings bullets.
+        # Only covers body-level findings (inline finding IDs are not in
+        # bullet form); use this path only for pre-marker reviews.
         in_body_section = False
         for line in body.splitlines():
             stripped = line.strip()
             if "### Findings not attached to specific lines" in stripped:
                 in_body_section = True
                 continue
-            # Any new level-3 heading ends the body-findings section
             if in_body_section and stripped.startswith("###"):
                 in_body_section = False
                 continue
@@ -105,19 +119,17 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
             finding_id = int(id_match.group(1))
 
             # Reconstruct fingerprint from bullet.
-            # Extract source tag (first [bracketed-thing] after the ID).
             source = ""
             after_id = stripped[id_match.end():]
             src_m = _SOURCE_RE.search(after_id)
             if src_m:
                 source = src_m.group(1).split(",")[0].strip()
 
-            # Extract file:line from location annotation if present.
             file_ = ""
             line_no = ""
             loc_m = _LOCATION_RE.search(stripped)
             if loc_m:
-                loc_str = loc_m.group(1)  # e.g. "foo/bar.py:42"
+                loc_str = loc_m.group(1)
                 if ":" in loc_str:
                     file_, _, line_no = loc_str.rpartition(":")
                     if not line_no.isdigit():
@@ -126,12 +138,9 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
                 else:
                     file_ = loc_str
 
-            # Extract finding text: everything after the source tag, up to
-            # the location annotation.
             text = after_id
             if src_m:
                 text = after_id[src_m.end():]
-            # Strip location annotation suffix
             loc_idx = text.find(" *(at `")
             if loc_idx >= 0:
                 text = text[:loc_idx]
@@ -139,7 +148,6 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
             text_hash = hashlib.sha256(text.encode()).hexdigest()[:12]
 
             fp = f"{source}|{file_}|{line_no}|{text_hash}"
-            # Earlier assignment wins — we want the first (oldest) review's ID.
             if fp not in fp_to_id:
                 fp_to_id[fp] = finding_id
 

@@ -11,12 +11,14 @@ are still recognized by the Python engine.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from typing import Final
 
 INLINE_MARKER: Final[str] = "<!-- ai-pr-review-inline -->"
 SUMMARY_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-summary"
+ID_MAP_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-id-map:"
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
@@ -78,6 +80,41 @@ def has_inline_marker(body: str) -> bool:
 def has_summary_marker(body: str) -> bool:
     """Case-sensitive check for the summary marker (with or without sha=)."""
     return _SUMMARY_MARKER_RE.search(body) is not None
+
+
+_ID_MAP_MARKER_RE = re.compile(
+    r"<!-- ai-pr-review-id-map: (\{[^}]*\}) -->"
+)
+
+
+def build_id_map_marker(id_map: dict[str, int]) -> str:
+    """Produce a hidden HTML comment embedding the finding ID map.
+
+    The marker is machine-readable and invisible to users.  It is embedded
+    in the review body so the ID map can be reconstructed from a single
+    REST call to list reviews — no per-thread fetching required.
+
+    Format: ``<!-- ai-pr-review-id-map: {"<fingerprint>": <id>, ...} -->``
+    """
+    payload = json.dumps(id_map, separators=(",", ":"), sort_keys=True)
+    return f"<!-- ai-pr-review-id-map: {payload} -->"
+
+
+def extract_id_map(body: str) -> dict[str, int]:
+    """Extract the finding ID map from a review body.
+
+    Returns an empty dict when no marker is present or the JSON is malformed.
+    """
+    match = _ID_MAP_MARKER_RE.search(body)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+        if isinstance(data, dict):
+            return {str(k): int(v) for k, v in data.items() if isinstance(v, int)}
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return {}
 
 
 def append_inline_marker(body: str) -> str:

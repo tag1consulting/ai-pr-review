@@ -1,4 +1,4 @@
-"""Tests for ai_pr_review.vcs._finding_ids."""
+"""Tests for ai_pr_review.vcs._finding_ids and the ID-map marker."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pytest
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
+from ai_pr_review.vcs.marker import build_id_map_marker, extract_id_map
 
 
 def _finding(
@@ -206,3 +207,61 @@ def test_format_body_finding_id_roundtrips_through_id_map() -> None:
 
     id_map2 = assemble_id_map([body1], [fa, fb])
     assert id_map2 == id_map1
+
+
+# ---------------------------------------------------------------------------
+# ID-map marker (build_id_map_marker / extract_id_map)
+# ---------------------------------------------------------------------------
+
+def test_id_map_marker_roundtrip() -> None:
+    fa = _finding("A")
+    fb = _finding("B")
+    id_map = assemble_id_map([], [fa, fb])
+    marker = build_id_map_marker(id_map)
+    recovered = extract_id_map(marker)
+    assert recovered == id_map
+
+
+def test_extract_id_map_empty_on_no_marker() -> None:
+    assert extract_id_map("no marker here") == {}
+    assert extract_id_map("") == {}
+
+
+def test_extract_id_map_from_full_review_body() -> None:
+    fa = _finding("A")
+    fb = _finding("B")
+    id_map = assemble_id_map([], [fa, fb])
+    marker = build_id_map_marker(id_map)
+    body = f"## AI Review Findings\n\nSome content\n\n{marker}\n<!-- ai-pr-review-inline -->"
+    recovered = extract_id_map(body)
+    assert recovered == id_map
+
+
+def test_marker_based_map_takes_priority_over_bullet_parse() -> None:
+    """When a review body has both a marker and bullet text, the marker wins."""
+    fa = _finding("A")
+    fb = _finding("B")
+    fc = _finding("C")
+
+    # Build first review body via bullet parsing (simulates pre-marker review).
+    id_map_old = assemble_id_map([], [fa, fb, fc])
+    old_body = "### Findings not attached to specific lines\n" + "\n".join(
+        format_body_finding(f, finding_id=id_map_old[fingerprint(f)]) for f in [fa, fb, fc]
+    )
+
+    # Build second review body with marker.
+    id_map_new = assemble_id_map([old_body], [fa, fc])
+    marker = build_id_map_marker(id_map_new)
+    new_body = (
+        "### Findings not attached to specific lines\n"
+        + "\n".join(
+            format_body_finding(f, finding_id=id_map_new[fingerprint(f)])
+            for f in [fa, fc]
+        )
+        + f"\n{marker}"
+    )
+
+    # When we reconstruct from [new_body], we should get the marker-based map.
+    id_map_reconstructed = assemble_id_map([new_body], [fa, fc])
+    assert id_map_reconstructed[fingerprint(fa)] == id_map_old[fingerprint(fa)]  # F1 preserved
+    assert id_map_reconstructed[fingerprint(fc)] == id_map_old[fingerprint(fc)]  # F3 preserved (gap at F2)

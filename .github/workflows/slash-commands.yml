@@ -399,36 +399,68 @@ jobs:
               | sort -n | uniq | tr '\n' ',' | sed 's/,$//' || true)
             if [[ -n "$active_ids" ]]; then
               id_list=$(printf '%s\n' "$newest_body" \
+                | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
                 | grep -oP '\*\*\[F\K[0-9]+(?=\]\*\*)' \
                 | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//')
-              gh pr comment "$ISSUE_NUMBER" \
-                --repo "$REPOSITORY" \
-                --body "**AI Review**: to dismiss a body-level finding, include its ID. Active IDs in the current review: **${id_list}**
+              if [[ -z "$id_list" ]]; then
+                gh pr comment "$ISSUE_NUMBER" \
+                  --repo "$REPOSITORY" \
+                  --body "**AI Review**: no body-level findings with stable IDs found in the current review. All findings are anchored inline — reply directly to a finding comment with \`/ai-pr-review dismiss\`."
+              else
+                gh pr comment "$ISSUE_NUMBER" \
+                  --repo "$REPOSITORY" \
+                  --body "**AI Review**: to dismiss a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**
 
 Example: \`/ai-pr-review dismiss F1\`
 
-These IDs are stable — \`F1\` always refers to the same finding on this PR, even after new reviews."
-            else
-              gh pr comment "$ISSUE_NUMBER" \
-                --repo "$REPOSITORY" \
-                --body "**AI Review**: no body-level findings with stable IDs found in the current review. To dismiss an inline finding, reply directly to its comment thread with \`/ai-pr-review dismiss\`."
+These IDs are stable across review cycles — \`F1\` always refers to the same finding on this PR.
+
+To dismiss an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review dismiss\`."
+              fi
             fi
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Search all bot review bodies for **[F{FINDING_ID}]**.
+          # Search all bot review body-sections for **[F{FINDING_ID}]**.
+          # We only look within "### Findings not attached to specific lines"
+          # sections — inline finding IDs exist in thread comments (not review
+          # bodies) and can only be dismissed by replying to the thread.
           pattern="\*\*\[F${FINDING_ID}\]\*\*"
-          matching_line=$(printf '%s\n' "$all_bodies" \
-            | jq -r '.[]' \
-            | grep -m1 -P "$pattern" || true)
+          matching_line=""
+          while IFS= read -r body_text; do
+            in_section=false
+            while IFS= read -r line; do
+              if [[ "$line" == *"### Findings not attached to specific lines"* ]]; then
+                in_section=true; continue
+              fi
+              if $in_section && [[ "$line" =~ ^"###" ]]; then
+                in_section=false; continue
+              fi
+              $in_section || continue
+              if echo "$line" | grep -qP "$pattern"; then
+                matching_line="$line"
+                break 2
+              fi
+            done <<< "$body_text"
+          done < <(printf '%s\n' "$all_bodies" | jq -r '.[]')
 
           if [[ -z "$matching_line" ]]; then
-            gh pr comment "$ISSUE_NUMBER" \
-              --repo "$REPOSITORY" \
-              --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect.
+            # Check if the ID exists in the full marker (i.e. it's an inline finding).
+            id_in_marker=$(printf '%s\n' "$all_bodies" | jq -r '.[]' \
+              | grep -oP '<!-- ai-pr-review-id-map: \K\{[^}]+\}' | tail -1 \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if any(v == ${FINDING_ID} for v in d.values()) else 'no')" 2>/dev/null || echo "no")
+            if [[ "$id_in_marker" == "yes" ]]; then
+              gh pr comment "$ISSUE_NUMBER" \
+                --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} is an **inline** finding anchored to a diff line. To dismiss it, reply directly to its review-thread comment with \`/ai-pr-review dismiss\`."
+            else
+              gh pr comment "$ISSUE_NUMBER" \
+                --repo "$REPOSITORY" \
+                --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect.
 
-To see active IDs, post \`/ai-pr-review dismiss\` (without an ID)."
+To see active body-level IDs, post \`/ai-pr-review dismiss\` (without an ID)."
+            fi
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

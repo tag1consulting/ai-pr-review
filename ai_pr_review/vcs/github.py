@@ -329,6 +329,13 @@ class GitHubProvider:
             (lr.file, lr.line) for lr in parse_new_file_lines(diff.diff_text)
         }
 
+        # Assign stable per-PR IDs to ALL findings upfront — inline and body
+        # alike — so the ID counter is consistent regardless of where a finding
+        # ends up rendered. Users can then reference any finding by its F<n> ID
+        # from a top-level comment, not just body-level ones.
+        prior_bodies = self._list_prior_bot_review_bodies() if findings else []
+        id_map = assemble_id_map(prior_bodies, list(findings))
+
         inline_comments: list[dict[str, Any]] = []
         original_inline_comments: list[dict[str, Any]] = []
         body_findings: list[Finding] = []
@@ -339,16 +346,13 @@ class GitHubProvider:
                     eligible_new=eligible_new,
                     eligible_context=eligible_ctx,
                     enable_suggestions=enable_suggestions,
+                    finding_id=id_map.get(fingerprint(f)),
                 )
                 if payload is not None:
                     inline_comments.append(payload)
                     continue
             # Fell through to body-findings
             body_findings.append(f)
-
-        # Assign stable per-PR IDs to body-level findings.
-        prior_bodies = self._list_prior_bot_review_bodies() if body_findings else []
-        id_map = assemble_id_map(prior_bodies, body_findings)
 
         body_bullets: list[str] = []
         for f in body_findings:
@@ -373,7 +377,12 @@ class GitHubProvider:
             token_table=token_table,
             agent_prompt=agent_prompt,
         )
-        body = append_inline_marker(truncate_body(body))
+        # Embed the ID map as a hidden HTML comment so future reviews and the
+        # dismiss workflow can reconstruct which fingerprint → ID associations
+        # exist on this PR without needing to parse rendered bullet text.
+        from ai_pr_review.vcs.marker import build_id_map_marker
+        id_map_marker = build_id_map_marker(id_map)
+        body = append_inline_marker(truncate_body(body)) + "\n" + id_map_marker
 
         # GitHub disallows inline comments on an APPROVE review. When approving
         # with inline findings, post them as COMMENT first then APPROVE body-only.
@@ -754,13 +763,23 @@ def _render_review_body(
     return body
 
 
-def _build_inline_comment_body(f: Finding) -> str:
-    """Render the markdown body for a GitHub inline review comment."""
+def _build_inline_comment_body(f: Finding, *, finding_id: int | None = None) -> str:
+    """Render the markdown body for a GitHub inline review comment.
+
+    Parameters
+    ----------
+    finding_id:
+        Optional stable per-PR ID (e.g. 3 → ``**[F3]**``).  When provided,
+        the token is inserted between severity and source tag, mirroring
+        the body-finding render so all findings have a consistent ID token
+        regardless of whether they are anchored inline or fall to the body.
+    """
     from ai_pr_review.vcs._body import format_source_tag, severity_icon
 
     icon = severity_icon(f.severity)
     tag = format_source_tag(f)
-    header = f"{icon} **[{f.severity}]** {tag} {f.finding}".strip()
+    id_token = f" **[F{finding_id}]**" if finding_id is not None else ""
+    header = f"{icon} **[{f.severity}]**{id_token} {tag} {f.finding}".strip()
     parts = [header]
     if f.remediation:
         parts.append(f"\n**Remediation:** {f.remediation}")
@@ -777,6 +796,7 @@ def _build_inline_comment_payload(
     eligible_new: set[tuple[str, int]],
     eligible_context: set[tuple[str, int]],
     enable_suggestions: bool,
+    finding_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Return a GitHub reviews-API inline-comment dict, or None if ineligible.
 
@@ -786,7 +806,7 @@ def _build_inline_comment_payload(
     if not is_inline_eligible(f, eligible_new):
         return None
 
-    body = _build_inline_comment_body(f)
+    body = _build_inline_comment_body(f, finding_id=finding_id)
     payload: dict[str, Any] = {"path": f.file, "line": f.line, "body": body}
 
     if (
