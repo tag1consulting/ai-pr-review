@@ -16,6 +16,15 @@ _VALID_PR_TYPES: frozenset[str] = frozenset(
 )
 
 _MERMAID_ARROW = re.compile(r"-->>|->>|-->|->")
+# Matches a participant/actor declaration with an optional alias.
+# Group 1: everything up to and including " as " (or end-of-line).
+# Group 2: the alias text (may be empty when no `as` clause is present).
+_PARTICIPANT_ALIAS = re.compile(
+    r"^(\s*(?:participant|actor)\s+\S+\s+as\s+)(.*)", re.IGNORECASE
+)
+# Characters that Mermaid rejects inside a participant alias.
+_ALIAS_INVALID_CHARS = re.compile(r"[()[\]{}<>]")
+
 _DIAGRAM_ADDENDUM = """
 
 ## Optional: Sequence Diagram
@@ -36,10 +45,17 @@ Format:
 sequenceDiagram
     participant A as Caller
     participant B as Callee
-    A->>B: method(args)
+    A->>B: callMethod
     B-->>A: result
 ```
 ````
+
+Rules for valid Mermaid syntax:
+- Participant aliases (the text after `as`) must be plain identifiers — no parentheses,
+  brackets, angle brackets, or other special characters. Write `post_review` not
+  `post_review()`, and `truncate_body` not `truncate_body(limit)`.
+- Describe call arguments in prose inside the message label (after the colon on arrow
+  lines), not with `()` syntax.
 """
 
 
@@ -412,3 +428,55 @@ def _parse_diagram(section: str, warnings: list[str]) -> str | None:
         )
         return None
     return block
+
+
+# ---------------------------------------------------------------------------
+# Mermaid sanitization
+# ---------------------------------------------------------------------------
+
+def sanitize_mermaid(block: str) -> str:
+    """Remove characters that break Mermaid's parser from a sequenceDiagram block.
+
+    Operates line-by-line and targets only ``participant``/``actor`` alias text
+    (the portion after the ``as`` keyword), which is where parentheses and other
+    special characters cause parse failures.  Arrow lines and ``alt``/``end``
+    blocks are left structurally intact.
+
+    Example::
+
+        participant GH as GitHubProvider.post_review()
+        →
+        participant GH as GitHubProvider.post_review
+    """
+    sanitized_lines: list[str] = []
+    for line in block.splitlines():
+        m = _PARTICIPANT_ALIAS.match(line)
+        if m:
+            prefix, alias = m.group(1), m.group(2)
+            # Strip invalid chars and collapse any resulting trailing whitespace.
+            clean_alias = _ALIAS_INVALID_CHARS.sub("", alias).rstrip()
+            line = prefix + clean_alias
+        sanitized_lines.append(line)
+    return "\n".join(sanitized_lines)
+
+
+def sanitize_summary_markdown(text: str) -> str:
+    """Sanitize any Mermaid sequence-diagram block embedded in a markdown string.
+
+    Finds the first ``\`\`\`mermaid ... \`\`\`` fence in *text*, runs
+    :func:`sanitize_mermaid` on its contents, and returns *text* with the
+    fence body replaced.  If no mermaid fence is present the original string
+    is returned unchanged.
+
+    This allows ``_run_summarizer`` in ``cli.py`` to continue returning the
+    full raw LLM markdown (preserving the walkthrough table) while guaranteeing
+    that the embedded diagram uses valid Mermaid alias syntax.
+    """
+    match = _MERMAID_FENCE.search(text)
+    if not match:
+        return text
+    raw_block = match.group(1)
+    clean_block = sanitize_mermaid(raw_block.rstrip())
+    # Rebuild the fenced block, preserving the trailing newline before the
+    # closing fence so Mermaid's renderer sees a complete block.
+    return text[: match.start(1)] + clean_block + "\n" + text[match.end(1) :]
