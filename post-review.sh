@@ -936,6 +936,7 @@ ${suggested_code}
     local prior_bodies_file
     prior_bodies_file=$(mktemp_tracked /tmp/prior-review-bodies-XXXXXXXX.txt)
     # Each line in prior_bodies_file is one review body with \n replaced by literal \n.
+    # Exact equality per state avoids substring matches from jq's test() regex operator.
     gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
       --jq '.[] | select(.user.login == "github-actions[bot]") |
              select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED" or .state == "APPROVED" or .state == "DISMISSED") |
@@ -967,8 +968,11 @@ ${suggested_code}
       local bf_src_tag="[${bf_src}]"
       local bf_id
       bf_id=$(finding_ids_get "$bf_src" "$bf_file" "$bf_line" "$bf_text" "$id_map_file" "$next_id_file") || {
-        echo "::warning::finding-ids: ID assignment failed for finding in ${bf_file}:${bf_line}; rendering without ID" >&2
-        bf_id=""
+        # ID assignment failed (e.g. corrupt counter file). Render with a visible
+        # placeholder so the finding still appears in the review body. Users cannot
+        # dismiss [F?] via slash command but will see the CI warning in the log.
+        echo "::warning::finding-ids: ID assignment failed for finding in ${bf_file}:${bf_line}; rendering as [F?]" >&2
+        bf_id="?"
       }
 
       body_findings="${body_findings}

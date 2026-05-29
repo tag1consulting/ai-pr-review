@@ -391,6 +391,7 @@ jobs:
             # No ID supplied — list active body-level IDs and show correct syntax
             # for the command that was issued (dismiss/false-positive/wont-fix/explain/revise).
             nb_err=$(mktemp)
+            trap 'rm -f "$nb_err"' EXIT
             newest_body=$(gh api \
               "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
               --jq '[.[] | select(.user.login == "github-actions[bot]") |
@@ -401,9 +402,8 @@ jobs:
               newest_body=""
             }
             rm -f "$nb_err"
-            # Only reply if there is an actual review to reference.
             if [[ -n "$newest_body" ]]; then
-              # Extract IDs only from the body-findings section, not the full body.
+              # Extract IDs only from the body-findings section (exact section, not full body).
               id_list=$(printf '%s\n' "$newest_body" \
                 | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
                 | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
@@ -417,10 +417,13 @@ jobs:
               else
                 reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. To act on an inline finding, reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`."
               fi
-              gh pr comment "$ISSUE_NUMBER" \
-                --repo "$REPOSITORY" \
-                --body "$reply_body"
+            else
+              # No prior CHANGES_REQUESTED review found (fresh PR or API error) — still reply.
+              reply_body="**AI Review**: no active AI review with body-level findings found on this PR. To act on an inline finding, reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`."
             fi
+            gh pr comment "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --body "$reply_body"
             echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -616,14 +619,17 @@ jobs:
               echo "::error::GraphQL errors fetching review threads: $(printf '%s' "$page" | jq -c '.errors')"
               exit 1
             fi
+            jq_err=$(mktemp)
             threads=$(printf '%s' "$page" | jq \
               --argjson rid "$review_id" \
               '[.data.repository.pullRequest.reviewThreads.nodes[] |
                 select(.comments.nodes[0].pullRequestReview.databaseId == $rid and
-                       .isResolved == false)] | length') || {
-              echo "::error::jq failed parsing review threads response"
+                       .isResolved == false)] | length' 2>"$jq_err") || {
+              echo "::error::jq failed parsing review threads response: $(cat "$jq_err")"
+              rm -f "$jq_err"
               exit 1
             }
+            rm -f "$jq_err"
             unresolved_inline=$((unresolved_inline + threads))
             has_next=$(printf '%s' "$page" | jq -r \
               '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')

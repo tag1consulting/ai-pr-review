@@ -93,8 +93,11 @@ class _FakeProvider:
 
     advance_sha_watermark_retval: bool = True
 
+    last_watermark_sha: str = ""
+
     def advance_sha_watermark(self, new_sha: str) -> bool:
         self.last_call_order.append("advance_sha_watermark")
+        self.last_watermark_sha = new_sha
         return self.advance_sha_watermark_retval
 
     def post_skip_comment(self, reason: str) -> SummaryResult:
@@ -505,7 +508,7 @@ def test_token_table_renderer_exception_is_failsoft(tmp_path: Path) -> None:
 
 def test_incremental_run_calls_advance_sha_watermark(tmp_path: Path) -> None:
     """When summary_text is empty and there is no skip_reason, run_review must
-    call advance_sha_watermark instead of post_summary."""
+    call advance_sha_watermark instead of post_summary, passing the correct SHA."""
     provider = _FakeProvider()
     ctx = _make_dispatch_context(tmp_path)
 
@@ -520,6 +523,9 @@ def test_incremental_run_calls_advance_sha_watermark(tmp_path: Path) -> None:
         )
         assert result.ok is True
         assert "advance_sha_watermark" in provider.last_call_order
+        assert provider.last_watermark_sha == "abc1234567", (
+            f"advance_sha_watermark must receive head_sha; got {provider.last_watermark_sha!r}"
+        )
         assert provider.summary_calls == [], "post_summary must NOT be called on incremental run"
         assert provider.findings_calls, "post_findings must still be called on incremental run"
 
@@ -530,35 +536,38 @@ def test_incremental_run_advance_sha_watermark_false_logs_warning(
     tmp_path: Path,
 ) -> None:
     """When advance_sha_watermark returns False, a warning must be logged."""
+    import io
     import logging
 
     provider = _FakeProvider()
     provider.advance_sha_watermark_retval = False
     ctx = _make_dispatch_context(tmp_path)
 
-    async def _run() -> None:
-        import capfd  # noqa: F401 — unused; warning goes to Python logging
-        pass
-
-    # Use caplog via pytest directly
-    import io
     log_stream = io.StringIO()
     handler = logging.StreamHandler(log_stream)
     handler.setLevel(logging.WARNING)
     logger = logging.getLogger("ai_pr_review.orchestrate")
     logger.addHandler(handler)
-    try:
-        anyio.run(lambda: run_review(  # type: ignore[return-value]
+
+    async def _run() -> None:
+        await run_review(
             diff=DiffContext(diff_text="", head_sha="abc1234567"),
             summary_text="",
             agents=[],
             llm_call=_llm_call_factory({}),
             dispatch_context=ctx,
             provider=provider,
-        ))
+        )
+
+    try:
+        anyio.run(_run)
     finally:
         logger.removeHandler(handler)
+
     log_output = log_stream.getvalue()
     assert "advance_sha_watermark" in log_output, (
         f"Expected warning about advance_sha_watermark returning False; got: {log_output!r}"
+    )
+    assert "abc1234567" in log_output, (
+        f"Warning must include the head_sha for correlation; got: {log_output!r}"
     )

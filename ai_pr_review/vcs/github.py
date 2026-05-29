@@ -405,24 +405,22 @@ class GitHubProvider:
             id_map_marker = build_id_map_marker(id_map)
         except Exception as exc:  # noqa: BLE001
             _log.warning("github: failed to build id-map marker: %s", exc)
-        # Reserve space for the id-map marker before truncating so the marker
-        # never pushes the total body past GitHub's 65,536-byte limit.
-        # Clamp to a 4 KiB minimum so a pathologically large id-map never
-        # produces a zero or negative truncation limit.
+        # Body content takes priority over the id-map marker.  Check whether
+        # the marker fits before computing truncate_limit so that a large marker
+        # doesn't shrink the visible review body; drop the marker first instead.
         _MIN_BODY_BYTES = 4096
         from ai_pr_review.vcs._body import GITHUB_MAX_BODY_SIZE
         marker_reserve = len(id_map_marker.encode("utf-8")) + 1 if id_map_marker else 0
-        truncate_limit = max(_MIN_BODY_BYTES, GITHUB_MAX_BODY_SIZE - marker_reserve)
-        if marker_reserve > GITHUB_MAX_BODY_SIZE - _MIN_BODY_BYTES:
-            # id-map is too large to fit alongside the body — drop it so the
-            # review can still post. The next review cycle will rebuild from
-            # bullet-parsing fallback.
+        if id_map_marker and marker_reserve > GITHUB_MAX_BODY_SIZE - _MIN_BODY_BYTES:
             _log.warning(
-                "github: id-map marker (%d bytes) too large to fit in review body; "
-                "omitting marker for this cycle — ID stability may degrade",
+                "github: id-map marker (%d bytes) too large to fit in review body "
+                "for %s/%s PR #%s; omitting marker for this cycle — ID stability may degrade",
                 marker_reserve,
+                self.config.owner, self.config.repo, self.config.pr_number,
             )
             id_map_marker = ""
+            marker_reserve = 0
+        truncate_limit = GITHUB_MAX_BODY_SIZE - marker_reserve
         body = append_inline_marker(truncate_body(body, limit=truncate_limit))
         if id_map_marker:
             body += "\n" + id_map_marker
