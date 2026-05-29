@@ -22,8 +22,11 @@ _MERMAID_ARROW = re.compile(r"-->>|->>|-->|->")
 _PARTICIPANT_ALIAS = re.compile(
     r"^(\s*(?:participant|actor)\s+\S+\s+as\s+)(.*)", re.IGNORECASE
 )
-# Characters that Mermaid rejects inside a participant alias.
-_ALIAS_INVALID_CHARS = re.compile(r"[()[\]{}<>]")
+# Bracket groups (including their contents) that Mermaid rejects in participant
+# aliases.  Matching the full group — e.g. "(limit)" not just "(" and ")" —
+# prevents word-boundary fusion: "truncate_body(limit)" → "truncate_body",
+# not "truncate_bodylimit".
+_ALIAS_BRACKET_GROUPS = re.compile(r"\([^)]*\)|\[[^\]]*\]|\{[^}]*\}|<[^>]*>")
 
 _DIAGRAM_ADDENDUM = """
 
@@ -453,8 +456,14 @@ def sanitize_mermaid(block: str) -> str:
         m = _PARTICIPANT_ALIAS.match(line)
         if m:
             prefix, alias = m.group(1), m.group(2)
-            # Strip invalid chars and collapse any resulting trailing whitespace.
-            clean_alias = _ALIAS_INVALID_CHARS.sub("", alias).rstrip()
+            # Remove bracket groups including their contents so that
+            # "truncate_body(limit)" → "truncate_body", not "truncate_bodylimit".
+            clean_alias = _ALIAS_BRACKET_GROUPS.sub("", alias).rstrip()
+            # Guard: if all characters were stripped the alias is empty, which
+            # leaves a dangling "participant X as " that Mermaid will reject.
+            # Fall back to the raw alias so the diagram renders even if imperfect.
+            if not clean_alias:
+                clean_alias = alias.strip()
             line = prefix + clean_alias
         sanitized_lines.append(line)
     return "\n".join(sanitized_lines)

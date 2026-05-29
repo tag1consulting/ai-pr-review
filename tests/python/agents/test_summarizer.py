@@ -598,16 +598,32 @@ sequenceDiagram
     assert "end" in result
 
 
-def test_sanitize_mermaid_strips_brackets_and_angle_brackets_from_alias() -> None:
+def test_sanitize_mermaid_strips_bracket_groups_including_contents() -> None:
+    """Bracket groups are removed with their contents, not just the bracket chars.
+
+    truncate_body(limit) must become truncate_body, NOT truncate_bodylimit.
+    Foo[bar] must become Foo, NOT Foobar.
+    """
     block = """\
 sequenceDiagram
-    participant A as Foo[bar]
-    participant B as Baz<T>
+    participant A as truncate_body(limit)
+    participant B as Foo[bar]
+    participant C as Baz<T>
     A->>B: go
     B-->>A: done"""
     result = sanitize_mermaid(block)
-    assert "[" not in result.split("A->>B")[0]  # alias portion only
-    assert "<" not in result.split("A->>B")[0]
+    # Contents inside brackets are dropped, not concatenated
+    assert "participant A as truncate_body" in result
+    assert "truncate_bodylimit" not in result
+    assert "participant B as Foo" in result
+    assert "Foobar" not in result
+    # Bracket chars themselves are removed
+    lines = result.splitlines()
+    participant_lines = [l for l in lines if "participant " in l or "actor " in l]
+    for line in participant_lines:
+        alias = line.split(" as ", 1)[1] if " as " in line else ""
+        for ch in "()[]<>{}":
+            assert ch not in alias, f"unexpected {ch!r} in alias of: {line!r}"
 
 
 def test_sanitize_mermaid_handles_actor_keyword() -> None:
@@ -658,6 +674,30 @@ sequenceDiagram
     # Block is still valid Mermaid
     from ai_pr_review.agents.summarizer import is_valid_mermaid
     assert is_valid_mermaid(result)
+
+
+def test_sanitize_mermaid_empty_alias_falls_back_to_raw() -> None:
+    """When alias consists entirely of bracket chars, fall back to the raw alias.
+
+    'participant X as ()' → alias becomes empty after stripping; the fallback
+    preserves '()' rather than leaving a dangling 'participant X as ' which
+    Mermaid would reject with a parse error.
+    """
+    block = "sequenceDiagram\n    participant X as ()\n    X->>X: go"
+    result = sanitize_mermaid(block)
+    # Alias is not empty (dangling 'as ' is avoided)
+    for line in result.splitlines():
+        if "participant X" in line and " as " in line:
+            alias = line.split(" as ", 1)[1].strip()
+            assert alias, f"empty alias in: {line!r}"
+
+
+def test_sanitize_mermaid_alias_with_args_drops_group_contents() -> None:
+    """truncate_body(limit) → truncate_body, not truncate_bodylimit."""
+    block = "sequenceDiagram\n    participant A as truncate_body(limit)\n    A->>A: go"
+    result = sanitize_mermaid(block)
+    assert "participant A as truncate_body" in result
+    assert "limit" not in result.split("A->>A")[0]
 
 
 # ---------------------------------------------------------------------------
