@@ -398,6 +398,7 @@ async def _run_summarizer(
         build_summarizer_system_prompt,
         build_summarizer_user_message,
         parse_summarizer_output,
+        sanitize_summary_markdown,
     )
     from ai_pr_review.llm.base import LLMRequest
 
@@ -443,7 +444,11 @@ async def _run_summarizer(
         # parseable before returning the raw markdown to the caller.
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
         parse_summarizer_output(response.text, include_diagram=True)
-        return response.text
+        # Sanitize the Mermaid block (if present) so that invalid alias syntax
+        # (e.g. parentheses in "participant X as foo()") doesn't produce a
+        # broken diagram in the posted PR comment.  sanitize_summary_markdown
+        # is a no-op when no mermaid fence is found.
+        return sanitize_summary_markdown(response.text)
     except Exception as exc:
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
