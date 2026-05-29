@@ -7,6 +7,20 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.12.0
+
+**Stable per-PR `F<n>` IDs on all findings, with `/ai-pr-review dismiss F<n>` from top-level PR comments (PRs #365, #366, #367, closes #364).** AI review findings now carry stable, monotonically increasing IDs — `**[F1]**`, `**[F2]**`, etc. — across both inline review-thread comments and body-level findings (those in the `### Findings not attached to specific lines` section). IDs are PR-wide: the same finding keeps its ID across review cycles, new findings get the next unused ID, and dismissed gaps (e.g. no `F2`) signal historical dismissals.
+
+Before this release, `/ai-pr-review dismiss` silently did nothing when posted as a top-level PR comment, and body-level findings had no dismissal path at all. Now:
+
+- `/ai-pr-review dismiss F1` posted as a **top-level PR comment** dismisses a specific body-level finding, records a `FeedbackEntry`, and auto-dismisses the `CHANGES_REQUESTED` review when all inline threads are also resolved.
+- `/ai-pr-review dismiss` (no ID) replies with the list of active `F<n>` IDs instead of silently doing nothing — fixing the exact user-visible bug.
+- Full parity: `false-positive F<n>`, `wont-fix F<n>`, `explain F<n>`, and `revise F<n>` all accept the same body-finding ID syntax from top-level comments.
+
+The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-pr-review-id-map: {...} -->`) for stateless reconstruction without a side-channel database. A backward-compatible fallback parses rendered bullet text for pre-marker reviews.
+
+**Incremental-run summary preservation (PR #366).** Incremental review runs (where the summarizer is skipped because the diff base matches the last-reviewed SHA) previously overwrote the existing summary comment with a bare `## AI Review` placeholder. The orchestrator now calls `advance_sha_watermark()` on incremental runs instead of `post_summary()`, preserving the original summary comment body while updating only the watermark SHA.
+
 ## What's new in v0.11.0
 
 **Governance posture for LLM reviewers (PR #350).** A new shared prompt partial `prompts/_governance.md` is injected into all seven finding-producing agents (`code-reviewer`, `security-reviewer`, `architecture-reviewer`, `edge-case-hunter`, `blind-hunter`, `adversarial-general`, `silent-failure-hunter`). It encodes three principles: an Asimov-style severity lens (calibrate severity by harm to users/systems, not abstract "code smell"), don't-reinvent-the-wheel detection (flag duplication of existing utilities visible in the diff or manifest), and verify-before-naming with secret redaction (any flag/function/path named in a finding must appear in the supplied diff or manifest, and any secret-shaped value visible in the diff must be replaced with `<secret-redacted>` in finding and remediation text). Always-on, no env var toggle. Composition order is `base → _governance → _knowledge-cutoff → _trailer-findings → (suggestion-addendum)` to preserve prompt-cache locality.
