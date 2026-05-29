@@ -158,7 +158,7 @@ finding_ids_get() {
 
   if [[ -f "$map_file" ]]; then
     local existing_id
-    existing_id=$(grep -F "$fp	" "$map_file" 2>/dev/null | head -1 | cut -f2 || true)
+    existing_id=$(awk -F'\t' -v fp="$fp" '$1 == fp {print $2; exit}' "$map_file" 2>/dev/null || true)
     if [[ -n "$existing_id" ]]; then
       echo "$existing_id"
       return

@@ -183,7 +183,9 @@ class GitHubProvider:
             for review in resp.json() or []:
                 if (review.get("user") or {}).get("login") != c.bot_login:
                     continue
-                if review.get("state") not in ("CHANGES_REQUESTED", "COMMENTED"):
+                if review.get("state") not in (
+                    "CHANGES_REQUESTED", "COMMENTED", "APPROVED", "DISMISSED"
+                ):
                     continue
                 body = review.get("body") or ""
                 if "### Findings not attached to specific lines" in body:
@@ -403,7 +405,25 @@ class GitHubProvider:
             id_map_marker = build_id_map_marker(id_map)
         except Exception as exc:  # noqa: BLE001
             _log.warning("github: failed to build id-map marker: %s", exc)
-        body = append_inline_marker(truncate_body(body))
+        # Reserve space for the id-map marker before truncating so the marker
+        # never pushes the total body past GitHub's 65,536-byte limit.
+        # Clamp to a 4 KiB minimum so a pathologically large id-map never
+        # produces a zero or negative truncation limit.
+        _MIN_BODY_BYTES = 4096
+        from ai_pr_review.vcs._body import GITHUB_MAX_BODY_SIZE
+        marker_reserve = len(id_map_marker.encode("utf-8")) + 1 if id_map_marker else 0
+        truncate_limit = max(_MIN_BODY_BYTES, GITHUB_MAX_BODY_SIZE - marker_reserve)
+        if marker_reserve > GITHUB_MAX_BODY_SIZE - _MIN_BODY_BYTES:
+            # id-map is too large to fit alongside the body — drop it so the
+            # review can still post. The next review cycle will rebuild from
+            # bullet-parsing fallback.
+            _log.warning(
+                "github: id-map marker (%d bytes) too large to fit in review body; "
+                "omitting marker for this cycle — ID stability may degrade",
+                marker_reserve,
+            )
+            id_map_marker = ""
+        body = append_inline_marker(truncate_body(body, limit=truncate_limit))
         if id_map_marker:
             body += "\n" + id_map_marker
 

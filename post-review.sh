@@ -938,7 +938,7 @@ ${suggested_code}
     # Each line in prior_bodies_file is one review body with \n replaced by literal \n.
     gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
       --jq '.[] | select(.user.login == "github-actions[bot]") |
-             select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED") |
+             select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED" or .state == "APPROVED" or .state == "DISMISSED") |
              select(.body | contains("### Findings not attached to specific lines")) |
              .body | gsub("\n"; "\\n")' \
       >> "$prior_bodies_file" 2>/dev/null || true
@@ -966,7 +966,10 @@ ${suggested_code}
 
       local bf_src_tag="[${bf_src}]"
       local bf_id
-      bf_id=$(finding_ids_get "$bf_src" "$bf_file" "$bf_line" "$bf_text" "$id_map_file" "$next_id_file")
+      bf_id=$(finding_ids_get "$bf_src" "$bf_file" "$bf_line" "$bf_text" "$id_map_file" "$next_id_file") || {
+        echo "::warning::finding-ids: ID assignment failed for finding in ${bf_file}:${bf_line}; rendering without ID" >&2
+        bf_id=""
+      }
 
       body_findings="${body_findings}
 $(format_body_finding "$bf_sev" "$bf_src_tag" "$bf_text" "${bf_file}:${bf_line}" "$bf_loc_note" "$bf_rem" "$bf_sugg" "$bf_id")"
