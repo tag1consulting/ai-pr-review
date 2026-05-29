@@ -931,6 +931,7 @@ ${suggested_code}
   done <<< "$findings_ndjson"
 
   # Assign stable per-PR IDs to body findings and render them.
+  local id_assignment_failed=false
   if [[ -s "$body_findings_ndjson_file" ]]; then
     # Fetch prior bot review bodies for ID reconstruction.
     local prior_bodies_file
@@ -968,11 +969,9 @@ ${suggested_code}
       local bf_src_tag="[${bf_src}]"
       local bf_id
       bf_id=$(finding_ids_get "$bf_src" "$bf_file" "$bf_line" "$bf_text" "$id_map_file" "$next_id_file") || {
-        # ID assignment failed (e.g. corrupt counter file). Render with a visible
-        # placeholder so the finding still appears in the review body. Users cannot
-        # dismiss [F?] via slash command but will see the CI warning in the log.
         echo "::warning::finding-ids: ID assignment failed for finding in ${bf_file}:${bf_line}; rendering as [F?]" >&2
         bf_id="?"
+        id_assignment_failed=true
       }
 
       body_findings="${body_findings}
@@ -1075,6 +1074,11 @@ $(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:
 
 ### Findings not attached to specific lines
 ${body_findings}"
+      if [[ "$id_assignment_failed" == "true" ]]; then
+        review_body="${review_body}
+
+> ⚠️ **Note:** One or more findings above show **[F?]** because finding ID assignment failed (e.g. a corrupt ID counter file). These findings cannot be dismissed via \`/ai-pr-review dismiss\`. See the CI run logs for details."
+      fi
     elif [[ "$inline_count" -gt 0 ]]; then
       review_body="${review_body}
 

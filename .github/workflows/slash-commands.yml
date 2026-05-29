@@ -402,6 +402,7 @@ jobs:
               newest_body=""
             }
             rm -f "$nb_err"
+            reply_body=""
             if [[ -n "$newest_body" ]]; then
               # Extract IDs only from the body-findings section (exact section, not full body).
               id_list=$(printf '%s\n' "$newest_body" \
@@ -620,6 +621,7 @@ jobs:
               exit 1
             fi
             jq_err=$(mktemp)
+            trap 'rm -f "$jq_err"' EXIT
             threads=$(printf '%s' "$page" | jq \
               --argjson rid "$review_id" \
               '[.data.repository.pullRequest.reviewThreads.nodes[] |

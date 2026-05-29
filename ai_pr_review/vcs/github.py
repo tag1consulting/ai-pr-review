@@ -410,17 +410,22 @@ class GitHubProvider:
         # doesn't shrink the visible review body; drop the marker first instead.
         _MIN_BODY_BYTES = 4096
         from ai_pr_review.vcs._body import GITHUB_MAX_BODY_SIZE
-        marker_reserve = len(id_map_marker.encode("utf-8")) + 1 if id_map_marker else 0
+        marker_bytes = len(id_map_marker.encode("utf-8")) if id_map_marker else 0
+        # +1 for the newline separator between body and marker
+        marker_reserve = marker_bytes + 1 if id_map_marker else 0
         if id_map_marker and marker_reserve > GITHUB_MAX_BODY_SIZE - _MIN_BODY_BYTES:
             _log.warning(
                 "github: id-map marker (%d bytes) too large to fit in review body "
                 "for %s/%s PR #%s; omitting marker for this cycle — ID stability may degrade",
-                marker_reserve,
+                marker_bytes,
                 self.config.owner, self.config.repo, self.config.pr_number,
             )
             id_map_marker = ""
             marker_reserve = 0
-        truncate_limit = GITHUB_MAX_BODY_SIZE - marker_reserve
+        # Floor at 0 as a defensive guard; marker_reserve is always ≤ GITHUB_MAX_BODY_SIZE
+        # after the drop-if-too-large check above, but clamp to prevent any edge case
+        # producing a negative limit.
+        truncate_limit = max(0, GITHUB_MAX_BODY_SIZE - marker_reserve)
         body = append_inline_marker(truncate_body(body, limit=truncate_limit))
         if id_map_marker:
             body += "\n" + id_map_marker
