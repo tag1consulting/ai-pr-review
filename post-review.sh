@@ -931,11 +931,13 @@ ${suggested_code}
   done <<< "$findings_ndjson"
 
   # Assign stable per-PR IDs to body findings and render them.
+  local id_assignment_failed=false
   if [[ -s "$body_findings_ndjson_file" ]]; then
     # Fetch prior bot review bodies for ID reconstruction.
     local prior_bodies_file
     prior_bodies_file=$(mktemp_tracked /tmp/prior-review-bodies-XXXXXXXX.txt)
     # Each line in prior_bodies_file is one review body with \n replaced by literal \n.
+    # Exact equality per state avoids substring matches from jq's test() regex operator.
     gh api "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
       --jq '.[] | select(.user.login == "github-actions[bot]") |
              select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED" or .state == "APPROVED" or .state == "DISMISSED") |
@@ -967,13 +969,21 @@ ${suggested_code}
       local bf_src_tag="[${bf_src}]"
       local bf_id
       bf_id=$(finding_ids_get "$bf_src" "$bf_file" "$bf_line" "$bf_text" "$id_map_file" "$next_id_file") || {
-        echo "::warning::finding-ids: ID assignment failed for finding in ${bf_file}:${bf_line}; rendering without ID" >&2
-        bf_id=""
+        echo "::warning::finding-ids: ID assignment failed for finding in ${bf_file}:${bf_line}; rendering as [F?]" >&2
+        bf_id="?"
+        id_assignment_failed=true
       }
 
       body_findings="${body_findings}
 $(format_body_finding "$bf_sev" "$bf_src_tag" "$bf_text" "${bf_file}:${bf_line}" "$bf_loc_note" "$bf_rem" "$bf_sugg" "$bf_id")"
     done < "$body_findings_ndjson_file"
+  fi
+
+  # Emit a CI-level warning whenever ID assignment failed, regardless of whether
+  # body_findings was populated (the note in the review body only fires when there
+  # are body findings, but the CI annotation should always be visible).
+  if [[ "$id_assignment_failed" == "true" ]]; then
+    echo "::warning::finding-ids: ID assignment failed for one or more body findings; those findings rendered as [F?] and cannot be dismissed via slash command" >&2
   fi
 
   # Determine overall risk and review event from highest severity found
@@ -1071,6 +1081,11 @@ $(severity_icon "$overall_risk") **Overall Risk:** ${overall_risk} | **Findings:
 
 ### Findings not attached to specific lines
 ${body_findings}"
+      if [[ "$id_assignment_failed" == "true" ]]; then
+        review_body="${review_body}
+
+> ⚠️ **Note:** One or more findings above show **[F?]** because finding ID assignment failed (e.g. a corrupt ID counter file). These findings cannot be dismissed via \`/ai-pr-review dismiss\`. See the CI run logs for details."
+      fi
     elif [[ "$inline_count" -gt 0 ]]; then
       review_body="${review_body}
 
