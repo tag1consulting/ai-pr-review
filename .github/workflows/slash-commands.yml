@@ -620,8 +620,10 @@ jobs:
               echo "::error::GraphQL errors fetching review threads: $(printf '%s' "$page" | jq -c '.errors')"
               exit 1
             fi
+            # mktemp + explicit rm -f in both success and error paths — no EXIT trap
+            # because this is inside a loop; a trap would only clean the last iteration's
+            # file, leaking all previous iterations' temp files.
             jq_err=$(mktemp)
-            trap 'rm -f "$jq_err"' EXIT
             threads=$(printf '%s' "$page" | jq \
               --argjson rid "$review_id" \
               '[.data.repository.pullRequest.reviewThreads.nodes[] |

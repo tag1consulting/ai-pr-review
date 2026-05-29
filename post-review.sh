@@ -979,6 +979,13 @@ $(format_body_finding "$bf_sev" "$bf_src_tag" "$bf_text" "${bf_file}:${bf_line}"
     done < "$body_findings_ndjson_file"
   fi
 
+  # Emit a CI-level warning whenever ID assignment failed, regardless of whether
+  # body_findings was populated (the note in the review body only fires when there
+  # are body findings, but the CI annotation should always be visible).
+  if [[ "$id_assignment_failed" == "true" ]]; then
+    echo "::warning::finding-ids: ID assignment failed for one or more body findings; those findings rendered as [F?] and cannot be dismissed via slash command" >&2
+  fi
+
   # Determine overall risk and review event from highest severity found
   #   No findings          → APPROVE
   #   Medium/Low findings  → APPROVE  (informational findings noted in review body)
