@@ -618,8 +618,10 @@ sequenceDiagram
     assert "participant B as Foo" in result
     assert "Foobar" not in result
     # Bracket chars themselves are removed
-    lines = result.splitlines()
-    participant_lines = [l for l in lines if "participant " in l or "actor " in l]
+    participant_lines = [
+        ln for ln in result.splitlines()
+        if "participant " in ln or "actor " in ln
+    ]
     for line in participant_lines:
         alias = line.split(" as ", 1)[1] if " as " in line else ""
         for ch in "()[]<>{}":
@@ -666,11 +668,10 @@ sequenceDiagram
     result = sanitize_mermaid(block)
     # No parens in participant alias lines
     for line in result.splitlines():
-        if line.lstrip().startswith(("participant ", "actor ")):
-            if " as " in line:
-                alias_part = line.split(" as ", 1)[1]
-                assert "(" not in alias_part, f"paren in alias: {line!r}"
-                assert ")" not in alias_part, f"paren in alias: {line!r}"
+        if line.lstrip().startswith(("participant ", "actor ")) and " as " in line:
+            alias_part = line.split(" as ", 1)[1]
+            assert "(" not in alias_part, f"paren in alias: {line!r}"
+            assert ")" not in alias_part, f"paren in alias: {line!r}"
     # Block is still valid Mermaid
     from ai_pr_review.agents.summarizer import is_valid_mermaid
     assert is_valid_mermaid(result)

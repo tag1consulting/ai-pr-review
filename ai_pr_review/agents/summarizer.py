@@ -463,6 +463,11 @@ def sanitize_mermaid(block: str) -> str:
             # leaves a dangling "participant X as " that Mermaid will reject.
             # Fall back to the raw alias so the diagram renders even if imperfect.
             if not clean_alias:
+                print(
+                    f"WARNING: sanitize_mermaid: alias became empty after stripping "
+                    f"bracket groups; falling back to raw alias: {alias!r}",
+                    file=sys.stderr,
+                )
                 clean_alias = alias.strip()
             line = prefix + clean_alias
         sanitized_lines.append(line)
@@ -472,7 +477,7 @@ def sanitize_mermaid(block: str) -> str:
 def sanitize_summary_markdown(text: str) -> str:
     """Sanitize any Mermaid sequence-diagram block embedded in a markdown string.
 
-    Finds the first ``\`\`\`mermaid ... \`\`\`` fence in *text*, runs
+    Finds the first mermaid fenced block in *text*, runs
     :func:`sanitize_mermaid` on its contents, and returns *text* with the
     fence body replaced.  If no mermaid fence is present the original string
     is returned unchanged.
