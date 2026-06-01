@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.12.1
+
+**Removed sequence-diagram generation from `pr-summarizer` (PR #374).** The summarizer no longer produces an optional Mermaid `sequenceDiagram` block. GitHub does not render Mermaid in PR comments (only in `.md` files and PR description bodies), and Bitbucket does not render it at all, so the diagram was rarely seen where reviews are read, while adding LLM cost and prompt complexity. The summarizer continues to emit the summary, PR type, effort estimate, and walkthrough table. This is a behavior change to the summary comment but is not breaking for downstream consumers; no inputs or outputs that callers depend on were removed.
+
+**Serena MCP onboarding config (PR #373).** Adds `.serena/` project onboarding configuration and memories for contributors using the Serena code-navigation MCP server. Purely additive: no runtime code paths change.
+
 ## What's new in v0.12.0
 
 **Stable per-PR `F<n>` IDs on all findings, with `/ai-pr-review dismiss F<n>` from top-level PR comments (PRs #365, #366, #367, closes #364).** AI review findings now carry stable, monotonically increasing IDs — `**[F1]**`, `**[F2]**`, etc. — across both inline review-thread comments and body-level findings (those in the `### Findings not attached to specific lines` section). IDs are PR-wide: the same finding keeps its ID across review cycles, new findings get the next unused ID, and dismissed gaps (e.g. no `F2`) signal historical dismissals.
