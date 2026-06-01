@@ -754,8 +754,14 @@ jobs:
           fi
 
       - name: Record false-positive in feedback store
+        # Only the body-level path (valid == 'true') records here, because only
+        # it populates source/file/line/finding_text. The inline-by-F-ID path
+        # (inline_fid set) deliberately does NOT record here — its source/file
+        # outputs are empty, which would persist a malformed entry. The verdict
+        # for that path is already persisted by the separate feedback-command
+        # job, which runs for the same top-level issue_comment event.
         if: |
-          (steps.lookup.outputs.valid == 'true' || steps.lookup.outputs.inline_fid != '') &&
+          steps.lookup.outputs.valid == 'true' &&
           inputs.enable-feedback-loop == 'true' &&
           !contains(fromJSON('["explain","revise"]'), needs.handle-command.outputs.command)
         uses: tag1consulting/ai-pr-review/container-action@main

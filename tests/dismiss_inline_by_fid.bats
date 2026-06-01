@@ -15,11 +15,16 @@
 
 bats_require_minimum_version 1.5.0
 
+# File-scope so the helper functions below are self-contained and don't depend
+# on setup() having populated these (PROJECT_ROOT is exported by test_helper,
+# loaded in setup()).
+FIXTURE_REL="tests/fixtures/dismiss-inline/review-threads.json"
+BOT='github-actions[bot]'
+
 setup() {
   command -v jq >/dev/null 2>&1 || skip "jq not available"
   load test_helper
-  FIXTURE="${PROJECT_ROOT}/tests/fixtures/dismiss-inline/review-threads.json"
-  BOT='github-actions[bot]'
+  FIXTURE="${PROJECT_ROOT}/${FIXTURE_REL}"
 }
 
 # Selection predicate: the thread whose first comment is bot-authored, carries
