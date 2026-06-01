@@ -330,7 +330,7 @@ The `Dockerfile` builds for linux/amd64 and linux/arm64. Each binary download us
 
 ### Multi-stage layout
 
-- **`builder`** — installs build-time tooling, downloads analyzer binaries, pip-installs ruff/semgrep/checkov, composer-installs phpcs/phpstan, fetches semgrep rulesets.
+- **`builder`** — installs build-time tooling, downloads analyzer binaries, pip-installs ruff/semgrep/checkov, composer-installs phpcs/phpstan. Semgrep registry rulesets are **not** baked into the image (they are use-restricted under the Semgrep Rules License v1.0); `run-semgrep.sh` uses `--config=auto` to fetch rules at runtime instead. See [Third-party licenses](#third-party-licenses).
 - **final stage** — slim runtime with `bash`, `ca-certificates`, `curl`, `git`, `jq`, `php-cli` + extensions, `python3`. Copies `/usr/local/bin` and `/usr/local/lib/python${PYTHON_VERSION}/dist-packages` (parameterized via `ARG PYTHON_VERSION`, default `3.12` to match Ubuntu 24.04) wholesale from the builder. Action scripts are copied at the end so source-only changes don't invalidate heavy builder layers.
 
 The final stage uses `COPY post-review*.sh` (a glob) so future provider scripts are picked up without Dockerfile churn.
