@@ -42,14 +42,17 @@ if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# Resolve semgrep config. Prefer the baked-in rule bundle shipped with the
-# container image (no network fetch, deterministic ruleset). Fall back to
-# `--config=auto` when the bundle is absent — that lets the script remain
-# usable outside the container (direct script invocation, composite-action
-# users who install semgrep themselves).
+# Resolve semgrep config. By default the container ships NO baked rule bundle:
+# Semgrep's registry rulesets (p/ci, p/security-audit, etc.) are licensed under
+# the Semgrep Rules License v1.0 (use-restricted, not freely redistributable),
+# so they are intentionally not baked into the image. The script therefore falls
+# back to `--config=auto`, which fetches rules at runtime (the user fetches them,
+# mirroring the composite-action model). See memory-bank/license-audit-2026-06-01.md.
 #
-# SEMGREP_RULES_DIR can also be overridden by consumers who want to point
-# at their own rule bundle.
+# Consumers who want a deterministic, offline ruleset can still point
+# SEMGREP_RULES_DIR at their own permissively-licensed rule bundle (mounted or
+# added to a derived image); if that directory contains *.yml files they are
+# used instead of --config=auto.
 SEMGREP_RULES_DIR="${SEMGREP_RULES_DIR:-/opt/ai-pr-review/semgrep-rules}"
 SEMGREP_CONFIG_ARGS=()
 if [[ -d "$SEMGREP_RULES_DIR" ]] \

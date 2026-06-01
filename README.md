@@ -452,4 +452,18 @@ For the directory layout, data-flow diagram, and dependency notes, see [docs/arc
 
 ## License
 
-MIT
+ai-pr-review is licensed under the [MIT License](LICENSE).
+
+### Third-party tools
+
+The container image redistributes third-party open-source analyzers (shellcheck,
+hadolint, golangci-lint, trufflehog, tflint, semgrep, ruff, kube-linter, checkov, gh CLI,
+phpstan, php_codesniffer, drupal/coder, ripgrep). Each retains its own license; full
+texts and attribution are in [THIRD-PARTY-LICENSES/](THIRD-PARTY-LICENSES/NOTICE.md)
+(also bundled at `/opt/ai-pr-review/THIRD-PARTY-LICENSES/` inside the image).
+
+These tools run as separate, unmodified upstream processes; aggregating them in the image
+does not place ai-pr-review under their copyleft terms. Notably, semgrep's use-restricted
+registry rulesets are **not** bundled — semgrep fetches rules at runtime via
+`--config=auto`. See [THIRD-PARTY-LICENSES/NOTICE.md](THIRD-PARTY-LICENSES/NOTICE.md) for
+details and corresponding-source pointers.

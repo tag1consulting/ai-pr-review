@@ -13,7 +13,7 @@
 #   shellcheck, trufflehog, golangci-lint, hadolint, kube-linter, tflint,
 #   ruff          — named single-binary stages; COPY --from pulls the binary
 #   builder       — pip (semgrep, checkov) + composer (phpcs, phpstan) +
-#                   gh CLI (no official image) + semgrep ruleset download
+#                   gh CLI (no official image)
 #   final         — slim runtime; assembles binaries from all prior stages
 
 # ==============================================================================
@@ -53,9 +53,6 @@ ARG GH_SHA256_ARM64=ccbed39c472d3dc1c501d1e164a9cffd934c5f6fce1012811a1a59d24cb7
 
 ARG SEMGREP_VERSION=1.161.0
 ARG CHECKOV_VERSION=3.2.524
-
-# Cache-buster for semgrep ruleset downloads; bump to force fresh pull.
-ARG SEMGREP_RULESET_DATE=2026-05-07
 
 ARG PHPCS_VERSION=4.0.1
 ARG DRUPAL_CODER_VERSION=9.0.0
@@ -107,18 +104,14 @@ RUN pip3 install --no-cache-dir --break-system-packages \
       "checkov==${CHECKOV_VERSION}" \
       "/opt/ai-pr-review[context]"
 
-# Bake semgrep rulesets so runtime scans skip the network.
-# run-semgrep.sh points --config at /opt/ai-pr-review/semgrep-rules/ and falls
-# back to --config=auto if the directory is absent (e.g. when invoked outside
-# the container). SEMGREP_RULESET_DATE above invalidates this layer's cache.
-RUN mkdir -p /opt/ai-pr-review/semgrep-rules && \
-    echo "Fetching semgrep rulesets (cache-buster: ${SEMGREP_RULESET_DATE})" && \
-    curl -fsSL -o /opt/ai-pr-review/semgrep-rules/ci.yml \
-      "https://semgrep.dev/c/p/ci" && \
-    curl -fsSL -o /opt/ai-pr-review/semgrep-rules/security-audit.yml \
-      "https://semgrep.dev/c/p/security-audit" && \
-    grep -q '^rules:' /opt/ai-pr-review/semgrep-rules/ci.yml && \
-    grep -q '^rules:' /opt/ai-pr-review/semgrep-rules/security-audit.yml
+# NOTE: semgrep registry rulesets are NOT baked into the image. The
+# Semgrep-maintained rules (e.g. p/ci, p/security-audit) are licensed under the
+# Semgrep Rules License v1.0, which restricts internal/non-competing/non-SaaS
+# use and is not freely redistributable inside this tool's image. Instead,
+# run-semgrep.sh falls back to `--config=auto`, which fetches rules at runtime
+# (the user fetches them, mirroring the composite-action model). This keeps the
+# distributed image free of use-restricted rule content. See
+# memory-bank/license-audit-2026-06-01.md.
 
 # phpcs with Drupal coding standards + phpstan with phpstan-drupal.
 # composer.phar itself is only needed at build time, so it stays in the builder
@@ -204,9 +197,6 @@ COPY --from=builder /opt/composer /opt/composer
 RUN ln -s /opt/composer/vendor/bin/phpcs   /usr/local/bin/phpcs && \
     ln -s /opt/composer/vendor/bin/phpstan /usr/local/bin/phpstan
 
-# Baked semgrep rulesets (pure data).
-COPY --from=builder /opt/ai-pr-review/semgrep-rules /opt/ai-pr-review/semgrep-rules
-
 # Action scripts are copied LAST so source-only changes don't invalidate any
 # of the heavy layers above.
 COPY review.sh post-review*.sh llm-call.sh \
@@ -218,6 +208,9 @@ COPY lib/               /opt/ai-pr-review/lib/
 COPY prompts/           /opt/ai-pr-review/prompts/
 COPY language-profiles/ /opt/ai-pr-review/language-profiles/
 COPY vcs/               /opt/ai-pr-review/vcs/
+# Third-party license texts for the bundled analyzers (shellcheck, semgrep,
+# trufflehog, etc.). Required for redistribution of these tools inside the image.
+COPY THIRD-PARTY-LICENSES/ /opt/ai-pr-review/THIRD-PARTY-LICENSES/
 # Python engine source (pip-installed from builder via dist-packages COPY above).
 COPY ai_pr_review/      /opt/ai-pr-review/ai_pr_review/
 COPY pyproject.toml     /opt/ai-pr-review/pyproject.toml
