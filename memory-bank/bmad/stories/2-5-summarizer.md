@@ -9,6 +9,8 @@ branch: rework/epic-2-llm-vcs-dispatch
 
 # E2.S5 — pr-summarizer port with sequence diagrams
 
+> **Superseded note:** The Mermaid sequence-diagram capability described in this story was later removed from `pr-summarizer`. GitHub does not render Mermaid in PR comments and Bitbucket does not render it at all, so the feature added cost and prompt complexity without proportional value. The summarizer now emits summary, PR type, effort, and the walkthrough table only. This story is retained as the as-built record of the original Epic 2 implementation.
+
 ## Summary
 
 Implement `ai_pr_review/agents/summarizer.py` — the typed orchestration wrapper around the

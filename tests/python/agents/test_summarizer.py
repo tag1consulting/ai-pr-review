@@ -12,56 +12,14 @@ from ai_pr_review.agents.summarizer import (
     WalkthroughRow,
     build_summarizer_system_prompt,
     build_summarizer_user_message,
-    is_valid_mermaid,
     parse_summarizer_output,
-    sanitize_mermaid,
-    sanitize_summary_markdown,
 )
-
-# ---------------------------------------------------------------------------
-# is_valid_mermaid
-# ---------------------------------------------------------------------------
-
-def test_is_valid_mermaid_accepts_well_formed() -> None:
-    block = """\
-sequenceDiagram
-    participant A
-    participant B
-    A->>B: hello
-    B-->>A: reply
-"""
-    assert is_valid_mermaid(block) is True
-
-
-def test_is_valid_mermaid_rejects_missing_header() -> None:
-    block = "A->>B: hello\nB-->>A: reply"
-    assert is_valid_mermaid(block) is False
-
-
-def test_is_valid_mermaid_rejects_empty_body() -> None:
-    assert is_valid_mermaid("sequenceDiagram\n") is False
-
-
-def test_is_valid_mermaid_rejects_without_arrows() -> None:
-    block = "sequenceDiagram\n    participant A\n    participant B\n"
-    assert is_valid_mermaid(block) is False
-
-
-def test_is_valid_mermaid_rejects_nested_code_fence() -> None:
-    block = "sequenceDiagram\n    A->>B: hi\n```\n"
-    assert is_valid_mermaid(block) is False
-
-
-def test_is_valid_mermaid_accepts_leading_whitespace() -> None:
-    block = "   \n\n  sequenceDiagram\n    A->>B: hi\n"
-    assert is_valid_mermaid(block) is True
-
 
 # ---------------------------------------------------------------------------
 # parse_summarizer_output — happy path
 # ---------------------------------------------------------------------------
 
-def test_parse_happy_path_no_diagram() -> None:
+def test_parse_happy_path() -> None:
     raw = """\
 ## Summary
 
@@ -77,7 +35,7 @@ This PR adds a new widget handler.
 | src/handler.py | Added | New widget handler |
 | src/routes.py | Modified | Registers the handler |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert "adds a new widget handler" in result.summary_md
     assert result.pr_type == "feature"
     assert result.effort == 3
@@ -85,63 +43,6 @@ This PR adds a new widget handler.
     assert result.walkthrough[0] == WalkthroughRow(
         file="src/handler.py", change="Added", summary="New widget handler"
     )
-    assert result.sequence_diagram is None
-
-
-def test_parse_happy_path_with_diagram() -> None:
-    raw = """\
-## Summary
-
-Refactors the auth flow.
-
-**Type:** refactor
-**Effort:** 4/5 — cross-cutting
-
-## Walkthrough
-
-| File | Change | Summary |
-|------|--------|---------|
-| auth.py | Modified | New flow |
-
-## Sequence Diagrams
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as Server
-    C->>S: login
-    S-->>C: token
-```
-"""
-    result = parse_summarizer_output(raw, include_diagram=True)
-    assert result.sequence_diagram is not None
-    assert "sequenceDiagram" in result.sequence_diagram
-    assert "C->>S: login" in result.sequence_diagram
-
-
-def test_parse_drops_malformed_mermaid() -> None:
-    raw = """\
-## Summary
-
-x
-
-**Type:** feature
-**Effort:** 2/5 — small
-
-## Walkthrough
-
-| File | Change | Summary |
-|------|--------|---------|
-| a.py | Added | new file |
-
-## Sequence Diagrams
-
-```mermaid
-This is not a valid sequence diagram.
-```
-"""
-    result = parse_summarizer_output(raw, include_diagram=True)
-    assert result.sequence_diagram is None
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +57,7 @@ def test_parse_missing_summary_heading_yields_empty_summary() -> None:
 |------|--------|---------|
 | a.py | Added | x |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.summary_md == ""
 
 
@@ -169,7 +70,7 @@ x
 **Type:** docs
 **Effort:** 1/5 — trivial
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.walkthrough == ()
 
 
@@ -187,7 +88,7 @@ x
 | File | Change | Summary |
 |------|--------|---------|
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.effort == 3
 
 
@@ -205,7 +106,7 @@ x
 | File | Change | Summary |
 |------|--------|---------|
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.effort == 3
 
 
@@ -223,7 +124,7 @@ x
 | File | Change | Summary |
 |------|--------|---------|
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.pr_type == "mixed"
 
 
@@ -241,7 +142,7 @@ x
 | File | Change | Summary |
 |------|--------|---------|
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.pr_type == "feature"
 
 
@@ -262,7 +163,7 @@ x
 | src/api.py | Added | new endpoint |
 | src/model.py | Modified | add field |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     # The **API layer** row is a section header with empty change/summary; skip it
     assert len(result.walkthrough) == 2
     assert result.walkthrough[0].file == "src/api.py"
@@ -272,30 +173,17 @@ x
 # build_summarizer_system_prompt
 # ---------------------------------------------------------------------------
 
-def test_system_prompt_without_diagram(tmp_path: Path) -> None:
+def test_system_prompt_returns_base(tmp_path: Path) -> None:
     base = tmp_path / "pr-summarizer.md"
     base.write_text("BASE PROMPT BODY")
-    result = build_summarizer_system_prompt(base, include_diagram=False)
+    result = build_summarizer_system_prompt(base)
     assert result == "BASE PROMPT BODY"
-
-
-def test_system_prompt_with_diagram_appends_addendum(tmp_path: Path) -> None:
-    base = tmp_path / "pr-summarizer.md"
-    base.write_text("BASE PROMPT BODY")
-    result = build_summarizer_system_prompt(base, include_diagram=True)
-    assert "BASE PROMPT BODY" in result
-    assert "Sequence Diagram" in result
-    assert "mermaid" in result
-    # Prompt must not model the broken parenthesis-in-alias/label pattern.
-    assert "method(args)" not in result
-    # Prompt must instruct the model to avoid special chars in aliases.
-    assert "parentheses" in result
 
 
 def test_system_prompt_missing_base_raises(tmp_path: Path) -> None:
     missing = tmp_path / "nope.md"
     with pytest.raises(FileNotFoundError):
-        build_summarizer_system_prompt(missing, include_diagram=False)
+        build_summarizer_system_prompt(missing)
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +221,6 @@ def test_summarizer_output_is_frozen() -> None:
         pr_type="feature",
         effort=2,
         walkthrough=(),
-        sequence_diagram=None,
     )
     with pytest.raises(FrozenInstanceError):
         result.effort = 5  # type: ignore[misc]
@@ -367,7 +254,6 @@ def test_summarizer_output_rejects_invalid_pr_type() -> None:
             pr_type="wibble",  # type: ignore[arg-type]
             effort=2,
             walkthrough=(),
-            sequence_diagram=None,
         )
 
 
@@ -378,7 +264,6 @@ def test_summarizer_output_rejects_out_of_range_effort() -> None:
             pr_type="feature",
             effort=0,
             walkthrough=(),
-            sequence_diagram=None,
         )
 
 
@@ -397,7 +282,7 @@ x
 |------|--------|---------|
 | src/re.py | Modified | Adds regex for foo | bar matching |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert len(result.walkthrough) == 1
     assert "foo | bar matching" in result.walkthrough[0].summary
 
@@ -417,7 +302,7 @@ x
 |------|--------|---------|
 | src/re.py | Modified | literal \\| pipe inside |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert len(result.walkthrough) == 1
     assert result.walkthrough[0].summary == "literal | pipe inside"
 
@@ -437,7 +322,7 @@ x
 |------|--------|---------|
 | a.py | Added | new file |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.parse_warnings == ()
     assert result.is_degraded is False
 
@@ -455,7 +340,7 @@ x
 | File | Change | Summary |
 |------|--------|---------|
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert "missing-type-line" in result.parse_warnings
     assert result.is_degraded is True
 
@@ -474,7 +359,7 @@ x
 | File | Change | Summary |
 |------|--------|---------|
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert "unknown-pr-type" in result.parse_warnings
 
 
@@ -494,7 +379,7 @@ x
 | a.py | Wibble | bad change verb |
 | b.py | Added | ok |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     # Static tag — callers can use `in result.parse_warnings` directly
     assert "walkthrough-rows-dropped" in result.parse_warnings
 
@@ -519,7 +404,7 @@ Example of a heading inside a fence:
 |------|--------|---------|
 | a.py | Added | x |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.pr_type == "feature"
     assert result.effort == 4
 
@@ -547,224 +432,6 @@ Example showing an embedded fence:
 |------|--------|---------|
 | a.py | Added | x |
 """
-    result = parse_summarizer_output(raw, include_diagram=False)
+    result = parse_summarizer_output(raw)
     assert result.pr_type == "refactor"
     assert result.effort == 2
-
-
-# ---------------------------------------------------------------------------
-# sanitize_mermaid
-# ---------------------------------------------------------------------------
-
-def test_sanitize_mermaid_strips_parens_from_alias() -> None:
-    block = """\
-sequenceDiagram
-    participant GH as GitHubProvider.post_review()
-    participant Body as truncate_body()
-    participant Marker as build_id_map_marker()
-    GH->>Marker: build_id_map_marker(id_map)
-    Marker-->>GH: id_map_marker (N bytes)"""
-    result = sanitize_mermaid(block)
-    assert "post_review()" not in result
-    assert "truncate_body()" not in result
-    assert "build_id_map_marker()" not in result
-    # participant id and alias prefix are preserved
-    assert "participant GH as GitHubProvider.post_review" in result
-    assert "participant Body as truncate_body" in result
-    # message labels are left intact (parens after : are tolerated by Mermaid)
-    assert "GH->>Marker: build_id_map_marker(id_map)" in result
-
-
-def test_sanitize_mermaid_leaves_clean_aliases_unchanged() -> None:
-    block = """\
-sequenceDiagram
-    participant A as Caller
-    participant B as Callee
-    A->>B: callMethod
-    B-->>A: result"""
-    assert sanitize_mermaid(block) == block
-
-
-def test_sanitize_mermaid_leaves_alt_blocks_unchanged() -> None:
-    block = """\
-sequenceDiagram
-    participant GH as Provider
-    alt marker_reserve > MAX - MIN_BODY_BYTES
-        GH->>GH: log warning
-    end
-    GH->>GH: post review"""
-    result = sanitize_mermaid(block)
-    assert "alt marker_reserve > MAX - MIN_BODY_BYTES" in result
-    assert "end" in result
-
-
-def test_sanitize_mermaid_strips_bracket_groups_including_contents() -> None:
-    """Bracket groups are removed with their contents, not just the bracket chars.
-
-    truncate_body(limit) must become truncate_body, NOT truncate_bodylimit.
-    Foo[bar] must become Foo, NOT Foobar.
-    """
-    block = """\
-sequenceDiagram
-    participant A as truncate_body(limit)
-    participant B as Foo[bar]
-    participant C as Baz<T>
-    A->>B: go
-    B-->>A: done"""
-    result = sanitize_mermaid(block)
-    # Contents inside brackets are dropped, not concatenated
-    assert "participant A as truncate_body" in result
-    assert "truncate_bodylimit" not in result
-    assert "participant B as Foo" in result
-    assert "Foobar" not in result
-    # Bracket chars themselves are removed
-    participant_lines = [
-        ln for ln in result.splitlines()
-        if "participant " in ln or "actor " in ln
-    ]
-    for line in participant_lines:
-        alias = line.split(" as ", 1)[1] if " as " in line else ""
-        for ch in "()[]<>{}":
-            assert ch not in alias, f"unexpected {ch!r} in alias of: {line!r}"
-
-
-def test_sanitize_mermaid_handles_actor_keyword() -> None:
-    block = """\
-sequenceDiagram
-    actor U as User()
-    participant S as Server
-    U->>S: request
-    S-->>U: response"""
-    result = sanitize_mermaid(block)
-    assert "User()" not in result
-    assert "actor U as User" in result
-
-
-def test_sanitize_mermaid_is_valid_after_cleaning_pr367_diagram() -> None:
-    """The exact broken diagram from PR #367 must be valid after sanitization."""
-    block = """\
-sequenceDiagram
-    participant GH as GitHubProvider.post_review()
-    participant Body as truncate_body()
-    participant Marker as build_id_map_marker()
-
-    GH->>Marker: build_id_map_marker(id_map)
-    Marker-->>GH: id_map_marker (N bytes)
-
-    alt marker_reserve > MAX - MIN_BODY_BYTES
-        GH->>GH: log warning (owner/repo/PR#, marker size)
-        GH->>GH: id_map_marker = ""; marker_reserve = 0
-    end
-
-    GH->>GH: truncate_limit = MAX_BODY_SIZE - marker_reserve
-    GH->>Body: truncate_body(body, limit=truncate_limit)
-    Body-->>GH: truncated body
-
-    alt id_map_marker non-empty
-        GH->>GH: body += "\\n" + id_map_marker
-    end
-
-    GH->>GH: post review body"""
-    result = sanitize_mermaid(block)
-    # No parens in participant alias lines
-    for line in result.splitlines():
-        if line.lstrip().startswith(("participant ", "actor ")) and " as " in line:
-            alias_part = line.split(" as ", 1)[1]
-            assert "(" not in alias_part, f"paren in alias: {line!r}"
-            assert ")" not in alias_part, f"paren in alias: {line!r}"
-    # Block is still valid Mermaid
-    from ai_pr_review.agents.summarizer import is_valid_mermaid
-    assert is_valid_mermaid(result)
-
-
-def test_sanitize_mermaid_empty_alias_falls_back_to_raw() -> None:
-    """When alias consists entirely of bracket chars, fall back to the raw alias.
-
-    'participant X as ()' → alias becomes empty after stripping; the fallback
-    preserves '()' rather than leaving a dangling 'participant X as ' which
-    Mermaid would reject with a parse error.
-    """
-    block = "sequenceDiagram\n    participant X as ()\n    X->>X: go"
-    result = sanitize_mermaid(block)
-    # Alias is not empty (dangling 'as ' is avoided)
-    for line in result.splitlines():
-        if "participant X" in line and " as " in line:
-            alias = line.split(" as ", 1)[1].strip()
-            assert alias, f"empty alias in: {line!r}"
-
-
-def test_sanitize_mermaid_alias_with_args_drops_group_contents() -> None:
-    """truncate_body(limit) → truncate_body, not truncate_bodylimit."""
-    block = "sequenceDiagram\n    participant A as truncate_body(limit)\n    A->>A: go"
-    result = sanitize_mermaid(block)
-    assert "participant A as truncate_body" in result
-    assert "limit" not in result.split("A->>A")[0]
-
-
-# ---------------------------------------------------------------------------
-# sanitize_summary_markdown
-# ---------------------------------------------------------------------------
-
-def test_sanitize_summary_markdown_fixes_mermaid_in_full_body() -> None:
-    markdown = """\
-## Summary
-
-Refactors the auth flow.
-
-**Type:** bugfix
-**Effort:** 3/5
-
-## Walkthrough
-
-| File | Change | Summary |
-|------|--------|---------|
-| foo.py | Modified | Fix truncation |
-
-## Sequence Diagrams
-
-```mermaid
-sequenceDiagram
-    participant GH as GitHubProvider.post_review()
-    participant B as truncate_body()
-    GH->>B: truncate_body(text)
-    B-->>GH: truncated
-```
-"""
-    result = sanitize_summary_markdown(markdown)
-    # Aliases sanitized
-    assert "post_review()" not in result
-    assert "truncate_body()" not in result
-    # Walkthrough and summary sections are preserved verbatim
-    assert "## Walkthrough" in result
-    assert "Fix truncation" in result
-    assert "## Summary" in result
-    # The mermaid fence structure is preserved
-    assert "```mermaid" in result
-    assert "```" in result
-
-
-def test_sanitize_summary_markdown_noop_when_no_mermaid() -> None:
-    markdown = "## Summary\n\nNo diagram here.\n"
-    assert sanitize_summary_markdown(markdown) == markdown
-
-
-def test_sanitize_summary_markdown_noop_when_already_clean() -> None:
-    markdown = """\
-## Summary
-
-Clean.
-
-## Sequence Diagrams
-
-```mermaid
-sequenceDiagram
-    participant A as Caller
-    participant B as Callee
-    A->>B: go
-    B-->>A: done
-```
-"""
-    # Should return the text structurally equivalent (modulo trailing newline in block)
-    result = sanitize_summary_markdown(markdown)
-    assert "participant A as Caller" in result
-    assert "participant B as Callee" in result

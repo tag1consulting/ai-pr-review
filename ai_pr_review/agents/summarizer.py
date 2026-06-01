@@ -15,52 +15,6 @@ _VALID_PR_TYPES: frozenset[str] = frozenset(
     {"feature", "bugfix", "refactor", "docs", "config", "test", "mixed"}
 )
 
-_MERMAID_ARROW = re.compile(r"-->>|->>|-->|->")
-# Matches a participant/actor declaration with an optional alias.
-# Group 1: everything up to and including " as " (or end-of-line).
-# Group 2: the alias text (may be empty when no `as` clause is present).
-_PARTICIPANT_ALIAS = re.compile(
-    r"^(\s*(?:participant|actor)\s+\S+\s+as\s+)(.*)", re.IGNORECASE
-)
-# Bracket groups (including their contents) that Mermaid rejects in participant
-# aliases.  Matching the full group — e.g. "(limit)" not just "(" and ")" —
-# prevents word-boundary fusion: "truncate_body(limit)" → "truncate_body",
-# not "truncate_bodylimit".
-_ALIAS_BRACKET_GROUPS = re.compile(r"\([^)]*\)|\[[^\]]*\]|\{[^}]*\}|<[^>]*>")
-
-_DIAGRAM_ADDENDUM = """
-
-## Optional: Sequence Diagram
-
-After the walkthrough, when the PR contains a non-trivial control-flow change
-(multi-step orchestration, new cross-service call, new pipeline stage), append
-a `## Sequence Diagrams` section containing exactly one Mermaid `sequenceDiagram`
-block. Focus on the single most significant call flow introduced or changed.
-
-Skip the section entirely for docs-only, config, or value-only changes.
-
-Format:
-
-````markdown
-## Sequence Diagrams
-
-```mermaid
-sequenceDiagram
-    participant A as Caller
-    participant B as Callee
-    A->>B: callMethod
-    B-->>A: result
-```
-````
-
-Rules for valid Mermaid syntax:
-- Participant aliases (the text after `as`) must be plain identifiers — no parentheses,
-  brackets, angle brackets, or other special characters. Write `post_review` not
-  `post_review()`, and `truncate_body` not `truncate_body(limit)`.
-- Describe call arguments in prose inside the message label (after the colon on arrow
-  lines), not with `()` syntax.
-"""
-
 
 # ---------------------------------------------------------------------------
 # Value objects
@@ -90,7 +44,6 @@ class SummarizerOutput:
     pr_type: PRType
     effort: int
     walkthrough: tuple[WalkthroughRow, ...]
-    sequence_diagram: str | None
     parse_warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -111,32 +64,12 @@ class SummarizerOutput:
 
 
 # ---------------------------------------------------------------------------
-# Mermaid validation
-# ---------------------------------------------------------------------------
-
-def is_valid_mermaid(block: str) -> bool:
-    """Syntactic smoke-check for a Mermaid sequenceDiagram block."""
-    stripped = block.lstrip()
-    if not stripped.startswith("sequenceDiagram"):
-        return False
-    body = stripped.split("\n", 1)[1] if "\n" in stripped else ""
-    if not body.strip():
-        return False
-    if "```" in body:
-        return False
-    return _MERMAID_ARROW.search(body) is not None
-
-
-# ---------------------------------------------------------------------------
 # Prompt/message assembly
 # ---------------------------------------------------------------------------
 
-def build_summarizer_system_prompt(base_path: Path, include_diagram: bool) -> str:
-    """Read base prompt; append diagram addendum when requested."""
-    base = base_path.read_text()
-    if include_diagram:
-        return base + _DIAGRAM_ADDENDUM
-    return base
+def build_summarizer_system_prompt(base_path: Path) -> str:
+    """Read the base pr-summarizer prompt."""
+    return base_path.read_text()
 
 
 def build_summarizer_user_message(
@@ -154,20 +87,19 @@ def build_summarizer_user_message(
 # Output parsing
 # ---------------------------------------------------------------------------
 
-def parse_summarizer_output(raw: str, include_diagram: bool) -> SummarizerOutput:
+def parse_summarizer_output(raw: str) -> SummarizerOutput:
     """Parse the LLM's markdown output into a typed SummarizerOutput.
 
     When parsing falls back to defaults (missing heading, unparseable effort,
-    dropped walkthrough rows, malformed Mermaid), the reason is both logged
-    to stderr AND recorded in the returned `parse_warnings` tuple. Callers
-    can check `output.is_degraded` to decide whether to surface the
-    degradation (e.g., skip posting, warn the user).
+    dropped walkthrough rows), the reason is both logged to stderr AND recorded
+    in the returned `parse_warnings` tuple. Callers can check `output.is_degraded`
+    to decide whether to surface the degradation (e.g., skip posting, warn the
+    user).
     """
     warnings: list[str] = []
     sections = _split_top_level_sections(raw)
     summary_section = sections.get("summary", "")
     walkthrough_section = sections.get("walkthrough", "")
-    diagram_section = sections.get("sequence diagrams", "") if include_diagram else ""
 
     if not summary_section:
         warnings.append("missing-summary-section")
@@ -178,16 +110,12 @@ def parse_summarizer_output(raw: str, include_diagram: bool) -> SummarizerOutput
     pr_type = _parse_pr_type(summary_section, warnings)
     effort = _parse_effort(summary_section, warnings)
     walkthrough = _parse_walkthrough(walkthrough_section, warnings)
-    sequence_diagram = (
-        _parse_diagram(diagram_section, warnings) if include_diagram else None
-    )
 
     return SummarizerOutput(
         summary_md=summary_md,
         pr_type=pr_type,
         effort=effort,
         walkthrough=walkthrough,
-        sequence_diagram=sequence_diagram,
         parse_warnings=tuple(warnings),
     )
 
@@ -410,87 +338,3 @@ def _parse_walkthrough(
             "walkthrough-rows-dropped",
         )
     return tuple(rows)
-
-
-_MERMAID_FENCE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
-
-
-def _parse_diagram(section: str, warnings: list[str]) -> str | None:
-    """Extract and validate the Mermaid block from the sequence-diagram section."""
-    if not section:
-        return None
-    match = _MERMAID_FENCE.search(section)
-    if not match:
-        return None
-    block = match.group(1).rstrip()
-    if not is_valid_mermaid(block):
-        _warn(
-            "summarizer produced malformed Mermaid block; dropping",
-            warnings,
-            "malformed-mermaid",
-        )
-        return None
-    return block
-
-
-# ---------------------------------------------------------------------------
-# Mermaid sanitization
-# ---------------------------------------------------------------------------
-
-def sanitize_mermaid(block: str) -> str:
-    """Remove characters that break Mermaid's parser from a sequenceDiagram block.
-
-    Operates line-by-line and targets only ``participant``/``actor`` alias text
-    (the portion after the ``as`` keyword), which is where parentheses and other
-    special characters cause parse failures.  Arrow lines and ``alt``/``end``
-    blocks are left structurally intact.
-
-    Example::
-
-        participant GH as GitHubProvider.post_review()
-        →
-        participant GH as GitHubProvider.post_review
-    """
-    sanitized_lines: list[str] = []
-    for line in block.splitlines():
-        m = _PARTICIPANT_ALIAS.match(line)
-        if m:
-            prefix, alias = m.group(1), m.group(2)
-            # Remove bracket groups including their contents so that
-            # "truncate_body(limit)" → "truncate_body", not "truncate_bodylimit".
-            clean_alias = _ALIAS_BRACKET_GROUPS.sub("", alias).rstrip()
-            # Guard: if all characters were stripped the alias is empty, which
-            # leaves a dangling "participant X as " that Mermaid will reject.
-            # Fall back to the raw alias so the diagram renders even if imperfect.
-            if not clean_alias:
-                print(
-                    f"WARNING: sanitize_mermaid: alias became empty after stripping "
-                    f"bracket groups; falling back to raw alias: {alias!r}",
-                    file=sys.stderr,
-                )
-                clean_alias = alias.strip()
-            line = prefix + clean_alias
-        sanitized_lines.append(line)
-    return "\n".join(sanitized_lines)
-
-
-def sanitize_summary_markdown(text: str) -> str:
-    """Sanitize any Mermaid sequence-diagram block embedded in a markdown string.
-
-    Finds the first mermaid fenced block in *text*, runs
-    :func:`sanitize_mermaid` on its contents, and returns *text* with the
-    fence body replaced.  If no mermaid fence is present the original string
-    is returned unchanged.
-
-    This allows ``_run_summarizer`` in ``cli.py`` to continue returning the
-    full raw LLM markdown (preserving the walkthrough table) while guaranteeing
-    that the embedded diagram uses valid Mermaid alias syntax.
-    """
-    match = _MERMAID_FENCE.search(text)
-    if not match:
-        return text
-    raw_block = match.group(1)
-    clean_block = sanitize_mermaid(raw_block.rstrip())
-    # Rebuild the fenced block, preserving the trailing newline before the
-    # closing fence so Mermaid's renderer sees a complete block.
-    return text[: match.start(1)] + clean_block + "\n" + text[match.end(1) :]

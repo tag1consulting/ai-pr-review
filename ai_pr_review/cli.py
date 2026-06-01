@@ -382,10 +382,10 @@ async def _run_summarizer(
 ) -> str:
     """Run the pr-summarizer agent and return its formatted markdown output.
 
-    Returns response.text (the full LLM markdown including summary, walkthrough
-    table, and optional sequence diagram) rather than SummarizerOutput.summary_md,
-    because summary_md contains only the text before the **Type:** line —
-    returning it alone would drop the walkthrough table and sequence diagram.
+    Returns response.text (the full LLM markdown including summary and
+    walkthrough table) rather than SummarizerOutput.summary_md, because
+    summary_md contains only the text before the **Type:** line — returning it
+    alone would drop the walkthrough table.
     parse_summarizer_output() is called for validation only (not to reformat).
 
     Fail-soft: on any error logs a WARNING and returns _SUMMARIZER_FAILURE_NOTICE
@@ -398,13 +398,12 @@ async def _run_summarizer(
         build_summarizer_system_prompt,
         build_summarizer_user_message,
         parse_summarizer_output,
-        sanitize_summary_markdown,
     )
     from ai_pr_review.llm.base import LLMRequest
 
     try:
         prompt_path = script_dir / "prompts" / "pr-summarizer.md"
-        system_prompt = build_summarizer_system_prompt(prompt_path, include_diagram=True)
+        system_prompt = build_summarizer_system_prompt(prompt_path)
 
         commit_log = ""
         _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
@@ -443,12 +442,8 @@ async def _run_summarizer(
         # cleaned string). We call it here only to validate the response is
         # parseable before returning the raw markdown to the caller.
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
-        parse_summarizer_output(response.text, include_diagram=True)
-        # Sanitize the Mermaid block (if present) so that invalid alias syntax
-        # (e.g. parentheses in "participant X as foo()") doesn't produce a
-        # broken diagram in the posted PR comment.  sanitize_summary_markdown
-        # is a no-op when no mermaid fence is found.
-        return sanitize_summary_markdown(response.text)
+        parse_summarizer_output(response.text)
+        return response.text
     except Exception as exc:
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",

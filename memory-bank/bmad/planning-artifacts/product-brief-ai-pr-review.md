@@ -74,7 +74,7 @@ In one line: **VCS-agnostic, Python-powered, context-aware, learning-enabled cod
 - #187 suppression registry timeouts (Epic 1)
 - #188 analyzer dispatch pre-filter (Epic 1)
 - #190 finding schema validation (Epic 1)
-- #100 pr-summarizer sequence diagrams (Epic 2)
+- #100 pr-summarizer sequence diagrams (Epic 2) _(later removed)_
 - #129 declarative agent roster (Epic 2)
 - #181 failed agents can produce approval (Epic 2)
 - #182 watermark advances after partial failure (Epic 2)
