@@ -217,7 +217,7 @@ Once the comment-trigger workflow is merged to your default branch, users with w
 | `/ai-pr-review review-full` | Run all agents (full mode) |
 | `/ai-pr-review skip` | Add `skip-ai-review` label |
 | `/ai-pr-review help` | Post command list as reply |
-| `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive; dismisses the `CHANGES_REQUESTED` review when every thread is resolved |
+| `/ai-pr-review dismiss [F<n>]` | Mark a finding a false positive. Reply on the inline comment thread, **or** post `dismiss F<n>` as a top-level comment using the `[F<n>]` ID shown on either an inline or body-level finding. Either way the matching inline thread is resolved, and the `CHANGES_REQUESTED` review is dismissed once every thread is resolved. |
 | `/ai-pr-review false-positive [reason]` | Persist a false-positive verdict. Post as a reply on the AI's inline finding (recommended — also resolves the thread on success) **or** as a top-level PR comment. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
 | `/ai-pr-review wont-fix [reason]` | Persist a "won't fix / by design" verdict. Same posting rules as `false-positive` (review-thread reply preferred). |
 | `/ai-pr-review feedback <text>` | Persist free-form feedback for future review runs to consider. |
