@@ -1,0 +1,14 @@
+{ "data": { "repository": { "pullRequest": { "reviewThreads": { "nodes": [
+  { "id": "T_F1", "isResolved": false,
+    "comments": { "nodes": [ { "body": "🔴 **[High]** **[F1]** [adversarial-general] release notes describe artifacts...\n<!-- ai-pr-review-inline -->", "author": { "login": "github-actions" } } ] } },
+  { "id": "T_F2", "isResolved": false,
+    "comments": { "nodes": [ { "body": "🟡 **[Medium]** **[F2]** [code-reviewer] some other finding\n<!-- ai-pr-review-inline -->", "author": { "login": "github-actions" } } ] } },
+  { "id": "T_user", "isResolved": false,
+    "comments": { "nodes": [ { "body": "a human comment that quotes **[F1]** but is not ours (no marker)", "author": { "login": "someuser" } } ] } },
+  { "id": "T_F11", "isResolved": false,
+    "comments": { "nodes": [ { "body": "🔵 **[Low]** **[F11]** [blind-hunter] eleventh finding\n<!-- ai-pr-review-inline -->", "author": { "login": "github-actions" } } ] } },
+  { "id": "T_F10_resolved", "isResolved": true,
+    "comments": { "nodes": [ { "body": "🔴 **[F10]** previously resolved bot finding\n<!-- ai-pr-review-inline -->", "author": { "login": "github-actions" } } ] } },
+  { "id": "T_F3_nomarker", "isResolved": false,
+    "comments": { "nodes": [ { "body": "🔴 **[F3]** a finding-shaped comment WITHOUT our inline marker", "author": { "login": "github-actions" } } ] } }
+] } } } } }

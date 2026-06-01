@@ -334,19 +334,24 @@ jobs:
             -f content=confused
 
   # ---------------------------------------------------------------------------
-  # Dismiss a body-level finding by stable ID from a top-level PR comment.
+  # Dismiss a finding by stable ID from a top-level PR comment.
   #
   # Triggered by "/ai-pr-review dismiss F<n>" as a regular PR comment
-  # (issue_comment event). Body-level findings appear in the
-  # "### Findings not attached to specific lines" section of the review body
-  # and have no inline thread to reply to — this job provides the escape hatch.
+  # (issue_comment event). Handles BOTH kinds of finding:
+  #   - Body-level (in the "### Findings not attached to specific lines"
+  #     section, no inline thread): matched in the review body and recorded.
+  #   - Inline (anchored to a diff line, `[F<n>]` shown on the thread comment):
+  #     the body lookup misses it, the id-map check confirms it is inline, and
+  #     the "Resolve inline finding by F-ID" step locates the thread by its
+  #     **[F<n>]** token, resolves it, and dismisses the review if it was the
+  #     last open one. This is the top-level-comment equivalent of replying on
+  #     the thread (handled by the separate dismiss-finding job).
   #
   # When no ID is given ("/ai-pr-review dismiss" with no F<n>), posts an
   # inline reply naming the active IDs instead of silently no-op'ing.
   #
-  # If the dismissed finding was the last unresolved body-level finding AND
-  # all inline review threads are already resolved, the CHANGES_REQUESTED
-  # review is dismissed automatically (same behavior as the inline path).
+  # If the dismissed finding was the last unresolved finding, the
+  # CHANGES_REQUESTED review is dismissed automatically.
   # ---------------------------------------------------------------------------
   dismiss-body-finding:
     if: |
@@ -414,7 +419,7 @@ jobs:
                   "**AI Review**: to act on a body-level finding, include its ID. Active body-level IDs in the current review: **${id_list}**" \
                   "Example: \`/ai-pr-review ${COMMAND} F1\`" \
                   "These IDs are stable across review cycles -- \`F1\` always refers to the same finding on this PR." \
-                  "To act on an **inline** finding (anchored to a diff line), reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`.")"
+                  "**Inline** findings (anchored to a diff line) can also be dismissed by ID from here -- e.g. \`/ai-pr-review ${COMMAND} F<n>\` using the \`[F<n>]\` shown on the inline comment -- or by replying directly to the comment thread.")"
               else
                 reply_body="**AI Review**: no body-level findings with stable IDs found in the current review. To act on an inline finding, reply directly to its comment thread with \`/ai-pr-review ${COMMAND}\`."
               fi
@@ -431,8 +436,11 @@ jobs:
 
           # Search all bot review body-sections for **[F{FINDING_ID}]**.
           # We only look within "### Findings not attached to specific lines"
-          # sections — inline finding IDs exist in thread comments (not review
-          # bodies) and can only be dismissed by replying to the thread.
+          # sections — inline finding IDs live in thread comments, not review
+          # bodies. If the ID is not found in a body section we fall through to
+          # the inline-marker check below; when it matches an inline finding the
+          # "Resolve inline finding by F-ID" step resolves that thread (and
+          # dismisses the review if it was the last open one).
           pattern="\*\*\[F${FINDING_ID}\]\*\*"
           matching_line=""
           while IFS= read -r body_text; do
@@ -488,15 +496,20 @@ jobs:
             fi
             rm -f "$py_script" "$py_err"
             if [[ "$id_in_marker" == "yes" ]]; then
-              gh pr comment "$ISSUE_NUMBER" \
-                --repo "$REPOSITORY" \
-                --body "**AI Review**: F${FINDING_ID} is an **inline** finding anchored to a diff line. To act on it, reply directly to its review-thread comment with \`/ai-pr-review ${COMMAND}\`."
+              # F<n> is an INLINE finding. Rather than dead-ending and telling the
+              # user to go reply on the thread (bad UX: dismiss-by-ID from the PR
+              # conversation is documented), signal the resolve-inline step to
+              # locate the thread by its **[F<n>]** token, resolve it, and dismiss
+              # the review if it was the last unresolved thread. The reply is
+              # posted by that step.
+              echo "valid=false" >> "$GITHUB_OUTPUT"
+              echo "inline_fid=${FINDING_ID}" >> "$GITHUB_OUTPUT"
             else
               gh pr comment "$ISSUE_NUMBER" \
                 --repo "$REPOSITORY" \
                 --body "**AI Review**: F${FINDING_ID} was not found in any review on this PR. It may have already been resolved, or the ID may be incorrect. To see active body-level IDs, post \`/ai-pr-review ${COMMAND}\` (without an ID)."
+              echo "valid=false" >> "$GITHUB_OUTPUT"
             fi
-            echo "valid=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -539,7 +552,222 @@ jobs:
           echo "line=${finding_line_num}" >> "$GITHUB_OUTPUT"
           echo "finding_text=${finding_text}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve inline finding by F-ID and dismiss review if last
+        # Handles `/ai-pr-review dismiss F<n>` (or false-positive/wont-fix) issued
+        # from a TOP-LEVEL PR comment where F<n> turns out to be an INLINE finding.
+        # The body-level lookup sets inline_fid in that case. We locate the inline
+        # thread by its rendered **[F<n>]** token (the token is present in the
+        # thread comment body and is unique per PR), resolve it, and — if it was
+        # the last unresolved bot thread — dismiss the CHANGES_REQUESTED review.
+        if: |
+          steps.lookup.outputs.inline_fid != '' &&
+          contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          OWNER: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository-name }}
+          PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          ACTOR: ${{ inputs.actor-login }}
+          FINDING_ID: ${{ steps.lookup.outputs.inline_fid }}
+          COMMAND: ${{ needs.handle-command.outputs.command }}
+          # REST API form (github-actions[bot]) — used only for the
+          # /pulls/{n}/reviews REST query below. Do NOT use this for GraphQL
+          # reviewThreads author matching: GraphQL reports "github-actions"
+          # (no [bot] suffix). Thread ownership is gated by the inline marker.
+          BOT_LOGIN: 'github-actions[bot]'
+        run: |
+          # Validate the F-ID is a bare integer before using it in any pattern.
+          if ! [[ "$FINDING_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Refusing to act on non-numeric finding id '${FINDING_ID}'."
+            exit 1
+          fi
+          if ! [[ "$ACTOR" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}(\[bot\])?$ ]]; then
+            echo "::error::Refusing to dismiss: unexpected actor login '${ACTOR}'."
+            exit 1
+          fi
+
+          # The rendered inline-comment token, e.g. "**[F1]**". Bot inline
+          # comments carry both this token and the <!-- ai-pr-review-inline -->
+          # marker; we require both plus bot authorship to avoid touching a
+          # user's lookalike comment.
+          ftoken="**[F${FINDING_ID}]**"
+
+          # Page review threads; find the one whose first comment is bot-authored,
+          # carries the inline marker, and contains the F-token. Capture its node
+          # id and resolved state.
+          cursor=""
+          has_next=true
+          thread_id=""
+          thread_resolved=""
+          while [[ "$has_next" == "true" && -z "$thread_id" ]]; do
+            api_err=$(mktemp)
+            page=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        id
+                        isResolved
+                        comments(first: 1) {
+                          nodes { body author { login } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' \
+              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
+              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
+              echo "::error::Could not fetch review threads: $(cat "$api_err")"
+              rm -f "$api_err"; exit 1
+            }
+            rm -f "$api_err"
+            if printf '%s' "$page" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL errors fetching review threads: $(printf '%s' "$page" | jq -c '.errors')"
+              exit 1
+            fi
+
+            # jq selects the matching thread: first comment body contains the
+            # inline ownership marker AND the F-token (passed as --arg so the **
+            # and [] are treated literally, never as regex). Ownership is gated
+            # by the marker, NOT by author login: the GraphQL API reports the bot
+            # author as "github-actions" while the REST API reports
+            # "github-actions[bot]", so an author-login compare is unreliable
+            # across APIs. The <!-- ai-pr-review-inline --> marker is the
+            # canonical ownership signal (see ai_pr_review/vcs/marker.py) and is
+            # only ever emitted on our own inline comments.
+            match=$(printf '%s' "$page" | jq -r \
+              --arg ftoken "$ftoken" \
+              '.data.repository.pullRequest.reviewThreads.nodes[]
+               | select(.comments.nodes[0].body | contains("<!-- ai-pr-review-inline -->"))
+               | select(.comments.nodes[0].body | contains($ftoken))
+               | "\(.id)\t\(.isResolved)"' | head -1)
+            if [[ -n "$match" ]]; then
+              thread_id="${match%%$'\t'*}"
+              thread_resolved="${match##*$'\t'}"
+            fi
+
+            has_next=$(printf '%s' "$page" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+            cursor=$(printf '%s' "$page" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
+          done
+
+          if [[ -z "$thread_id" ]]; then
+            gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+              --body "**AI Review**: F${FINDING_ID} is an inline finding, but its review thread could not be located (it may already be resolved). No action taken."
+            exit 0
+          fi
+
+          # Resolve the thread if not already resolved.
+          if [[ "$thread_resolved" != "true" ]]; then
+            mut_err=$(mktemp)
+            mut=$(gh api graphql -f query='
+              mutation($threadId: ID!) {
+                resolveReviewThread(input: {threadId: $threadId}) {
+                  thread { id isResolved }
+                }
+              }' -f threadId="$thread_id" 2>"$mut_err") || {
+              echo "::error::Failed to resolve review thread: $(cat "$mut_err")"
+              rm -f "$mut_err"; exit 1
+            }
+            rm -f "$mut_err"
+            if printf '%s' "$mut" | jq -e '.errors' >/dev/null 2>&1; then
+              echo "::error::GraphQL errors resolving thread: $(printf '%s' "$mut" | jq -c '.errors')"
+              exit 1
+            fi
+            echo "Resolved thread ${thread_id} for F${FINDING_ID}." >&2
+          else
+            echo "Thread for F${FINDING_ID} was already resolved." >&2
+          fi
+
+          # Find the newest bot CHANGES_REQUESTED review.
+          newest=$(gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq "[.[] | select(.user.login == \"${BOT_LOGIN}\") |
+                   select(.state == \"CHANGES_REQUESTED\")] | sort_by(.id) | last" \
+            2>/dev/null || echo "null")
+          if [[ "$newest" == "null" || -z "$newest" ]]; then
+            review_id=""
+          else
+            review_id=$(printf '%s' "$newest" | jq -r '.id')
+          fi
+
+          # Count remaining UNRESOLVED bot inline threads across the PR.
+          cursor=""
+          has_next=true
+          unresolved=0
+          while [[ "$has_next" == "true" ]]; do
+            api_err=$(mktemp)
+            page=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        isResolved
+                        comments(first: 1) {
+                          nodes { body author { login } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' \
+              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
+              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
+              echo "::warning::Could not recount threads; leaving review state unchanged: $(cat "$api_err")" >&2
+              rm -f "$api_err"; exit 0
+            }
+            rm -f "$api_err"
+            # Ownership gated by the inline marker, not author login (GraphQL
+            # reports "github-actions", REST reports "github-actions[bot]").
+            n=$(printf '%s' "$page" | jq \
+              '[.data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.comments.nodes[0].body | contains("<!-- ai-pr-review-inline -->"))
+                | select(.isResolved == false)] | length')
+            unresolved=$((unresolved + n))
+            has_next=$(printf '%s' "$page" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+            cursor=$(printf '%s' "$page" | jq -r \
+              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
+          done
+
+          if [[ "$unresolved" -gt 0 ]]; then
+            gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+              --body "**AI Review**: F${FINDING_ID} resolved. ${unresolved} inline finding(s) still unresolved; the review stays *changes requested* until they are addressed or dismissed."
+            exit 0
+          fi
+
+          if [[ -z "$review_id" ]]; then
+            gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+              --body "**AI Review**: F${FINDING_ID} resolved. All inline findings are resolved; no open *changes requested* review to dismiss."
+            exit 0
+          fi
+
+          dismiss_msg="All findings resolved — dismissed by @${ACTOR}."
+          if gh api \
+            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+            --method PUT --field "message=${dismiss_msg}" >/dev/null 2>&1; then
+            gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+              --body "**AI Review**: F${FINDING_ID} resolved. All inline findings are now resolved — the *changes requested* review has been dismissed."
+          else
+            gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" \
+              --body "**AI Review**: F${FINDING_ID} resolved, but the *changes requested* review could not be dismissed automatically (it may already be dismissed, or the token lacks scope)."
+          fi
+
       - name: Record false-positive in feedback store
+        # Only the body-level path (valid == 'true') records here, because only
+        # it populates source/file/line/finding_text. The inline-by-F-ID path
+        # (inline_fid set) deliberately does NOT record here — its source/file
+        # outputs are empty, which would persist a malformed entry. The verdict
+        # for that path is already persisted by the separate feedback-command
+        # job, which runs for the same top-level issue_comment event.
         if: |
           steps.lookup.outputs.valid == 'true' &&
           inputs.enable-feedback-loop == 'true' &&
@@ -706,7 +934,11 @@ jobs:
           esac
 
       - name: React — not applicable (no ID given)
-        if: steps.lookup.outputs.valid == 'false'
+        # valid == 'false' covers two cases: a genuine no-op (ID not found / no
+        # ID given) and the inline-by-F-ID case, which is handled successfully by
+        # the "Resolve inline finding by F-ID" step above. Only react 😕 for the
+        # genuine no-op — i.e. when inline_fid was NOT set.
+        if: steps.lookup.outputs.valid == 'false' && steps.lookup.outputs.inline_fid == ''
         env:
           GH_TOKEN: ${{ secrets.github-token }}
           REPOSITORY: ${{ inputs.repository }}
