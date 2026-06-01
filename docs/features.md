@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v0.12.2
+
+**Third-party analyzer license compliance for the container image (PR #376).** The container image redistributes ~15 third-party open-source analyzers; this release adds a `THIRD-PARTY-LICENSES/` directory with each tool's full upstream license text and a `NOTICE.md` manifest (tool, version, license, copyright, corresponding-source URL), bundled into the image at `/opt/ai-pr-review/THIRD-PARTY-LICENSES/` and referenced from the README and architecture docs.
+
+**Semgrep registry rulesets are no longer baked into the image (PR #376).** The Semgrep-maintained `p/ci` and `p/security-audit` rulesets are licensed under the Semgrep Rules License v1.0 (use-restricted; not freely redistributable inside this tool's image), so they are no longer pre-downloaded. `run-semgrep.sh` falls back to `--config=auto`, which fetches rules at runtime instead. **Behavior note:** semgrep scans now require network access at review time and re-incur the ~20–40s ruleset fetch that the bake step previously eliminated. Consumers who need an offline/deterministic ruleset can point `SEMGREP_RULES_DIR` at their own permissively-licensed rule bundle. Semgrep finding output is otherwise unchanged.
+
 ## What's new in v0.12.1
 
 **Removed sequence-diagram generation from `pr-summarizer` (PR #374).** The summarizer no longer produces an optional Mermaid `sequenceDiagram` block. GitHub does not render Mermaid in PR comments (only in `.md` files and PR description bodies), and Bitbucket does not render it at all, so the diagram was rarely seen where reviews are read, while adding LLM cost and prompt complexity. The summarizer continues to emit the summary, PR type, effort estimate, and walkthrough table. This is a behavior change to the summary comment but is not breaking for downstream consumers; no inputs or outputs that callers depend on were removed.
