@@ -173,7 +173,7 @@ See [examples/README.md](examples/README.md) for the complete setup walkthrough 
 | `AI_REVIEW_BASE_URL` | Variable | No | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
 | `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
-| `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `0.12.1` — image tags published by `publish-image.yml` strip the `v` prefix) |
+| `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `0.12.2` — image tags published by `publish-image.yml` strip the `v` prefix) |
 | `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `bash` (default) or `python` — the latter is required for the opt-in capabilities below |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `true` to strip base-branch merge commits from the diff before review (default `false`) |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (requires `engine: python`; default `false`) |
