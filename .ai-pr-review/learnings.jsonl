@@ -16,3 +16,4 @@
 {"ts": "2026-05-29T18:10:47Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": ""}
 {"ts": "2026-05-29T18:10:56Z", "command": "wont-fix", "reason": "", "source": "", "file": "", "rule_id": ""}
 {"ts": "2026-06-01T21:17:51Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": ""}
+{"ts": "2026-06-01T21:18:55Z", "command": "false-positive", "reason": "", "source": "F1", "file": "docs/features.md", "rule_id": ""}
