@@ -60,7 +60,7 @@ Story format below: `#NNN — short description — primary PRD requirement`.
 - #217 — Agent roster registry — `2.FR-2` — closes #129, #191
 - #218 — Agent dispatch and parallelism — `2.FR-3`
 - #219 — Conditional gates port — `2.FR-4`
-- #220 — pr-summarizer sequence diagrams — `2.FR-5` — closes #100
+- #220 — pr-summarizer sequence diagrams — `2.FR-5` — closes #100 _(sequence diagrams later removed)_
 - #221 — Outcome classifier (single source) — `2.FR-6` — closes #181, #192
 - #222 — Watermark policy (per-agent) — `2.FR-7` — closes #182
 - #223 — Ownership marker (marker-gated stale cleanup) — `2.FR-8`, `2.FR-10` — closes #183, #184

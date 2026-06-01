@@ -77,7 +77,7 @@ ai_pr_review/                    # Python package, entry point: python -m ai_pr_
 │   ├── roster.py                # AgentSpec dataclass + AGENTS list (#129, #191)
 │   ├── dispatch.py              # asyncio.gather fan-out, FAILED_AGENTS (#181)
 │   ├── gates.py                 # detect_conditional_agent_triggers port (AI_DISABLE_GATE_*)
-│   ├── summarizer.py            # pr-summarizer with typed Mermaid sequence diagrams (#100)
+│   ├── summarizer.py            # pr-summarizer: summary, PR type, effort, walkthrough table
 │   └── prompts.py               # Prompt assembly — loads prompts/*.md + addenda
 │
 ├── review/                      # Epic 2
