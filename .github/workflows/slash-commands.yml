@@ -572,6 +572,10 @@ jobs:
           ACTOR: ${{ inputs.actor-login }}
           FINDING_ID: ${{ steps.lookup.outputs.inline_fid }}
           COMMAND: ${{ needs.handle-command.outputs.command }}
+          # REST API form (github-actions[bot]) — used only for the
+          # /pulls/{n}/reviews REST query below. Do NOT use this for GraphQL
+          # reviewThreads author matching: GraphQL reports "github-actions"
+          # (no [bot] suffix). Thread ownership is gated by the inline marker.
           BOT_LOGIN: 'github-actions[bot]'
         run: |
           # Validate the F-ID is a bare integer before using it in any pattern.
@@ -627,14 +631,18 @@ jobs:
               exit 1
             fi
 
-            # jq selects the matching thread: first comment authored by the bot,
-            # body contains the inline marker AND the F-token (passed as --arg so
-            # the ** and [] are treated literally, never as regex).
+            # jq selects the matching thread: first comment body contains the
+            # inline ownership marker AND the F-token (passed as --arg so the **
+            # and [] are treated literally, never as regex). Ownership is gated
+            # by the marker, NOT by author login: the GraphQL API reports the bot
+            # author as "github-actions" while the REST API reports
+            # "github-actions[bot]", so an author-login compare is unreliable
+            # across APIs. The <!-- ai-pr-review-inline --> marker is the
+            # canonical ownership signal (see ai_pr_review/vcs/marker.py) and is
+            # only ever emitted on our own inline comments.
             match=$(printf '%s' "$page" | jq -r \
               --arg ftoken "$ftoken" \
-              --arg bot "$BOT_LOGIN" \
               '.data.repository.pullRequest.reviewThreads.nodes[]
-               | select(.comments.nodes[0].author.login == $bot)
                | select(.comments.nodes[0].body | contains("<!-- ai-pr-review-inline -->"))
                | select(.comments.nodes[0].body | contains($ftoken))
                | "\(.id)\t\(.isResolved)"' | head -1)
@@ -717,10 +725,10 @@ jobs:
               rm -f "$api_err"; exit 0
             }
             rm -f "$api_err"
+            # Ownership gated by the inline marker, not author login (GraphQL
+            # reports "github-actions", REST reports "github-actions[bot]").
             n=$(printf '%s' "$page" | jq \
-              --arg bot "$BOT_LOGIN" \
               '[.data.repository.pullRequest.reviewThreads.nodes[]
-                | select(.comments.nodes[0].author.login == $bot)
                 | select(.comments.nodes[0].body | contains("<!-- ai-pr-review-inline -->"))
                 | select(.isResolved == false)] | length')
             unresolved=$((unresolved + n))
