@@ -117,6 +117,7 @@ EXPECTED_AGENTS = {
     "blind-hunter",
     "edge-case-hunter",
     "adversarial-general",
+    "issue-linker",
 }
 
 

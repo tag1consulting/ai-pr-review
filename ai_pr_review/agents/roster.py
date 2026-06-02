@@ -140,6 +140,18 @@ AGENTS: list[AgentSpec] = [
         full_mode_only=True,
         context_enrichment_eligible=True,
     ),
+    AgentSpec(
+        # GitHub-only: discovers related issues/PRs and assesses resolution.
+        # Dispatched separately (like pr-summarizer) via _run_issue_linker();
+        # excluded from generic run_tier dispatch in review/runtime.py.
+        name="issue-linker",
+        prompt_path="prompts/issue-linker.md",
+        tier=2,
+        conditional_trigger=None,
+        max_output_tokens=4096,
+        full_mode_only=True,
+        context_enrichment_eligible=False,
+    ),
 ]
 
 _AGENTS_BY_NAME: dict[str, AgentSpec] = {a.name: a for a in AGENTS}
