@@ -146,7 +146,7 @@ AGENTS: list[AgentSpec] = [
         # excluded from generic run_tier dispatch in review/runtime.py.
         name="issue-linker",
         prompt_path="prompts/issue-linker.md",
-        tier=2,
+        tier=2,  # excluded from tier dispatch; runs via _run_issue_linker() in cli.py
         conditional_trigger=None,
         max_output_tokens=4096,
         full_mode_only=True,

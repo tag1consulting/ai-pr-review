@@ -173,14 +173,18 @@ async def _run_review_async(config: ReviewConfig) -> int:
             llm_call=_llm_call,
         )
 
-    # Run issue-linker on first review in full mode when provider is GitHub.
+    # Run issue-linker on first review in full mode when the VCS provider is GitHub.
+    # rc.vcs_provider is the VCS provider (github/bitbucket/gitlab); rc.provider is
+    # the AI provider (anthropic/openai/bedrock/etc). The guard here avoids a wasted
+    # LLM call on non-GitHub repos because the prompt checks for "github" and returns
+    # NONE immediately otherwise.
     # Fail-soft: if it returns NONE or errors, summary_text is unchanged.
-    if not runtime.is_incremental and rc.review_mode == "full":
+    if not runtime.is_incremental and rc.review_mode == "full" and rc.vcs_provider == "github":
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,
             base_ref=runtime.base_ref,
             script_dir=runtime.script_dir,
-            provider=rc.provider,
+            provider=rc.vcs_provider,
             github_repository=rc.github_repository,
             model=rc.model_standard,
             llm_call=_llm_call,
@@ -479,6 +483,7 @@ async def _run_issue_linker(
 ) -> str:
     """Run the issue-linker agent and return its markdown output, or "" to suppress.
 
+    ``provider`` is the VCS provider (github/bitbucket/gitlab), NOT the AI provider.
     The issue-linker is GitHub-only. When the provider is not github or the agent
     returns the sentinel NONE, this function returns "" so the caller skips
     appending to summary_text. Any error is logged as WARNING and "" is returned
