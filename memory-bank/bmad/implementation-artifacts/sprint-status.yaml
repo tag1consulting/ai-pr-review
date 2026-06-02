@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-06-02T13:45:00-07:00
+# last_updated: 2026-06-02T16:24:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -105,10 +105,9 @@ development_status:
   epic-3-retrospective: optional
 
   # ── Epic 4 — Soak, Observability, Default Flip ─────────────────────────────
-  # Parent issue #198 OPEN. S1-S9 merged; S10 (v1.0.0 release) is next.
-  # PRs: #388 (S6/S8/S9 merged 2026-06-02), earlier PRs for S1-S5.
-  # Issues: #246-249 CLOSED; #250 (S10 release) still OPEN.
-  epic-4: in-progress
+  # Parent issue #198 CLOSED. v1.0.0 released 2026-06-02.
+  # All issues #246-#250 CLOSED. publish-image.yml run 26853323826 in progress.
+  epic-4: done
   4-1-structured-logging: done
   4-2-telemetry-hooks: done
   4-3-cost-table-refinement: done
@@ -118,7 +117,7 @@ development_status:
   4-7-field-soak: done
   4-8-deprecation-warning-bash: done
   4-9-flip-default-engine: done
-  4-10-release-python-as-default: ready-for-dev
+  4-10-release-python-as-default: done
   epic-4-retrospective: optional
 
   # ── Epic 5 — Delete Bash ────────────────────────────────────────────────────
