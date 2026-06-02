@@ -504,34 +504,50 @@ async def _run_issue_linker(
 
         commit_log = ""
         _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
+
+        def _run_git_log() -> subprocess.CompletedProcess[str] | None:
+            try:
+                return subprocess.run(_git_cmd, capture_output=True, text=True, timeout=15)
+            except subprocess.TimeoutExpired:
+                return None
+
         try:
-            proc = await anyio.to_thread.run_sync(
-                lambda: subprocess.run(
-                    _git_cmd, capture_output=True, text=True, timeout=15,
-                )
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("issue-linker: git log timed out; proceeding without commit log")
+            proc = await anyio.to_thread.run_sync(_run_git_log)
         except Exception as exc:
             logger.warning("issue-linker: could not get commit log: %s", exc)
         else:
-            if proc.returncode == 0:
+            if proc is None:
+                logger.warning("issue-linker: git log timed out; proceeding without commit log")
+            elif proc.returncode == 0:
                 commit_log = proc.stdout.strip()
             else:
                 commit_log = "_Note: commit log unavailable (git log failed)._"
 
         branch_name = ""
-        try:
-            branch_proc = await anyio.to_thread.run_sync(
-                lambda: subprocess.run(
+
+        def _run_git_branch() -> subprocess.CompletedProcess[str] | None:
+            try:
+                return subprocess.run(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     capture_output=True, text=True, timeout=10,
                 )
-            )
-            if branch_proc.returncode == 0:
-                branch_name = branch_proc.stdout.strip()
+            except subprocess.TimeoutExpired:
+                return None
+
+        try:
+            branch_proc = await anyio.to_thread.run_sync(_run_git_branch)
         except Exception as exc:
             logger.warning("issue-linker: could not get branch name: %s", exc)
+        else:
+            if branch_proc is not None and branch_proc.returncode == 0:
+                branch_name = branch_proc.stdout.strip()
+
+        if not commit_log and not branch_name:
+            logger.warning(
+                "issue-linker: both commit log and branch name unavailable "
+                "(not a git repo, or git is absent); skipping"
+            )
+            return ""
 
         user_message = (
             f"PROVIDER: {provider}\n\n"

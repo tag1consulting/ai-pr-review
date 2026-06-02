@@ -196,3 +196,18 @@ def test_get_agent_returns_correct_spec() -> None:
 def test_get_agent_raises_on_unknown() -> None:
     with pytest.raises(KeyError):
         get_agent("nonexistent-agent")
+
+
+def test_separately_dispatched_agents() -> None:
+    separate = {a.name for a in AGENTS if a.separately_dispatched}
+    assert "pr-summarizer" in separate
+    assert "issue-linker" in separate
+    assert "code-reviewer" not in separate
+
+
+def test_generic_dispatch_excludes_separately_dispatched() -> None:
+    generic = [a for a in AGENTS if not a.separately_dispatched]
+    names = {a.name for a in generic}
+    assert "pr-summarizer" not in names
+    assert "issue-linker" not in names
+    assert "code-reviewer" in names

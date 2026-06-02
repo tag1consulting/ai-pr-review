@@ -201,8 +201,8 @@ def build_review_runtime(
     mode_filtered = [
         a for a in AGENTS if not a.full_mode_only or config.review_mode == "full"
     ]
-    # pr-summarizer and issue-linker are dispatched separately; exclude from generic dispatch.
-    mode_filtered = [a for a in mode_filtered if a.name not in ("pr-summarizer", "issue-linker")]
+    # Agents marked separately_dispatched run via their own code paths; exclude from generic dispatch.
+    mode_filtered = [a for a in mode_filtered if not a.separately_dispatched]
     agents = filter_agents(mode_filtered, gates)
     if not agents:
         logger.warning(
