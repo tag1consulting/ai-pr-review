@@ -99,8 +99,8 @@ Release steps completed:
 3. ✅ `git tag -s v1.0.0` signed tag created @ 3cb926c
 4. ✅ `git push origin v1.0.0` — tag live
 5. ✅ GitHub release created: https://github.com/tag1consulting/ai-pr-review/releases/tag/v1.0.0
-6. ⏳ `publish-image.yml` run 26853323826 in progress (arm64 QEMU build ~20 min)
-7. ⬜ GHCR verify pending publish completion
+6. ✅ `publish-image.yml` run 26853323826 — success
+7. ✅ GHCR verified: `docker pull ghcr.io/tag1consulting/ai-pr-review:1.0.0` → sha256:a0d2d22c
 
 ### Change Log
 
