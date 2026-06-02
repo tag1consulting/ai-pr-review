@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import anyio
 import click
+from pydantic import ValidationError
 
 from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
@@ -70,7 +71,7 @@ def compute(output: str) -> None:
     """Run the compute phase (diff, manifest, findings) and write handoff JSON."""
     try:
         config = ReviewConfig.from_env()
-    except ConfigError as exc:
+    except (ConfigError, ValidationError) as exc:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(1)
 
@@ -109,7 +110,7 @@ def review() -> None:
     """
     try:
         config = ReviewConfig.from_env()
-    except ConfigError as exc:
+    except (ConfigError, ValidationError) as exc:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(1)
 
@@ -670,7 +671,7 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
 
     try:
         config = ReviewConfig.from_env()
-    except ConfigError as exc:
+    except (ConfigError, ValidationError) as exc:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(1)
 

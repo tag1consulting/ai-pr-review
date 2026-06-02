@@ -36,6 +36,12 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.parallel is True
 
 
+def test_engine_field_default() -> None:
+    """ReviewConfig() bare constructor should default engine to 'python'."""
+    cfg = ReviewConfig()
+    assert cfg.engine == "python"
+
+
 def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_REVIEW_MODE", "full")
     monkeypatch.setenv("AI_PR_REVIEW_ENGINE", "python")

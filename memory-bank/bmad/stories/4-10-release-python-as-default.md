@@ -30,7 +30,7 @@ This story is **explicitly held** pending:
 
 ## Acceptance Criteria
 
-- [ ] `docs/features.md` has a `## What's new in v1.0.0` section with the default-flip announcement
+- [x] `docs/features.md` has a `## What's new in v1.0.0` section with the default-flip announcement — completed by story 4-6 in the same PR; do not add again
 - [ ] `pyproject.toml:7` version is `1.0.0` (already the case — verify before touching)
 - [ ] A `v1.0.0` git tag is pushed to `origin`
 - [ ] A GitHub release is created for `v1.0.0` with release notes covering: default flip, bash deprecation, escape hatch (`engine: bash` still works + deprecation warning), migration guidance

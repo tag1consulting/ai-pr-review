@@ -123,7 +123,7 @@ GitHub, GitLab, and Bitbucket. Required for all Epic 3 capabilities below.
 As of v1.0.0 the Python engine is the default; the bash pipeline is deprecated.
 
 **Epic 3 — three opt-in capability groups in the Python engine.** All default
-off, all require `engine: python`. See
+off, all require the Python engine (the default since v1.0.0). See
 [Configuration → Opt-in capabilities](configuration#opt-in-capabilities-epic-3)
 for the full env-var reference.
 
