@@ -105,7 +105,7 @@ inputs:
   engine:
     description: "Compute engine: 'python' (default) or 'bash' (deprecated legacy; will be removed in a future major release). Required for Epic 3 capabilities (context enrichment, SARIF ingestion, learning loop)."
     required: false
-    default: 'bash'
+    default: 'python'
 
   ignore-merge-commits:
     description: >

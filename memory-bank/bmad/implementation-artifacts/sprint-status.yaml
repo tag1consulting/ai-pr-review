@@ -118,7 +118,7 @@ development_status:
   4-6-docs-refresh-python-primary: done
   4-7-field-soak: done
   4-8-deprecation-warning-bash: done
-  4-9-flip-default-engine: ready-for-dev
+  4-9-flip-default-engine: done
   4-10-release-python-as-default: ready-for-dev
   epic-4-retrospective: optional
 

@@ -352,11 +352,11 @@ main() {
   # ---------------------------------------------------------------------------
   # Engine dispatch — AI_PR_REVIEW_ENGINE=python runs the end-to-end Python
   # pipeline (compute + dispatch + post via the VCS provider) in a single
-  # process. Default engine is still "bash"; no behavior change for existing
-  # consumers until Epic 4 flips the default.
+  # process. Default engine is "python" as of v1.0.0 (Epic 4 S9); "bash" is
+  # deprecated and will be removed in Epic 5.
   # The legacy JSON-tempfile handoff (Epic 1 shim) is removed in Epic 2 S12.
   # ---------------------------------------------------------------------------
-  AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+  AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-python}"
 
   # Surface Epic 3 capability/engine misconfigurations to stderr before
   # dispatching to either engine.  Defined as a top-level function so it's

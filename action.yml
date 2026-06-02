@@ -139,7 +139,7 @@ inputs:
       Required for Epic 3 capabilities (context enrichment, SARIF ingestion,
       learning loop). Sets AI_PR_REVIEW_ENGINE.
     required: false
-    default: 'bash'
+    default: 'python'
 
   ignore-merge-commits:
     description: >
