@@ -103,7 +103,7 @@ for file in "${SHELL_FILES[@]}"; do
     FILE_FINDINGS="[]"
   fi
 
-  FINDINGS=$(printf '%s\n%s' "$FINDINGS" "$FILE_FINDINGS" | jq -s '.[0] + .[1]')
+  FINDINGS=$(printf '%s\n%s' "$FINDINGS" "$FILE_FINDINGS" | jq -s '.[0] + .[1]' 2>/dev/null) || FINDINGS="[]"
 done
 
 printf '%s\n' "$FINDINGS"

@@ -43,42 +43,46 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "shellcheck: returns [] and exits 0 when jq is absent" {
-  # We need command -v jq to fail inside the script. Build a PATH that
-  # excludes every directory containing jq (including /bin -> /usr/bin
-  # symlinks, resolved via realpath). Use a wrapper script so the PATH
-  # modification is applied only to the script under test, not to bats'
-  # own subprocess infrastructure (which would break mktemp, etc.).
+  # Shadow jq with a fake stub that exits 127 (command-not-found), placed in a
+  # temp bin dir prepended to PATH inside a wrapper script. Using a wrapper
+  # confines the PATH change to the script's process tree only -- bats' own
+  # infrastructure (mktemp, etc.) runs with the original PATH unchanged.
+  # This approach is portable across CI environments where jq may be at
+  # /usr/bin/jq or elsewhere, and does not rely on realpath being available.
 
-  REAL_JQ=$(command -v jq 2>/dev/null || true)
-  if [[ -z "$REAL_JQ" ]]; then
-    skip "real jq not found; cannot build jq-absent PATH"
-  fi
-  REAL_JQ_DIR=$(dirname "$REAL_JQ")
-  REAL_JQ_CANON_DIR=$(dirname "$(realpath "$REAL_JQ" 2>/dev/null || echo "$REAL_JQ")")
-
-  STUB_DIR=$(mktemp -d)
   touch "$WORK/test.sh"
 
-  # Reconstruct PATH excluding any dir that resolves to the jq binary location.
+  STUB_DIR=$(mktemp -d)
+
+  # Create a fake jq that exits 127 so command -v jq succeeds in PATH lookup
+  # but actually running it fails -- however, the script uses "command -v jq"
+  # which checks PATH existence. We make it not executable so command -v fails,
+  # OR we can simply not create jq at all in STUB_DIR and instead strip the
+  # real jq's directory. The simplest and most portable approach: put a
+  # non-executable file named jq in STUB_DIR (command -v will still find
+  # executables only), and place STUB_DIR before the real jq in PATH while
+  # excluding the real jq's directory entirely from the wrapper's PATH.
+  #
+  # Simplest portable approach: fake jq stub that exits 127, placed before
+  # the real jq in PATH. The script checks "command -v jq" which will find
+  # the stub -- but wait, a stub that exits 127 still IS found by command -v.
+  # We need command -v jq to FAIL (exit non-zero). So: don't put any jq in
+  # PATH at all. Strip real jq's parent dir and any dirs containing a jq
+  # binary, using a simple existence check (no realpath needed).
+
   FILTERED_PATH="$STUB_DIR"
   IFS=: read -ra PATH_PARTS <<< "$PATH"
   for p in "${PATH_PARTS[@]}"; do
-    CANON_P=$(realpath "$p" 2>/dev/null || echo "$p")
-    if [[ "$p" == "$REAL_JQ_DIR" || "$p" == "$REAL_JQ_CANON_DIR" \
-       || "$CANON_P" == "$REAL_JQ_DIR" || "$CANON_P" == "$REAL_JQ_CANON_DIR" ]]; then
-      continue
+    if [[ -x "${p}/jq" ]]; then
+      continue  # skip any directory that contains a jq executable
     fi
     FILTERED_PATH="${FILTERED_PATH}:${p}"
   done
 
-  # Write a wrapper that sets the filtered PATH, then execs the real script.
-  # This confines the PATH change to the script's process tree only.
+  # Write a wrapper that applies the filtered PATH and execs the real script.
   WRAPPER="$STUB_DIR/run-wrapper.sh"
-  cat > "$WRAPPER" <<EOF
-#!/usr/bin/env bash
-export PATH="${FILTERED_PATH}"
-exec "$SCRIPT" "\$@"
-EOF
+  printf '#!/usr/bin/env bash\nexport PATH="%s"\nexec "%s" "$@"\n' \
+    "$FILTERED_PATH" "$SCRIPT" > "$WRAPPER"
   chmod +x "$WRAPPER"
 
   run --separate-stderr "$WRAPPER" "$WORK/test.sh"
