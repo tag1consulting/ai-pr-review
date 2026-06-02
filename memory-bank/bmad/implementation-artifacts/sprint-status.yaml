@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-05-19T10:00:00-07:00
+# last_updated: 2026-06-02T09:00:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-18T11:48:00-07:00
-last_updated: 2026-05-19T10:00:00-07:00
+last_updated: 2026-06-02T09:00:00-07:00
 project: ai-pr-review
 project_key: NOKEY
 tracking_system: file-system
@@ -110,16 +110,16 @@ development_status:
   # Phase B (mid-soak): #242, #244, #246
   # Phase C (gated on soak exit): #248, #249, #250
   epic-4: in-progress
-  4-1-structured-logging: review
-  4-2-telemetry-hooks: review
-  4-3-cost-table-refinement: review
-  4-4-perf-tuning-cache-priming: review
-  4-5-error-surface-polish: review
-  4-6-docs-refresh-python-primary: backlog
-  4-7-field-soak: in-progress
-  4-8-deprecation-warning-bash: backlog
-  4-9-flip-default-engine: backlog
-  4-10-release-python-as-default: backlog
+  4-1-structured-logging: done
+  4-2-telemetry-hooks: done
+  4-3-cost-table-refinement: done
+  4-4-perf-tuning-cache-priming: done
+  4-5-error-surface-polish: done
+  4-6-docs-refresh-python-primary: in-progress
+  4-7-field-soak: done
+  4-8-deprecation-warning-bash: ready-for-dev
+  4-9-flip-default-engine: ready-for-dev
+  4-10-release-python-as-default: ready-for-dev
   epic-4-retrospective: optional
 
   # ── Epic 5 — Delete Bash ────────────────────────────────────────────────────

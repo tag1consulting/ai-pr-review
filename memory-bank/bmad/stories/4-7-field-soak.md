@@ -4,9 +4,9 @@
 **Story ID:** 4-7
 **Story Key:** 4-7-field-soak
 **GitHub Issue:** #247
-**Status:** in-progress
+**Status:** done
 **PRD refs:** 4.FR-7, 4.NFR-2
-**Blocks:** E4.S9 flip (#249)
+**Blocks:** E4.S9 flip (#249) — UNBLOCKED (all exit criteria met 2026-06-02)
 
 ---
 
@@ -194,3 +194,17 @@ Upstream pull on tag1-lagoon-infra revealed the workflow had already been extend
 - tag1-lagoon-infra is a separate git repo at `/home/gchaix/repos/tag1/tag1-lagoon-infra/`. It must be committed and pushed separately.
 - Story status should be set to `in-progress` (not `done`) because the soak is an ongoing activity. The story only reaches `done` when the exit criterion is met and recorded.
 - Do not change `review.sh` default engine in this story — that is strictly E4.S9 (#249).
+
+---
+
+## Soak Exit — CONFIRMED 2026-06-02
+
+All three exit criteria verified against live data:
+
+| Criterion | Required | Actual | Verified via |
+|---|---|---|---|
+| Calendar days since 2026-05-18 | ≥14 | 15 | `python3 -c "from datetime import date; print((date(2026,6,2)-date(2026,5,18)).days)"` |
+| Real engine=python reviews | ≥30 | 80 | soak-log.md running total |
+| Zero open P0/P1 python-engine bugs, consecutive days | ≥7 | 14 (last P1 closed 2026-05-19) | `gh issue list --label python-engine --label severity:p0 --state open` → `[]` + `gh issue list --label python-engine --label severity:p1 --state open` → `[]` |
+
+**Flip authorized.** Story set to `done`. E4.S9 (flip default to python) unblocked.

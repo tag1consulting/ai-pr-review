@@ -4,7 +4,7 @@
 **Story ID:** 4-3
 **Story Key:** 4-3-cost-table-refinement
 **GitHub Issue:** #243
-**Status:** ready-for-dev
+**Status:** done
 **PRD refs:** 4.FR-3
 
 ---
@@ -277,3 +277,29 @@ Extend `tests/python/test_pricing.py`. All tests must pass with `pytest tests/py
   ```
 - **No print() for new code.** Use `logging.getLogger(__name__)` for any diagnostic messages. `pricing.py` currently uses `print(..., file=sys.stderr)` for pricing-file warnings — match that existing pattern there, but do not add new `print()` calls for the new rendering logic.
 - **Do not touch `review.sh` or any bash files.** This story is Python-only.
+
+---
+
+## Dev Agent Record
+
+### Completion Notes (2026-05-20)
+
+All acceptance criteria satisfied. Implementation landed via PR #345 (2026-05-20):
+- `ai_pr_review/pricing.py`: `max_output_tokens` field added to `TokenEntry`; `emit_token_table` extended with `context_tokens` and `sarif_elapsed_s` kwargs; "Context enrichment" and "SARIF ingestion" supplementary rows added.
+- `ai_pr_review/analyzers/sarif.py`: `load_sarif_files` returns `tuple[list[Finding], float]` with monotonic timing.
+- `ai_pr_review/agents/dispatch.py`: `context_tokens_used` field threaded through dispatch results.
+- `ai_pr_review/cli.py`: `emit_token_table` called with full kwargs; output written to `GITHUB_STEP_SUMMARY`.
+- 870 tests passing at time of merge; mypy strict and ruff clean.
+
+### File List
+
+| File | Change |
+|---|---|
+| `ai_pr_review/pricing.py` | Added `max_output_tokens` to `TokenEntry`; extended `emit_token_table` with `context_tokens`, `sarif_elapsed_s`; added supplementary rows |
+| `ai_pr_review/analyzers/sarif.py` | `load_sarif_files` now returns timing float |
+| `ai_pr_review/agents/dispatch.py` | `context_tokens_used` field added |
+| `ai_pr_review/cli.py` | `emit_token_table` wired with full kwargs; `GITHUB_STEP_SUMMARY` output |
+
+### Change Log
+
+- 2026-05-20: Implementation merged via PR #345. Story doc updated to `done` status on 2026-06-02 (bookkeeping — doc was stale at `ready-for-dev` despite code being merged).

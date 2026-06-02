@@ -4,7 +4,7 @@
 **Story ID:** 4-5
 **Story Key:** 4-5-error-surface-polish
 **GitHub Issue:** #245
-**Status:** review
+**Status:** done
 **PRD refs:** 4.FR-5
 
 ---
@@ -406,3 +406,30 @@ def test_append_http_error_logs_standard_warning(caplog):
 - Check that `caplog` tests use `logger="ai_pr_review.<module>"` with the correct dotted module path, not a partial path.
 
 **Scope boundary:** This story covers the 15 fail-soft paths enumerated above. Any new error paths discovered during implementation should be filed as a separate issue, not silently added here.
+
+---
+
+## Dev Agent Record
+
+### Completion Notes (2026-05-19)
+
+All 15 fail-soft paths implemented and acceptance criteria satisfied. Implementation committed to branch 2026-05-19:
+- `ai_pr_review/errors.py`: six-class exception hierarchy created (`AiPrReviewError` → `ConfigError`, `EngineError`, `ProviderError`, `AnalyzerError`, `CapabilityError`).
+- Standardized `[ai-pr-review] WARNING:`/`ERROR:` prefix applied across all five target modules: `treesitter.py` (paths 1-3), `sarif.py` (paths 4-6), `bridge.py` (paths 7-10), `dispatch.py` (paths 11-12), `feedback/store.py` (paths 13-15).
+- 870 tests passing at time of implementation; mypy strict and ruff clean.
+- GitHub issue #245 closed.
+
+### File List
+
+| File | Change |
+|---|---|
+| `ai_pr_review/errors.py` | Created — six-class exception hierarchy |
+| `ai_pr_review/context/treesitter.py` | Standardized 3 fail-soft WARNING paths |
+| `ai_pr_review/analyzers/sarif.py` | Standardized 3 fail-soft WARNING paths |
+| `ai_pr_review/analyzers/bridge.py` | Standardized 4 fail-soft WARNING/ERROR paths |
+| `ai_pr_review/agents/dispatch.py` | Standardized 2 fail-soft WARNING paths |
+| `ai_pr_review/feedback/store.py` | Standardized 3 fail-soft WARNING/ERROR paths |
+
+### Change Log
+
+- 2026-05-19: Implementation committed. Story doc updated to `done` status on 2026-06-02 (bookkeeping — Dev Agent Record was missing despite code being complete).
