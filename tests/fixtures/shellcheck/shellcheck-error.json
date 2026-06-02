@@ -1,0 +1,15 @@
+{
+  "comments": [
+    {
+      "file": "test.sh",
+      "line": 2,
+      "endLine": 2,
+      "column": 8,
+      "endColumn": 13,
+      "level": "error",
+      "code": 2104,
+      "message": "'break' is only valid in loops.",
+      "fix": null
+    }
+  ]
+}

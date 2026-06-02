@@ -1,0 +1,15 @@
+{
+  "comments": [
+    {
+      "file": "test.sh",
+      "line": 3,
+      "endLine": 3,
+      "column": 6,
+      "endColumn": 8,
+      "level": "warning",
+      "code": 2086,
+      "message": "Double quote to prevent globbing and word splitting.",
+      "fix": null
+    }
+  ]
+}
