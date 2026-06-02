@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-06-02T09:00:00-07:00
+# last_updated: 2026-06-02T13:45:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -105,10 +105,9 @@ development_status:
   epic-3-retrospective: optional
 
   # ── Epic 4 — Soak, Observability, Default Flip ─────────────────────────────
-  # Parent issue #198 OPEN. Branch: rework/epic-4-soak-and-flip
-  # Phase A (parallel with soak): #247, #241, #245, #243
-  # Phase B (mid-soak): #242, #244, #246
-  # Phase C (gated on soak exit): #248, #249, #250
+  # Parent issue #198 OPEN. S1-S9 merged; S10 (v1.0.0 release) is next.
+  # PRs: #388 (S6/S8/S9 merged 2026-06-02), earlier PRs for S1-S5.
+  # Issues: #246-249 CLOSED; #250 (S10 release) still OPEN.
   epic-4: in-progress
   4-1-structured-logging: done
   4-2-telemetry-hooks: done
