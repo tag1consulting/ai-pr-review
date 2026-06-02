@@ -514,7 +514,7 @@ async def _run_issue_linker(
         try:
             proc = await anyio.to_thread.run_sync(_run_git_log)
         except Exception as exc:
-            logger.warning("issue-linker: could not get commit log: %s", exc)
+            logger.warning("issue-linker: could not get commit log: %s", exc, exc_info=True)
         else:
             if proc is None:
                 logger.warning("issue-linker: git log timed out; proceeding without commit log")
@@ -537,9 +537,11 @@ async def _run_issue_linker(
         try:
             branch_proc = await anyio.to_thread.run_sync(_run_git_branch)
         except Exception as exc:
-            logger.warning("issue-linker: could not get branch name: %s", exc)
+            logger.warning("issue-linker: could not get branch name: %s", exc, exc_info=True)
         else:
-            if branch_proc is not None and branch_proc.returncode == 0:
+            if branch_proc is None:
+                logger.warning("issue-linker: git rev-parse timed out; proceeding without branch name")
+            elif branch_proc.returncode == 0:
                 branch_name = branch_proc.stdout.strip()
 
         if not commit_log and not branch_name:
