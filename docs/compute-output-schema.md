@@ -10,7 +10,7 @@ This page describes the JSON payload that the Python engine writes when
 `AI_PR_REVIEW_COMPUTE_OUTPUT` points at a file path.
 
 > **Status (v0.9.0):** The Python engine now handles compute, dispatch,
-> *and* posting end-to-end (Epic 2). The action itself no longer needs
+> *and* posting end-to-end. The action itself no longer needs
 > the compute → bash handoff this file once enabled. `AI_PR_REVIEW_COMPUTE_OUTPUT`
 > is retained for external tooling that wants to consume the compute
 > payload independently — set the env var to a path and the Python engine

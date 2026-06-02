@@ -25,7 +25,7 @@
 #   AI_IGNORE_MERGE_COMMITS (plain, default: false; strip base-branch merges
 #                            from the diff before review)
 #
-# Epic 3 opt-in capabilities (require Python engine):
+# Opt-in capabilities (require the Python engine, which is the default):
 #   AI_CONTEXT_ENRICHMENT  (plain, default: false; tree-sitter symbol context)
 #   AI_SARIF_PATHS         (plain, default: ''; comma-separated SARIF 2.1.0
 #                           file paths to merge as findings)
@@ -68,7 +68,7 @@ pipelines:
             - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
             - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-python}"
             - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-false}"
-            # Epic 3 opt-in capabilities (Python engine only)
+            # Opt-in capabilities (Python engine only — the default)
             - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
             - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"
             - export PR_NUMBER="$BITBUCKET_PR_ID"

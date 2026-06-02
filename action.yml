@@ -136,8 +136,8 @@ inputs:
     description: >
       Compute engine to use. 'python' (default) is the supported engine; 'bash'
       is the deprecated legacy pipeline (will be removed in a future major release).
-      Required for Epic 3 capabilities (context enrichment, SARIF ingestion,
-      learning loop). Sets AI_PR_REVIEW_ENGINE.
+      Context enrichment, SARIF ingestion, and the learning loop all require the
+      Python engine. Sets AI_PR_REVIEW_ENGINE.
     required: false
     default: 'python'
 

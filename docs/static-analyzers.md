@@ -48,14 +48,12 @@ In addition to the built-in analyzers, the Python engine can ingest SARIF 2.1.0 
 
 ### Setup
 
-1. Set `engine: python` in your action inputs.
-2. Run your SARIF-producing tool as a prior step (e.g. CodeQL, Trivy).
-3. Pass the output path(s) via the `sarif-paths` input:
+1. Run your SARIF-producing tool as a prior step (e.g. CodeQL, Trivy).
+2. Pass the output path(s) via the `sarif-paths` input:
 
 ```yaml
 - uses: tag1consulting/ai-pr-review@main
   with:
-    engine: python
     sarif-paths: 'results/codeql.sarif,results/trivy.sarif'
     api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}
