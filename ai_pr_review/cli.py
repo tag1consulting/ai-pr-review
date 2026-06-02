@@ -173,6 +173,25 @@ async def _run_review_async(config: ReviewConfig) -> int:
             llm_call=_llm_call,
         )
 
+    # Run issue-linker on first review in full mode when the VCS provider is GitHub.
+    # rc.vcs_provider is the VCS provider (github/bitbucket/gitlab); rc.provider is
+    # the AI provider (anthropic/openai/bedrock/etc). The guard here avoids a wasted
+    # LLM call on non-GitHub repos because the prompt checks for "github" and returns
+    # NONE immediately otherwise.
+    # Fail-soft: if it returns NONE or errors, summary_text is unchanged.
+    if not runtime.is_incremental and rc.review_mode == "full" and rc.vcs_provider == "github":
+        issue_linker_md = await _run_issue_linker(
+            manifest_text=runtime.manifest_text,
+            base_ref=runtime.base_ref,
+            script_dir=runtime.script_dir,
+            provider=rc.vcs_provider,
+            github_repository=rc.github_repository,
+            model=rc.model_standard,
+            llm_call=_llm_call,
+        )
+        if issue_linker_md:
+            summary_text += "\n\n" + issue_linker_md
+
     def _token_renderer(
         successes: Sequence[_AgentResult], _sarif_elapsed_unused: float | None
     ) -> str:
@@ -450,6 +469,114 @@ async def _run_summarizer(
             type(exc).__name__, exc, exc_info=True,
         )
         return _SUMMARIZER_FAILURE_NOTICE
+
+
+async def _run_issue_linker(
+    *,
+    manifest_text: str,
+    base_ref: str,
+    script_dir: Path,
+    provider: str,
+    github_repository: str,
+    model: str,
+    llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
+) -> str:
+    """Run the issue-linker agent and return its markdown output, or "" to suppress.
+
+    ``provider`` is the VCS provider (github/bitbucket/gitlab), NOT the AI provider.
+    The issue-linker is GitHub-only. When the provider is not github or the agent
+    returns the sentinel NONE, this function returns "" so the caller skips
+    appending to summary_text. Any error is logged as WARNING and "" is returned
+    (fail-soft).
+
+    The user message provides the context the agent needs: commit log, branch name,
+    file manifest, repository slug, and PROVIDER. The agent uses these along with
+    gh CLI calls to discover and assess related issues.
+    """
+    from ai_pr_review.llm.base import LLMRequest
+
+    try:
+        prompt_path = script_dir / "prompts" / "issue-linker.md"
+        if not prompt_path.exists():
+            logger.warning("issue-linker: prompt not found at %s; skipping", prompt_path)
+            return ""
+        system_prompt = prompt_path.read_text()
+
+        commit_log = ""
+        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
+
+        def _run_git_log() -> subprocess.CompletedProcess[str] | None:
+            try:
+                return subprocess.run(_git_cmd, capture_output=True, text=True, timeout=15)
+            except subprocess.TimeoutExpired:
+                return None
+
+        try:
+            proc = await anyio.to_thread.run_sync(_run_git_log)
+        except Exception as exc:
+            logger.warning("issue-linker: could not get commit log: %s", exc, exc_info=True)
+        else:
+            if proc is None:
+                logger.warning("issue-linker: git log timed out; proceeding without commit log")
+            elif proc.returncode == 0:
+                commit_log = proc.stdout.strip()
+            else:
+                commit_log = "_Note: commit log unavailable (git log failed)._"
+
+        branch_name = ""
+
+        def _run_git_branch() -> subprocess.CompletedProcess[str] | None:
+            try:
+                return subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                return None
+
+        try:
+            branch_proc = await anyio.to_thread.run_sync(_run_git_branch)
+        except Exception as exc:
+            logger.warning("issue-linker: could not get branch name: %s", exc, exc_info=True)
+        else:
+            if branch_proc is None:
+                logger.warning("issue-linker: git rev-parse timed out; proceeding without branch name")
+            elif branch_proc.returncode == 0:
+                branch_name = branch_proc.stdout.strip()
+
+        if not commit_log and not branch_name:
+            logger.warning(
+                "issue-linker: both commit log and branch name unavailable "
+                "(not a git repo, or git is absent); skipping"
+            )
+            return ""
+
+        user_message = (
+            f"PROVIDER: {provider}\n\n"
+            f"REPOSITORY: {github_repository}\n\n"
+            f"## Branch Name\n\n{branch_name or '(unavailable)'}\n\n"
+            f"## Commit Log\n\n{commit_log or '(unavailable)'}\n\n"
+            f"## File Manifest\n\n{manifest_text}\n"
+        )
+
+        request = LLMRequest(
+            model_id=model,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            max_tokens=4096,
+        )
+        response: LLMResponse = await llm_call(request)
+        text = response.text.strip()
+        if text == "NONE" or not text:
+            logger.debug("issue-linker: returned NONE or empty; skipping")
+            return ""
+        return text
+    except Exception as exc:
+        logger.warning(
+            "issue-linker: failed (review will continue without issue links): %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
+        return ""
 
 
 def _build_token_table_accordion(

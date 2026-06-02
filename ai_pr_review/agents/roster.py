@@ -39,6 +39,7 @@ class AgentSpec:
     max_output_tokens: int
     full_mode_only: bool
     context_enrichment_eligible: bool
+    separately_dispatched: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -74,6 +75,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=16384,
         full_mode_only=False,
         context_enrichment_eligible=True,
+        separately_dispatched=True,
     ),
     AgentSpec(
         name="code-reviewer",
@@ -139,6 +141,19 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=16384,
         full_mode_only=True,
         context_enrichment_eligible=True,
+    ),
+    AgentSpec(
+        # GitHub-only: discovers related issues/PRs and assesses resolution.
+        # Dispatched separately via _run_issue_linker() in cli.py; excluded from
+        # generic run_tier dispatch via separately_dispatched=True.
+        name="issue-linker",
+        prompt_path="prompts/issue-linker.md",
+        tier=2,
+        conditional_trigger=None,
+        max_output_tokens=4096,
+        full_mode_only=True,
+        context_enrichment_eligible=False,
+        separately_dispatched=True,
     ),
 ]
 
