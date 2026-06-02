@@ -20,7 +20,7 @@ GitHub workflows use the `container-action` variant, which pulls a pinned public
 
 ```yaml
 image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
-engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'bash' }}
+engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'python' }}
 context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
 # ... etc.
 ```

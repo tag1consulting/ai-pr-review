@@ -20,8 +20,8 @@
 # Optional repository variables:
 #   AI_PROVIDER             (plain, default: anthropic)
 #   AI_REVIEW_MODE          (plain, default: quick; set to 'full' for deep agents)
-#   AI_PR_REVIEW_ENGINE     (plain, default: bash; set to 'python' to opt into
-#                            the Epic 3 capabilities below)
+#   AI_PR_REVIEW_ENGINE     (plain, default: python; set to 'bash' to use the
+#                            deprecated legacy pipeline — will be removed in a future release)
 #   AI_IGNORE_MERGE_COMMITS (plain, default: false; strip base-branch merges
 #                            from the diff before review)
 #
@@ -66,7 +66,7 @@ pipelines:
             - export VCS_PROVIDER=bitbucket
             - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
             - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
-            - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+            - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-python}"
             - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-false}"
             # Epic 3 opt-in capabilities (Python engine only)
             - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"

@@ -44,7 +44,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `8192` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | `enable-suggestions` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
-| `AI_PR_REVIEW_ENGINE` | `bash` | `engine` | Compute engine: `bash` (default) or `python` |
+| `AI_PR_REVIEW_ENGINE` | `python` | `engine` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
 | `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | `context-enrichment` | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). |
@@ -115,7 +115,7 @@ to change them.
 
 ### Opt-in capabilities
 
-These variables enable optional capabilities that are off by default. All require the Python engine (`AI_PR_REVIEW_ENGINE=python`) unless stated otherwise.
+These variables enable optional capabilities that are off by default. All require the Python engine (the default since v1.0.0; set explicitly with `AI_PR_REVIEW_ENGINE=python` if you have overridden the default) unless stated otherwise.
 
 #### Context enrichment
 

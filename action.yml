@@ -134,12 +134,12 @@ inputs:
 
   engine:
     description: >
-      Compute engine to use. 'bash' (default) uses the original shell pipeline;
-      'python' routes compute, dispatch, and posting through the Python engine.
+      Compute engine to use. 'python' (default) is the supported engine; 'bash'
+      is the deprecated legacy pipeline (will be removed in a future major release).
       Required for Epic 3 capabilities (context enrichment, SARIF ingestion,
       learning loop). Sets AI_PR_REVIEW_ENGINE.
     required: false
-    default: 'bash'
+    default: 'python'
 
   ignore-merge-commits:
     description: >

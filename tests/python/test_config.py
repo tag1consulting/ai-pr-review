@@ -30,10 +30,16 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = ReviewConfig.from_env()
     assert cfg.provider == "anthropic"
     assert cfg.review_mode == "quick"
-    assert cfg.engine == "bash"
+    assert cfg.engine == "python"
     assert cfg.confidence_threshold == 75
     assert cfg.max_diff_lines == 5000
     assert cfg.parallel is True
+
+
+def test_engine_field_default() -> None:
+    """ReviewConfig() bare constructor should default engine to 'python'."""
+    cfg = ReviewConfig()
+    assert cfg.engine == "python"
 
 
 def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:

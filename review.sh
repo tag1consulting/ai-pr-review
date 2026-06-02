@@ -227,6 +227,28 @@ warn_epic3_capability_misconfig() {
 }
 
 
+# Emit a deprecation warning when the legacy bash engine is explicitly selected,
+# or an unrecognized engine value was given (which also falls through to bash).
+# As of v1.0.0 the default engine is "python"; this path is reached only when
+# AI_PR_REVIEW_ENGINE=bash or an unknown value is set explicitly. The bash
+# pipeline is scheduled for removal in Epic 5.
+# Fail-soft: always returns 0 and never blocks the review.
+# Defined as a top-level function so it is testable via
+# tests/warn_bash_engine_deprecated.bats.
+# Arguments: $1 — the resolved AI_PR_REVIEW_ENGINE value
+warn_bash_engine_deprecated() {
+  local engine="$1"
+  if [[ "$engine" == "python" ]]; then
+    return 0
+  fi
+  if [[ "$engine" == "bash" ]]; then
+    echo "::warning::AI_PR_REVIEW_ENGINE=bash selects the legacy bash engine, which is DEPRECATED as of v1.0.0. The Python engine is now the default and the bash pipeline will be removed in a future major release. Unset AI_PR_REVIEW_ENGINE (or set it to 'python') to use the supported engine." >&2
+  else
+    echo "::warning::AI_PR_REVIEW_ENGINE=${engine} is not a recognized engine value; falling back to the legacy bash engine. Valid values: 'python' (default) or 'bash' (deprecated). The bash pipeline will be removed in a future major release. Set AI_PR_REVIEW_ENGINE=python (or unset it) to use the supported engine." >&2
+  fi
+}
+
+
 main() {
 
   set -euo pipefail
@@ -338,11 +360,11 @@ main() {
   # ---------------------------------------------------------------------------
   # Engine dispatch — AI_PR_REVIEW_ENGINE=python runs the end-to-end Python
   # pipeline (compute + dispatch + post via the VCS provider) in a single
-  # process. Default engine is still "bash"; no behavior change for existing
-  # consumers until Epic 4 flips the default.
+  # process. Default engine is "python" as of v1.0.0 (Epic 4 S9); "bash" is
+  # deprecated and will be removed in Epic 5.
   # The legacy JSON-tempfile handoff (Epic 1 shim) is removed in Epic 2 S12.
   # ---------------------------------------------------------------------------
-  AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-bash}"
+  AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-python}"
 
   # Surface Epic 3 capability/engine misconfigurations to stderr before
   # dispatching to either engine.  Defined as a top-level function so it's
@@ -360,6 +382,10 @@ main() {
     fi
     exit 0
   fi
+
+  # Warn that the bash engine is deprecated as of v1.0.0. Fail-soft — never
+  # blocks the review. Defined as a top-level function for testability.
+  warn_bash_engine_deprecated "$AI_PR_REVIEW_ENGINE"
 
   # ---------------------------------------------------------------------------
   # Phase 0: Pre-flight — compute diff, build manifest

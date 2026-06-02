@@ -75,7 +75,7 @@ That's it — reviews start firing on the next PR.
 - [Getting started](getting-started) — Installation, requirements, secrets and variables
 - [Configuration](configuration) — Action inputs and LLM provider options
 
-**Opt-in capabilities (Epic 3)** — three independent features, all default off, all require `engine: python`:
+**Opt-in capabilities (Epic 3)** — three independent features, all default off, all require the Python engine (the default since v1.0.0):
 
 - [Tree-sitter context enrichment](configuration#opt-in-capabilities-epic-3) — inject symbol definitions referenced in the diff into agent prompts; reduces hallucinated "should check X" findings
 - [SARIF 2.1.0 ingestion](static-analyzers#sarif-ingestion-capability-b) — merge findings from external scanners (CodeQL, Semgrep, Trivy, Bandit) into the same dedup/post pipeline as native analyzers
