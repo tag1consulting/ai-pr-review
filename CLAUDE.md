@@ -28,7 +28,7 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-7` |
+| `anthropic` | `claude-sonnet-4-6` | `claude-opus-4-8` |
 | `openai` | `gpt-5.4-mini` | `gpt-5.4` |
 | `openai-compatible` | (user-specified) | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
