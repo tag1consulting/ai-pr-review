@@ -8,6 +8,14 @@
     "cache_read_rate": 300000
   },
   {
+    "patterns": ["claude-opus-4-8", "claude-opus-4\\.8"],
+    "display_name": "Opus 4.8",
+    "input_rate": 5000000,
+    "output_rate": 25000000,
+    "cache_write_rate": 6250000,
+    "cache_read_rate": 500000
+  },
+  {
     "patterns": ["claude-opus-4-7", "claude-opus-4\\.7", "claude-opus-4-6", "claude-opus-4\\.6", "claude-opus-4-5", "claude-opus-4\\.5"],
     "display_name": "Opus 4.7",
     "input_rate": 5000000,

@@ -43,7 +43,9 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
     """Return None when the model doesn't accept temperature; else the clamped value."""
     lower = model_id.lower()
     if (
-        "opus-4-7" in lower
+        "opus-4-8" in lower
+        or "opus-4.8" in lower
+        or "opus-4-7" in lower
         or "opus-4.7" in lower
         or lower.startswith("o1")
         or lower.startswith("o3")

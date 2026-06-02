@@ -100,6 +100,14 @@ def test_body_temperature_skipped_for_opus():
     assert "temperature" not in body
 
 
+def test_body_temperature_skipped_for_opus_4_8():
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(model_id="claude-opus-4-8-20250101", temperature=0.7)
+    body = _build_body(req, caching=False, extra={})
+    assert "temperature" not in body
+
+
 def test_body_bedrock_extra_fields():
     req = make_request()
     body = build_body_for_bedrock(req, caching=False)

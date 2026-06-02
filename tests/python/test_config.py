@@ -164,3 +164,19 @@ def test_cache_priming_env_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_CACHE_PRIMING", "true")
     cfg = ReviewConfig.from_env()
     assert cfg.cache_priming is True
+
+
+def test_anthropic_premium_default_is_opus_4_8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_models() should fill the Anthropic premium slot with claude-opus-4-8."""
+    monkeypatch.delenv("AI_MODEL_PREMIUM", raising=False)
+    monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
+    cfg = ReviewConfig(provider="anthropic").resolve_models()
+    assert cfg.model_premium == "claude-opus-4-8"
+
+
+def test_bedrock_proxy_premium_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bedrock-proxy premium stays on claude-opus-4-7 until Bedrock ID for 4.8 is confirmed."""
+    monkeypatch.delenv("AI_MODEL_PREMIUM", raising=False)
+    monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
+    cfg = ReviewConfig(provider="bedrock-proxy").resolve_models()
+    assert cfg.model_premium == "global.anthropic.claude-opus-4-7"
