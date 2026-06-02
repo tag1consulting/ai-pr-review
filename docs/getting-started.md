@@ -131,9 +131,9 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `python` (default) or `bash` (deprecated legacy) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `false`) |
 | `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default: `latest`); set to `dev` to dogfood pre-release builds or pin to a release |
-| `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | **Epic 3 — Capability A.** Tree-sitter symbol-context injection (default: `false`; requires `engine: python`) |
-| `AI_REVIEW_SARIF_PATHS` | Variable | No | **Epic 3 — Capability B.** Comma-separated SARIF 2.1.0 paths to merge as findings (default: `''`; requires `engine: python`) |
-| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | **Epic 3 — Capability C.** Enable the learning loop (default: `false`; GitHub-only; requires `engine: python`) |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | **Epic 3 — Capability A.** Tree-sitter symbol-context injection (default: `false`; requires the Python engine, which is the default) |
+| `AI_REVIEW_SARIF_PATHS` | Variable | No | **Epic 3 — Capability B.** Comma-separated SARIF 2.1.0 paths to merge as findings (default: `''`; requires the Python engine, which is the default) |
+| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | **Epic 3 — Capability C.** Enable the learning loop (default: `false`; GitHub-only; requires the Python engine, which is the default) |
 
 See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 
