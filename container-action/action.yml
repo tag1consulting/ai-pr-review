@@ -103,7 +103,7 @@ inputs:
     default: 'true'
 
   engine:
-    description: "Compute engine: 'python' (default) or 'bash' (deprecated legacy; will be removed in a future major release). Required for Epic 3 capabilities (context enrichment, SARIF ingestion, learning loop)."
+    description: "Compute engine: 'python' (default) or 'bash' (deprecated legacy; will be removed in a future major release). Context enrichment, SARIF ingestion, and the learning loop all require the Python engine."
     required: false
     default: 'python'
 

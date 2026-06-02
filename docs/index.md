@@ -75,9 +75,9 @@ That's it — reviews start firing on the next PR.
 - [Getting started](getting-started) — Installation, requirements, secrets and variables
 - [Configuration](configuration) — Action inputs and LLM provider options
 
-**Opt-in capabilities (Epic 3)** — three independent features, all default off, all require the Python engine (the default since v1.0.0):
+**Opt-in capabilities** — three independent features, all default off, all require the Python engine (the default since v1.0.0):
 
-- [Tree-sitter context enrichment](configuration#opt-in-capabilities-epic-3) — inject symbol definitions referenced in the diff into agent prompts; reduces hallucinated "should check X" findings
+- [Tree-sitter context enrichment](configuration#opt-in-capabilities) — inject symbol definitions referenced in the diff into agent prompts; reduces hallucinated "should check X" findings
 - [SARIF 2.1.0 ingestion](static-analyzers#sarif-ingestion-capability-b) — merge findings from external scanners (CodeQL, Semgrep, Trivy, Bandit) into the same dedup/post pipeline as native analyzers
 - [Learning loop](learning-loop) — reviewers post `/ai-pr-review false-positive | wont-fix | feedback` to persist verdicts to a dedicated git branch; future reviews see them as a `<repo-feedback>` block
 
@@ -87,7 +87,7 @@ That's it — reviews start firing on the next PR.
 - [Agents & profiles](agents) — Review agents, severity icons, review modes, language profiles
 - [Static analyzers](static-analyzers) — Analyzer table, dependency vulnerability check, SARIF ingestion
 - [Suppression rules](suppression) — Suppress false positives with JSON rules
-- [Slash commands](slash-commands) — PR-comment commands (rescan, review-full, skip, dismiss, help, plus Epic 3 learning-loop commands)
+- [Slash commands](slash-commands) — PR-comment commands (rescan, review-full, skip, dismiss, help, plus learning-loop commands)
 
 **Internals**
 

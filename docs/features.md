@@ -9,7 +9,7 @@ render_with_liquid: false
 
 ## What's new in v1.0.0
 
-**Python engine is now the default.** `AI_PR_REVIEW_ENGINE` now defaults to `python`. Consumers who do not set `engine:` in their workflow will automatically use the Python engine. The bash pipeline is deprecated: it continues to work when explicitly set (`engine: bash` / `AI_PR_REVIEW_ENGINE=bash`) but emits a deprecation warning and will be removed in a future major release (Epic 5). To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`). All Epic 3 capabilities (context enrichment, SARIF ingestion, learning loop) require the Python engine and are unaffected — they remain opt-in via their existing env vars.
+**Python engine is now the default.** `AI_PR_REVIEW_ENGINE` now defaults to `python`. Consumers who do not set `engine:` in their workflow will automatically use the Python engine. The bash pipeline is deprecated: it continues to work when explicitly set (`engine: bash` / `AI_PR_REVIEW_ENGINE=bash`) but emits a deprecation warning and will be removed in a future major release. To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`). Context enrichment, SARIF ingestion, and the learning loop all require the Python engine and are unaffected — they remain opt-in via their existing env vars.
 
 **Bash deprecation warning.** When `AI_PR_REVIEW_ENGINE=bash` is set explicitly, the bash entrypoint now emits a `::warning::` annotation in GitHub Actions (visible as a plain warning on GitLab/Bitbucket) reminding you to migrate. The review continues to completion — this is fail-soft.
 
@@ -87,11 +87,11 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 ## What's new in v0.9.3
 
-**Telemetry hooks — Epic 4, Story 2.** Set `AI_TELEMETRY_ENABLED=true` and `AI_TELEMETRY_SINK=file:///path/to/events.jsonl` (or an `http(s)://` endpoint) to receive one structured JSON event per review run. The event includes outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency, SARIF elapsed time, and the count of learning-store entries loaded. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues. See [Configuration → Telemetry hooks](configuration#telemetry-hooks) for the full env-var reference.
+**Telemetry hooks.** Set `AI_TELEMETRY_ENABLED=true` and `AI_TELEMETRY_SINK=file:///path/to/events.jsonl` (or an `http(s)://` endpoint) to receive one structured JSON event per review run. The event includes outcome, findings counts by severity, per-agent token usage, per-agent wall-clock latency, SARIF elapsed time, and the count of learning-store entries loaded. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues. See [Configuration → Telemetry hooks](configuration#telemetry-hooks) for the full env-var reference.
 
-**Agent latency tracking — Epic 4, Story 4.** Each agent now records its wall-clock elapsed time (`elapsed_ms`). The value is included in the telemetry event's `agent_latency_ms` map and is available for future cost-table display.
+**Agent latency tracking.** Each agent now records its wall-clock elapsed time (`elapsed_ms`). The value is included in the telemetry event's `agent_latency_ms` map and is available for future cost-table display.
 
-**Token table enhancements — Epic 4, Story 3.** The collapsible token cost table now includes two additional optional rows: a **Context enrichment** row showing the token count of the `<symbol-context>` block (when `AI_CONTEXT_ENRICHMENT=1` and context was non-empty), and a **SARIF ingestion** row showing the wall-clock parse time (when `AI_SARIF_PATHS` is configured). The Output column also displays the configured per-agent output cap when one is set (e.g. `1234 / 4096`).
+**Token table enhancements.** The collapsible token cost table now includes two additional optional rows: a **Context enrichment** row showing the token count of the `<symbol-context>` block (when `AI_CONTEXT_ENRICHMENT=1` and context was non-empty), and a **SARIF ingestion** row showing the wall-clock parse time (when `AI_SARIF_PATHS` is configured). The Output column also displays the configured per-agent output cap when one is set (e.g. `1234 / 4096`).
 
 **`cache_priming` default changed to `false`.** `AI_CACHE_PRIMING` now defaults to `false` in the Python engine, aligning with the bash engine default. Previously the Python engine defaulted to `true`. If you rely on cache priming, add `AI_CACHE_PRIMING=true` explicitly to your workflow.
 
@@ -111,20 +111,19 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 **PR summarizer and token cost table wired (PR #299).** On first-run reviews (`engine: python`), the engine now automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. The token cost table is updated on every run (see v0.9.2 below); the PR summary is posted on first run only.
 
-**Structured logging — Epic 4, Story 1 (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](configuration#structured-logging) for the full env-var reference.
+**Structured logging (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](configuration#structured-logging) for the full env-var reference.
 
-**Error surface polish — Epic 4, Story 5 (PR #300).** All internal exceptions now use a typed hierarchy (`AiPrReviewError` → `ConfigError` / `ProviderError` / `CapabilityError` / `AnalyzerError` / `EngineError`). Warning messages follow a consistent `[ai-pr-review] WARNING: <component>: <message>` format across all modules.
+**Error surface polish (PR #300).** All internal exceptions now use a typed hierarchy (`AiPrReviewError` → `ConfigError` / `ProviderError` / `CapabilityError` / `AnalyzerError` / `EngineError`). Warning messages follow a consistent `[ai-pr-review] WARNING: <component>: <message>` format across all modules.
 
 ## What's new in v0.9.0
 
-**Python engine end-to-end (Epic 2).** `engine: python` now routes compute,
+**Python engine end-to-end.** `engine: python` now routes compute,
 agent dispatch, and PR/MR posting through the Python implementation across
-GitHub, GitLab, and Bitbucket. Required for all Epic 3 capabilities below.
-As of v1.0.0 the Python engine is the default; the bash pipeline is deprecated.
+GitHub, GitLab, and Bitbucket. As of v1.0.0 the Python engine is the default;
+the bash pipeline is deprecated.
 
-**Epic 3 — three opt-in capability groups in the Python engine.** All default
-off, all require the Python engine (the default since v1.0.0). See
-[Configuration → Opt-in capabilities](configuration#opt-in-capabilities-epic-3)
+**Three opt-in capability groups (all default off, all require the Python engine, which is the default since v1.0.0).** See
+[Configuration → Opt-in capabilities](configuration#opt-in-capabilities)
 for the full env-var reference.
 
 **Capability A — Context enrichment** (`AI_CONTEXT_ENRICHMENT=true`)

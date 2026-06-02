@@ -7,7 +7,7 @@ Copy these files into your repository to enable AI PR/MR reviews.
 | File | Purpose |
 |---|---|
 | `workflows/pr-review.yml` | GitHub Actions: automatic review on PR open/sync. **Canonical template** — every input is wired to a `vars.AI_REVIEW_*` repo variable with a safe fallback, so you can flip any knob without editing the workflow. |
-| `workflows/comment-triggers.yml` | GitHub Actions: slash command support — thin wrapper that calls the reusable workflow (`/ai-pr-review rescan`, plus Epic 3 learning-loop commands when enabled) |
+| `workflows/comment-triggers.yml` | GitHub Actions: slash command support — thin wrapper that calls the reusable workflow (`/ai-pr-review rescan`, plus learning-loop commands when enabled) |
 | `workflows/sarif-codeql.yml` | GitHub Actions: example **CodeQL + AI review** pipeline using Capability B (SARIF 2.1.0 ingestion) |
 | `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
 | `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
@@ -78,13 +78,13 @@ Once the file is merged to your default branch, post these commands in any PR co
 | `/ai-pr-review skip` | Add `skip-ai-review` label to suppress the next review |
 | `/ai-pr-review help` | Post the command list as a reply |
 | `/ai-pr-review dismiss` | Reply to an inline review comment to mark that thread a false positive (dispatched via `pull_request_review_comment`, not `issue_comment`) |
-| `/ai-pr-review false-positive [reason]` | **Epic 3 — Capability C.** Persist a false-positive verdict to the learning store. Post as a reply on the AI's inline finding (recommended — also resolves the thread on success) **or** as a top-level PR comment. Requires `AI_REVIEW_FEEDBACK_LOOP=true`. OWNER/MEMBER only. |
-| `/ai-pr-review wont-fix [reason]` | **Epic 3 — Capability C.** Persist a "won't fix / by design" verdict. Same posting rules as `false-positive` (review-thread reply preferred). |
-| `/ai-pr-review feedback <text>` | **Epic 3 — Capability C.** Persist free-form feedback for future review runs. |
-| `/ai-pr-review explain` | **Epic 3 — Capability C.** Request a longer explanation (stub for now). |
-| `/ai-pr-review revise <hint>` | **Epic 3 — Capability C.** Request agent revision with a hint (stub for now). |
+| `/ai-pr-review false-positive [reason]` | **Learning loop.** Persist a false-positive verdict to the learning store. Post as a reply on the AI's inline finding (recommended — also resolves the thread on success) **or** as a top-level PR comment. Requires `AI_REVIEW_FEEDBACK_LOOP=true`. OWNER/MEMBER only. |
+| `/ai-pr-review wont-fix [reason]` | **Learning loop.** Persist a "won't fix / by design" verdict. Same posting rules as `false-positive` (review-thread reply preferred). |
+| `/ai-pr-review feedback <text>` | **Learning loop.** Persist free-form feedback for future review runs. |
+| `/ai-pr-review explain` | **Learning loop.** Request a longer explanation (stub for now). |
+| `/ai-pr-review revise <hint>` | **Learning loop.** Request agent revision with a hint (stub for now). |
 
-The basic commands (`rescan`, `review-full`, `skip`, `dismiss`, `help`) allow OWNER, MEMBER, or COLLABORATOR. The Epic 3 learning-loop commands are restricted to OWNER and MEMBER only because they persist data that influences every future review repo-wide. Both restrictions are enforced via `author_association` guards in the workflow — GitHub does **not** do this automatically.
+The basic commands (`rescan`, `review-full`, `skip`, `dismiss`, `help`) allow OWNER, MEMBER, or COLLABORATOR. The learning-loop commands are restricted to OWNER and MEMBER only because they persist data that influences every future review repo-wide. Both restrictions are enforced via `author_association` guards in the workflow — GitHub does **not** do this automatically.
 
 See [docs/slash-commands.md](../docs/slash-commands.md) for full details.
 
@@ -97,9 +97,9 @@ Both `issue_comment` and `pull_request_review_comment` workflows run from the **
 
 This is a GitHub Actions platform behavior, not a limitation of this action.
 
-## Opt-in capabilities (Epic 3)
+## Opt-in capabilities
 
-Three optional features can be enabled independently. All default off, all require `engine: python`. Set the corresponding repo variable to turn them on without editing the workflow.
+Three optional features can be enabled independently. All default off, all require the Python engine (the default since v1.0.0). Set the corresponding repo variable to turn them on without editing the workflow.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
@@ -107,7 +107,7 @@ Three optional features can be enabled independently. All default off, all requi
 | `AI_REVIEW_SARIF_PATHS` | `''` | Comma-separated SARIF 2.1.0 file paths to merge as findings — see [`workflows/sarif-codeql.yml`](workflows/sarif-codeql.yml) for the CodeQL flavor |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | Learning loop — persists `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts and re-injects them into future reviews. GitHub-only. |
 
-See [Configuration → Opt-in capabilities](../docs/configuration.md#opt-in-capabilities-epic-3) for the full env-var reference (retention knobs, token budgets, branch name).
+See [Configuration → Opt-in capabilities](../docs/configuration.md#opt-in-capabilities) for the full env-var reference (retention knobs, token budgets, branch name).
 
 ## Using a pinned image version
 
