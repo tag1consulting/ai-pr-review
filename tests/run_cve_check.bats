@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
 # Tests for run-cve-check.sh.
 # Uses OSV_MOCK_FILE to bypass the network and feed canned responses.
+#
+# Mock file format: /v1/querybatch response, i.e. {"results": [{...}, ...]}.
+# Each element in "results" corresponds to the package at the same index in
+# the batch query. Missing indices return {} (treated as no vulns).
 
 bats_require_minimum_version 1.5.0
 
@@ -124,14 +128,71 @@ teardown() {
   [ "$status" -eq 0 ]
   echo "$output" | jq -e 'type == "array"' > /dev/null
 
-  # OSV_MOCK_FILE returns the same response for every queried package, so one
-  # finding is emitted per (manifest, package) pair. Assert that findings are
-  # present for both manifests rather than just count >= 1.
-  local go_count pkg_count
-  go_count=$(echo "$output" | jq '[.[] | select(.file | endswith("go.mod"))] | length')
-  pkg_count=$(echo "$output" | jq '[.[] | select(.file | endswith("package.json"))] | length')
-  [ "$go_count" -ge 1 ]
-  [ "$pkg_count" -ge 1 ]
+  # With batching, the mock returns one batch response for the entire set of
+  # packages. The fixture has one result (index 0 = gin-gonic from go.mod), so
+  # we expect at least one finding in total across both manifests.
+  echo "$output" | jq -e 'length >= 1' > /dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Batched querybatch API — multi-package batch response
+# ---------------------------------------------------------------------------
+
+@test "cve-check: querybatch mock with multiple results produces multiple findings" {
+  # go.mod.sample has 3 packages: gin (index 0), testify (index 1), crypto (index 2).
+  # osv-batch-multi.json has findings at index 0 (gin) and index 2 (crypto), empty at 1.
+  cp "$FIXTURES/go.mod.sample" "$WORK/go.mod"
+  OSV_MOCK_FILE="$FIXTURES/osv-batch-multi.json" run --separate-stderr "$SCRIPT" "$WORK/go.mod"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'type == "array" and length >= 2' > /dev/null
+  # First finding is for gin-gonic (Critical)
+  echo "$output" | jq -e '[.[] | select(.finding | test("CVE-2025-99999"))] | length >= 1' > /dev/null
+  # Second finding is for crypto (High)
+  echo "$output" | jq -e '[.[] | select(.finding | test("CVE-2024-88888"))] | length >= 1' > /dev/null
+  # No finding for testify (index 1 returned empty)
+  echo "$output" | jq -e '[.[] | select(.finding | test("testify"))] | length == 0' > /dev/null
+}
+
+@test "cve-check: querybatch stderr reports attempt and check counts" {
+  cp "$FIXTURES/go.mod.sample" "$WORK/go.mod"
+  OSV_MOCK_FILE="$FIXTURES/osv-batch-multi.json" run --separate-stderr "$SCRIPT" "$WORK/go.mod"
+  [ "$status" -eq 0 ]
+  # Should report queried N/M where M >= 3 (the number of packages in go.mod.sample)
+  [[ "$stderr" == *"CVE check: queried"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# go.mod replace directive handling
+# ---------------------------------------------------------------------------
+
+@test "cve-check: go.mod replace directive maps module to replacement coordinates" {
+  # go.mod.replace.sample has:
+  #   require github.com/old-module/lib v0.5.0
+  #   replace github.com/old-module/lib => github.com/new-module/lib v0.9.0
+  # The parser should query new-module/lib, not old-module/lib.
+  cp "$FIXTURES/go.mod.replace.sample" "$WORK/go.mod"
+  OSV_MOCK_FILE="$FIXTURES/osv-empty.json" run --separate-stderr "$SCRIPT" "$WORK/go.mod"
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+  # Two packages queried: gin (not replaced) + new-module/lib (replacement).
+  # local-only/thing is replaced by a local path and must be skipped.
+  [[ "$stderr" == *"CVE check: queried"* ]]
+  # Verify the attempt count is 2 (not 3), confirming local-path replace was skipped.
+  local attempted
+  attempted=$(echo "$stderr" | grep -oE 'queried [0-9]+/[0-9]+' | grep -oE '[0-9]+$')
+  [ "$attempted" -eq 2 ]
+}
+
+@test "cve-check: go.mod local-path replace is skipped entirely" {
+  # go.mod.replace.sample replaces github.com/local-only/thing => ./internal/thing.
+  # That entry must not appear in the query set (local paths are not in OSV).
+  cp "$FIXTURES/go.mod.replace.sample" "$WORK/go.mod"
+  OSV_MOCK_FILE="$FIXTURES/osv-empty.json" run --separate-stderr "$SCRIPT" "$WORK/go.mod"
+  [ "$status" -eq 0 ]
+  # Attempted count must be 2 (gin + new-module/lib), not 3.
+  local attempted
+  attempted=$(echo "$stderr" | grep -oE 'queried [0-9]+/[0-9]+' | grep -oE '[0-9]+$')
+  [ "$attempted" -eq 2 ]
 }
 
 # ---------------------------------------------------------------------------
