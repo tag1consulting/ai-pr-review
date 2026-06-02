@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v1.0.0
+
+**Python engine is now the default.** `AI_PR_REVIEW_ENGINE` now defaults to `python`. Consumers who do not set `engine:` in their workflow will automatically use the Python engine. The bash pipeline is deprecated: it continues to work when explicitly set (`engine: bash` / `AI_PR_REVIEW_ENGINE=bash`) but emits a deprecation warning and will be removed in a future major release (Epic 5). To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`). All Epic 3 capabilities (context enrichment, SARIF ingestion, learning loop) require the Python engine and are unaffected — they remain opt-in via their existing env vars.
+
+**Bash deprecation warning.** When `AI_PR_REVIEW_ENGINE=bash` is set explicitly, the bash entrypoint now emits a `::warning::` annotation in GitHub Actions (visible as a plain warning on GitLab/Bitbucket) reminding you to migrate. The review continues to completion — this is fail-soft.
+
 ## What's new in v0.12.2
 
 **Third-party analyzer license compliance for the container image (PR #376).** The container image redistributes ~15 third-party open-source analyzers; this release adds a `THIRD-PARTY-LICENSES/` directory with each tool's full upstream license text and a `NOTICE.md` manifest (tool, version, license, copyright, corresponding-source URL), bundled into the image at `/opt/ai-pr-review/THIRD-PARTY-LICENSES/` and referenced from the README and architecture docs.
@@ -113,8 +119,8 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 **Python engine end-to-end (Epic 2).** `engine: python` now routes compute,
 agent dispatch, and PR/MR posting through the Python implementation across
-GitHub, GitLab, and Bitbucket. The bash pipeline remains the default and is
-unchanged. Required for all Epic 3 capabilities below.
+GitHub, GitLab, and Bitbucket. Required for all Epic 3 capabilities below.
+As of v1.0.0 the Python engine is the default; the bash pipeline is deprecated.
 
 **Epic 3 — three opt-in capability groups in the Python engine.** All default
 off, all require `engine: python`. See

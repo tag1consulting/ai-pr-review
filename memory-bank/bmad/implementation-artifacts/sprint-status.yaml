@@ -115,7 +115,7 @@ development_status:
   4-3-cost-table-refinement: done
   4-4-perf-tuning-cache-priming: done
   4-5-error-surface-polish: done
-  4-6-docs-refresh-python-primary: in-progress
+  4-6-docs-refresh-python-primary: done
   4-7-field-soak: done
   4-8-deprecation-warning-bash: ready-for-dev
   4-9-flip-default-engine: ready-for-dev

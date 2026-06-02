@@ -42,7 +42,7 @@ That's it — reviews start firing on the next PR.
 
 **Going further:**
 - [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`)
-- [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment, SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All default off, all require `engine: python`.
+- [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment, SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All default off; all require the Python engine (the default since v1.0.0).
 - [Installation](#installation) — full-mode agents, provider configuration, [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) for the complete repo-variable pattern used by internal consumers
 
 ## Supported VCS providers
@@ -174,7 +174,7 @@ See [examples/README.md](examples/README.md) for the complete setup walkthrough 
 | `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
 | `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `0.12.2` — image tags published by `publish-image.yml` strip the `v` prefix) |
-| `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `bash` (default) or `python` — the latter is required for the opt-in capabilities below |
+| `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) — the Python engine is required for the opt-in capabilities below |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `true` to strip base-branch merge commits from the diff before review (default `false`) |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (requires `engine: python`; default `false`) |
 | `AI_REVIEW_SARIF_PATHS` | Variable | No | Comma-separated SARIF 2.1.0 file paths to merge as findings (requires `engine: python`; default `''`) |
@@ -246,7 +246,7 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
-| `engine` | No | `bash` | Compute engine: `bash` (default) or `python`. Required for opt-in capabilities below. |
+| `engine` | No | `python` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release). Required for opt-in capabilities below. |
 | `ignore-merge-commits` | No | `false` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. |
 | `context-enrichment` | No | `false` | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Opt-in capabilities](#opt-in-capabilities). |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
@@ -256,7 +256,7 @@ Additional settings are available as **env-var-only** knobs for advanced tuning 
 
 ## Opt-in capabilities
 
-Three optional features can be enabled independently — all off by default, all require `engine: python`.
+Three optional features can be enabled independently — all off by default, all require the Python engine (the default since v1.0.0).
 
 | Capability | Action input | Env var | Default | Description |
 |-----------|-------------|---------|---------|-------------|
