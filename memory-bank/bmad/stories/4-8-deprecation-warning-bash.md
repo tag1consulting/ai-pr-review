@@ -4,7 +4,7 @@
 **Story ID:** 4-8
 **Story Key:** 4-8-deprecation-warning-bash
 **GitHub Issue:** #248
-**Status:** ready-for-dev
+**Status:** done
 **PRD refs:** 4.FR-8
 
 ---
@@ -17,13 +17,13 @@ As a **consumer who has explicitly set `AI_PR_REVIEW_ENGINE=bash`**, I want to s
 
 ## Acceptance Criteria
 
-- [ ] A new function `warn_bash_engine_deprecated()` is added to `review.sh`, defined alongside `warn_epic3_capability_misconfig()` (after ~line 227)
-- [ ] The function emits a single `::warning::` annotation line to stderr (GitHub Actions format, also visible on GitLab/Bitbucket as plain stderr)
-- [ ] The function is called in `main()` in the fall-through (non-python) branch — after the `if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]] … fi` block and before Phase 0
-- [ ] The function does NOT fire when `AI_PR_REVIEW_ENGINE=python` (or when engine is unset/defaults to python after story 4-9)
-- [ ] The warning is fail-soft: always returns exit code 0 and never blocks the review
-- [ ] `tests/warn_bash_engine_deprecated.bats` is created with tests covering: bash engine → warning fires; unknown engine value → named in warning; always returns 0
-- [ ] All existing `bats tests/*.bats` continue to pass
+- [x] A new function `warn_bash_engine_deprecated()` is added to `review.sh`, defined alongside `warn_epic3_capability_misconfig()` (after ~line 227)
+- [x] The function emits a single `::warning::` annotation line to stderr (GitHub Actions format, also visible on GitLab/Bitbucket as plain stderr)
+- [x] The function is called in `main()` in the fall-through (non-python) branch — after the `if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]] … fi` block and before Phase 0
+- [x] The function does NOT fire when `AI_PR_REVIEW_ENGINE=python` (or when engine is unset/defaults to python after story 4-9)
+- [x] The warning is fail-soft: always returns exit code 0 and never blocks the review
+- [x] `tests/warn_bash_engine_deprecated.bats` is created with tests covering: bash engine → warning fires; unknown engine value → named in warning; always returns 0
+- [x] All existing `bats tests/*.bats` continue to pass — 685 tests, 0 failures
 
 ---
 
@@ -161,3 +161,28 @@ shellcheck review.sh
 - This story is implemented in the worktree at `/home/gchaix/worktrees/ai-pr-review-epic4-flip` on branch `feat/epic4-default-flip-to-python`.
 - Story 4-9 (flip) flips the `:-bash` fallback to `:-python`. Story 4-8 (this story) adds the warning in the fall-through branch. Since both land in the same PR, the net behavior after both commits is: python by default (no warning), bash on explicit request (warning fires).
 - Story 4-9 must be committed AFTER this story so the warning function exists when 4-9 makes the fall-through branch the explicit-only path.
+
+---
+
+## Dev Agent Record
+
+### Completion Notes (2026-06-02)
+
+All ACs satisfied. Implementation mirrors `warn_epic3_capability_misconfig()` exactly (same `::warning::` stderr format, same fail-soft posture, same top-level function placement for testability).
+
+Key decisions:
+- Function placed between `warn_epic3_capability_misconfig()` and `main()` in `review.sh` for grouping consistency.
+- Call site is in the fall-through (non-python) branch, after the `exit 0` of the python block and before Phase 0. This guarantees the warning fires only when the bash path is taken.
+- 5 bats tests covering: warning fires with correct content, unknown engine named, always exit 0. Full suite: 685 tests, 0 failures.
+- shellcheck clean.
+
+### File List
+
+| File | Change |
+|---|---|
+| `review.sh` | Added `warn_bash_engine_deprecated()` function; added call in `main()` fall-through branch |
+| `tests/warn_bash_engine_deprecated.bats` | Created — 5 test cases |
+
+### Change Log
+
+- 2026-06-02: Bash deprecation warning implemented and tested.
