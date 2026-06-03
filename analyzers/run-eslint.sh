@@ -8,7 +8,8 @@
 # no ESLint config is found, so consumers without JS/TS code are unaffected.
 #
 # Usage:
-#   ./run-eslint.sh <changed_files_list>
+#   ./run-eslint.sh <changed_files_list>    # positional arg
+#   echo "$FILES" | ./run-eslint.sh         # stdin
 #
 # Output:
 #   JSON array of findings compatible with review.sh merge_findings.
@@ -22,7 +23,12 @@
 
 set -euo pipefail
 
-CHANGED_FILES="${1:-}"
+# Accept changed files list from positional arg or stdin
+if [[ -n "${1:-}" ]]; then
+  CHANGED_FILES="$1"
+else
+  CHANGED_FILES=$(cat)
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "WARNING: jq not installed; eslint check skipped." >&2

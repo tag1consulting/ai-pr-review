@@ -7,7 +7,8 @@
 # image tags) that checkov's CIS-benchmark focus misses.
 #
 # Usage:
-#   ./run-kube-linter.sh <changed_files_list>
+#   ./run-kube-linter.sh <changed_files_list>    # positional arg
+#   echo "$FILES" | ./run-kube-linter.sh         # stdin
 #
 # Output:
 #   JSON array of findings compatible with review.sh merge_findings.
@@ -20,7 +21,12 @@
 
 set -euo pipefail
 
-CHANGED_FILES="${1:-}"
+# Accept changed files list from positional arg or stdin
+if [[ -n "${1:-}" ]]; then
+  CHANGED_FILES="$1"
+else
+  CHANGED_FILES=$(cat)
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "WARNING: jq not installed; kube-linter check skipped." >&2
