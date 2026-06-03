@@ -15,9 +15,10 @@
 #                       output from that file instead of running the binary.
 #                       Used by the bats test suite; unset in production.
 #
-# Ruleset strategy: use local SEMGREP_RULES_DIR bundle when available (offline support,
-# licensed rules). Falls back to --config=auto when no local rules are configured.
-# See issue #408 for rationale. claude-comprehensive-review uses --config=auto only.
+# Ruleset strategy: use local SEMGREP_RULES_DIR bundle when available (offline
+# support, licensed rules). Falls back to --config=auto when no local rules are
+# configured. See issue #408 for rationale. claude-comprehensive-review uses
+# --config=auto only.
 
 set -euo pipefail
 
