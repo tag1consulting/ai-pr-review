@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from typing import Any
 
 from ai_pr_review.feedback.models import FeedbackEntry
 from ai_pr_review.feedback.store import FeedbackStore
@@ -63,7 +64,7 @@ def build_entry(
         Human-readable explanation of why context is absent, forwarded from
         the GHA ``context_missing_reason`` output.
     """
-    extras: dict = {}
+    extras: dict[str, Any] = {}
     if command.finding_id is not None:
         extras["finding_id"] = command.finding_id
     if context_missing:
