@@ -3,8 +3,12 @@
 # run-trufflehog.sh — Run trufflehog on changed files and emit findings.
 #
 # Usage:
-#   ./run-trufflehog.sh <changed_files_list>    # positional arg
-#   echo "$FILES" | ./run-trufflehog.sh         # stdin
+#   ./run-trufflehog.sh <diff_file_or_changed_files_list>
+#
+# When $1 is a file that exists on disk, trufflehog is run against that file
+# (diff-scanning mode — the path is passed as a single argument).
+# Otherwise $1 (or stdin if $1 is absent) is treated as a newline-separated
+# list of changed file paths (per-file filesystem scanning mode).
 #
 # Output:
 #   JSON array of findings compatible with review.sh merge_findings.
@@ -17,13 +21,6 @@
 
 set -euo pipefail
 
-# Accept changed files list from positional arg or stdin
-if [[ -n "${1:-}" ]]; then
-  CHANGED_FILES="$1"
-else
-  CHANGED_FILES=$(cat)
-fi
-
 if ! command -v jq >/dev/null 2>&1; then
   echo "WARNING: jq not installed; trufflehog check skipped." >&2
   echo "[]"
@@ -32,18 +29,6 @@ fi
 
 if [[ -z "${TRUFFLEHOG_MOCK_FILE:-}" ]] && ! command -v trufflehog >/dev/null 2>&1; then
   echo "WARNING: trufflehog not installed; trufflehog check skipped." >&2
-  echo "[]"
-  exit 0
-fi
-
-# Collect files that exist on disk
-TARGET_FILES=()
-while IFS= read -r file; do
-  [[ -z "$file" ]] && continue
-  [[ -f "$file" ]] && TARGET_FILES+=("$file")
-done <<< "$CHANGED_FILES"
-
-if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   echo "[]"
   exit 0
 fi
@@ -65,19 +50,31 @@ _build_allowlist_json() {
     echo "[]"
     return
   fi
-  # Extract only the paths: block (stop at next top-level YAML key).
-  # Use POSIX character classes ([[:space:]]) for BSD/macOS sed compatibility.
+  # Extract the paths: list from the allowlist: block, handling all valid YAML
+  # list-item forms: double-quoted, single-quoted, and unquoted.
+  # awk state machine: enter allowlist: block, enter paths: sub-block, collect
+  # items, exit on next top-level key.
   local paths
-  paths=$(awk '/^[[:space:]]*paths:/{p=1;next} /^[a-zA-Z]/{p=0} p{print}' ".trufflehog.yml" \
-    | grep -E '^[[:space:]]*-[[:space:]]+"' \
-    | sed 's/^[[:space:]]*-[[:space:]]*"//; s/"[[:space:]]*$//' \
-    | grep -v '^#')
+  paths=$(awk '
+    /^allowlist:/ { in_al=1; next }
+    in_al && /^[^[:space:]]/ { in_al=0; in_paths=0 }
+    in_al && /^[[:space:]]+paths:/ { in_paths=1; next }
+    in_paths && /^[[:space:]]+[^[:space:]-]/ { in_paths=0 }
+    in_paths && /^[[:space:]]*-/ {
+      val = $0
+      gsub(/^[[:space:]]*-[[:space:]]*/, "", val)
+      gsub(/^"/, "", val); gsub(/"[[:space:]]*$/, "", val)
+      gsub(/^'"'"'/, "", val); gsub(/'"'"'[[:space:]]*$/, "", val)
+      gsub(/[[:space:]]+$/, "", val)
+      if (val != "" && substr(val,1,1) != "#") print val
+    }
+  ' ".trufflehog.yml")
   if [[ -z "$paths" ]]; then
     echo "[]"
     return
   fi
   # Emit a JSON array of exact path strings (jq -R/-s handles quoting/escaping)
-  echo "$paths" | jq -Rs 'split("\n") | map(select(length > 0))'
+  echo "$paths" | jq -R . | jq -s .
 }
 
 # jq filter to convert trufflehog NDJSON into findings array
@@ -142,13 +139,50 @@ if [[ -n "${TRUFFLEHOG_MOCK_FILE:-}" ]]; then
   exit 0
 fi
 
-# Production path: trufflehog filesystem accepts multiple paths in a single
-# invocation, so pass all target files at once rather than forking per file.
-# On PRs touching many files this avoids N-1 process startups.
-#
-# Capture the exit code so we can distinguish "no secrets found" (exit 0,
-# empty output) from "tool failed" (exit non-zero, empty output). Silent
-# tool failure would otherwise look identical to a clean scan.
+# Determine scan mode: if $1 names an existing file, scan it directly (diff mode).
+# Otherwise treat $1 (or stdin) as a newline-separated changed-files list.
+if [[ -n "${1:-}" && -f "$1" ]]; then
+  # Diff-file mode (called as: run-trufflehog.sh "$DIFF_FILE")
+  TH_CONFIG_ARGS=()
+  if [[ -f ".trufflehog.yml" ]]; then
+    TH_CONFIG_ARGS=(--config ".trufflehog.yml")
+  fi
+  TH_OUTPUT=$(trufflehog filesystem --json --no-update "${TH_CONFIG_ARGS[@]}" "$1" 2>/dev/null || true)
+  if [[ -z "$TH_OUTPUT" ]]; then
+    echo "[]"
+    exit 0
+  fi
+  FINDINGS=$(echo "$TH_OUTPUT" | _th_transform 2>/dev/null) || {
+    echo "WARNING: trufflehog output could not be parsed." >&2
+    echo "[]"
+    exit 0
+  }
+  echo "${FINDINGS:-[]}"
+  exit 0
+fi
+
+# Changed-files list mode: accept from $1 or stdin
+if [[ -n "${1:-}" ]]; then
+  CHANGED_FILES="$1"
+else
+  CHANGED_FILES=$(cat)
+fi
+
+TARGET_FILES=()
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+  [[ -f "$file" ]] && TARGET_FILES+=("$file")
+done <<< "$CHANGED_FILES"
+
+if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
+  echo "[]"
+  exit 0
+fi
+
+# Pass all target files to a single trufflehog invocation rather than forking
+# per file. trufflehog filesystem accepts variadic path arguments. On PRs
+# touching many files this avoids N-1 process startups. Capture exit code to
+# distinguish "no secrets" from "tool failed".
 TH_EC=0
 TH_CONFIG_ARGS=()
 if [[ -f ".trufflehog.yml" ]]; then

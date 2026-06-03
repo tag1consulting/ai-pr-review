@@ -43,7 +43,7 @@ SHELL_FILES=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   case "$file" in
-    *.sh|*.bash) SHELL_FILES+=("$file") ;;
+    *.sh|*.bash) [[ -f "$file" ]] && SHELL_FILES+=("$file") ;;
   esac
 done <<< "$CHANGED_FILES"
 
@@ -78,17 +78,11 @@ fi
 # Run shellcheck on each file, collect JSON output
 FINDINGS="[]"
 for file in "${SHELL_FILES[@]}"; do
-  [[ ! -f "$file" ]] && continue
-
   # Run shellcheck with JSON output (-f json1) at warning severity
   SC_OUTPUT=$(shellcheck -f json1 -S warning -- "$file" 2>/dev/null || true)
+  [[ -z "$SC_OUTPUT" ]] && continue
 
-  if [[ -z "$SC_OUTPUT" ]]; then
-    continue
-  fi
-
-  # Parse shellcheck JSON and convert to our findings format
-  if ! FILE_FINDINGS=$(echo "$SC_OUTPUT" | jq -r --arg file "$file" '
+  FILE_FINDINGS=$(echo "$SC_OUTPUT" | jq -r --arg file "$file" '
     [.comments[]? | select(.level == "warning" or .level == "error") | {
       severity: (if .level == "error" then "High" else "Medium" end),
       confidence: 95,
@@ -98,12 +92,12 @@ for file in "${SHELL_FILES[@]}"; do
       finding: ("SC\(.code): \(.message)"),
       remediation: ("See https://www.shellcheck.net/wiki/SC\(.code)")
     }]
-  ' 2>/dev/null); then
+  ' 2>/dev/null) || {
     echo "WARNING: jq failed to parse shellcheck output for ${file}; skipping." >&2
-    FILE_FINDINGS="[]"
-  fi
+    continue
+  }
 
-  FINDINGS=$(printf '%s\n%s' "$FINDINGS" "$FILE_FINDINGS" | jq -s '.[0] + .[1]' 2>/dev/null) || FINDINGS="[]"
+  FINDINGS=$(printf '%s\n%s' "$FINDINGS" "$FILE_FINDINGS" | jq -s '.[0] + .[1]')
 done
 
 printf '%s\n' "$FINDINGS"
