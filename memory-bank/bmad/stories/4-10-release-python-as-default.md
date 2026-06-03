@@ -4,10 +4,10 @@
 **Story ID:** 4-10
 **Story Key:** 4-10-release-python-as-default
 **GitHub Issue:** #250
-**Status:** ready-for-dev
+**Status:** done
 **PRD refs:** 4.FR-10
 **Gated on:** Story 4-9 (default flip) merged and PR reviewed
-**Blocked by:** `/comprehensive-review` pass + PR #N merged to main
+**Completed:** 2026-06-02
 
 ---
 
@@ -82,9 +82,26 @@ the Python engine and are unaffected.
 
 ---
 
-## Notes for Dev Agent (when this story is eventually devved)
+## Dev Agent Record
 
-- Per CLAUDE.md: "Never merge a pull request without prompting" and "Before creating GitHub releases ... [is a Checkpoint Trigger]". Each tag push and release creation needs its own confirmation.
-- Run `/comprehensive-review` before any of the above steps.
-- The `publish-image.yml` arm64 QEMU build takes ~20 minutes — use a background monitor.
-- Document the release in `docs/features.md` with a `## What's new in v1.0.0` header matching the existing section style.
+### Implementation Notes (2026-06-02)
+
+Pre-release: comprehensive e2e validated all three VCS providers (GitHub PR #1, GitLab MR !34, Bitbucket PR #2) against the locally-built `:dev` container. Python engine confirmed default on all three paths.
+
+Doc audit caught two gaps fixed in PRs #390 and #393 before tagging:
+- `static-analyzers.md`, `learning-loop.md`, `getting-started.md`, `configuration.md`: stale "must set `engine: python`" prerequisite language updated to reflect python-as-default
+- All user-facing "Epic 3/4/Story N" internal planning jargon replaced with feature names
+- `docs/architecture.md`: updated for Python engine default
+
+Release steps completed:
+1. ✅ `pyproject.toml:7` already `version = "1.0.0"` — no change needed
+2. ✅ `docs/features.md` `## What's new in v1.0.0` section added in PR #388
+3. ✅ `git tag -s v1.0.0` signed tag created @ 3cb926c
+4. ✅ `git push origin v1.0.0` — tag live
+5. ✅ GitHub release created: https://github.com/tag1consulting/ai-pr-review/releases/tag/v1.0.0
+6. ✅ `publish-image.yml` run 26853323826 — success
+7. ✅ GHCR verified: `docker pull ghcr.io/tag1consulting/ai-pr-review:1.0.0` → sha256:a0d2d22c
+
+### Change Log
+
+- 2026-06-02: v1.0.0 released. Issues #247-#250 all closed. Epic 4 complete.
