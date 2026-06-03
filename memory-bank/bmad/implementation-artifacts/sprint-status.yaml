@@ -106,7 +106,7 @@ development_status:
 
   # ── Epic 4 — Soak, Observability, Default Flip ─────────────────────────────
   # Parent issue #198 CLOSED. v1.0.0 released 2026-06-02.
-  # All issues #246-#250 CLOSED. publish-image.yml run 26853323826 in progress.
+  # All issues #246-#250 CLOSED. publish-image.yml run 26853323826 succeeded; v1.0.0 image confirmed pullable.
   epic-4: done
   4-1-structured-logging: done
   4-2-telemetry-hooks: done
