@@ -7,7 +7,8 @@
 # can override via PHPSTAN_LEVEL env var or a phpstan.neon in the repo root.
 #
 # Usage:
-#   ./run-phpstan.sh <changed_files_list>
+#   ./run-phpstan.sh <changed_files_list>    # positional arg
+#   echo "$FILES" | ./run-phpstan.sh         # stdin
 #
 # Output:
 #   JSON array of findings compatible with review.sh merge_findings.
@@ -22,7 +23,12 @@
 
 set -euo pipefail
 
-CHANGED_FILES="${1:-}"
+# Accept changed files list from positional arg or stdin
+if [[ -n "${1:-}" ]]; then
+  CHANGED_FILES="$1"
+else
+  CHANGED_FILES=$(cat)
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "WARNING: jq not installed; phpstan check skipped." >&2

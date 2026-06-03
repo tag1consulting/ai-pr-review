@@ -11,8 +11,10 @@ import pytest
 
 from ai_pr_review.analyzers.bridge import (
     AnalyzerSpec,
+    _file_list,
     _is_eligible,
     _normalise_output,
+    _run_analyzer,
     run_analyzers,
 )
 from ai_pr_review.manifest import ChangedFiles
@@ -252,3 +254,73 @@ class TestWarningFormat:
         captured = capsys.readouterr()
         assert result == []
         assert "[ai-pr-review] WARNING:" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# _file_list helper
+# ---------------------------------------------------------------------------
+
+
+class TestFileList:
+    def test_returns_sorted_deduplicated_newline_joined(self) -> None:
+        cf = ChangedFiles(
+            all_files=["b.py", "a.sh", "b.py", "c.go"],
+        )
+        result = _file_list(cf)
+        assert result == "a.sh\nb.py\nc.go"
+
+    def test_empty_changed_files(self) -> None:
+        cf = ChangedFiles()
+        assert _file_list(cf) == ""
+
+    def test_single_file(self) -> None:
+        cf = ChangedFiles(all_files=["main.py"])
+        assert _file_list(cf) == "main.py"
+
+    def test_deduplication_preserves_sort(self) -> None:
+        cf = ChangedFiles(all_files=["z.py", "a.py", "z.py", "m.py", "a.py"])
+        result = _file_list(cf)
+        assert result == "a.py\nm.py\nz.py"
+
+
+# ---------------------------------------------------------------------------
+# stdin passthrough via subprocess.run input= kwarg
+# ---------------------------------------------------------------------------
+
+
+class TestStdinPassthrough:
+    def test_subprocess_called_with_file_list_as_input(self) -> None:
+        """_run_analyzer must pass the file list to subprocess.run via input=."""
+        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"])
+        cf = ChangedFiles(all_files=["foo.sh", "bar.sh"])
+        expected_input = _file_list(cf)
+
+        captured_kwargs: dict = {}
+
+        def mock_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+            captured_kwargs.update(kwargs)
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="[]", stderr="")
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _run_analyzer(spec, "/fake/run-shellcheck.sh", "/dev/null", {}, expected_input)
+
+        assert "input" in captured_kwargs
+        assert captured_kwargs["input"] == "bar.sh\nfoo.sh"
+
+    def test_run_analyzers_passes_all_files_via_stdin(self) -> None:
+        """Integration check: file_list computed from all_files reaches subprocess."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            analyzers = Path(tmpdir) / "analyzers"
+            analyzers.mkdir()
+            script = analyzers / "run-shellcheck.sh"
+            # Echo stdin back as a JSON finding so we can assert it arrived.
+            script.write_text(
+                "#!/bin/bash\n"
+                "STDIN=$(cat)\n"
+                'printf \'[{"severity":"Low","confidence":50,"finding":"%s"}]\\n\' "$STDIN"\n'
+            )
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            cf = ChangedFiles(shell=["review.sh"], all_files=["review.sh"])
+            findings = run_analyzers(cf, "/dev/null", tmpdir)
+        assert len(findings) == 1
+        assert "review.sh" in findings[0].finding

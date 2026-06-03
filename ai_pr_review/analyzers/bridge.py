@@ -46,6 +46,11 @@ _ANALYZERS: list[AnalyzerSpec] = [
 _SUBPROCESS_TIMEOUT_SECS = 120
 
 
+def _file_list(cf: ChangedFiles) -> str:
+    """Return a sorted, deduplicated newline-joined string of all changed file paths."""
+    return "\n".join(sorted(set(cf.all_files)))
+
+
 def run_analyzers(
     changed_files: ChangedFiles,
     diff_file: str,
@@ -56,6 +61,7 @@ def run_analyzers(
     """Run all eligible analyzers and return normalised Finding instances."""
     results: list[Finding] = []
     analyzers_dir = Path(script_dir) / "analyzers"
+    file_list = _file_list(changed_files)
 
     for spec in _ANALYZERS:
         if not _is_eligible(spec, changed_files):
@@ -65,7 +71,7 @@ def run_analyzers(
         if not script_path.is_file():
             continue
 
-        findings = _run_analyzer(spec, str(script_path), diff_file, env or {})
+        findings = _run_analyzer(spec, str(script_path), diff_file, env or {}, file_list)
         results.extend(findings)
 
     return results
@@ -83,6 +89,7 @@ def _run_analyzer(
     script_path: str,
     diff_file: str,
     extra_env: dict[str, str],
+    file_list: str = "",
 ) -> list[Finding]:
     run_env = {**os.environ, **extra_env, "DIFF_FILE": diff_file}
     try:
@@ -90,6 +97,7 @@ def _run_analyzer(
             ["bash", script_path],
             capture_output=True,
             text=True,
+            input=file_list,
             env=run_env,
             timeout=_SUBPROCESS_TIMEOUT_SECS,
         )

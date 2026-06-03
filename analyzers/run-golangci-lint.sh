@@ -3,7 +3,8 @@
 # run-golangci-lint.sh — Run golangci-lint on changed Go files and emit findings.
 #
 # Usage:
-#   ./run-golangci-lint.sh <changed_files_list>
+#   ./run-golangci-lint.sh <changed_files_list>    # positional arg
+#   echo "$FILES" | ./run-golangci-lint.sh         # stdin
 #
 # Output:
 #   JSON array of findings compatible with review.sh merge_findings.
@@ -16,7 +17,12 @@
 
 set -euo pipefail
 
-CHANGED_FILES="${1:-}"
+# Accept changed files list from positional arg or stdin
+if [[ -n "${1:-}" ]]; then
+  CHANGED_FILES="$1"
+else
+  CHANGED_FILES=$(cat)
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "WARNING: jq not installed; golangci-lint check skipped." >&2
