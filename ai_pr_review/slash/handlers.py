@@ -37,8 +37,39 @@ def build_entry(
     source: str = "",
     file: str = "",
     rule_id: str = "",
+    context_missing: bool = False,
+    context_missing_reason: str = "",
 ) -> FeedbackEntry:
-    """Build a ``FeedbackEntry`` from a parsed ``SlashCommand``."""
+    """Build a ``FeedbackEntry`` from a parsed ``SlashCommand``.
+
+    Parameters
+    ----------
+    command:
+        Parsed slash command carrying ``reason`` and optional ``finding_id``.
+    source:
+        Finding source tag (e.g. ``code-reviewer``, ``sarif:bandit``).
+        Populated by the GHA workflow from the parent comment header; empty
+        when context extraction failed or the command was a top-level comment.
+    file:
+        File path the finding was on. Same caveats as *source*.
+    rule_id:
+        SARIF rule ID; only meaningful for ``sarif:*`` sources.
+    context_missing:
+        When ``True``, both *source* and *file* were unavailable and the
+        entry is being persisted with reduced fidelity.  The ``extras`` dict
+        will carry ``{"context_missing": True}`` (and optionally
+        ``context_missing_reason``) so callers can filter these records.
+    context_missing_reason:
+        Human-readable explanation of why context is absent, forwarded from
+        the GHA ``context_missing_reason`` output.
+    """
+    extras: dict = {}
+    if command.finding_id is not None:
+        extras["finding_id"] = command.finding_id
+    if context_missing:
+        extras["context_missing"] = True
+        if context_missing_reason:
+            extras["context_missing_reason"] = context_missing_reason
     return FeedbackEntry(
         ts=datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         command=command.canonical_name,
@@ -46,6 +77,7 @@ def build_entry(
         source=source,
         file=file,
         rule_id=rule_id,
+        extras=extras,
     )
 
 

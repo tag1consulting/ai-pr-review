@@ -1343,15 +1343,26 @@ jobs:
           parent_body=$(echo "$parent_json" | jq -r '.body // ""')
           # Inline-comment body header format (see ai_pr_review/vcs/github.py
           # _build_inline_comment_body):
-          #   {icon} **[{severity}]** [{source}] {finding text}
-          # For SARIF findings, finding text starts with [{rule_id}].
-          # We extract bracketed tokens positionally from the first line:
-          #   token[1] = severity (always present)
-          #   token[2] = source   (the tag we want)
+          #   {icon} **[{severity}]** **[F{n}]** {source_tag} {finding text}
+          #
+          # The **[F{n}]** finding-ID token is present whenever a stable per-PR
+          # ID was assigned (which is the default for all findings). Strip it
+          # before extracting bracketed tokens so source lands at position 1
+          # regardless of whether a finding ID is present. This mirrors the
+          # body-level lookup step which already applies the same strip.
+          #
+          # After stripping, token positions are:
+          #   token[1] = severity  (always present, e.g. [HIGH])
+          #   token[2] = source    (e.g. [code-reviewer] or [sarif:bandit])
           #   token[3] = SARIF ruleId, only present when source starts with sarif:
-          first_line=$(echo "$parent_body" | head -1)
+          #
+          # For multi-source findings (e.g. [code-reviewer, security-reviewer]),
+          # keep only the first source tag to match the body-level convention.
+          first_line=$(echo "$parent_body" | head -1 \
+            | sed 's/\*\*\[F[0-9]*\]\*\* //')
           source=$(echo "$first_line" \
-            | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]')
+            | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]' \
+            | sed 's/,.*//' | tr -d ' ')
           rule_id=""
           if [[ "$source" == sarif:* ]]; then
             rule_id=$(echo "$first_line" \
@@ -1376,6 +1387,9 @@ jobs:
           SLASH_SOURCE: ${{ inputs.finding-source || steps.context.outputs.source }}
           SLASH_FILE: ${{ inputs.finding-file || steps.context.outputs.file }}
           SLASH_RULE_ID: ${{ inputs.finding-rule-id || steps.context.outputs.rule_id }}
+          # Forward extraction failure reason so the Python handler can flag
+          # context_missing in extras without re-diagnosing the cause.
+          SLASH_CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
           AI_FEEDBACK_LOOP: 'true'
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           GH_TOKEN: ${{ secrets.github-token }}
