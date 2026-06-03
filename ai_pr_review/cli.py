@@ -825,6 +825,7 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
         result.is_feedback_command
         and not source
         and not file_path
+        and result.finding_id is None
     )
     if context_missing:
         logger.warning(

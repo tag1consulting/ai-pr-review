@@ -1359,7 +1359,7 @@ jobs:
           # For multi-source findings (e.g. [code-reviewer, security-reviewer]),
           # keep only the first source tag to match the body-level convention.
           first_line=$(echo "$parent_body" | head -1 \
-            | sed 's/\*\*\[F[0-9]*\]\*\* //')
+            | sed 's/\*\*\[F[0-9]\+\]\*\* *//')
           source=$(echo "$first_line" \
             | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]' \
             | sed 's/,.*//' | tr -d ' ')
