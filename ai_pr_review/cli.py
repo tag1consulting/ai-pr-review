@@ -768,7 +768,13 @@ def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> No
     default="",
     help="Rule ID from the original finding (may be empty).",
 )
-def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
+@click.option(
+    "--context-missing-reason",
+    envvar="SLASH_CONTEXT_MISSING_REASON",
+    default="",
+    help="Why finding context could not be extracted (forwarded from GHA workflow output).",
+)
+def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_reason: str) -> None:
     """Handle one /ai-pr-review comment command.
 
     Parses the comment body, dispatches to the appropriate handler, and
@@ -809,7 +815,35 @@ def slash(body: str, source: str, file_path: str, rule_id: str) -> None:
     from ai_pr_review.feedback.store import make_store
 
     store = make_store(config)
-    entry = build_entry(result, source=source, file=file_path, rule_id=rule_id)
+
+    # Detect missing context: both source and file are empty for a feedback
+    # command.  The entry is still persisted (captures reviewer intent) but
+    # flagged in extras so the learning-loop ranker can identify low-fidelity
+    # records and operators can audit them.  A loud warning is emitted so the
+    # issue surfaces in workflow logs.
+    context_missing = (
+        result.is_feedback_command
+        and not source
+        and not file_path
+        and result.finding_id is None
+    )
+    if context_missing:
+        logger.warning(
+            "slash: persisting feedback entry with no finding context "
+            "(source and file are both empty); command=%r reason=%r%s",
+            result.canonical_name,
+            result.reason,
+            f" context_missing_reason={context_missing_reason!r}" if context_missing_reason else "",
+        )
+
+    entry = build_entry(
+        result,
+        source=source,
+        file=file_path,
+        rule_id=rule_id,
+        context_missing=context_missing,
+        context_missing_reason=context_missing_reason,
+    )
     reply = handle_command(result, entry, store)
     if reply:
         click.echo(reply)

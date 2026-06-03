@@ -64,6 +64,74 @@ def test_handle_feedback_command_reports_persistence_failure() -> None:
     assert "could not persist" in reply.lower() or "retry" in reply.lower()
 
 
+def test_build_entry_captures_finding_id_in_extras() -> None:
+    """finding_id from the parser must be stored in extras, not dropped."""
+    cmd = SlashCommand(
+        name="false-positive",
+        reason="intentional",
+        raw_body="/ai-pr-review false-positive F7 intentional",
+        finding_id=7,
+    )
+    entry = build_entry(cmd, source="code-reviewer", file="src/foo.py")
+    assert entry.extras.get("finding_id") == 7
+
+
+def test_build_entry_no_finding_id_leaves_extras_clean() -> None:
+    """When finding_id is None, extras must not contain a finding_id key
+    (or any unexpected noise)."""
+    cmd = _cmd("false-positive", "no id here")
+    entry = build_entry(cmd, source="code-reviewer", file="src/foo.py")
+    assert "finding_id" not in entry.extras
+    assert "context_missing" not in entry.extras
+
+
+def test_build_entry_context_missing_flag() -> None:
+    """When context_missing=True, extras must carry the flag and optional reason."""
+    cmd = _cmd("false-positive", "looks fine")
+    entry = build_entry(
+        cmd,
+        context_missing=True,
+        context_missing_reason="parent comment not from bot",
+    )
+    assert entry.source == ""
+    assert entry.file == ""
+    assert entry.extras.get("context_missing") is True
+    assert entry.extras.get("context_missing_reason") == "parent comment not from bot"
+
+
+def test_build_entry_context_missing_without_reason() -> None:
+    """context_missing=True without a reason must still set the flag."""
+    cmd = _cmd("wont-fix", "")
+    entry = build_entry(cmd, context_missing=True)
+    assert entry.extras.get("context_missing") is True
+    assert "context_missing_reason" not in entry.extras
+
+
+def test_build_entry_context_missing_false_no_flag() -> None:
+    """context_missing=False (default) must not pollute extras."""
+    cmd = _cmd("false-positive", "reason")
+    entry = build_entry(cmd, source="code-reviewer", file="src/foo.py")
+    assert "context_missing" not in entry.extras
+
+
+def test_build_entry_finding_id_and_context_missing_coexist() -> None:
+    """finding_id and context_missing can appear together in extras."""
+    cmd = SlashCommand(
+        name="false-positive",
+        reason="",
+        raw_body="/ai-pr-review false-positive F3",
+        finding_id=3,
+    )
+    entry = build_entry(
+        cmd,
+        context_missing=True,
+        context_missing_reason="top-level comment, no thread context",
+    )
+    assert entry.extras.get("finding_id") == 3
+    assert entry.extras.get("context_missing") is True
+    assert entry.extras.get("context_missing_reason") == "top-level comment, no thread context"
+
+
 def test_explain_command_returns_stub_reply() -> None:
     store = _RecordingStore()
     cmd = _cmd("explain", "")
