@@ -18,3 +18,4 @@
 {"ts": "2026-06-01T21:17:51Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": ""}
 {"ts": "2026-06-01T21:18:55Z", "command": "false-positive", "reason": "", "source": "F1", "file": "docs/features.md", "rule_id": ""}
 {"ts": "2026-06-01T21:56:17Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": ""}
+{"ts": "2026-06-03T17:32:16Z", "command": "false-positive", "reason": "Intentional divergence: code-reviewer uses prose empty state by design (it has inline findings consumers); the parity prompts (architecture-reviewer, adversarial-general, etc.) use bare NONE because they feed a different parser path. The divergence is architectural, not accidental. See the empty-state discussion in #396/#398.", "source": "", "file": "", "rule_id": ""}
