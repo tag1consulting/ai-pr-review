@@ -23,7 +23,7 @@ You will receive a diff of all changed files along with a file manifest. Tear it
 
 If the file manifest is missing or empty, fall back to
 `git diff --name-only @{u}...HEAD 2>/dev/null || git diff --name-only main...HEAD`
-to discover changed files. If that also fails, output EXACTLY the word `NONE`.
+to discover changed files. If that also fails, output EXACTLY the word `NONE:NO_FILES`.
 
 ## Scope
 
@@ -122,6 +122,7 @@ this is a genuine gap rather than an intentional design decision:
 ## Empty State
 
 If you find no Medium or higher findings, output EXACTLY the word `NONE` and nothing else.
+If the file manifest was missing and all git fallbacks failed, output EXACTLY `NONE:NO_FILES` instead.
 
 ## Output Format
 
@@ -132,6 +133,8 @@ If you find no Medium or higher findings, output EXACTLY the word `NONE` and not
 <2-3 sentences: overall impression and biggest concern>
 
 ### Findings
+
+Only include findings with confidence >= 75. Omit any severity section that has no findings.
 
 #### Critical
 
@@ -159,8 +162,6 @@ If you find no Medium or higher findings, output EXACTLY the word `NONE` and not
 - <things done well that deserve recognition>
 ```
 
-Omit any severity section that has no findings.
-
 After your markdown output, emit a JSON block fenced with ` ```json-findings `:
 ```json-findings
 [{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix","source":"adversarial-general"}]
@@ -168,6 +169,7 @@ After your markdown output, emit a JSON block fenced with ` ```json-findings `:
 `severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
 `confidence` must be an integer 0-100. Only include findings with confidence >= 75.
 `source` must be exactly `"adversarial-general"`.
+`line` must be a positive integer when a specific line applies; use `1` for file-level findings with no applicable line.
 If no findings, emit an empty array: `[]`
 
 ---
