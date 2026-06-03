@@ -1406,85 +1406,89 @@ jobs:
           fi
           finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
 
+          api_err=$(mktemp)
+          trap 'rm -f "$api_err"' EXIT
           all_bodies=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${ISSUE_NUMBER}/reviews?per_page=100" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") |
-                   select(.body != null and (.body | contains("### Findings not attached to specific lines"))) |
-                   .body]' 2>/dev/null || echo "[]")
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body // ""]' \
+            2>"$api_err") || {
+            echo "::warning::gh api failed fetching reviews for F${finding_num} context lookup: $(cat "$api_err")" >&2
+            all_bodies="[]"
+          }
+          if [[ -s "$api_err" ]]; then
+            echo "::warning::gh api stderr: $(cat "$api_err")" >&2
+          fi
 
-          pattern="\*\*\[F${finding_num}\]\*\*"
-          matching_line=""
-          while IFS= read -r body_text; do
-            in_section=false
-            while IFS= read -r line; do
-              if [[ "$line" == *"### Findings not attached to specific lines"* ]]; then
-                in_section=true; continue
-              fi
-              if $in_section && [[ "$line" =~ ^"###" ]]; then
-                in_section=false; continue
-              fi
-              $in_section || continue
-              if echo "$line" | grep -qE "$pattern"; then
-                matching_line="$line"
-                break 2
-              fi
-            done <<< "$body_text"
-          done < <(printf '%s\n' "$all_bodies" | jq -r '.[]')
+          # Use Python (available in the feedback-command container) to search
+          # review bodies robustly. Bash line-by-line reads split multi-line
+          # bodies across iterations, making section boundary detection unreliable.
+          # Write the script to a temp file; pipe bodies via stdin to avoid quoting issues.
+          py_script=$(mktemp --suffix=.py)
+          py_err=$(mktemp)
+          trap 'rm -f "$api_err" "$py_script" "$py_err"' EXIT
+          cat > "$py_script" <<'PYEOF'
+import json, os, re, sys
 
-          if [[ -z "$matching_line" ]]; then
-            # F-ID not in a body section — may be an inline finding.
-            # Check the id-map marker; if it matches, the source lives in the
-            # thread comment header which we don't fetch here (would need an
-            # extra API call per-thread). Emit a notice and let the entry persist
-            # with empty context; the reviewer can use a thread reply instead.
-            py_script=$(mktemp --suffix=.py) || exit 0
-            printf '%s\n' \
-              "import json,os,sys,re" \
-              "bodies=json.load(sys.stdin)" \
-              "fid=int(os.environ['FINDING_NUM'])" \
-              "pat=re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->',re.DOTALL)" \
-              "for body in bodies:" \
-              "    m=pat.search(body)" \
-              "    if not m: continue" \
-              "    try:" \
-              "        d=json.loads(m.group(1))" \
-              "        if any(int(v)==fid for v in d.values()): print('inline'); sys.exit(0)" \
-              "    except Exception: pass" \
-              "print('not_found')" \
-              > "$py_script"
-            result=$(printf '%s' "$all_bodies" | FINDING_NUM="$finding_num" python3 "$py_script" 2>/dev/null || echo "not_found")
-            rm -f "$py_script"
-            if [[ "$result" == "inline" ]]; then
-              echo "::notice::F${finding_num} is an inline finding; for full context in the feedback entry, reply directly to the finding thread instead of using a top-level comment"
-            fi
+fid = int(os.environ['FINDING_NUM'])
+bodies = json.load(sys.stdin)
+section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)
+id_map_pat = re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->', re.DOTALL)
+f_token = f'**[F{fid}]**'
+
+for body in bodies:
+    for section in section_pat.findall(body):
+        for line in section.splitlines():
+            if f_token in line:
+                # Strip the F-token, then extract the first [...] group as source.
+                stripped = re.sub(r'\*\*\[F[0-9]+\]\*\* *', '', line)
+                brackets = re.findall(r'\[([^\]]+)\]', stripped)
+                source = brackets[0].split(',')[0].strip() if brackets else ''
+                # Extract file from (at `file:line` ...) or — `file:line`
+                m = re.search(r'\(at `([^`]+)`', line) or re.search(r'— `([^`]+)', line)
+                file_line = m.group(1) if m else ''
+                file_part = file_line.rsplit(':', 1)[0] if ':' in file_line else file_line
+                rule_id = ''
+                if source.startswith('sarif:') and len(brackets) > 1:
+                    rule_id = brackets[1]
+                print(f'body:{source}:{file_part}:{rule_id}')
+                sys.exit(0)
+
+# Not in a body section — check id-map for inline finding.
+for body in bodies:
+    m = id_map_pat.search(body)
+    if not m:
+        continue
+    try:
+        d = json.loads(m.group(1))
+        if any(int(v) == fid for v in d.values()):
+            print('inline')
+            sys.exit(0)
+    except Exception:
+        pass
+
+print('not_found')
+PYEOF
+          result=$(printf '%s' "$all_bodies" | FINDING_NUM="$finding_num" python3 "$py_script" 2>"$py_err") || {
+            echo "::warning::Python context-lookup script failed for F${finding_num}: $(cat "$py_err"); feedback entry will lack source/file context" >&2
             exit 0
+          }
+          if [[ -s "$py_err" ]]; then
+            echo "::warning::Python context-lookup stderr for F${finding_num}: $(cat "$py_err")" >&2
           fi
 
-          # Extract source from the matching body-finding line.
-          # Body-finding format: **[F<n>]** [source_tag] ... (at `file:line` ...)
-          # Remove the F-token first so [source_tag] is always at position 1.
-          source=$(printf '%s' "$matching_line" \
-            | sed 's/\*\*\[F[0-9]*\]\*\* //' \
-            | grep -oE '\[[^]]+\]' | head -1 | tr -d '[]' \
-            | sed 's/,.*//' | tr -d ' ' || true)
-          # Extract file from the backtick-quoted location annotation.
-          file_line=$(printf '%s' "$matching_line" \
-            | grep -oE '\(at `[^`]+`' | head -1 | sed 's/(at `//;s/`.*//' || true)
-          if [[ -z "$file_line" ]]; then
-            file_line=$(printf '%s' "$matching_line" \
-              | grep -oE '— `[^`]+' | head -1 | sed 's/— `//' || true)
-          fi
-          finding_file="${file_line%:*}"
-          rule_id=""
-          if [[ "$source" == sarif:* ]]; then
-            rule_id=$(printf '%s' "$matching_line" \
-              | sed 's/\*\*\[F[0-9]*\]\*\* //' \
-              | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]' || true)
-          fi
-
-          echo "source=${source}"       >> "$GITHUB_OUTPUT"
-          echo "file=${finding_file}"   >> "$GITHUB_OUTPUT"
-          echo "rule_id=${rule_id}"     >> "$GITHUB_OUTPUT"
+          case "$result" in
+            body:*)
+              IFS=: read -r _ source finding_file rule_id <<< "$result"
+              echo "source=${source}"       >> "$GITHUB_OUTPUT"
+              echo "file=${finding_file}"   >> "$GITHUB_OUTPUT"
+              echo "rule_id=${rule_id}"     >> "$GITHUB_OUTPUT"
+              ;;
+            inline)
+              echo "::notice::F${finding_num} is an inline finding; for full context in the feedback entry, reply directly to the finding thread instead of using a top-level comment"
+              ;;
+            not_found)
+              ;;
+          esac
 
       - name: Invoke Python slash handler
         id: handler
