@@ -1406,26 +1406,36 @@ jobs:
           fi
           finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
 
-          api_err=$(mktemp)
-          trap 'rm -f "$api_err"' EXIT
+          # Allocate all temp files upfront and set a single EXIT trap so any
+          # early exit (including mktemp failures below) cleans up correctly.
+          api_err=$(mktemp) || { echo "::error::mktemp failed (api_err)"; exit 1; }
+          py_script=$(mktemp --suffix=.py) || { echo "::error::mktemp failed (py_script)"; rm -f "$api_err"; exit 1; }
+          py_err=$(mktemp) || { echo "::error::mktemp failed (py_err)"; rm -f "$api_err" "$py_script"; exit 1; }
+          trap 'rm -f "$api_err" "$py_script" "$py_err"' EXIT
+
+          api_failed=false
           all_bodies=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${ISSUE_NUMBER}/reviews?per_page=100" \
             --jq '[.[] | select(.user.login == "github-actions[bot]") | .body // ""]' \
             2>"$api_err") || {
             echo "::warning::gh api failed fetching reviews for F${finding_num} context lookup: $(cat "$api_err")" >&2
-            all_bodies="[]"
+            api_failed=true
           }
           if [[ -s "$api_err" ]]; then
             echo "::warning::gh api stderr: $(cat "$api_err")" >&2
+          fi
+          # Skip the lookup entirely if the API call failed — an empty body list
+          # would silently produce 'not_found', indistinguishable from a genuine miss.
+          if [[ "$api_failed" == "true" ]]; then
+            exit 0
           fi
 
           # Use Python (available in the feedback-command container) to search
           # review bodies robustly. Bash line-by-line reads split multi-line
           # bodies across iterations, making section boundary detection unreliable.
           # Write the script to a temp file; pipe bodies via stdin to avoid quoting issues.
-          py_script=$(mktemp --suffix=.py)
-          py_err=$(mktemp)
-          trap 'rm -f "$api_err" "$py_script" "$py_err"' EXIT
+          # Use '|' as the field separator — safe because source tags and file paths
+          # never contain '|', unlike ':' which appears in file:line annotations.
           cat > "$py_script" <<'PYEOF'
 import json, os, re, sys
 
@@ -1450,7 +1460,7 @@ for body in bodies:
                 rule_id = ''
                 if source.startswith('sarif:') and len(brackets) > 1:
                     rule_id = brackets[1]
-                print(f'body:{source}:{file_part}:{rule_id}')
+                print(f'body|{source}|{file_part}|{rule_id}')
                 sys.exit(0)
 
 # Not in a body section — check id-map for inline finding.
@@ -1477,8 +1487,8 @@ PYEOF
           fi
 
           case "$result" in
-            body:*)
-              IFS=: read -r _ source finding_file rule_id <<< "$result"
+            body\|*)
+              IFS='|' read -r _ source finding_file rule_id <<< "$result"
               echo "source=${source}"       >> "$GITHUB_OUTPUT"
               echo "file=${finding_file}"   >> "$GITHUB_OUTPUT"
               echo "rule_id=${rule_id}"     >> "$GITHUB_OUTPUT"
