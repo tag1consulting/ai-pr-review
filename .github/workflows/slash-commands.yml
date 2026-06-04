@@ -1396,6 +1396,44 @@ jobs:
           REPO: ${{ inputs.repository-name }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
           COMMENT_BODY: ${{ inputs.comment-body }}
+          PY_SCRIPT: |
+            import json, os, re, sys
+
+            fid = int(os.environ['FINDING_NUM'])
+            bodies = json.load(sys.stdin)
+            section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)
+            id_map_pat = re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->', re.DOTALL)
+            f_token = f'**[F{fid}]**'
+
+            for body in bodies:
+                for section in section_pat.findall(body):
+                    for line in section.splitlines():
+                        if f_token in line:
+                            stripped = re.sub(r'\*\*\[F[0-9]+\]\*\* *', '', line)
+                            brackets = re.findall(r'\[([^\]]+)\]', stripped)
+                            source = brackets[0].split(',')[0].strip() if brackets else ''
+                            m = re.search(r'\(at `([^`]+)`', line) or re.search(r'— `([^`]+)', line)
+                            file_line = m.group(1) if m else ''
+                            file_part = file_line.rsplit(':', 1)[0] if ':' in file_line else file_line
+                            rule_id = ''
+                            if source.startswith('sarif:') and len(brackets) > 1:
+                                rule_id = brackets[1]
+                            print(f'body|{source}|{file_part}|{rule_id}')
+                            sys.exit(0)
+
+            for body in bodies:
+                m = id_map_pat.search(body)
+                if not m:
+                    continue
+                try:
+                    d = json.loads(m.group(1))
+                    if any(int(v) == fid for v in d.values()):
+                        print('inline')
+                        sys.exit(0)
+                except Exception:
+                    pass
+
+            print('not_found')
         run: |
           # Extract the finding ID from the comment body (e.g. "F3" → "3").
           # The parser accepts F<n> as the second token after the command.
@@ -1436,48 +1474,9 @@ jobs:
           # Write the script to a temp file; pipe bodies via stdin to avoid quoting issues.
           # Use '|' as the field separator — safe because source tags and file paths
           # never contain '|', unlike ':' which appears in file:line annotations.
-          cat > "$py_script" <<'PYEOF'
-import json, os, re, sys
-
-fid = int(os.environ['FINDING_NUM'])
-bodies = json.load(sys.stdin)
-section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)
-id_map_pat = re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->', re.DOTALL)
-f_token = f'**[F{fid}]**'
-
-for body in bodies:
-    for section in section_pat.findall(body):
-        for line in section.splitlines():
-            if f_token in line:
-                # Strip the F-token, then extract the first [...] group as source.
-                stripped = re.sub(r'\*\*\[F[0-9]+\]\*\* *', '', line)
-                brackets = re.findall(r'\[([^\]]+)\]', stripped)
-                source = brackets[0].split(',')[0].strip() if brackets else ''
-                # Extract file from (at `file:line` ...) or — `file:line`
-                m = re.search(r'\(at `([^`]+)`', line) or re.search(r'— `([^`]+)', line)
-                file_line = m.group(1) if m else ''
-                file_part = file_line.rsplit(':', 1)[0] if ':' in file_line else file_line
-                rule_id = ''
-                if source.startswith('sarif:') and len(brackets) > 1:
-                    rule_id = brackets[1]
-                print(f'body|{source}|{file_part}|{rule_id}')
-                sys.exit(0)
-
-# Not in a body section — check id-map for inline finding.
-for body in bodies:
-    m = id_map_pat.search(body)
-    if not m:
-        continue
-    try:
-        d = json.loads(m.group(1))
-        if any(int(v) == fid for v in d.values()):
-            print('inline')
-            sys.exit(0)
-    except Exception:
-        pass
-
-print('not_found')
-PYEOF
+          # PY_SCRIPT is defined in this step's env block as a YAML literal block scalar
+          # to avoid embedding unindented Python inside the YAML document body.
+          printf '%s' "$PY_SCRIPT" > "$py_script"
           result=$(printf '%s' "$all_bodies" | FINDING_NUM="$finding_num" python3 "$py_script" 2>"$py_err") || {
             echo "::warning::Python context-lookup script failed for F${finding_num}: $(cat "$py_err"); feedback entry will lack source/file context" >&2
             exit 0
