@@ -129,4 +129,8 @@ For contributor how-tos (adding an analyzer, agent, language profile, or VCS pro
 
 ## Release process
 
-Run `/comprehensive-review` before tagging or releasing. This action is consumed via direct action reference (`@main`, `@v1.0`) or as a git submodule. Breaking changes require a version bump and coordinated updates in consuming repos.
+1. **Run `/comprehensive-review`** on the release branch before tagging.
+2. **Run `Workflow({name: 'ai-pr-review-e2e'})`** to build the image from the current checkout and validate it against all three test platforms (GitHub PR #1, GitLab MR !34, Bitbucket PR #2). The workflow throws on failure — do not tag until it passes. Supports `args.mode` (`quick`/`full`, default `full`) and `args.platforms` for targeted runs. Script lives at `~/.claude/workflows/ai-pr-review-e2e.js` (user-level; not committed to this repo).
+3. **Tag and push** — `publish-image.yml` promotes `:dev` to `:v1.x.x` + `:latest`.
+
+This action is consumed via direct action reference (`@main`, `@v1.0`) or as a git submodule. Breaking changes require a version bump and coordinated updates in consuming repos.
