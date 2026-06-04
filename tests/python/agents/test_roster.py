@@ -193,6 +193,32 @@ def test_get_agent_returns_correct_spec() -> None:
     assert spec.full_mode_only is False
 
 
+_PROSE_AGENTS = {
+    "code-reviewer",
+    "silent-failure-hunter",
+    "architecture-reviewer",
+    "security-reviewer",
+    "blind-hunter",
+    "edge-case-hunter",
+    "adversarial-general",
+}
+
+
+def test_prose_agents_have_raised_token_budget() -> None:
+    """Prose-heavy finding agents must have max_output_tokens=32768 (issue #430)."""
+    for name in _PROSE_AGENTS:
+        spec = get_agent(name)
+        assert spec.max_output_tokens == 32768, (
+            f"Expected {name} max_output_tokens=32768, got {spec.max_output_tokens}"
+        )
+
+
+def test_issue_linker_has_small_token_budget() -> None:
+    """issue-linker is not prose-heavy; its budget should remain 4096."""
+    spec = get_agent("issue-linker")
+    assert spec.max_output_tokens == 4096
+
+
 def test_get_agent_raises_on_unknown() -> None:
     with pytest.raises(KeyError):
         get_agent("nonexistent-agent")

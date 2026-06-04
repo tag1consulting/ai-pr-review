@@ -1,6 +1,9 @@
-After your markdown output, emit a JSON block fenced with ```json-findings that
-contains structured findings for inline comment posting. Each finding MUST include
-its numeric `confidence` score — findings below 75 will be automatically filtered.
+IMPORTANT: Emit the `json-findings` block FIRST, before your markdown analysis.
+This ensures findings are captured even if your response is truncated.
+
+Emit a JSON block fenced with ```json-findings containing structured findings for
+inline comment posting. Each finding MUST include its numeric `confidence` score —
+findings below 75 will be automatically filtered.
 
 ```json-findings
 [{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix"}]

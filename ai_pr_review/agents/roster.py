@@ -61,9 +61,10 @@ class AgentSpec:
 # ---------------------------------------------------------------------------
 # Agent roster — extracted from review.sh + lib/diff.sh
 # ---------------------------------------------------------------------------
-# max_output_tokens uses the full-mode default (16384). The dispatch layer
-# may apply a global override via AI_MAX_TOKENS_PER_AGENT; this field
-# provides the per-agent budget for cost-table rendering (2.NFR-4).
+# max_output_tokens uses the per-agent default (32768 for prose agents, 4096 for
+# issue-linker). The dispatch layer may apply a global override via
+# AI_MAX_TOKENS_PER_AGENT; this field provides the per-agent budget for cost-table
+# rendering (2.NFR-4).
 
 AGENTS: list[AgentSpec] = [
     # --- Tier 1: run in both quick and full mode ---
@@ -82,7 +83,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/code-reviewer.md",
         tier=1,
         conditional_trigger=None,
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=False,
         context_enrichment_eligible=True,
     ),
@@ -91,7 +92,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/silent-failure-hunter.md",
         tier=1,
         conditional_trigger="has_error_patterns",
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=False,
         context_enrichment_eligible=True,
     ),
@@ -101,7 +102,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/architecture-reviewer.md",
         tier=2,
         conditional_trigger="has_code_or_infra",
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
     ),
@@ -110,7 +111,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/security-reviewer.md",
         tier=2,
         conditional_trigger="has_security_patterns",
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
     ),
@@ -120,7 +121,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/blind-hunter.md",
         tier=2,
         conditional_trigger=None,
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=False,
     ),
@@ -129,7 +130,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/edge-case-hunter.md",
         tier=2,
         conditional_trigger="has_control_flow",
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
     ),
@@ -138,7 +139,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/adversarial-general.md",
         tier=2,
         conditional_trigger=None,
-        max_output_tokens=16384,
+        max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
     ),

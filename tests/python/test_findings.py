@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ai_pr_review.findings.extract import extract_findings
 from ai_pr_review.findings.merge import merge_findings
 from ai_pr_review.findings.models import Finding
+
+_FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 def _make_finding(**kw: object) -> Finding:
@@ -68,6 +72,40 @@ def test_extract_findings_invalid_json_returns_empty() -> None:
     output = "```json-findings\n{bad json\n```\n"
     findings = extract_findings(output, "agent")
     assert findings == []
+
+
+def test_extract_findings_truncated_no_fence_returns_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    """truncated=True with no fence logs the truncation warning and returns []."""
+    output = (_FIXTURES / "truncated-no-fence.md").read_text()
+    findings = extract_findings(output, "code-reviewer", truncated=True)
+    assert findings == []
+    captured = capsys.readouterr()
+    assert "truncated before json-findings block" in captured.err
+    assert "code-reviewer" in captured.err
+
+
+def test_extract_findings_truncated_json_salvaged(capsys: pytest.CaptureFixture[str]) -> None:
+    """truncated=True with a fenced block whose JSON is internally incomplete.
+
+    _try_repair walks backwards to the last complete '}'  and reconstructs the
+    array, recovering findings that arrived before truncation.
+    """
+    # Two complete objects followed by a partial third (no closing brace/bracket).
+    # The fence IS closed so _FENCE_RE can match, but json.loads fails on the
+    # incomplete array -- triggering _try_repair.
+    output = (
+        "```json-findings\n"
+        '[\n'
+        '  {"severity":"High","confidence":85,"file":"foo.py","line":1,"finding":"f1"},\n'
+        '  {"severity":"Medium","confidence":77,"file":"bar.py","line":2,"finding":"f2"},\n'
+        '  {"severity":"Low","confidence":76,"file":"baz.py","line":3,"finding":"Partial find\n'
+        "```\n"
+    )
+    findings = extract_findings(output, "code-reviewer", truncated=True)
+    assert len(findings) >= 2
+    assert all(f.confidence >= 75 for f in findings)
+    captured = capsys.readouterr()
+    assert "salvaged" in captured.err
 
 
 def test_extract_findings_normalise_severity() -> None:
