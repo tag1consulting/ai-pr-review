@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-06-04
+
+### Fixed
+
+#### `slash-commands.yml` failed to parse as YAML (#434)
+
+A `cat > file <<'PYEOF'` bash heredoc placed Python source at column 0
+inside a `run: |` block scalar. YAML's scanner treats lines with less
+indentation than the block's established level as document-level keys,
+producing a `ScannerError`. Every consumer of `slash-commands.yml` received
+a "workflow file issue" failure with 0 jobs — all `/ai-pr-review` slash
+commands were broken.
+
+Fix: the Python script is now defined as a `PY_SCRIPT` env var using a YAML
+literal block scalar (`|`), and the heredoc is replaced with
+`printf '%s' "$PY_SCRIPT" > "$py_script"`. Python logic is unchanged.
+
+#### Feedback loop context extraction gated on wrong event type (#429)
+
+`slash-commands.yml` gated the `feedback-command` job's context-extraction
+step on `is_review_comment == 'true'`. Top-level PR comments (the primary
+surface for slash commands like `/ai-pr-review dismiss`) always produced empty
+`source`, `file`, and `rule_id` fields in the feedback store. The gate is
+removed so context extraction runs for all comment types.
+
+#### Finding agents could lose all findings on large diffs (#430, #432)
+
+All seven finding agents (`code-reviewer`, `silent-failure-hunter`,
+`architecture-reviewer`, `security-reviewer`, `blind-hunter`,
+`edge-case-hunter`, `adversarial-general`) were instructed to emit the full
+markdown analysis first and the structured `json-findings` block last. On
+large PRs, `stop_reason=max_tokens` was reached before the findings block,
+producing a `WARNING: … truncated before json-findings block; findings lost`
+and zero structured findings recorded from that agent — silent data loss.
+
+Two compounding root causes fixed:
+
+1. **Prompt reorder** (`prompts/_trailer-findings.md` + 6 base prompts):
+   agents now emit the `json-findings` block **before** the markdown report,
+   so truncation cuts trailing prose instead of structured findings.
+
+2. **Token budget** (`config.py`, `roster.py`): `AI_MAX_TOKENS_PER_AGENT`
+   default raised from 8192 to 16384 (the prior default was silently halving
+   the per-agent roster budget). Prose-heavy finding agents raised from 16384
+   to 32768 in the roster. `issue-linker` and `pr-summarizer` unchanged.
+
+Python test coverage added for the previously untested truncation paths in
+`extract.py` (`_try_repair` salvage and no-fence truncation warning).
+
 ## [1.0.1] - 2026-06-03
 
 ### Fixed
