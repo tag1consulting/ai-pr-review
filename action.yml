@@ -120,7 +120,7 @@ inputs:
       on large diffs. Must be a positive integer; values outside [256, 65536] are
       clamped to that range.
     required: false
-    default: '8192'
+    default: '32768'
 
   enable-suggestions:
     description: >
