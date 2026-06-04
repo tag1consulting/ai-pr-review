@@ -1378,15 +1378,138 @@ jobs:
           echo "file=${parent_path}" >> "$GITHUB_OUTPUT"
           echo "rule_id=${rule_id}"  >> "$GITHUB_OUTPUT"
 
+      - name: Extract finding context from review body (issue_comment with F-ID)
+        # When the slash command is a top-level PR comment (issue_comment event)
+        # that includes a body-level finding ID — e.g.
+        #   /ai-pr-review false-positive F3 this is a false alarm
+        # — look up the finding in the review body so source/file/rule_id can
+        # be populated in the FeedbackEntry.
+        #
+        # This mirrors the extraction in dismiss-body-finding's "Lookup body
+        # finding" step.  Failure modes are best-effort: the entry is still
+        # persisted with whatever context was found.
+        if: steps.endpoints.outputs.is_review_comment == 'false'
+        id: body_context
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          OWNER: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository-name }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          COMMENT_BODY: ${{ inputs.comment-body }}
+        run: |
+          # Extract the finding ID from the comment body (e.g. "F3" → "3").
+          # The parser accepts F<n> as the second token after the command.
+          second_token=$(echo "$COMMENT_BODY" | head -1 | tr -d '\r' | awk '{print $3}')
+          if ! echo "$second_token" | grep -qiE '^F[0-9]{1,6}$'; then
+            # No F-ID in this comment — nothing to look up.
+            exit 0
+          fi
+          finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
+
+          # Allocate all temp files upfront and set a single EXIT trap so any
+          # early exit (including mktemp failures below) cleans up correctly.
+          api_err=$(mktemp) || { echo "::error::mktemp failed (api_err)"; exit 1; }
+          py_script=$(mktemp --suffix=.py) || { echo "::error::mktemp failed (py_script)"; rm -f "$api_err"; exit 1; }
+          py_err=$(mktemp) || { echo "::error::mktemp failed (py_err)"; rm -f "$api_err" "$py_script"; exit 1; }
+          trap 'rm -f "$api_err" "$py_script" "$py_err"' EXIT
+
+          api_failed=false
+          all_bodies=$(gh api \
+            "repos/${OWNER}/${REPO}/pulls/${ISSUE_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body // ""]' \
+            2>"$api_err") || {
+            echo "::warning::gh api failed fetching reviews for F${finding_num} context lookup: $(cat "$api_err")" >&2
+            api_failed=true
+          }
+          if [[ -s "$api_err" ]]; then
+            echo "::warning::gh api stderr: $(cat "$api_err")" >&2
+          fi
+          # Skip the lookup entirely if the API call failed — an empty body list
+          # would silently produce 'not_found', indistinguishable from a genuine miss.
+          if [[ "$api_failed" == "true" ]]; then
+            exit 0
+          fi
+
+          # Use Python (available in the feedback-command container) to search
+          # review bodies robustly. Bash line-by-line reads split multi-line
+          # bodies across iterations, making section boundary detection unreliable.
+          # Write the script to a temp file; pipe bodies via stdin to avoid quoting issues.
+          # Use '|' as the field separator — safe because source tags and file paths
+          # never contain '|', unlike ':' which appears in file:line annotations.
+          cat > "$py_script" <<'PYEOF'
+import json, os, re, sys
+
+fid = int(os.environ['FINDING_NUM'])
+bodies = json.load(sys.stdin)
+section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)
+id_map_pat = re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->', re.DOTALL)
+f_token = f'**[F{fid}]**'
+
+for body in bodies:
+    for section in section_pat.findall(body):
+        for line in section.splitlines():
+            if f_token in line:
+                # Strip the F-token, then extract the first [...] group as source.
+                stripped = re.sub(r'\*\*\[F[0-9]+\]\*\* *', '', line)
+                brackets = re.findall(r'\[([^\]]+)\]', stripped)
+                source = brackets[0].split(',')[0].strip() if brackets else ''
+                # Extract file from (at `file:line` ...) or — `file:line`
+                m = re.search(r'\(at `([^`]+)`', line) or re.search(r'— `([^`]+)', line)
+                file_line = m.group(1) if m else ''
+                file_part = file_line.rsplit(':', 1)[0] if ':' in file_line else file_line
+                rule_id = ''
+                if source.startswith('sarif:') and len(brackets) > 1:
+                    rule_id = brackets[1]
+                print(f'body|{source}|{file_part}|{rule_id}')
+                sys.exit(0)
+
+# Not in a body section — check id-map for inline finding.
+for body in bodies:
+    m = id_map_pat.search(body)
+    if not m:
+        continue
+    try:
+        d = json.loads(m.group(1))
+        if any(int(v) == fid for v in d.values()):
+            print('inline')
+            sys.exit(0)
+    except Exception:
+        pass
+
+print('not_found')
+PYEOF
+          result=$(printf '%s' "$all_bodies" | FINDING_NUM="$finding_num" python3 "$py_script" 2>"$py_err") || {
+            echo "::warning::Python context-lookup script failed for F${finding_num}: $(cat "$py_err"); feedback entry will lack source/file context" >&2
+            exit 0
+          }
+          if [[ -s "$py_err" ]]; then
+            echo "::warning::Python context-lookup stderr for F${finding_num}: $(cat "$py_err")" >&2
+          fi
+
+          case "$result" in
+            body\|*)
+              IFS='|' read -r _ source finding_file rule_id <<< "$result"
+              echo "source=${source}"       >> "$GITHUB_OUTPUT"
+              echo "file=${finding_file}"   >> "$GITHUB_OUTPUT"
+              echo "rule_id=${rule_id}"     >> "$GITHUB_OUTPUT"
+              ;;
+            inline)
+              echo "::notice::F${finding_num} is an inline finding; for full context in the feedback entry, reply directly to the finding thread instead of using a top-level comment"
+              ;;
+            not_found)
+              ;;
+          esac
+
       - name: Invoke Python slash handler
         id: handler
         env:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
-          # Prefer wrapper-supplied context (legacy), fall back to context
-          # auto-extracted from the parent review comment (new path).
-          SLASH_SOURCE: ${{ inputs.finding-source || steps.context.outputs.source }}
-          SLASH_FILE: ${{ inputs.finding-file || steps.context.outputs.file }}
-          SLASH_RULE_ID: ${{ inputs.finding-rule-id || steps.context.outputs.rule_id }}
+          # Prefer wrapper-supplied context (legacy), then context auto-extracted
+          # from the parent inline comment (review_comment path), then context
+          # looked up from the review body (issue_comment + F-ID path).
+          SLASH_SOURCE: ${{ inputs.finding-source || steps.context.outputs.source || steps.body_context.outputs.source }}
+          SLASH_FILE: ${{ inputs.finding-file || steps.context.outputs.file || steps.body_context.outputs.file }}
+          SLASH_RULE_ID: ${{ inputs.finding-rule-id || steps.context.outputs.rule_id || steps.body_context.outputs.rule_id }}
           # Forward extraction failure reason so the Python handler can flag
           # context_missing in extras without re-diagnosing the cause.
           SLASH_CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
