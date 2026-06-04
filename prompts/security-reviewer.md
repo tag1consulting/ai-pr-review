@@ -157,7 +157,8 @@ and nothing else. Do NOT output a prose statement, a json-findings block, or any
 
 Omit any severity section that has no findings.
 
-After your markdown output, emit a JSON block fenced with ` ```json-findings `:
+FIRST, before your markdown report, emit a JSON block fenced with ` ```json-findings `
+so findings are preserved even if the response is truncated:
 
 ```json-findings
 [{"severity":"High","confidence":90,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix","source":"security-reviewer"}]

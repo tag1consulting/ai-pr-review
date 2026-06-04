@@ -124,7 +124,7 @@ class ReviewConfig(BaseModel):
     # Number of concurrent LLM calls. Derived from parallel in resolve_models().
     concurrency: int = 4
     max_inline: int = 10
-    max_tokens_per_agent: int = 8192
+    max_tokens_per_agent: int = 16384
     enable_suggestions: bool = True
     cache_priming: bool = False
     llm_prompt_caching: str = "auto"

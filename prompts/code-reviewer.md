@@ -80,10 +80,13 @@ Rate each issue from 0-100:
 
 ## Empty State
 
-If you find no issues at confidence >= 75, output a brief "No issues found" statement
-followed by an empty json-findings block. Do NOT output the bare word `NONE`.
+If you find no issues at confidence >= 75, emit an empty json-findings block first,
+then a brief "No issues found" statement. Do NOT output the bare word `NONE`.
 
 ## Output Format
+
+Emit the `json-findings` block FIRST (before the markdown report) so findings are
+preserved even if the response is truncated. Then emit the markdown report below.
 
 ```markdown
 ## Code Review Findings

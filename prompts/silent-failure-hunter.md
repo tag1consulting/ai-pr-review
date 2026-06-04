@@ -62,8 +62,8 @@ version string).
 
 ## Empty State
 
-If you find no silent failure patterns, output a brief statement ("No silent failure
-patterns found") followed by an empty json-findings block. Do NOT output the bare word `NONE`.
+If you find no silent failure patterns, emit an empty json-findings block first,
+then a brief "No silent failure patterns found" statement. Do NOT output the bare word `NONE`.
 
 ## Severity Classification
 
@@ -73,6 +73,9 @@ patterns found") followed by an empty json-findings block. Do NOT output the bar
 - **Low**: Missing error context that slightly degrades debuggability
 
 ## Output Format
+
+Emit the `json-findings` block FIRST (before the markdown report) so findings are
+preserved even if the response is truncated. Then emit the markdown report below.
 
 ```markdown
 ## Silent Failure Analysis
