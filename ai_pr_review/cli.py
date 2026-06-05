@@ -472,6 +472,64 @@ async def _run_summarizer(
         return _SUMMARIZER_FAILURE_NOTICE
 
 
+def _fetch_open_issues(github_repository: str) -> str:
+    """Fetch open issues via gh CLI and return a compact text block, or "(unavailable)".
+
+    Runs ``gh issue list`` synchronously (call via anyio.to_thread.run_sync from async
+    context).  Always returns a string; never raises.  Returns "(unavailable)" on any
+    error so that the caller can still pass a user message to the LLM.
+
+    Each line in the returned block has the format::
+
+        #<number> <title> [label1, label2]
+    """
+    import json as _json
+
+    cmd = [
+        "gh", "issue", "list",
+        "--repo", github_repository,
+        "--state", "open",
+        "--limit", "50",
+        "--json", "number,title,labels",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        logger.warning("issue-linker: gh CLI not found; open-issue list unavailable")
+        return "(unavailable)"
+    except subprocess.TimeoutExpired:
+        logger.warning("issue-linker: gh issue list timed out; open-issue list unavailable")
+        return "(unavailable)"
+    except Exception as exc:
+        logger.warning("issue-linker: gh issue list failed: %s", exc, exc_info=True)
+        return "(unavailable)"
+
+    if proc.returncode != 0:
+        logger.warning(
+            "issue-linker: gh issue list exited %d; open-issue list unavailable: %s",
+            proc.returncode, proc.stderr.strip()[:200],
+        )
+        return "(unavailable)"
+
+    try:
+        issues = _json.loads(proc.stdout)
+    except _json.JSONDecodeError as exc:
+        logger.warning("issue-linker: could not parse gh issue list output: %s", exc)
+        return "(unavailable)"
+
+    if not issues:
+        return "(no open issues)"
+
+    lines: list[str] = []
+    for item in issues:
+        number = item.get("number", "?")
+        title = item.get("title", "(no title)")
+        label_names = [lb.get("name", "") for lb in item.get("labels", []) if lb.get("name")]
+        label_str = f" [{', '.join(label_names)}]" if label_names else ""
+        lines.append(f"#{number} {title}{label_str}")
+    return "\n".join(lines)
+
+
 async def _run_issue_linker(
     *,
     manifest_text: str,
@@ -491,8 +549,10 @@ async def _run_issue_linker(
     (fail-soft).
 
     The user message provides the context the agent needs: commit log, branch name,
-    file manifest, repository slug, and PROVIDER. The agent uses these along with
-    gh CLI calls to discover and assess related issues.
+    open issues (pre-fetched deterministically via ``gh issue list``), file manifest,
+    repository slug, and PROVIDER. The agent itself executes no shell commands or tools;
+    the open-issue list is injected as plain text so the model can match and cite real
+    issue numbers without any tool-calling loop.
     """
     from ai_pr_review.llm.base import LLMRequest
 
@@ -552,11 +612,20 @@ async def _run_issue_linker(
             )
             return ""
 
+        # Pre-fetch open issues deterministically so the model receives real titles and
+        # numbers without needing any tool-calling loop.  Fail-soft: on any error the
+        # fetch helper returns "(unavailable)" and the agent falls back to text-only
+        # analysis of the commit log and manifest.
+        open_issues_text = await anyio.to_thread.run_sync(
+            lambda: _fetch_open_issues(github_repository)
+        )
+
         user_message = (
             f"PROVIDER: {provider}\n\n"
             f"REPOSITORY: {github_repository}\n\n"
             f"## Branch Name\n\n{branch_name or '(unavailable)'}\n\n"
             f"## Commit Log\n\n{commit_log or '(unavailable)'}\n\n"
+            f"## Open Issues\n\n{open_issues_text}\n\n"
             f"## File Manifest\n\n{manifest_text}\n"
         )
 
