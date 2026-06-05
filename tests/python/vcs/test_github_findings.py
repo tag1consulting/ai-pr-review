@@ -73,6 +73,62 @@ def _review_post_handler(review_id: int = 100, status: int = 201) -> Callable:
     return handler
 
 
+def test_post_findings_out_of_diff_goes_to_details_section() -> None:
+    """out_of_diff findings must land in the <details> section, not inflate the
+    headline count, and not appear in the main findings list."""
+    # Use a body-only in-diff finding (no file/line) so it always lands in the
+    # review body rather than as an inline comment.
+    in_diff = Finding(
+        severity="High",
+        confidence=90,
+        finding="real bug in diff",
+        source="phpcs",
+        out_of_diff=False,
+    )
+    ood = Finding(
+        severity="Low",
+        confidence=80,
+        finding="pre-existing style issue",
+        source="phpcs",
+        file="app.py",
+        line=99,
+        out_of_diff=True,
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            body = json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 1, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([in_diff, ood], diff, event="COMMENT")
+    assert result.ok
+
+    assert bodies, "no review body posted"
+    body = bodies[0]
+
+    # out-of-diff finding must appear in a <details> collapsed section
+    assert "<details>" in body, "out-of-diff section must use <details>"
+    assert "pre-existing style issue" in body, "ood finding text must appear in body"
+
+    # The in-diff finding's text must appear in the main body
+    assert "real bug in diff" in body
+
+    # Headline count: 1 (in-diff only), not 2 (total).
+    # The rendered format is "**Findings:** 1".
+    assert "**Findings:** 1" in body, (
+        "headline count must reflect in-diff findings only; got: %r" % body[:400]
+    )
+    assert "**Findings:** 2" not in body, "ood finding must not inflate the headline count"
+
+
 def test_post_findings_inline_for_eligible_line() -> None:
     findings = [
         Finding(

@@ -30,24 +30,27 @@ from ai_pr_review.findings.models import Finding
 
 # Analyzer source prefixes that identify native-tool findings.  LLM-agent
 # findings use agent names (code-reviewer, security-reviewer, etc.) which
-# do not appear in this set.
+# do not appear in this set.  These must match the source strings emitted
+# by each analyzers/run-*.sh script exactly (using prefix matching).
 _ANALYZER_PREFIXES: tuple[str, ...] = (
-    "phpcs",
-    "phpstan",
-    "semgrep",
-    "sarif:",
-    "ruff",
+    "checkov",
     "eslint",
+    "golangci-lint",
     "hadolint",
     "kube-linter",
-    "kubeLinter",
+    "osv",
+    "phpcs",
     "phpstan",
-    "tflint",
-    "govulncheck",
-    "trufflehog",
-    "osv-scanner",
+    "ruff",
+    "sarif:",
+    "semgrep",
     "shellcheck",
+    "tflint",
+    "trufflehog",
 )
+
+# Compiled whitespace normaliser used by rollup_repeated_findings.
+_WHITESPACE = re.compile(r"\s+")
 
 # When the same source+text fires more than this many times in one file,
 # collapse the group into a single rollup finding.
@@ -77,8 +80,8 @@ def apply_diff_scope(
 
     LLM-agent findings are never touched regardless of mode.
     """
-    if mode == "off" or not diff_text.strip():
-        return findings
+    if mode == "off" or not (diff_text or "").strip():
+        return list(findings)
 
     eligible = {(lr.file, lr.line) for lr in parse_added_lines(diff_text)}
 
@@ -113,20 +116,21 @@ def rollup_repeated_findings(
 
     Non-analyzer findings and findings without a file are left unchanged.
     """
-    _WHITESPACE = re.compile(r"\s+")
-
     def _normalise(text: str) -> str:
         return _WHITESPACE.sub(" ", text.strip().lower())
 
-    # Group analyzer findings by (file, source, normalised_text).
+    # Group analyzer findings by (file, source, normalised_text, out_of_diff).
+    # The out_of_diff flag is part of the key so in-diff and out-of-diff
+    # occurrences of the same rule are never collapsed together — otherwise a
+    # genuine in-diff High finding could be demoted to a Low out-of-diff stub.
     # Preserve insertion order for non-grouped findings.
-    groups: dict[tuple[str, str, str], list[Finding]] = defaultdict(list)
+    groups: dict[tuple[str, str, str, bool], list[Finding]] = defaultdict(list)
     passthrough: list[Finding] = []
 
     for f in findings:
         if _is_analyzer(f) and f.file:
             src = f.source or (f.sources[0] if f.sources else "")
-            key = (f.file, src, _normalise(f.finding))
+            key = (f.file, src, _normalise(f.finding), f.out_of_diff)
             groups[key].append(f)
         else:
             passthrough.append(f)
@@ -138,8 +142,7 @@ def rollup_repeated_findings(
             result.extend(group)
             continue
 
-        # Collapse: keep the representative (highest severity / lowest line),
-        # append occurrence summary.
+        # Collapse: keep the lowest-line representative, append occurrence summary.
         rep = min(group, key=lambda f: (f.line or 0))
         lines = sorted({f.line for f in group if f.line is not None})
         line_preview = ", ".join(str(n) for n in lines[:10])

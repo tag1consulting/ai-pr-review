@@ -183,9 +183,15 @@ async def run_review(
     # trigger CHANGES_REQUESTED.  Repeated-rule rollup prevents the same
     # analyzer rule from producing dozens of identical body entries.
     if cfg.analyzer_diff_scope != "off":
-        from ai_pr_review.findings.scope import apply_diff_scope, rollup_repeated_findings
-        kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
-        kept = rollup_repeated_findings(kept)
+        try:
+            from ai_pr_review.findings.scope import apply_diff_scope, rollup_repeated_findings
+            kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
+            kept = rollup_repeated_findings(kept)
+        except Exception as exc:
+            logger.warning(
+                "diff-scope/rollup failed (head_sha=%s); proceeding with unscoped findings: %s",
+                diff.head_sha, exc, exc_info=True,
+            )
 
     # Phase 3: outcome classification.
     # classify_review_outcome's Protocol declares severity: str; Finding's

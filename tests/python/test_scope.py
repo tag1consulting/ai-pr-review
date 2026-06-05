@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.findings.scope import (
     ROLLUP_THRESHOLD,
+    _ANALYZER_PREFIXES,
+    _is_analyzer,
     apply_diff_scope,
     rollup_repeated_findings,
 )
@@ -231,7 +234,7 @@ def test_config_valid_values(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_config_invalid_value_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from ai_pr_review.config import ReviewConfig
     monkeypatch.setenv("AI_ANALYZER_DIFF_SCOPE", "invalid")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ReviewConfig.from_env()
 
 
@@ -240,3 +243,70 @@ def test_config_default_is_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AI_ANALYZER_DIFF_SCOPE", raising=False)
     cfg = ReviewConfig.from_env()
     assert cfg.analyzer_diff_scope == "cap"
+
+
+# Analyzer prefix coverage — every source emitted by analyzers/run-*.sh must
+# be recognised.  If a new analyzer is added, update _ANALYZER_PREFIXES too.
+
+
+@pytest.mark.parametrize("source", [
+    "checkov",
+    "eslint",
+    "golangci-lint",
+    "hadolint",
+    "kube-linter",
+    "osv",
+    "phpcs",
+    "phpstan",
+    "ruff",
+    "sarif:bandit",
+    "semgrep",
+    "shellcheck",
+    "tflint",
+    "trufflehog",
+])
+def test_is_analyzer_recognises_all_sources(source: str) -> None:
+    f = Finding(severity="High", confidence=80, finding="x", source=source)
+    assert _is_analyzer(f), f"_is_analyzer returned False for source={source!r}"
+
+
+def test_is_analyzer_rejects_llm_agent_sources() -> None:
+    for source in ("code-reviewer", "security-reviewer", "architecture-reviewer", "blind-hunter"):
+        f = Finding(severity="High", confidence=80, finding="x", source=source)
+        assert not _is_analyzer(f), f"_is_analyzer returned True for LLM agent source={source!r}"
+
+
+def test_prefix_list_has_no_duplicates() -> None:
+    assert len(_ANALYZER_PREFIXES) == len(set(_ANALYZER_PREFIXES)), (
+        "Duplicate entries in _ANALYZER_PREFIXES"
+    )
+
+
+# Rollup: in-diff and out-of-diff occurrences of the same rule must not merge.
+
+
+def test_rollup_does_not_merge_across_diff_boundary() -> None:
+    """An in-diff High finding must not be folded into an out-of-diff Low group."""
+    # 5 out-of-diff Low findings + 1 in-diff High = 6 total, above threshold.
+    # The in-diff High must survive as a separate entry.
+    ood = [
+        Finding(
+            severity="Low", confidence=80, finding="same rule",
+            source="phpcs", file="a.php", line=i + 50,
+            out_of_diff=True,
+        )
+        for i in range(5)
+    ]
+    in_diff = Finding(
+        severity="High", confidence=90, finding="same rule",
+        source="phpcs", file="a.php", line=5,
+        out_of_diff=False,
+    )
+    result = rollup_repeated_findings(ood + [in_diff], threshold=5)
+    # Out-of-diff group (5 entries, exactly at threshold) is preserved unchanged.
+    # In-diff entry is kept separate.
+    in_diff_results = [f for f in result if not f.out_of_diff]
+    ood_results = [f for f in result if f.out_of_diff]
+    assert len(in_diff_results) == 1, "in-diff High finding must not be collapsed"
+    assert in_diff_results[0].severity == "High"
+    assert len(ood_results) == 5

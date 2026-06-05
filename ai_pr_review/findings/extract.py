@@ -79,7 +79,13 @@ def _parse_and_validate(
         if not item.get("source"):
             item["source"] = agent_name
         try:
-            results.append(Finding.model_validate(item))
+            f = Finding.model_validate(item)
+            # Strip out_of_diff: it is set internally by apply_diff_scope, not
+            # by agents.  An injected "out_of_diff": true in agent JSON would
+            # otherwise suppress the finding from CHANGES_REQUESTED evaluation.
+            if f.out_of_diff:
+                f = f.model_copy(update={"out_of_diff": False})
+            results.append(f)
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
 
