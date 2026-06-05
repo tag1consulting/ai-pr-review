@@ -50,6 +50,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_CONTEXT_LOOKUP_LINES",
         # --- SARIF ingestion ---
         "AI_SARIF_PATHS",
+        # --- Diff exclude patterns ---
+        "AI_EXCLUDE_PATTERNS",
+        "AI_EXCLUDE_PATTERNS_MODE",
         # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
@@ -145,6 +148,10 @@ class ReviewConfig(BaseModel):
 
     # --- SARIF ingestion ---
     sarif_paths: tuple[str, ...] = ()
+
+    # --- Diff exclude patterns ---
+    exclude_patterns: tuple[str, ...] = ()
+    exclude_patterns_mode: str = "append"
 
     # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
@@ -319,6 +326,12 @@ class ReviewConfig(BaseModel):
                 for p in os.environ.get("AI_SARIF_PATHS", "").split(",")
                 if p.strip()
             ),
+            exclude_patterns=tuple(
+                p.strip()
+                for p in os.environ.get("AI_EXCLUDE_PATTERNS", "").split(",")
+                if p.strip()
+            ),
+            exclude_patterns_mode=os.environ.get("AI_EXCLUDE_PATTERNS_MODE", "append"),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
             feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),

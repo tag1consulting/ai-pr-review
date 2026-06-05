@@ -23,6 +23,8 @@ def run_compute(
         ignore_merge_commits=config.ignore_merge_commits,
         review_target=config.review_target,
         last_reviewed_sha="" if config.force_full_diff else (last_reviewed_sha or ""),
+        exclude_patterns=config.exclude_patterns,
+        exclude_patterns_mode=config.exclude_patterns_mode,
     )
 
     if not diff_result.changed_files:

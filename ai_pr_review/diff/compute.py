@@ -33,11 +33,45 @@ _EXCLUDE_PATTERNS = [
 ]
 
 
+def _resolve_excludes(user_patterns: tuple[str, ...], mode: str) -> list[str]:
+    """Merge user-supplied exclude patterns with the built-in defaults.
+
+    Args:
+        user_patterns: Glob patterns supplied by the caller (without the ``":!"``
+            pathspec prefix — the prefix is added automatically if missing).
+        mode: ``"append"`` (default) adds *user_patterns* after the built-in list.
+            ``"replace"`` uses *only* user_patterns and drops the built-ins.
+            ``"replace"`` with an empty *user_patterns* falls back to the built-ins
+            with a warning rather than producing an unfiltered diff silently.
+
+    Returns:
+        A list of pathspec-prefixed glob patterns ready to pass to ``git diff``.
+    """
+
+    def _normalize(p: str) -> str:
+        return p if p.startswith(":!") else f":!{p}"
+
+    normalized = [_normalize(p) for p in user_patterns]
+
+    if mode == "replace":
+        if not normalized:
+            logger.warning(
+                "AI_EXCLUDE_PATTERNS_MODE=replace with no patterns supplied; "
+                "falling back to built-in excludes to avoid an unfiltered diff."
+            )
+            return list(_EXCLUDE_PATTERNS)
+        return normalized
+
+    # Default: "append" — built-ins first, then user patterns.
+    return list(_EXCLUDE_PATTERNS) + normalized
+
+
 def _filtered_diff(
     diff_base: str,
     head_sha: str,
     base_ref: str,
     workspace: str = ".",
+    exclude_patterns: list[str] | None = None,
 ) -> tuple[str, str]:
     """Return (diff_text, fallback_reason) after filtering base-branch merge commits.
 
@@ -46,9 +80,15 @@ def _filtered_diff(
     Cherry-picks all non-merge commits from the range onto a synthetic branch
     and diffs that against diff_base.
 
+    Args:
+        exclude_patterns: Resolved pathspec patterns to pass to ``git diff``.
+            Defaults to ``_EXCLUDE_PATTERNS`` when *None*.
+
     Returns fallback_reason="" on success.  On conflict or git error, returns
     ("", "<reason>") — the caller falls back to the unfiltered diff.
     """
+    if exclude_patterns is None:
+        exclude_patterns = list(_EXCLUDE_PATTERNS)
     git = ["git", "-C", workspace]
 
     # 1. List merge commits in range
@@ -149,7 +189,7 @@ def _filtered_diff(
                 return ("", "")
 
             diff_result = subprocess.run(
-                git + ["diff", f"{diff_base}..{synthetic_tip}"] + ["--"] + _EXCLUDE_PATTERNS,
+                git + ["diff", f"{diff_base}..{synthetic_tip}"] + ["--"] + exclude_patterns,
                 capture_output=True,
                 text=True,
             )
@@ -174,6 +214,8 @@ def compute_diff(
     workspace: str = ".",
     ignore_merge_commits: bool = False,
     review_target: str = "pr",
+    exclude_patterns: tuple[str, ...] = (),
+    exclude_patterns_mode: str = "append",
 ) -> DiffResult:
     """Compute a git diff between base and head.
 
@@ -183,7 +225,18 @@ def compute_diff(
     When ignore_merge_commits=True (and review_target != "standalone"), strips
     merge commits that pulled in upstream base-branch changes and diffs only
     the PR author's own commits.  Falls back to the unfiltered diff on conflict.
+
+    Args:
+        exclude_patterns: User-supplied git pathspec glob patterns to exclude from
+            the diff (e.g. ``("docs/*", "*.generated.go")``). The ``":!"`` prefix
+            is added automatically. Interacts with *exclude_patterns_mode*.
+        exclude_patterns_mode: ``"append"`` (default) adds *exclude_patterns* to
+            the built-in lockfile/vendor excludes. ``"replace"`` uses only
+            *exclude_patterns* and drops the built-in list. Providing ``"replace"``
+            with an empty *exclude_patterns* logs a warning and falls back to the
+            built-ins.
     """
+    excludes = _resolve_excludes(exclude_patterns, exclude_patterns_mode)
     git = ["git", "-C", workspace]
 
     # Determine diff base
@@ -220,7 +273,7 @@ def compute_diff(
 
     # Changed files (with exclusions)
     changed_result = subprocess.run(
-        git + ["diff", "--name-only", range_spec] + ["--"] + _EXCLUDE_PATTERNS,
+        git + ["diff", "--name-only", range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
     )
@@ -230,7 +283,7 @@ def compute_diff(
 
     # Diff stat
     stat_result = subprocess.run(
-        git + ["diff", "--stat", range_spec] + ["--"] + _EXCLUDE_PATTERNS,
+        git + ["diff", "--stat", range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
     )
@@ -238,7 +291,7 @@ def compute_diff(
 
     # Full diff text (initial, may be replaced by filtered version below)
     diff_result = subprocess.run(
-        git + ["diff", range_spec] + ["--"] + _EXCLUDE_PATTERNS,
+        git + ["diff", range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
     )
@@ -248,7 +301,7 @@ def compute_diff(
     # Optionally filter out upstream base-branch merges
     if ignore_merge_commits and review_target != "standalone":
         filtered_text, fallback_reason = _filtered_diff(
-            diff_base, head_sha, base_ref, workspace
+            diff_base, head_sha, base_ref, workspace, exclude_patterns=excludes
         )
         if fallback_reason:
             # Cherry-pick conflict — keep unfiltered diff, propagate reason
