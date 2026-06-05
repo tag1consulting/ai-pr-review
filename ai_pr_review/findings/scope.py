@@ -87,6 +87,9 @@ def apply_diff_scope(
 
     result: list[Finding] = []
     for f in findings:
+        # f.line is None (not `not f.line`) — line=0 is not a valid source line
+        # but using truthiness would also skip a hypothetical line=0 finding,
+        # which is subtly wrong.  Keep the explicit None check.
         if not _is_analyzer(f) or not f.file or f.line is None:
             result.append(f)
             continue
@@ -123,7 +126,11 @@ def rollup_repeated_findings(
     # The out_of_diff flag is part of the key so in-diff and out-of-diff
     # occurrences of the same rule are never collapsed together — otherwise a
     # genuine in-diff High finding could be demoted to a Low out-of-diff stub.
-    # Preserve insertion order for non-grouped findings.
+    #
+    # Output ordering: passthrough (non-analyzer / no-file) findings come
+    # first, followed by analyzer groups in the order their first member was
+    # encountered.  Callers must not rely on relative ordering between
+    # passthrough and grouped findings.
     groups: dict[tuple[str, str, str, bool], list[Finding]] = defaultdict(list)
     passthrough: list[Finding] = []
 

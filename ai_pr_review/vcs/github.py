@@ -750,6 +750,9 @@ def _render_review_body(
 
     # out_of_diff findings are excluded from the headline count and risk
     # calculation so they cannot trigger CHANGES_REQUESTED on their own.
+    # NOTE: the review event (APPROVE / REQUEST_CHANGES) is determined by the
+    # caller before this function is invoked; in_diff_findings is used only for
+    # display counts and the _top_risk label here.
     in_diff_findings = [f for f in findings if not f.out_of_diff]
     finding_total = len(in_diff_findings)
     ood_count = len(findings) - finding_total
