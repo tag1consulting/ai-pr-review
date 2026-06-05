@@ -227,6 +227,16 @@ class ReviewConfig(BaseModel):
             raise ValueError(f"engine must be 'bash' or 'python', got {v!r}")
         return v
 
+    @field_validator("exclude_patterns_mode")
+    @classmethod
+    def _validate_exclude_patterns_mode(cls, v: str) -> str:
+        normalized = v.lower()
+        if normalized not in ("append", "replace"):
+            raise ValueError(
+                f"exclude_patterns_mode must be 'append' or 'replace', got {v!r}"
+            )
+        return normalized
+
     @field_validator("confidence_threshold")
     @classmethod
     def _validate_confidence(cls, v: int) -> int:

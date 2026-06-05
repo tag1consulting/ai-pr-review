@@ -103,6 +103,35 @@ def test_invalid_confidence_threshold() -> None:
         ReviewConfig(confidence_threshold=150)
 
 
+def test_invalid_exclude_patterns_mode() -> None:
+    with pytest.raises(ValueError):
+        ReviewConfig.model_validate({"exclude_patterns_mode": "replaces"})
+
+
+def test_valid_exclude_patterns_mode_accepted() -> None:
+    cfg_append = ReviewConfig.model_validate({"exclude_patterns_mode": "append"})
+    assert cfg_append.exclude_patterns_mode == "append"
+    cfg_replace = ReviewConfig.model_validate({"exclude_patterns_mode": "replace"})
+    assert cfg_replace.exclude_patterns_mode == "replace"
+
+
+def test_exclude_patterns_mode_normalized_to_lowercase() -> None:
+    """Mixed-case values like 'Replace' and 'APPEND' are accepted and stored lowercase."""
+    cfg = ReviewConfig.model_validate({"exclude_patterns_mode": "Replace"})
+    assert cfg.exclude_patterns_mode == "replace"
+    cfg2 = ReviewConfig.model_validate({"exclude_patterns_mode": "APPEND"})
+    assert cfg2.exclude_patterns_mode == "append"
+
+
+def test_exclude_patterns_whitespace_trimmed_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AI_EXCLUDE_PATTERNS trims whitespace around each comma-separated entry."""
+    monkeypatch.setenv("AI_EXCLUDE_PATTERNS", "vendor/*, generated/*")
+    cfg = ReviewConfig.from_env()
+    assert cfg.exclude_patterns == ("vendor/*", "generated/*")
+
+
 def test_all_ai_vars_read_in_from_env_are_known() -> None:
     """Every AI_* var consumed in from_env() must appear in _KNOWN_AI_VARS.
 

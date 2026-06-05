@@ -28,8 +28,8 @@ nav_order: 2
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 | `ignore-merge-commits` | No | `false` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
-| `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically. Requires the Python engine. See `exclude-patterns-mode`. |
-| `exclude-patterns-mode` | No | `append` | Controls how `exclude-patterns` interacts with the built-in excludes. `append` (default): user patterns are added to the built-in lockfile/vendor excludes. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
+| `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Requires the Python engine. See `exclude-patterns-mode`. |
+| `exclude-patterns-mode` | No | `append` | Controls how `exclude-patterns` interacts with the built-in excludes. `append` (default): user patterns are added to the built-in lockfile/vendor excludes. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. Invalid values are rejected with an error. |
 
 ## Repository variables
 
@@ -140,8 +140,8 @@ These variables enable optional capabilities that are off by default. All requir
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated list of git pathspec glob patterns to exclude from the diff before the LLM reads it (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically if missing. Use to reduce LLM token costs on large generated or documentation-only files. Requires the Python engine (the default since v1.0.0). |
-| `AI_EXCLUDE_PATTERNS_MODE` | `append` | Controls how `AI_EXCLUDE_PATTERNS` interacts with the built-in exclude list (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are appended after the built-ins. `replace`: only user patterns are used and the built-in list is dropped. Setting `replace` with an empty `AI_EXCLUDE_PATTERNS` logs a warning and falls back to the built-in list to avoid producing an unfiltered diff silently. |
+| `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated list of git pathspec glob patterns to exclude from the diff before the LLM reads it (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically if missing. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Use to reduce LLM token costs on large generated or documentation-only files. Requires the Python engine (the default since v1.0.0). |
+| `AI_EXCLUDE_PATTERNS_MODE` | `append` | Controls how `AI_EXCLUDE_PATTERNS` interacts with the built-in exclude list (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are appended after the built-ins. `replace`: only user patterns are used and the built-in list is dropped. Setting `replace` with an empty `AI_EXCLUDE_PATTERNS` logs a warning and falls back to the built-in list to avoid producing an unfiltered diff silently. Invalid values (anything other than `append` or `replace`) are rejected with an error at startup. |
 
 #### Learning loop
 
