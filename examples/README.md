@@ -106,6 +106,8 @@ Three optional features can be enabled independently. All default off, all requi
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | Tree-sitter symbol-context injection into agent prompts (`<symbol-context>` block) |
 | `AI_REVIEW_SARIF_PATHS` | `''` | Comma-separated SARIF 2.1.0 file paths to merge as findings — see [`workflows/sarif-codeql.yml`](workflows/sarif-codeql.yml) for the CodeQL flavor |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | Learning loop — persists `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts and re-injects them into future reviews. GitHub-only. |
+| `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated git pathspec globs to exclude from the diff (e.g. `vendor/*,generated/*`). Appended to built-in excludes by default. (v1.1.0) |
+| `AI_EXCLUDE_PATTERNS_MODE` | `append` | `append` adds to built-in vendor/lockfile excludes; `replace` discards them and uses only the patterns you supply. (v1.1.0) |
 
 See [Configuration → Opt-in capabilities](../docs/configuration.md#opt-in-capabilities) for the full env-var reference (retention knobs, token budgets, branch name).
 
