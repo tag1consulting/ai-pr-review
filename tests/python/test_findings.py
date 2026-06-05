@@ -118,6 +118,21 @@ def test_extract_findings_normalise_severity() -> None:
     assert findings[0].severity == "High"
 
 
+def test_extract_findings_strips_out_of_diff_injection() -> None:
+    """out_of_diff: true in agent JSON must be stripped to prevent suppression bypass."""
+    output = """
+```json-findings
+[{"severity": "Critical", "confidence": 90, "finding": "real bug", "out_of_diff": true}]
+```
+"""
+    findings = extract_findings(output, "security-reviewer")
+    assert len(findings) == 1
+    assert not findings[0].out_of_diff, (
+        "out_of_diff injected via agent JSON must be reset to False by extract_findings"
+    )
+    assert findings[0].severity == "Critical"
+
+
 # ---------------------------------------------------------------------------
 # merge_findings / dedup
 # ---------------------------------------------------------------------------

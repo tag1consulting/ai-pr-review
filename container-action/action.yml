@@ -160,6 +160,17 @@ inputs:
     required: false
     default: 'append'
 
+  analyzer-diff-scope:
+    description: >
+      Controls how native static-analyzer findings on lines outside the PR
+      diff are handled. "cap" (default) downgrades them to Low severity and
+      collapses them into a folded section in the review body so they cannot
+      trigger CHANGES_REQUESTED. "drop" removes them entirely. "off" passes
+      them through unchanged (full-file linting behaviour). LLM-agent findings
+      are not affected by this setting.
+    required: false
+    default: 'cap'
+
 runs:
   using: composite
   steps:
@@ -214,6 +225,7 @@ runs:
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
         AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
+        AI_ANALYZER_DIFF_SCOPE: ${{ inputs.analyzer-diff-scope }}
       run: |
         docker pull "$IMAGE"
         # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
@@ -251,6 +263,7 @@ runs:
           -e AI_FEEDBACK_LOOP \
           -e AI_EXCLUDE_PATTERNS \
           -e AI_EXCLUDE_PATTERNS_MODE \
+          -e AI_ANALYZER_DIFF_SCOPE \
           ${FORCE_FULL_DIFF:+-e FORCE_FULL_DIFF} \
           ${STANDALONE_DEPTH:+-e STANDALONE_DEPTH} \
           ${LLM_RETRY_COUNT:+-e LLM_RETRY_COUNT} \

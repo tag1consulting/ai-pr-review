@@ -279,6 +279,7 @@ def build_review_runtime(
         semaphore_size=config.concurrency,
         suppression_rules=suppression_rules,
         extra_findings=extra_findings,
+        analyzer_diff_scope=config.analyzer_diff_scope,
     )
 
     return ReviewRuntime(

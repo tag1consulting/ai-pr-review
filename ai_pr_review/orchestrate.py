@@ -78,6 +78,9 @@ class OrchestrationConfig:
     # native static analyzers and SARIF, assembled by the caller).
     # Typed as tuple[object,...] to avoid a circular import at module level.
     extra_findings: tuple[object, ...] = ()
+    # Controls how out-of-diff native-analyzer findings are handled.
+    # Mirrors ReviewConfig.analyzer_diff_scope ("cap" / "drop" / "off").
+    analyzer_diff_scope: str = "cap"
 
 
 TokenTableRenderer = Callable[[Sequence[AgentResult], float | None], str]
@@ -173,6 +176,28 @@ async def run_review(
         )
     merged = merge_findings(raw_findings, confidence_threshold=cfg.confidence_threshold)
     kept, _suppressed_count = apply_suppressions(merged, list(cfg.suppression_rules))
+
+    # Phase 2.5: diff-scope and rollup for native-analyzer findings.
+    # Out-of-diff analyzer findings are capped to Low (or dropped) so that
+    # whole-file linting on a small diff can never dominate the review or
+    # trigger CHANGES_REQUESTED.  Repeated-rule rollup prevents the same
+    # analyzer rule from producing dozens of identical body entries.
+    if cfg.analyzer_diff_scope != "off":
+        from ai_pr_review.findings.scope import apply_diff_scope, rollup_repeated_findings
+        try:
+            kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
+        except Exception as exc:
+            logger.warning(
+                "apply_diff_scope failed (head_sha=%s); proceeding with unscoped findings: %s",
+                diff.head_sha, exc, exc_info=True,
+            )
+        try:
+            kept = rollup_repeated_findings(kept)
+        except Exception as exc:
+            logger.warning(
+                "rollup_repeated_findings failed (head_sha=%s); proceeding without rollup: %s",
+                diff.head_sha, exc, exc_info=True,
+            )
 
     # Phase 3: outcome classification.
     # classify_review_outcome's Protocol declares severity: str; Finding's
