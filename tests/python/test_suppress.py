@@ -155,6 +155,91 @@ class TestRuleMatches:
 
 
 # ---------------------------------------------------------------------------
+# _rule_matches — line-range (match_line_start / match_line_end)
+# ---------------------------------------------------------------------------
+
+
+class TestRuleMatchesLineRange:
+    def test_range_hit(self) -> None:
+        """Finding inside the rule window is suppressed."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=100, match_line_end=200)
+        f = _finding(line=150)
+        assert _rule_matches(f, rule) is True
+
+    def test_range_miss_below(self) -> None:
+        """Finding below the window is not suppressed."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=100, match_line_end=200)
+        f = _finding(line=50)
+        assert _rule_matches(f, rule) is False
+
+    def test_range_miss_above(self) -> None:
+        """Finding above the window is not suppressed."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=100, match_line_end=200)
+        f = _finding(line=250)
+        assert _rule_matches(f, rule) is False
+
+    def test_open_lower_bound(self) -> None:
+        """line_start=0 (unset) means no lower bound — early lines are matched."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=0, match_line_end=200)
+        f = _finding(line=5)
+        assert _rule_matches(f, rule) is True
+
+    def test_open_upper_bound(self) -> None:
+        """line_end=0 (unset) means no upper bound — very late lines are matched."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=100, match_line_end=0)
+        f = _finding(line=9999)
+        assert _rule_matches(f, rule) is True
+
+    def test_unanchored_finding_not_matched(self) -> None:
+        """A finding with no line number is never matched by a range rule."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=1, match_line_end=200)
+        f = _finding()  # line defaults to None
+        assert _rule_matches(f, rule) is False
+
+    def test_multiline_finding_overlap(self) -> None:
+        """Multi-line finding whose span overlaps the rule window is suppressed."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=100, match_line_end=200)
+        # Finding spans 190–210; overlaps with 100–200
+        f = _finding(start_line=190, line=210)
+        assert _rule_matches(f, rule) is True
+
+    def test_multiline_finding_no_overlap(self) -> None:
+        """Multi-line finding entirely above the window is not suppressed."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=100, match_line_end=200)
+        # Finding spans 210–220; entirely above the window
+        f = _finding(start_line=210, line=220)
+        assert _rule_matches(f, rule) is False
+
+    def test_misconfigured_rule_start_gt_end(self) -> None:
+        """Rule with line_start > line_end never matches any finding."""
+        rule = SuppressionRule(id="r", reason="ok", match_line_start=200, match_line_end=100)
+        f = _finding(line=150)
+        assert _rule_matches(f, rule) is False
+
+    def test_combined_with_match_file_hit(self) -> None:
+        """Rule with file + line range: matching file and line → suppressed."""
+        rule = SuppressionRule(
+            id="r", reason="ok", match_file=r"patches/", match_line_start=1, match_line_end=200
+        )
+        f = _finding(file="patches/lib.c", line=150)
+        assert _rule_matches(f, rule) is True
+
+    def test_combined_with_match_file_line_miss(self) -> None:
+        """Rule with file + line range: matching file but line outside window → not suppressed."""
+        rule = SuppressionRule(
+            id="r", reason="ok", match_file=r"patches/", match_line_start=1, match_line_end=200
+        )
+        f = _finding(file="patches/lib.c", line=250)
+        assert _rule_matches(f, rule) is False
+
+    def test_exact_match_line_still_works(self) -> None:
+        """match_line exact-match behaviour is unaffected by the new fields."""
+        rule = SuppressionRule(id="r", reason="ok", match_line=150)
+        assert _rule_matches(_finding(line=150), rule) is True
+        assert _rule_matches(_finding(line=151), rule) is False
+
+
+# ---------------------------------------------------------------------------
 # apply_suppressions
 # ---------------------------------------------------------------------------
 
