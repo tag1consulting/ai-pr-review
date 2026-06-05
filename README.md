@@ -250,6 +250,8 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `ignore-merge-commits` | No | `false` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. |
 | `context-enrichment` | No | `false` | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Opt-in capabilities](#opt-in-capabilities). |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
+| `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. Requires `engine: python`. See `exclude-patterns-mode`. |
+| `exclude-patterns-mode` | No | `append` | How `exclude-patterns` interacts with the built-in excludes (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are added after the built-ins. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
 | `feedback-loop` | No | `false` | Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. Requires `engine: python`. |
 
 Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).

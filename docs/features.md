@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v1.0.1
+
+**Config-driven diff exclude patterns (PR #438, closes #436).** The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Default mode is `append`, which adds user patterns after the built-in lockfile/`vendor/`/`node_modules/` excludes; set `exclude-patterns-mode: replace` (or `AI_EXCLUDE_PATTERNS_MODE=replace`) to drop the built-ins entirely. Python engine only. See [docs/configuration.md](docs/configuration.md#diff-exclude-patterns).
+
+**Line-range suppression rules (PR #439, closes #437).** Suppression rules now support `match.line_start` and `match.line_end` fields, scoping a rule to a specific line window within a file. This resolves the granularity gap for repos that vendor upstream code and apply patches: a rule can now target only the upstream line window (e.g. lines 1–200) so that findings on the user's own patched lines (201+) are never silenced. Multi-line findings match on overlap. A finding with no line number is never matched by a range rule. Python engine only. See [docs/suppression.md](docs/suppression.md).
+
 ## What's new in v1.0.0
 
 **Python engine is now the default.** `AI_PR_REVIEW_ENGINE` now defaults to `python`. Consumers who do not set `engine:` in their workflow will automatically use the Python engine. The bash pipeline is deprecated: it continues to work when explicitly set (`engine: bash` / `AI_PR_REVIEW_ENGINE=bash`) but emits a deprecation warning and will be removed in a future major release. To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`). Context enrichment, SARIF ingestion, and the learning loop all require the Python engine and are unaffected — they remain opt-in via their existing env vars.

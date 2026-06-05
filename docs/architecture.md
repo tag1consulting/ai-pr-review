@@ -78,7 +78,7 @@ Setting `engine: bash` explicitly causes `review.sh` to emit a `::warning::` dep
 4. **review.sh** extracts JSON findings from agent responses, deduplicates, applies suppressions
 5. The **provider-specific post-review script** (`post-review.sh`, `post-review-bitbucket.sh`, or `post-review-gitlab.sh` — selected by `VCS_PROVIDER`) resolves stale threads, posts the summary and findings, advances the SHA watermark
 
-The bash engine will be removed in a future major release (Epic 5). To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`).
+The bash engine will be removed in a future major release. To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`).
 
 ## Dependencies
 
