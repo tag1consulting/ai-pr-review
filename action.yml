@@ -159,6 +159,26 @@ inputs:
     required: false
     default: ''
 
+  exclude-patterns:
+    description: >
+      Comma-separated list of git pathspec glob patterns to exclude from the diff
+      in addition to the built-in excludes (lockfiles, vendor/, node_modules/).
+      Each pattern should be a glob such as "docs/*" or "*.generated.go". The
+      leading ":!" pathspec prefix is added automatically. Requires the Python engine.
+      See exclude-patterns-mode to control interaction with the built-in defaults.
+    required: false
+    default: ''
+
+  exclude-patterns-mode:
+    description: >
+      Controls how exclude-patterns interacts with the built-in exclude list.
+      "append" (default): user patterns are added to the built-in excludes.
+      "replace": only user patterns are used; the built-in lockfile/vendor excludes
+      are dropped. "replace" with an empty exclude-patterns falls back to the
+      built-in defaults with a warning.
+    required: false
+    default: 'append'
+
   context-enrichment:
     description: >
       When true, extract symbol references from the diff and look them up
@@ -228,6 +248,8 @@ runs:
         AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
+        AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
+        AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
       run: bash "${{ github.action_path }}/review.sh"

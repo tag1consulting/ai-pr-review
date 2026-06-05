@@ -27,6 +27,9 @@ nav_order: 2
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set (thinking tokens consume the output budget). |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 | `ignore-merge-commits` | No | `false` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. |
+| `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
+| `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically. Requires the Python engine. See `exclude-patterns-mode`. |
+| `exclude-patterns-mode` | No | `append` | Controls how `exclude-patterns` interacts with the built-in excludes. `append` (default): user patterns are added to the built-in lockfile/vendor excludes. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
 
 ## Repository variables
 
@@ -49,6 +52,8 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | `context-enrichment` | Inject tree-sitter symbol-context blocks into agent prompts (requires the Python engine, which is the default). |
 | `AI_REVIEW_SARIF_PATHS` | `''` | `sarif-paths` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires the Python engine, which is the default). |
+| `AI_REVIEW_EXCLUDE_PATTERNS` | `''` | `exclude-patterns` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*`). Requires the Python engine, which is the default. |
+| `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
 
 To set a variable via the GitHub CLI:
@@ -130,6 +135,13 @@ These variables enable optional capabilities that are off by default. All requir
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_SARIF_PATHS` | `''` | Comma-separated list of SARIF 2.1.0 file paths (relative to workspace root) to ingest as additional findings. Findings are merged into the same dedup/suppress pipeline as native analyzer results. Source tag: `sarif:<driver.name>`. |
+
+#### Diff exclude patterns
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated list of git pathspec glob patterns to exclude from the diff before the LLM reads it (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically if missing. Use to reduce LLM token costs on large generated or documentation-only files. Requires the Python engine (the default since v1.0.0). |
+| `AI_EXCLUDE_PATTERNS_MODE` | `append` | Controls how `AI_EXCLUDE_PATTERNS` interacts with the built-in exclude list (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are appended after the built-ins. `replace`: only user patterns are used and the built-in list is dropped. Setting `replace` with an empty `AI_EXCLUDE_PATTERNS` logs a warning and falls back to the built-in list to avoid producing an unfiltered diff silently. |
 
 #### Learning loop
 
