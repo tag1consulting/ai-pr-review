@@ -108,6 +108,7 @@ Three optional features can be enabled independently. All default off, all requi
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | Learning loop — persists `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts and re-injects them into future reviews. GitHub-only. |
 | `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated git pathspec globs to exclude from the diff (e.g. `vendor/*,generated/*`). Appended to built-in excludes by default. (v1.1.0) |
 | `AI_EXCLUDE_PATTERNS_MODE` | `append` | `append` adds to built-in vendor/lockfile excludes; `replace` discards them and uses only the patterns you supply. (v1.1.0) |
+| `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. LLM-agent findings unaffected. (v1.2.0) |
 
 See [Configuration → Opt-in capabilities](../docs/configuration.md#opt-in-capabilities) for the full env-var reference (retention knobs, token budgets, branch name).
 

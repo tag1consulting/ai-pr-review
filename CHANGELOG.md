@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-05
+
+### Added
+
+#### Diff-scope severity cap for native analyzer findings (PR #444, closes #359)
+
+Native static analyzers (phpcs, phpstan, ruff, golangci-lint, semgrep, and others) lint entire files — a single changed line in a large legacy file can produce hundreds of diagnostics on unchanged code, flooding the review and triggering `REQUEST_CHANGES` for pre-existing issues.
+
+The new `analyzer-diff-scope` input (or `AI_ANALYZER_DIFF_SCOPE` env var) controls how findings outside the changed lines are handled:
+
+- `cap` (default): findings outside the diff are downgraded to Low severity and marked `out_of_diff=True`. They are collapsed into a `<details>` section in the review body — visible but never trigger `REQUEST_CHANGES`.
+- `drop`: out-of-diff analyzer findings are removed entirely.
+- `off`: pass through unchanged (full-file linting behavior, pre-v1.2 default).
+
+LLM-agent findings are never affected regardless of this setting. Python engine only. A rollup pass collapses findings where the same rule fires more than 5 times in one file into a single entry with an occurrence count and line list.
+
+### Fixed
+
+#### `exclude-patterns-mode` now validates input and normalizes case (PR #443, closes #442)
+
+The `exclude-patterns-mode` input (and `AI_EXCLUDE_PATTERNS_MODE` env var) previously accepted any string, silently falling through to `append` behavior on typos like `replaces` or `add`. It now validates that the value is `append` or `replace`, raising a `ValueError` at startup for any other value. Values are case-insensitive and normalized to lowercase, so `APPEND`, `Replace`, etc. are accepted. Python engine only.
+
+## [1.1.0] - 2026-06-05
+
+### Added
+
+#### Config-driven diff exclude patterns (PR #438, closes #436)
+
+The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Entries are split on commas and surrounding whitespace is trimmed, so `vendor/*, generated/*` is treated the same as `vendor/*,generated/*`. Python engine only.
+
+The `exclude-patterns-mode` input (or `AI_EXCLUDE_PATTERNS_MODE` env var) controls how user-supplied patterns combine with the built-in lockfile/`vendor/`/`node_modules/` excludes. Default `append` adds user patterns after the built-ins; `replace` uses only the user-supplied list.
+
+#### Line-range suppression rules (PR #439, closes #437)
+
+Suppression rules now support `match.line_start` and `match.line_end` fields, scoping a rule to a specific line window within a file. This resolves the granularity gap for repos that vendor upstream code and apply patches: a rule can now target only the upstream line window (e.g. lines 1–200) so that findings on the user's own patched lines (201+) are never silenced. Multi-line findings match on overlap. A finding with no line number is never matched by a range rule. Python engine only.
+
 ## [1.0.2] - 2026-06-04
 
 ### Fixed
