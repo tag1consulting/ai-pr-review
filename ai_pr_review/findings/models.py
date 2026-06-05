@@ -25,6 +25,11 @@ class Finding(BaseModel):
     remediation: str = ""
     suggested_code: str = ""
     sources: list[str] = Field(default_factory=list)
+    # Set by apply_diff_scope when a native-analyzer finding falls outside the
+    # changed-line set.  Findings with out_of_diff=True are capped to Low
+    # severity and rendered in a collapsed body section rather than the main
+    # findings list.
+    out_of_diff: bool = False
 
     @field_validator("severity", mode="before")
     @classmethod

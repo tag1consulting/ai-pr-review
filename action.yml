@@ -182,6 +182,17 @@ inputs:
     required: false
     default: 'append'
 
+  analyzer-diff-scope:
+    description: >
+      Controls how native static-analyzer findings on lines outside the PR
+      diff are handled. "cap" (default) downgrades them to Low severity and
+      collapses them into a folded section in the review body so they cannot
+      trigger CHANGES_REQUESTED. "drop" removes them entirely. "off" passes
+      them through unchanged (full-file linting behaviour). LLM-agent findings
+      are not affected by this setting.
+    required: false
+    default: 'cap'
+
   context-enrichment:
     description: >
       When true, extract symbol references from the diff and look them up
@@ -253,6 +264,7 @@ runs:
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
         AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
+        AI_ANALYZER_DIFF_SCOPE: ${{ inputs.analyzer-diff-scope }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
       run: bash "${{ github.action_path }}/review.sh"

@@ -53,6 +53,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Diff exclude patterns ---
         "AI_EXCLUDE_PATTERNS",
         "AI_EXCLUDE_PATTERNS_MODE",
+        # --- Analyzer diff scope ---
+        "AI_ANALYZER_DIFF_SCOPE",
         # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
@@ -153,6 +155,13 @@ class ReviewConfig(BaseModel):
     exclude_patterns: tuple[str, ...] = ()
     exclude_patterns_mode: str = "append"
 
+    # --- Analyzer diff-scope ---
+    # Controls how out-of-diff native-analyzer findings are handled.
+    # "cap"  -- downgrade to Low and collapse into a <details> section (default).
+    # "drop" -- remove out-of-diff analyzer findings entirely.
+    # "off"  -- pass through unchanged (full-file linting behaviour).
+    analyzer_diff_scope: str = "cap"
+
     # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
     feedback_branch: str = "ai-pr-review-bot"
@@ -242,6 +251,13 @@ class ReviewConfig(BaseModel):
     def _validate_confidence(cls, v: int) -> int:
         if not (0 <= v <= 100):
             raise ValueError(f"confidence_threshold must be 0-100, got {v}")
+        return v
+
+    @field_validator("analyzer_diff_scope")
+    @classmethod
+    def _validate_analyzer_diff_scope(cls, v: str) -> str:
+        if v not in ("cap", "drop", "off"):
+            raise ValueError(f"analyzer_diff_scope must be 'cap', 'drop', or 'off', got {v!r}")
         return v
 
     @field_validator("log_format")
@@ -342,6 +358,7 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             exclude_patterns_mode=os.environ.get("AI_EXCLUDE_PATTERNS_MODE", "append"),
+            analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
             feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),
