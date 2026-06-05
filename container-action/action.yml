@@ -144,8 +144,10 @@ inputs:
   exclude-patterns:
     description: >
       Comma-separated list of git pathspec globs to exclude from the diff
-      (e.g. 'vendor/*,generated/*'). By default these are appended to the
-      built-in vendor/lockfile excludes. Requires the Python engine.
+      (e.g. 'vendor/*,generated/*'). Entries are split on commas; surrounding
+      whitespace is trimmed, so 'vendor/*, generated/*' is treated the same as
+      'vendor/*,generated/*'. By default these are appended to the built-in
+      vendor/lockfile excludes. Requires the Python engine.
     required: false
     default: ''
 
@@ -153,7 +155,8 @@ inputs:
     description: >
       How to apply exclude-patterns: 'append' (default) adds them to the
       built-in excludes; 'replace' discards the built-ins and uses only the
-      patterns you supply. Requires the Python engine.
+      patterns you supply. Invalid values are rejected with an error.
+      Requires the Python engine.
     required: false
     default: 'append'
 

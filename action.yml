@@ -164,8 +164,11 @@ inputs:
       Comma-separated list of git pathspec glob patterns to exclude from the diff
       in addition to the built-in excludes (lockfiles, vendor/, node_modules/).
       Each pattern should be a glob such as "docs/*" or "*.generated.go". The
-      leading ":!" pathspec prefix is added automatically. Requires the Python engine.
-      See exclude-patterns-mode to control interaction with the built-in defaults.
+      leading ":!" pathspec prefix is added automatically. Entries are split on
+      commas; surrounding whitespace is trimmed and empty entries are dropped, so
+      "docs/*, *.generated.go" is treated the same as "docs/*,*.generated.go".
+      Requires the Python engine. See exclude-patterns-mode to control interaction
+      with the built-in defaults.
     required: false
     default: ''
 
@@ -175,7 +178,7 @@ inputs:
       "append" (default): user patterns are added to the built-in excludes.
       "replace": only user patterns are used; the built-in lockfile/vendor excludes
       are dropped. "replace" with an empty exclude-patterns falls back to the
-      built-in defaults with a warning.
+      built-in defaults with a warning. Invalid values are rejected with an error.
     required: false
     default: 'append'
 
