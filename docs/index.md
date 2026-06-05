@@ -27,9 +27,9 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
-## What's new in v1.1.0
+## What's new in v1.2.0
 
-**Config-driven diff excludes** — `exclude-patterns` / `exclude-patterns-mode` let you drop generated, vendored, or documentation-only paths from the diff before the LLM reads them, reducing token costs directly. **Line-range suppression rules** — `match.line_start` / `match.line_end` scope a suppression rule to a specific line window within a file, so rules targeting upstream-vendored lines don't silence findings on your own patched code. See [Features → v1.1.0](features#whats-new-in-v110) and [Suppression rules](suppression) for details.
+**Diff-scope severity cap** — `analyzer-diff-scope: cap` (default) downgrades out-of-diff native analyzer findings to Low and collapses them under a `<details>` section, so a single changed line in a large file can't flood the review or trigger `REQUEST_CHANGES`. Use `drop` to remove them entirely, or `off` for the pre-v1.2 pass-through behavior. **`exclude-patterns-mode` validation** — invalid values now fail fast with a clear error instead of silently defaulting to `append`. See [Features → v1.2.0](features#whats-new-in-v120) for details.
 
 ## What it does
 
@@ -91,6 +91,7 @@ That's it — reviews start firing on the next PR.
 - [Agents & profiles](agents) — Review agents, severity icons, review modes, language profiles
 - [Static analyzers](static-analyzers) — Analyzer table, dependency vulnerability check, SARIF ingestion
 - [Suppression rules](suppression) — Suppress false positives with JSON rules; scope rules to a line range with `match.line_start` / `match.line_end` (v1.1.0)
+- [Diff-scope severity cap](configuration#static-analyzer-options) — control how out-of-diff native-analyzer findings are handled via `analyzer-diff-scope` (v1.2.0)
 - [Slash commands](slash-commands) — PR-comment commands (rescan, review-full, skip, dismiss, help, plus learning-loop commands)
 
 **Internals**

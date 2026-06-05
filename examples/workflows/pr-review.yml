@@ -97,6 +97,12 @@ jobs:
           # AI_REVIEW_EXCLUDE_PATTERNS_MODE: 'append' (default) or 'replace'. 'append' adds user patterns
           # to the built-in lockfile/vendor/node_modules excludes; 'replace' uses only user patterns.
           exclude-patterns-mode: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS_MODE || 'append' }}
+          # AI_REVIEW_ANALYZER_DIFF_SCOPE: how to handle native-analyzer findings outside the changed lines.
+          # 'cap' (default): downgrade to Low severity and collapse into a <details> section (no REQUEST_CHANGES).
+          # 'drop': remove out-of-diff analyzer findings entirely.
+          # 'off': pass through unchanged (full-file linting behavior, pre-v1.2 default).
+          # LLM-agent findings are never affected. Requires engine: python.
+          analyzer-diff-scope: ${{ vars.AI_REVIEW_ANALYZER_DIFF_SCOPE || 'cap' }}
           # AI_REVIEW_FEEDBACK_LOOP: load past /ai-pr-review false-positive | wont-fix | feedback entries
           # from the ai-pr-review-bot branch and inject them into agent prompts (default: false).
           # Requires github-token with contents:write on that branch.

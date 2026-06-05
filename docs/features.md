@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v1.2.0
+
+**Diff-scope severity cap for native analyzer findings (PR #444, closes #359).** Native static analyzers (phpcs, phpstan, ruff, golangci-lint, semgrep, etc.) lint entire files — a single changed line in a large legacy file can produce hundreds of diagnostics on unchanged code. The new `analyzer-diff-scope` input (or `AI_ANALYZER_DIFF_SCOPE` env var) controls how those out-of-diff findings are handled. `cap` (default): downgrade out-of-diff analyzer findings to Low severity and collapse them into a `<details>` section in the review body — they remain visible but never trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged (full-file linting behavior, pre-v1.2 default). LLM-agent findings are never affected regardless of this setting. Python engine only. See [Configuration → analyzer-diff-scope](configuration#static-analyzer-options).
+
+**`exclude-patterns-mode` validation (PR #443, closes #442).** The `exclude-patterns-mode` input (and `AI_EXCLUDE_PATTERNS_MODE` env var) now validates that the value is `append` or `replace` — any other value raises an error at startup rather than silently falling through to append behavior. Values are case-insensitive (`APPEND`, `Replace`, etc. are all accepted and normalized to lowercase). Python engine only.
+
 ## What's new in v1.1.0
 
 **Config-driven diff exclude patterns (PR #438, closes #436).** The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Default mode is `append`, which adds user patterns after the built-in lockfile/`vendor/`/`node_modules/` excludes; set `exclude-patterns-mode: replace` (or `AI_EXCLUDE_PATTERNS_MODE=replace`) to drop the built-ins entirely. Python engine only. See [docs/configuration.md](docs/configuration.md#diff-exclude-patterns).

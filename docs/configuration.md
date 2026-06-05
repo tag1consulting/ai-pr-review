@@ -30,6 +30,7 @@ nav_order: 2
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Requires the Python engine. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | Controls how `exclude-patterns` interacts with the built-in excludes. `append` (default): user patterns are added to the built-in lockfile/vendor excludes. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. Invalid values are rejected with an error. |
+| `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged. LLM-agent findings are never affected. Requires the Python engine. |
 
 ## Repository variables
 
@@ -55,6 +56,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_EXCLUDE_PATTERNS` | `''` | `exclude-patterns` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*`). Requires the Python engine, which is the default. |
 | `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
+| `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -142,7 +144,12 @@ These variables enable optional capabilities that are off by default. All requir
 |----------|---------|-------------|
 | `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated list of git pathspec glob patterns to exclude from the diff before the LLM reads it (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically if missing. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Use to reduce LLM token costs on large generated or documentation-only files. Requires the Python engine (the default since v1.0.0). |
 | `AI_EXCLUDE_PATTERNS_MODE` | `append` | Controls how `AI_EXCLUDE_PATTERNS` interacts with the built-in exclude list (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are appended after the built-ins. `replace`: only user patterns are used and the built-in list is dropped. Setting `replace` with an empty `AI_EXCLUDE_PATTERNS` logs a warning and falls back to the built-in list to avoid producing an unfiltered diff silently. Invalid values (anything other than `append` or `replace`) are rejected with an error at startup. |
-| `AI_ANALYZER_DIFF_SCOPE` | `cap` | Controls how out-of-diff native static-analyzer findings are handled (requires the Python engine). Native analyzers (phpcs, phpstan, ruff, golangci-lint, etc.) lint entire files, so a small change can produce many diagnostics on unchanged lines. `cap` (default): downgrade those findings to Low severity and collapse them into a `<details>` section in the summary comment — they remain visible but do not trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour, pre-v1.1 default). LLM-agent findings are never affected regardless of this setting. |
+
+#### Static analyzer options
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_ANALYZER_DIFF_SCOPE` | `cap` | Controls how out-of-diff native static-analyzer findings are handled (requires the Python engine). Native analyzers (phpcs, phpstan, ruff, golangci-lint, etc.) lint entire files, so a small change can produce many diagnostics on unchanged lines. `cap` (default): downgrade those findings to Low severity and collapse them into a `<details>` section in the summary comment — they remain visible but do not trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour, pre-v1.2 default). LLM-agent findings are never affected regardless of this setting. |
 
 #### Learning loop
 
