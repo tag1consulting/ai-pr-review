@@ -39,10 +39,23 @@ were given to assess whether the PR likely resolves it:
 Provide 1–2 sentences explaining your assessment based only on the commit messages and
 file manifest provided.
 
+## Step 3: Identify Related Work from Context
+
+Extract 3–5 meaningful keywords from the commit messages and file manifest (component
+names, feature names, config keys, subsystem names — e.g. `exclude-patterns`,
+`analyzer-diff-scope`, `findings pipeline`). Search the commit log and branch name you
+were given for any other mentions of these keywords that were not captured as explicit
+issue references in Step 1.
+
+For each keyword-matched item that suggests related work, note it as a potential
+related issue or area of interest. Do not fabricate issue numbers — if you cannot
+confirm a number from the text you were given, describe the related area without
+inventing a `#` reference.
+
 ## Empty State
 
-If no explicit issue references are found in the commit log or branch name, output
-EXACTLY the word `NONE` and nothing else.
+If no explicit issue references are found AND no related work can be inferred from the
+commit log and file manifest, output EXACTLY the word `NONE` and nothing else.
 
 ## Output Format
 
@@ -56,8 +69,15 @@ EXACTLY the word `NONE` and nothing else.
 | #123 | _(title not available — verify on GitHub)_ | Fully Resolved — <explanation> |
 
 _No issues explicitly referenced._ (if none found)
+
+### Potentially Related
+
+- **<keyword/component>** — <one sentence explaining why this area may be related based
+  on the commit messages and manifest>
+
+_No related areas identified._ (if none found)
 ```
 
-Output only the section above. No findings, no review feedback, no shell commands, no
+Output only the sections above. No findings, no review feedback, no shell commands, no
 tool calls. Base your assessment entirely on the commit log, branch name, and file
 manifest you received.
