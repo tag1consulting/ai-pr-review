@@ -27,6 +27,10 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v1.1.0
+
+**Config-driven diff excludes** — `exclude-patterns` / `exclude-patterns-mode` let you drop generated, vendored, or documentation-only paths from the diff before the LLM reads them, reducing token costs directly. **Line-range suppression rules** — `match.line_start` / `match.line_end` scope a suppression rule to a specific line window within a file, so rules targeting upstream-vendored lines don't silence findings on your own patched code. See [Features → v1.1.0](features#whats-new-in-v110) and [Suppression rules](suppression) for details.
+
 ## What it does
 
 On every push to a pull request, AI PR Review runs a roster of LLM agents and deterministic static analyzers against the diff, then posts a structured review — a summary comment plus inline findings with "Apply suggestion" buttons where applicable. It's incremental (subsequent pushes only review what changed), suppresses known false positives via a JSON rules file, and is designed to fail gracefully when a model times out or a scanner is missing. Runs on GitHub Actions, Bitbucket Cloud Pipelines, or GitLab CI/CD against Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint.
@@ -86,7 +90,7 @@ That's it — reviews start firing on the next PR.
 - [Features](features) — Code suggestions, incremental reviews, resilience, token usage
 - [Agents & profiles](agents) — Review agents, severity icons, review modes, language profiles
 - [Static analyzers](static-analyzers) — Analyzer table, dependency vulnerability check, SARIF ingestion
-- [Suppression rules](suppression) — Suppress false positives with JSON rules
+- [Suppression rules](suppression) — Suppress false positives with JSON rules; scope rules to a line range with `match.line_start` / `match.line_end` (v1.1.0)
 - [Slash commands](slash-commands) — PR-comment commands (rescan, review-full, skip, dismiss, help, plus learning-loop commands)
 
 **Internals**

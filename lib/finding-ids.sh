@@ -4,7 +4,7 @@
 # Uses only POSIX-compatible grep (-E, not -P) so it works on macOS/BSD
 # as well as Linux.  The Python side uses a machine-readable id-map marker
 # in the review body as the authoritative source; this bash helper is only
-# invoked for the legacy bash engine (still default until Epic 5).
+# invoked for the legacy bash engine (deprecated; will be removed in a future major release).
 #
 # Functions exported:
 #   finding_ids_max_from_bodies  BODIES_FILE → prints max ID seen (0 if none)
