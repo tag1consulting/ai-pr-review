@@ -141,6 +141,22 @@ inputs:
     required: false
     default: 'false'
 
+  exclude-patterns:
+    description: >
+      Comma-separated list of git pathspec globs to exclude from the diff
+      (e.g. 'vendor/*,generated/*'). By default these are appended to the
+      built-in vendor/lockfile excludes. Requires the Python engine.
+    required: false
+    default: ''
+
+  exclude-patterns-mode:
+    description: >
+      How to apply exclude-patterns: 'append' (default) adds them to the
+      built-in excludes; 'replace' discards the built-ins and uses only the
+      patterns you supply. Requires the Python engine.
+    required: false
+    default: 'append'
+
 runs:
   using: composite
   steps:
@@ -193,6 +209,8 @@ runs:
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
+        AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
+        AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
       run: |
         docker pull "$IMAGE"
         # Build optional GITHUB_STEP_SUMMARY volume mount into an array to avoid
@@ -228,6 +246,8 @@ runs:
           -e AI_SARIF_PATHS \
           -e AI_CONTEXT_ENRICHMENT \
           -e AI_FEEDBACK_LOOP \
+          -e AI_EXCLUDE_PATTERNS \
+          -e AI_EXCLUDE_PATTERNS_MODE \
           ${FORCE_FULL_DIFF:+-e FORCE_FULL_DIFF} \
           ${STANDALONE_DEPTH:+-e STANDALONE_DEPTH} \
           ${LLM_RETRY_COUNT:+-e LLM_RETRY_COUNT} \

@@ -366,7 +366,7 @@ main() {
 
   # Surface capability/engine misconfigurations to stderr before dispatching
   # to either engine.  Defined as a top-level function so it's testable via
-  # tests/warn_epic3_capability_misconfig.bats.
+  # tests/warn_capability_misconfig.bats.
   warn_capability_misconfig "$AI_PR_REVIEW_ENGINE"
 
   if [[ "$AI_PR_REVIEW_ENGINE" == "python" ]]; then
