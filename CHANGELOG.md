@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+#### issue-linker now pre-fetches the open-issue list via `gh issue list` (closes #446)
+
+The issue-linker agent previously emitted raw `<tool_call>` XML when its prompt instructed the model to run `gh issue list` — a command the text-completion call path cannot execute.
+
+The fix is deterministic: Python now runs `gh issue list --state open --limit 50` via subprocess **before** the LLM call and injects the result as a plain-text `## Open Issues` block in the user message. The model never calls any tools; it assesses the pre-fetched list the same way it already assessed the commit log. The `gh` CLI is already installed in the container image and `GH_TOKEN` is already set at runtime, so no new permissions or secrets are required (the `issues: write` permission in the example workflows implies the `read` access needed here).
+
+Behaviour changes:
+- The `### Linked Issues` table now fills in real issue titles when the referenced `#N` appears in the open list (rather than "`title not available`").
+- The `### Potentially Related` section now surfaces real open issues by number and title when their title or labels match extracted keywords — no fabricated `#` references.
+- The fetch is fail-soft: if `gh` is absent, times out, or returns an error, the section falls back to `(unavailable)` and analysis continues from the commit log and manifest alone.
+
+Python engine only.
+
 ## [1.2.0] - 2026-06-05
 
 ### Added

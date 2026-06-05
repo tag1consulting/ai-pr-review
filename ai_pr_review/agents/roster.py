@@ -145,8 +145,11 @@ AGENTS: list[AgentSpec] = [
     ),
     AgentSpec(
         # GitHub-only: discovers related issues/PRs and assesses resolution.
-        # Dispatched separately via _run_issue_linker() in cli.py; excluded from
-        # generic run_tier dispatch via separately_dispatched=True.
+        # Pre-fetches the open-issue list via ``gh issue list`` in Python before the
+        # LLM call, then injects it as plain text so the model can cite real titles
+        # without any tool-calling loop.  Dispatched separately via
+        # _run_issue_linker() in cli.py; excluded from generic run_tier dispatch via
+        # separately_dispatched=True.
         name="issue-linker",
         prompt_path="prompts/issue-linker.md",
         tier=2,
