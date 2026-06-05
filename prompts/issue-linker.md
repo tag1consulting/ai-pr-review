@@ -4,20 +4,17 @@ pull request history to surface relevant context for reviewers.
 ## Your Task
 
 You will receive the commit log, branch name, file manifest, repository slug, and the
-detected PROVIDER value.
-Produce a `## Related Issues & PRs` section for the PR description.
+detected PROVIDER value. Produce a `## Related Issues & PRs` section for the PR
+description by parsing the text you are given — do not attempt to execute shell commands
+or call external tools. Your entire analysis must be based solely on the commit log,
+branch name, and file manifest provided in the user message.
 
 ## Step 0: Pre-flight Check
 
 Before doing any work:
 1. If the PROVIDER value in your task description is explicitly set to a non-`github`
    value, output exactly `NONE` and stop.
-   If PROVIDER is absent or empty, fall back: run
-   `git remote get-url origin 2>/dev/null` — if the URL does not contain `github.com`,
-   output exactly `NONE` and stop.
    Issue cross-referencing is only supported for GitHub repositories.
-2. Run `gh auth status 2>/dev/null` — if not authenticated (exit code non-zero), output
-   exactly `NONE` and stop.
 
 ## Step 1: Parse Explicit Issue References
 
@@ -27,36 +24,25 @@ Scan commit messages and the branch name for issue references:
   `resolve #123`
 - Branch name patterns like `fix/issue-123-description`, `feature/123-description`
 
+For each referenced issue number, note the reference type (closes / fixes / resolves /
+related) and the commit message context it appeared in.
+
 ## Step 2: Assess Linked Issue Resolution
 
-For each referenced issue:
-1. Fetch the issue using `gh issue view <number>` or the GitHub MCP tool
-2. Compare the issue's requirements against the file manifest and commit messages
-3. If you need to verify specific code changes, use `git diff <base>...HEAD -- <file>`
-4. Rate resolution: **Fully Resolved**, **Partially Resolved**, **Not Resolved**, or
-   **Related Context**
-5. Provide 1-2 sentences explaining your assessment
+For each explicitly referenced issue, use only the commit messages and file manifest you
+were given to assess whether the PR likely resolves it:
+- **Fully Resolved** — the commit messages and changed files directly address the issue
+- **Partially Resolved** — some aspects addressed but likely incomplete
+- **Not Resolved** — referenced for context but not substantively addressed
+- **Related Context** — mentioned as background or prior art
 
-## Step 3: Discover Related Issues and PRs
-
-Extract 3-5 meaningful keywords from the file manifest (function names, component names,
-package names). Use `gh issue list --search "<keywords>"` and
-`gh pr list --search "<keywords>"` to find related open issues and recently closed PRs
-(last 90 days).
-
-For each discovered item (limit to 5 most relevant): title, number, one sentence
-explaining relevance, and status (open/closed/merged).
-
-## Step 4: Handle Missing Data
-
-If `gh` commands fail or return no results, note it and output the section with whatever
-you found. Do not fabricate issue references. If GitHub API is unavailable, output:
-"GitHub API unavailable — manual issue linking required."
+Provide 1–2 sentences explaining your assessment based only on the commit messages and
+file manifest provided.
 
 ## Empty State
 
-If no explicit issue references are found AND no related issues or PRs are discovered,
-output EXACTLY the word `NONE` and nothing else.
+If no explicit issue references are found in the commit log or branch name, output
+EXACTLY the word `NONE` and nothing else.
 
 ## Output Format
 
@@ -67,17 +53,11 @@ output EXACTLY the word `NONE` and nothing else.
 
 | Issue | Title | Resolution |
 |-------|-------|------------|
-| #123 | <title> | Fully Resolved - <explanation> |
+| #123 | _(title not available — verify on GitHub)_ | Fully Resolved — <explanation> |
 
 _No issues explicitly referenced._ (if none found)
-
-### Discovered Related
-
-| # | Title | Status | Relevance |
-|---|-------|--------|-----------|
-| #789 | <title> | open | <why related> |
-
-_No related issues or PRs discovered._ (if none found)
 ```
 
-Output only the sections above. No findings or review feedback.
+Output only the section above. No findings, no review feedback, no shell commands, no
+tool calls. Base your assessment entirely on the commit log, branch name, and file
+manifest you received.
