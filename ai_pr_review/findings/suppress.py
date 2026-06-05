@@ -71,10 +71,10 @@ def load_rules(
     return [_parse_rule(r) for r in rules_data if isinstance(r, dict)]
 
 
-def _safe_int(val: object) -> int:
+def _safe_int(val: str | int | float | None) -> int:
     """Coerce *val* to a non-negative int; return 0 on failure."""
     try:
-        return max(0, int(val))  # type: ignore[arg-type]
+        return max(0, int(val or 0))
     except (TypeError, ValueError):
         return 0
 
