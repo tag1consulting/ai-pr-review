@@ -18,7 +18,6 @@ import pytest
 from ai_pr_review.cli import _fetch_open_issues, _run_issue_linker
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -113,7 +112,12 @@ class TestFetchOpenIssues:
 
 
 class TestRunIssueLinkerUserMessage:
-    """Assert that the user message sent to the LLM contains an ## Open Issues block."""
+    """Assert that the user message sent to the LLM contains an ## Open Issues block.
+
+    _fetch_open_issues is mocked directly (patch 'ai_pr_review.cli._fetch_open_issues')
+    so these tests are not sensitive to subprocess call order inside _run_issue_linker.
+    The git log and git rev-parse subprocess calls are mocked separately via subprocess.run.
+    """
 
     @pytest.fixture()
     def prompt_dir(self, tmp_path: Path) -> Path:
@@ -122,16 +126,28 @@ class TestRunIssueLinkerUserMessage:
         prompt.write_text("You are a test prompt.\n")
         return tmp_path
 
-    def _run(self, prompt_dir: Path, mock_run_side_effects: list, llm_text: str = "NONE") -> tuple[str, list[LLMRequest]]:
-        """Run _run_issue_linker under anyio.run with mocked subprocess and llm_call."""
+    def _run(
+        self,
+        prompt_dir: Path,
+        open_issues_text: str = "(no open issues)",
+        llm_text: str = "NONE",
+    ) -> tuple[str, list[LLMRequest]]:
+        """Run _run_issue_linker with _fetch_open_issues mocked at the function level."""
         captured: list[LLMRequest] = []
 
         async def _fake_llm(req: LLMRequest) -> LLMResponse:
             captured.append(req)
             return _make_response(llm_text)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = mock_run_side_effects
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("ai_pr_review.cli._fetch_open_issues", return_value=open_issues_text),
+        ):
+            # Only git log and git rev-parse remain; order is stable and documented.
+            mock_run.side_effect = [
+                _completed(stdout="abc1234 fix: test commit\n"),  # git log
+                _completed(stdout="feat/test-branch"),             # git rev-parse
+            ]
             result = anyio.run(
                 lambda: _run_issue_linker(
                     manifest_text="## Manifest\n- src/foo.py",
@@ -147,46 +163,23 @@ class TestRunIssueLinkerUserMessage:
         return result, captured
 
     def test_open_issues_block_injected_on_success(self, prompt_dir: Path) -> None:
-        issue_payload = json.dumps([{"number": 42, "title": "A real issue", "labels": []}])
-        _result, captured = self._run(
-            prompt_dir,
-            mock_run_side_effects=[
-                _completed(stdout="abc1234 fix: test commit\n"),  # git log
-                _completed(stdout="feat/test-branch"),             # git rev-parse
-                _completed(stdout=issue_payload),                  # gh issue list
-            ],
-        )
+        _result, captured = self._run(prompt_dir, open_issues_text="#42 A real issue")
         assert len(captured) == 1, "Expected one LLM call"
         user_msg = captured[0].user_message
         assert "## Open Issues" in user_msg
         assert "#42 A real issue" in user_msg
 
     def test_open_issues_unavailable_does_not_abort(self, prompt_dir: Path) -> None:
-        """When gh is absent the LLM call still proceeds with (unavailable)."""
-        _result, captured = self._run(
-            prompt_dir,
-            mock_run_side_effects=[
-                _completed(stdout="abc1234 fix: test commit\n"),  # git log
-                _completed(stdout="feat/test-branch"),             # git rev-parse
-                FileNotFoundError("gh not found"),                 # gh issue list
-            ],
-        )
-        assert len(captured) == 1, "LLM call must proceed even when gh is absent"
+        """When the fetch returns (unavailable) the LLM call still proceeds."""
+        _result, captured = self._run(prompt_dir, open_issues_text="(unavailable)")
+        assert len(captured) == 1, "LLM call must proceed even when fetch failed"
         user_msg = captured[0].user_message
         assert "## Open Issues" in user_msg
         assert "(unavailable)" in user_msg
 
     def test_llm_none_sentinel_returns_empty_string(self, prompt_dir: Path) -> None:
         """When the LLM returns NONE, _run_issue_linker returns ""."""
-        result, _captured = self._run(
-            prompt_dir,
-            mock_run_side_effects=[
-                _completed(stdout="abc1234 fix: test\n"),
-                _completed(stdout="feat/branch"),
-                _completed(stdout="[]"),
-            ],
-            llm_text="NONE",
-        )
+        result, _captured = self._run(prompt_dir, llm_text="NONE")
         assert result == ""
 
     def test_run_issue_linker_never_raises(self, prompt_dir: Path) -> None:
@@ -197,11 +190,13 @@ class TestRunIssueLinkerUserMessage:
             captured.append(req)
             raise RuntimeError("simulated LLM failure")
 
-        with patch("subprocess.run") as mock_run:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("ai_pr_review.cli._fetch_open_issues", return_value="(no open issues)"),
+        ):
             mock_run.side_effect = [
                 _completed(stdout="abc1234 fix: something\n"),
                 _completed(stdout="feat/branch"),
-                _completed(stdout="[]"),
             ]
             result = anyio.run(
                 lambda: _run_issue_linker(

@@ -505,9 +505,11 @@ def _fetch_open_issues(github_repository: str) -> str:
         return "(unavailable)"
 
     if proc.returncode != 0:
+        stderr_snippet = proc.stderr.strip()[:500]
+        truncated = "…" if len(proc.stderr.strip()) > 500 else ""
         logger.warning(
-            "issue-linker: gh issue list exited %d; open-issue list unavailable: %s",
-            proc.returncode, proc.stderr.strip()[:200],
+            "issue-linker: gh issue list exited %d; open-issue list unavailable: %s%s",
+            proc.returncode, stderr_snippet, truncated,
         )
         return "(unavailable)"
 
