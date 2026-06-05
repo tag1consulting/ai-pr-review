@@ -7,7 +7,7 @@ render_with_liquid: false
 
 # Features
 
-## What's new in v1.0.3
+## What's new in v1.1.0
 
 **Config-driven diff exclude patterns (PR #438, closes #436).** The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Default mode is `append`, which adds user patterns after the built-in lockfile/`vendor/`/`node_modules/` excludes; set `exclude-patterns-mode: replace` (or `AI_EXCLUDE_PATTERNS_MODE=replace`) to drop the built-ins entirely. Python engine only. See [docs/configuration.md](docs/configuration.md#diff-exclude-patterns).
 
