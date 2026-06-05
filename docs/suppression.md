@@ -24,8 +24,28 @@ Known false positives can be suppressed via `config/suppressions.json`. Each ent
 Match fields (all optional, combined with AND logic):
 - `file` — Substring match on the finding's file path
 - `line` — Exact line number match
+- `line_start` — Line range lower bound (inclusive); finding must have its line number ≥ this value
+- `line_end` — Line range upper bound (inclusive); finding must have its line number ≤ this value
 - `code` — Finding text starts with this prefix
 - `pattern` — Regex matched against the finding text
+
+`line_start` and `line_end` are both optional. When used together they target a specific line window within a file. Either bound may be omitted to leave that end open (e.g. `line_end` only means "up to line N from the beginning of the file"). A finding with no line number is never matched by a range rule.
+
+Note: Line-range matching (`line_start`/`line_end`) requires the Python engine (the default). The deprecated bash engine does not support this field.
+
+Example — suppress findings only within unmodified upstream lines in a vendored patch file:
+
+```json
+{
+  "id": "accept-upstream-vuln-in-patches",
+  "reason": "Lines 1–200 are unmodified upstream code; our patch starts at line 201",
+  "match": {
+    "file": "patches/upstream-lib.c",
+    "line_start": 1,
+    "line_end": 200
+  }
+}
+```
 
 ## Local suppressions
 

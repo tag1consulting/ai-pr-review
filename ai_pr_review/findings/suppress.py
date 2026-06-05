@@ -30,8 +30,10 @@ class SuppressionRule:
     reason: str
     match_file: str = ""
     match_pattern: str = ""
-    match_line: int = 0    # #318: suppress finding on exact line number (0 = any)
-    match_code: str = ""   # #318: suppress finding whose finding text starts with this code
+    match_line: int = 0          # #318: suppress finding on exact line number (0 = any)
+    match_line_start: int = 0    # #437: line-range lower bound (0 = unbounded)
+    match_line_end: int = 0      # #437: line-range upper bound (0 = unbounded)
+    match_code: str = ""         # #318: suppress finding whose finding text starts with this code
     verify: str = ""
 
 
@@ -69,19 +71,24 @@ def load_rules(
     return [_parse_rule(r) for r in rules_data if isinstance(r, dict)]
 
 
+def _safe_int(val: object) -> int:
+    """Coerce *val* to a non-negative int; return 0 on failure."""
+    try:
+        return max(0, int(val))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 def _parse_rule(raw: dict[str, Any]) -> SuppressionRule:
     match = raw.get("match", {})
-    raw_line = match.get("line", 0)
-    try:
-        match_line = int(raw_line)
-    except (TypeError, ValueError):
-        match_line = 0
     return SuppressionRule(
         id=raw.get("id", ""),
         reason=raw.get("reason", ""),
         match_file=match.get("file", ""),
         match_pattern=match.get("pattern", ""),
-        match_line=match_line,
+        match_line=_safe_int(match.get("line", 0)),
+        match_line_start=_safe_int(match.get("line_start", 0)),
+        match_line_end=_safe_int(match.get("line_end", 0)),
         match_code=str(match.get("code", "")),
         verify=raw.get("verify", ""),
     )
@@ -140,6 +147,27 @@ def _rule_matches(finding: Finding, rule: SuppressionRule) -> bool:
             return False
     if rule.match_line > 0 and finding.line != rule.match_line:
         return False
+    # Line-range check (match_line_start / match_line_end)
+    if rule.match_line_start > 0 or rule.match_line_end > 0:
+        # An unanchored finding (no line number) cannot be placed in any window
+        if finding.line is None:
+            return False
+        # Misconfigured rule (start > end): treat as no-match
+        if (
+            rule.match_line_start > 0
+            and rule.match_line_end > 0
+            and rule.match_line_start > rule.match_line_end
+        ):
+            return False
+        # Use the finding's full span: start_line..line (single-line if no start_line)
+        f_start = finding.start_line if finding.start_line is not None else finding.line
+        f_end = finding.line
+        # Rule window: [line_start or 1, line_end or +inf]
+        r_start = rule.match_line_start if rule.match_line_start > 0 else 1
+        r_end: int | float = rule.match_line_end if rule.match_line_end > 0 else float("inf")
+        # Overlap: finding span overlaps rule window
+        if f_end < r_start or f_start > r_end:
+            return False
     if rule.match_code and not finding.finding.startswith(rule.match_code):  # noqa: SIM103
         return False
     return True
