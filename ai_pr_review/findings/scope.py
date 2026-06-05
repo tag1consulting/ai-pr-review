@@ -87,10 +87,10 @@ def apply_diff_scope(
 
     result: list[Finding] = []
     for f in findings:
-        # f.line is None (not `not f.line`) — line=0 is not a valid source line
-        # but using truthiness would also skip a hypothetical line=0 finding,
-        # which is subtly wrong.  Keep the explicit None check.
-        if not _is_analyzer(f) or not f.file or f.line is None:
+        # Treat line=None and line=0 as "no specific line" — some analyzers emit
+        # line=0 as a file-level sentinel.  Such findings should pass through
+        # unchanged rather than being compared against the in-diff line set.
+        if not _is_analyzer(f) or not f.file or not f.line:
             result.append(f)
             continue
 
@@ -122,22 +122,24 @@ def rollup_repeated_findings(
     def _normalise(text: str) -> str:
         return _WHITESPACE.sub(" ", text.strip().lower())
 
-    # Group analyzer findings by (file, source, normalised_text, out_of_diff).
-    # The out_of_diff flag is part of the key so in-diff and out-of-diff
-    # occurrences of the same rule are never collapsed together — otherwise a
-    # genuine in-diff High finding could be demoted to a Low out-of-diff stub.
+    # Group analyzer findings by (file, source, normalised_text, severity, out_of_diff).
+    # Both severity and out_of_diff are part of the key so:
+    # - In-diff and out-of-diff occurrences of the same rule are never collapsed
+    #   together (a genuine in-diff High could otherwise be demoted to Low).
+    # - Findings of the same rule but different severities are kept separate
+    #   (important when mode='off' leaves all out_of_diff flags as False).
     #
     # Output ordering: passthrough (non-analyzer / no-file) findings come
     # first, followed by analyzer groups in the order their first member was
     # encountered.  Callers must not rely on relative ordering between
     # passthrough and grouped findings.
-    groups: dict[tuple[str, str, str, bool], list[Finding]] = defaultdict(list)
+    groups: dict[tuple[str, str, str, str, bool], list[Finding]] = defaultdict(list)
     passthrough: list[Finding] = []
 
     for f in findings:
         if _is_analyzer(f) and f.file:
             src = f.source or (f.sources[0] if f.sources else "")
-            key = (f.file, src, _normalise(f.finding), f.out_of_diff)
+            key = (f.file, src, _normalise(f.finding), f.severity, f.out_of_diff)
             groups[key].append(f)
         else:
             passthrough.append(f)

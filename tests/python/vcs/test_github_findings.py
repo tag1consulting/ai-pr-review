@@ -124,7 +124,7 @@ def test_post_findings_out_of_diff_goes_to_details_section() -> None:
     # Headline count: 1 (in-diff only), not 2 (total).
     # The rendered format is "**Findings:** 1".
     assert "**Findings:** 1" in body, (
-        "headline count must reflect in-diff findings only; got: %r" % body[:400]
+        f"headline count must reflect in-diff findings only; got: {body[:400]!r}"
     )
     assert "**Findings:** 2" not in body, "ood finding must not inflate the headline count"
 

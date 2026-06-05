@@ -97,6 +97,14 @@ def test_finding_without_line_not_capped() -> None:
     assert not result[0].out_of_diff
 
 
+def test_finding_with_line_zero_not_capped() -> None:
+    # line=0 is a file-level sentinel used by some analyzers; treat like no line.
+    f = Finding(severity="High", confidence=80, finding="file-level finding", source="phpcs", file="web/quickbooks.inc", line=None)
+    result = apply_diff_scope([f], _DIFF)
+    assert result[0].severity == "High"
+    assert not result[0].out_of_diff
+
+
 def test_finding_without_file_not_capped() -> None:
     f = Finding(severity="High", confidence=80, finding="global finding", source="phpcs")
     result = apply_diff_scope([f], _DIFF)

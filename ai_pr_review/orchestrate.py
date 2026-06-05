@@ -183,13 +183,19 @@ async def run_review(
     # trigger CHANGES_REQUESTED.  Repeated-rule rollup prevents the same
     # analyzer rule from producing dozens of identical body entries.
     if cfg.analyzer_diff_scope != "off":
+        from ai_pr_review.findings.scope import apply_diff_scope, rollup_repeated_findings
         try:
-            from ai_pr_review.findings.scope import apply_diff_scope, rollup_repeated_findings
             kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
+        except Exception as exc:
+            logger.warning(
+                "apply_diff_scope failed (head_sha=%s); proceeding with unscoped findings: %s",
+                diff.head_sha, exc, exc_info=True,
+            )
+        try:
             kept = rollup_repeated_findings(kept)
         except Exception as exc:
             logger.warning(
-                "diff-scope/rollup failed (head_sha=%s); proceeding with unscoped findings: %s",
+                "rollup_repeated_findings failed (head_sha=%s); proceeding without rollup: %s",
                 diff.head_sha, exc, exc_info=True,
             )
 
