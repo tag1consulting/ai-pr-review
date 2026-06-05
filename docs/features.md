@@ -7,11 +7,29 @@ render_with_liquid: false
 
 # Features
 
-## What's new in v1.0.1
+## What's new in v1.0.3
 
 **Config-driven diff exclude patterns (PR #438, closes #436).** The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Default mode is `append`, which adds user patterns after the built-in lockfile/`vendor/`/`node_modules/` excludes; set `exclude-patterns-mode: replace` (or `AI_EXCLUDE_PATTERNS_MODE=replace`) to drop the built-ins entirely. Python engine only. See [docs/configuration.md](docs/configuration.md#diff-exclude-patterns).
 
 **Line-range suppression rules (PR #439, closes #437).** Suppression rules now support `match.line_start` and `match.line_end` fields, scoping a rule to a specific line window within a file. This resolves the granularity gap for repos that vendor upstream code and apply patches: a rule can now target only the upstream line window (e.g. lines 1–200) so that findings on the user's own patched lines (201+) are never silenced. Multi-line findings match on overlap. A finding with no line number is never matched by a range rule. Python engine only. See [docs/suppression.md](docs/suppression.md).
+
+## What's new in v1.0.2
+
+**Slash-commands YAML parse fix (PR #434).** The Python heredoc in the slash-commands workflow was moved to an env block scalar, fixing a YAML parse error that prevented the workflow from running in some environments.
+
+**Learning loop feedback context fix (PR #429).** The feedback store now correctly populates `source`, `file`, and `rule_id` fields for `issue_comment` events, so feedback entries written via `/ai-pr-review false-positive` and related commands carry the full context needed for relevance-ranked re-injection.
+
+**Agent output token budget and ordering fix (PR #432).** Agent prompts now emit the `json-findings` block first (before prose explanations), and the default `max-tokens-per-agent` cap has been raised to match the documented default of 32768. Both issues were causing findings to be silently truncated on large diffs.
+
+**E2E validation workflow (PR #433).** A Claude Code workflow (`ai-pr-review-e2e`) now builds the container image from the current checkout and runs live reviews against all three test platforms (GitHub, GitLab, Bitbucket) as part of the release process.
+
+## What's new in v1.0.1
+
+**Agent prompt parity with claude-comprehensive-review (PRs #414–#419).** Six agents — `pr-summarizer`, `edge-case-hunter`, `blind-hunter`, `adversarial-general`, `architecture-reviewer`, and `security-reviewer` — received targeted prompt improvements ported from the companion CCR plugin: tighter output structure, improved finding signal-to-noise, and better alignment with the shared language profiles.
+
+**Analyzer correctness fixes (PRs #420–#423).** `run-semgrep.sh` gains stdin support and ruleset strategy documentation. `run-cve-check.sh` fixes range version truncation and `requirements.txt` pinning. `run-shellcheck.sh` and `run-trufflehog.sh` receive correctness improvements ported from CCR. All 12 analyzer wrappers now accept stdin input via the analyzer bridge.
+
+**Learning loop data quality fix (PR #425).** `source`, `file`, and `rule_id` fields are now correctly populated in `learnings.jsonl` entries, making relevance-ranked feedback injection more accurate.
 
 ## What's new in v1.0.0
 
