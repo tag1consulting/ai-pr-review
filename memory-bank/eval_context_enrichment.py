@@ -177,8 +177,8 @@ async def run_one(diff_text: str, pr_number: int, enrichment: bool) -> RunResult
         # Select agents: filter by mode, then gate-evaluate against diff
         mode_agents = [a for a in AGENTS if not a.separately_dispatched
                        and (not a.full_mode_only or EVAL_MODE == "full")]
-        changed_files = build_changed_files([])
-        gate_results = evaluate_gates(diff_text, changed_files, os.environ)
+        gate_changed_files = build_changed_files([])
+        gate_results = evaluate_gates(diff_text, gate_changed_files, os.environ)
         selected = list(filter_agents(mode_agents, gate_results))
 
         provider = NullProvider()

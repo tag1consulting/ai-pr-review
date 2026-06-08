@@ -30,7 +30,6 @@ from ai_pr_review.context.symbols import (
 )
 from ai_pr_review.context.treesitter import SymbolRef
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -167,9 +166,12 @@ def test_lookup_definitions_respects_max_queries(caplog, tmp_path: Path) -> None
     refs = [_sym(f"sym{i}") for i in range(10)]
 
     with caplog.at_level(logging.WARNING, logger="ai_pr_review.context.symbols"):
-        lookup_definitions(refs, repo, [], language="python", max_queries=3)
+        results = lookup_definitions(refs, repo, [], language="python", max_queries=3)
 
     assert any("max_queries" in r.message for r in caplog.records)
+    # Each query can return up to 5 matches (--max-count=5 in rg), so
+    # with max_queries=3 the result set is bounded to 3*5=15 definitions.
+    assert len(results) <= 3 * 5
 
 
 # ---------------------------------------------------------------------------
