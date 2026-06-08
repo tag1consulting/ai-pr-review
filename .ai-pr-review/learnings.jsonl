@@ -43,3 +43,4 @@
 {"ts": "2026-06-08T21:08:26Z", "command": "false-positive", "reason": "", "source": "Low", "file": "tests/python/test_scope.py", "rule_id": "", "finding_id": 5}
 {"ts": "2026-06-08T22:57:06Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 1}
 {"ts": "2026-06-08T22:57:10Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 3}
+{"ts": "2026-06-08T22:57:13Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 6}
