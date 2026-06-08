@@ -68,6 +68,18 @@ The default temperature (0.3) is unchanged. Python engine only.
 
 Out-of-range values are now clamped at config load time: values below 256 are raised to 256 and values above 65536 are lowered to 65536, each with a `WARNING` printed to stderr. This aligns the runtime with the `[256–65536]` range documented in the reference docs.
 
+#### Native analyzer wrappers now run concurrently (closes #354)
+
+Static analyzer subprocess wrappers (`shellcheck`, `trufflehog`, `semgrep`, `ruff`, and others) previously ran sequentially — each wrapper blocked until the previous one finished. On repos where several analyzers are eligible, this added 2–5× the latency of the slowest single wrapper.
+
+Analyzers now run concurrently via `anyio.to_thread.run_sync` under a shared `CapacityLimiter`. The new `AI_ANALYZER_CONCURRENCY` env var (and `analyzer-concurrency` action input) sets the cap (default 4). Setting `AI_PARALLEL=false` forces the cap to 1 (sequential, matching the old behavior). Results are returned in the original analyzer-list order for deterministic golden-fixture comparison. A single analyzer crash produces a warning and an empty slot — the remaining analyzers proceed normally.
+
+Python engine only.
+
+#### Native wrappers for ruff, semgrep, and hadolint are skipped when equivalent SARIF is supplied (closes #353)
+
+If `AI_SARIF_PATHS` includes a SARIF file whose filename stem matches `ruff`, `semgrep`, or `hadolint` (case-insensitive), the corresponding native wrapper is not run. A `[ai-pr-review] INFO` line is printed for each skipped analyzer. When `AI_SARIF_PATHS` is empty, behavior is unchanged. The match is purely on filename stem — no JSON parsing of the SARIF file is required, so a malformed path simply produces no skip (fail-soft). Add `ruff.sarif`, `semgrep.sarif`, or `hadolint.sarif` to your `AI_SARIF_PATHS` to enable.
+
 Python engine only.
 
 ## [1.2.0] - 2026-06-05

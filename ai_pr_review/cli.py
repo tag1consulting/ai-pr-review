@@ -142,7 +142,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     from ai_pr_review.orchestrate import run_review
     from ai_pr_review.review.runtime import SkipPlan, build_review_runtime
 
-    runtime = build_review_runtime(config)
+    runtime = await build_review_runtime(config)
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)

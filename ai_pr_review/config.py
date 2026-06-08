@@ -67,6 +67,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # Set by the engine at startup and inherited by analyzer subprocesses;
         # not a user-configured input but must be known to avoid ConfigError.
         "AI_PR_REVIEW_CORRELATION_ID",
+        # --- Analyzer concurrency ---
+        "AI_ANALYZER_CONCURRENCY",
         # --- Telemetry ---
         "AI_TELEMETRY_ENABLED",
         "AI_TELEMETRY_SINK",
@@ -128,6 +130,8 @@ class ReviewConfig(BaseModel):
     parallel: bool = True
     # Number of concurrent LLM calls. Derived from parallel in resolve_models().
     concurrency: int = 4
+    # Number of concurrent analyzer subprocesses. Clamped to 1 when parallel=False.
+    analyzer_concurrency: int = 4
     max_inline: int = 10
     max_tokens_per_agent: int = 16384
     enable_suggestions: bool = True
@@ -352,6 +356,7 @@ class ReviewConfig(BaseModel):
             force_full_diff=_bool("FORCE_FULL_DIFF"),
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
+            analyzer_concurrency=_int("AI_ANALYZER_CONCURRENCY", 4),
             max_inline=_int("AI_MAX_INLINE", 10),
             max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 16384),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
@@ -450,9 +455,12 @@ class ReviewConfig(BaseModel):
 
         # AI_PARALLEL=true → 4 concurrent calls (bash default); false → 1 (serial).
         concurrency = 4 if self.parallel else 1
+        # Mirror: parallel=false also serializes analyzer subprocesses.
+        analyzer_concurrency = 1 if not self.parallel else self.analyzer_concurrency
 
         return self.model_copy(update={
             "model_standard": std,
             "model_premium": prem,
             "concurrency": concurrency,
+            "analyzer_concurrency": analyzer_concurrency,
         })
