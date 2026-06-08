@@ -51,7 +51,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_PR_REVIEW_ENGINE` | `python` | `engine` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
 | `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
-| `AI_REVIEW_CONTEXT_ENRICHMENT` | `false` | `context-enrichment` | Inject tree-sitter symbol-context blocks into agent prompts (requires the Python engine, which is the default). |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | `true` (container), `false` (direct action) | `context-enrichment` | Inject tree-sitter symbol-context blocks into agent prompts (requires the Python engine, which is the default). The container image ships `tree-sitter-language-pack` and `ripgrep`, so enrichment is on by default there. Direct-action consumers without those tools get a silent no-op. |
 | `AI_REVIEW_SARIF_PATHS` | `''` | `sarif-paths` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires the Python engine, which is the default). |
 | `AI_REVIEW_EXCLUDE_PATTERNS` | `''` | `exclude-patterns` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*`). Requires the Python engine, which is the default. |
 | `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
@@ -128,7 +128,7 @@ These variables enable optional capabilities that are off by default. All requir
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_CONTEXT_ENRICHMENT` | `false` | Enable tree-sitter + ripgrep symbol-context injection. Extracts symbol references from the diff and appends relevant definitions to each agent's prompt in a `<symbol-context>` block. Requires `tree-sitter-language-pack` (included in the container image) and `ripgrep`. |
+| `AI_CONTEXT_ENRICHMENT` | `true` (container), `false` (direct action) | Enable tree-sitter + ripgrep symbol-context injection. Extracts symbol references from the diff and appends relevant definitions to each agent's prompt in a `<symbol-context>` block. Requires `tree-sitter-language-pack` (included in the container image) and `ripgrep`. Silently no-ops if either dependency is absent. |
 | `AI_CONTEXT_MAX_TOKENS` | `8192` | Maximum token budget for the injected `<symbol-context>` block per agent call. |
 | `AI_CONTEXT_LOOKUP_LINES` | `8` | Number of source lines to capture per symbol definition (snippet window). |
 

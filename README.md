@@ -42,7 +42,7 @@ That's it — reviews start firing on the next PR.
 
 **Going further:**
 - [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`)
-- [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment, SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All default off; all require the Python engine (the default since v1.0.0).
+- [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment (default on in the container image), SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All require the Python engine (the default since v1.0.0).
 - [Installation](#installation) — full-mode agents, provider configuration, [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) for the complete repo-variable pattern used by internal consumers
 
 ## Supported VCS providers
@@ -248,7 +248,7 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
 | `engine` | No | `python` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release). Required for opt-in capabilities below. |
 | `ignore-merge-commits` | No | `true` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. Set to `false` to review all commits including upstream merges. |
-| `context-enrichment` | No | `false` | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Opt-in capabilities](#opt-in-capabilities). |
+| `context-enrichment` | No | `true` (container), `false` (direct action) | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Opt-in capabilities](#opt-in-capabilities). |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. Requires `engine: python`. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | How `exclude-patterns` interacts with the built-in excludes (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are added after the built-ins. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
@@ -263,7 +263,7 @@ Three optional features can be enabled independently — all off by default, all
 
 | Capability | Action input | Env var | Default | Description |
 |-----------|-------------|---------|---------|-------------|
-| **A. Context enrichment** | `context-enrichment: 'true'` | `AI_CONTEXT_ENRICHMENT=true` | `false` | Use tree-sitter + ripgrep to look up cross-file symbol definitions referenced in the diff, then inject a `<symbol-context>` block (token-budget-capped) into eligible agent prompts. Reduces hallucinated "we should check X" findings by giving agents the real definitions. |
+| **A. Context enrichment** | `context-enrichment: 'true'` | `AI_CONTEXT_ENRICHMENT=true` | `true` (container), `false` (direct action) | Use tree-sitter + ripgrep to look up cross-file symbol definitions referenced in the diff, then inject a `<symbol-context>` block (token-budget-capped) into eligible agent prompts. Reduces hallucinated "we should check X" findings by giving agents the real definitions. The container image ships both dependencies; direct-action consumers without them get a silent no-op. |
 | **B. SARIF ingestion** | `sarif-paths: 'a.sarif,b.sarif'` | `AI_SARIF_PATHS=a.sarif,b.sarif` | `''` | Parse SARIF 2.1.0 files produced by external scanners (CodeQL, Semgrep, Trivy, Bandit, ...) and merge their findings into the same dedup/suppress/post pipeline as native analyzers. See [examples/workflows/sarif-codeql.yml](examples/workflows/sarif-codeql.yml). |
 | **C. Learning loop** | `feedback-loop: 'true'` + `enable-feedback-loop: 'true'` on the slash-commands workflow | `AI_FEEDBACK_LOOP=true` | `false` | Reviewers post `/ai-pr-review false-positive`, `wont-fix`, or `feedback` to mark findings. Entries persist to a dedicated `ai-pr-review-bot` branch (auto-bootstrapped on first write) and feed into future agent prompts as a `<repo-feedback>` block. Requires `github-token` with `contents:write`. GitHub-only. See [docs/learning-loop.md](docs/learning-loop.md). |
 
