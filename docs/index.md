@@ -27,9 +27,9 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
-## What's new in v1.2.0
+## What's new in v1.3.0
 
-**Diff-scope severity cap** — `analyzer-diff-scope: cap` (default) downgrades out-of-diff native analyzer findings to Low and collapses them under a `<details>` section, so a single changed line in a large file can't flood the review or trigger `REQUEST_CHANGES`. Use `drop` to remove them entirely, or `off` for the pre-v1.2 pass-through behavior. **`exclude-patterns-mode` validation** — invalid values now fail fast with a clear error instead of silently defaulting to `append`. See [Features → v1.2.0](features#whats-new-in-v120) for details.
+**Concurrent static analyzers** — native analyzer wrappers now run simultaneously (default 4 at a time) via the new `analyzer-concurrency` input, reducing wall-clock time on repos where several analyzers are eligible. **SARIF-equivalent skip** — when `AI_SARIF_PATHS` includes a SARIF file named `ruff.sarif`, `semgrep.sarif`, or `hadolint.sarif`, the corresponding native wrapper is suppressed automatically. **Temperature wired through** — the `temperature` input (and `AI_TEMPERATURE` env var) is now forwarded to every LLM call in the Python engine; previously it was validated but ignored. **`max-tokens-per-agent` default lowered to 16384** (from 32768) and clamped at config load time. **Breaking: `ignore-merge-commits` now defaults to `true`** — only the PR author's own commits are reviewed by default; set `ignore-merge-commits: false` to restore the previous behavior. See [Features → v1.3.0](features#whats-new-in-v130) for the full list.
 
 ## What it does
 
