@@ -53,8 +53,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Diff exclude patterns ---
         "AI_EXCLUDE_PATTERNS",
         "AI_EXCLUDE_PATTERNS_MODE",
-        # --- Analyzer diff scope ---
+        # --- Analyzer diff scope and concurrency ---
         "AI_ANALYZER_DIFF_SCOPE",
+        "AI_ANALYZER_CONCURRENCY",
         # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
