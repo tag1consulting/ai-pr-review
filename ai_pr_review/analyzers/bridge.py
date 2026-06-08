@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 from typing import NamedTuple
 
@@ -133,10 +134,13 @@ async def run_analyzers(
                 cancellable=True,
                 limiter=limiter,
             )
-        except Exception as exc:  # noqa: BLE001
+        except BaseException as exc:
+            if isinstance(exc, anyio.get_cancelled_exc_class()):
+                raise
             print(
                 f"\n[ai-pr-review] WARNING: {spec.name} raised an unexpected error: "
-                f"{type(exc).__name__}: {exc}; skipping.",
+                f"{type(exc).__name__}: {exc}; skipping.\n"
+                f"{traceback.format_exc()}",
                 file=sys.stderr,
             )
             findings = []

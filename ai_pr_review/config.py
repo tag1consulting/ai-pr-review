@@ -356,7 +356,7 @@ class ReviewConfig(BaseModel):
             force_full_diff=_bool("FORCE_FULL_DIFF"),
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
-            analyzer_concurrency=_int("AI_ANALYZER_CONCURRENCY", 4),
+            analyzer_concurrency=max(1, _int("AI_ANALYZER_CONCURRENCY", 4)),
             max_inline=_int("AI_MAX_INLINE", 10),
             max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 16384),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
