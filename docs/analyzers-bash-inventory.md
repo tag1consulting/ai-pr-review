@@ -10,7 +10,7 @@ Each of the 13 static analyzers ships as a thin bash wrapper in `analyzers/run-<
 
 This document records the implementation details of every wrapper: binary invocation, input handling, output-field mapping, known complexity, and the mock mechanism used in tests. It exists primarily to scope a future native-Python port (tracked as Phase 11 issues) and to serve as the authoritative reference for parity requirements.
 
-**Architecture note:** `bridge.py` invokes each wrapper with the changed-file list passed as `$1` (a space-separated string of relative paths) and `DIFF_FILE` set in the environment pointing to the raw diff. Wrappers that do not operate on individual files (e.g. trufflehog, cve-check) ignore `$1` and read from the workspace root or the diff. All wrappers write JSON to stdout conforming to the `json-findings` schema described below.
+**Architecture note:** `bridge.py` invokes each wrapper with the changed-file list passed via **stdin as a newline-separated string of relative paths** (`_file_list()` returns `"\n".join(sorted(set(cf.all_files)))`), and `DIFF_FILE` set in the environment pointing to the raw diff. Wrappers that do not operate on individual files (e.g. trufflehog, cve-check) ignore stdin and read from the workspace root or the diff. All wrappers write JSON to stdout conforming to the `json-findings` schema described below.
 
 ---
 
@@ -335,7 +335,7 @@ Wrappers that find nothing emit `{"findings": []}`. Wrappers that cannot run (bi
 | Source tag | **`osv`** (not `cve-check`) |
 | Additional field | `"agent": "dependency-check"` on every finding |
 | Mock env var | `OSV_MOCK_FILE` |
-| Fixture dir | `tests/fixtures/osv/` |
+| Fixture dir | `tests/fixtures/cve/` |
 
 **Source tag exception:** This is the only wrapper where `source` is not the wrapper's own name. It always emits `"source": "osv"` and adds `"agent": "dependency-check"`. Both fields are required for parity.
 

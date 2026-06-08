@@ -90,7 +90,7 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 | Script | Mock env var | Fixture directory |
 |--------|-------------|-------------------|
-| `analyzers/run-cve-check.sh` | `OSV_MOCK_FILE` | `tests/fixtures/osv/` |
+| `analyzers/run-cve-check.sh` | `OSV_MOCK_FILE` | `tests/fixtures/cve/` |
 | `analyzers/run-semgrep.sh` | `SEMGREP_MOCK_FILE` | `tests/fixtures/semgrep/` |
 | `analyzers/run-trufflehog.sh` | `TRUFFLEHOG_MOCK_FILE` | `tests/fixtures/trufflehog/` |
 | `analyzers/run-ruff.sh` | `RUFF_MOCK_FILE` | `tests/fixtures/ruff/` |
