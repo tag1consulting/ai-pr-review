@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### Context enrichment now defaults to `true` in the container image (closes #391)
+
+The container image ships `tree-sitter-language-pack` and `ripgrep`, so the dependencies required for context enrichment are always present. The `context-enrichment` input (and `AI_CONTEXT_ENRICHMENT` env var) now defaults to `true` in `container-action/action.yml`.
+
+Direct-action consumers (those using `uses: tag1consulting/ai-pr-review@...` without the container image) keep the `false` default because tree-sitter and ripgrep are not guaranteed in that environment. If either dependency is missing, enrichment silently no-ops — no error is thrown and the review proceeds normally.
+
+To opt out in the container image: `context-enrichment: 'false'`.
+
+Python engine only.
+
 #### issue-linker now pre-fetches the open-issue list via `gh issue list` (closes #446)
 
 The issue-linker agent previously emitted raw `<tool_call>` XML when its prompt instructed the model to run `gh issue list` — a command the text-completion call path cannot execute.

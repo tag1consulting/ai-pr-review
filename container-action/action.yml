@@ -131,7 +131,7 @@ inputs:
       each agent's prompt. Requires tree-sitter-language-pack and ripgrep.
       Only available with the Python engine.
     required: false
-    default: 'false'
+    default: 'true'
 
   feedback-loop:
     description: >

@@ -203,6 +203,19 @@ def test_anthropic_premium_default_is_opus_4_8(monkeypatch: pytest.MonkeyPatch) 
     assert cfg.model_premium == "claude-opus-4-8"
 
 
+def test_context_enrichment_default_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Container image ships tree-sitter + ripgrep; enrichment should default on."""
+    monkeypatch.delenv("AI_CONTEXT_ENRICHMENT", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.enable_context_enrichment is True
+
+
+def test_context_enrichment_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CONTEXT_ENRICHMENT", "false")
+    cfg = ReviewConfig.from_env()
+    assert cfg.enable_context_enrichment is False
+
+
 def test_bedrock_proxy_premium_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     """bedrock-proxy premium stays on claude-opus-4-7 until Bedrock ID for 4.8 is confirmed."""
     monkeypatch.delenv("AI_MODEL_PREMIUM", raising=False)
