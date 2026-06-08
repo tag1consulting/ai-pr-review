@@ -1,9 +1,0 @@
-{
-  "type": "vcs",
-  "provider": "gitlab",
-  "method": "POST",
-  "url": "https://gitlab.com/api/v4/projects/9876/merge_requests/21/notes",
-  "request_body": "{\"body\":\"<!-- ai-pr-review-summary sha=555eee66 -->\\n## AI Review: Incomplete\\n\\nOne or more agents failed: blind-hunter\"}",
-  "response_body": "{\"id\":77021,\"body\":\"<!-- ai-pr-review-summary -->\"}",
-  "timestamp": "2026-05-13T20:00:01Z"
-}

@@ -1,9 +1,0 @@
-{
-  "type": "vcs",
-  "provider": "gitlab",
-  "method": "POST",
-  "url": "https://gitlab.com/api/v4/projects/9876/merge_requests/5/notes",
-  "request_body": "{\"body\":\"<!-- ai-pr-review-summary sha=444ddd55 -->\"}",
-  "response_body": "{\"id\":77001,\"body\":\"<!-- ai-pr-review-summary -->\"}",
-  "timestamp": "2026-05-11T20:02:05Z"
-}

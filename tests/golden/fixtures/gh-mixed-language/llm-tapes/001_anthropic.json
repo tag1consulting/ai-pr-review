@@ -1,8 +1,0 @@
-{
-  "type": "llm",
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-6",
-  "request_body": "{\"model\":\"claude-sonnet-4-6\",\"system\":[{\"type\":\"text\",\"text\":\"<diff>...\",\"cache_control\":{\"type\":\"ephemeral\"}},{\"type\":\"text\",\"text\":\"You are a security review agent.\"}],\"messages\":[{\"role\":\"user\",\"content\":\"Please perform your review now.\"}],\"max_tokens\":8192,\"temperature\":0.3}",
-  "response_body": "{\"id\":\"msg_02AbC\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"# Code Review\\n\\nFound security issues in this mixed-language PR.\\n\\n```json-findings\\n[{\\\"severity\\\":\\\"Critical\\\",\\\"confidence\\\":95,\\\"file\\\":\\\"src/processor.py\\\",\\\"line\\\":15,\\\"finding\\\":\\\"SQL injection vulnerability: string concatenation in cursor.execute()\\\",\\\"remediation\\\":\\\"Use parameterized queries: cursor.execute('SELECT * FROM users WHERE name = ?', (query,))\\\",\\\"source\\\":\\\"security-reviewer\\\"},{\\\"severity\\\":\\\"High\\\",\\\"confidence\\\":88,\\\"file\\\":\\\"src/handler.ts\\\",\\\"line\\\":9,\\\"finding\\\":\\\"Cross-site scripting (XSS): unsanitized user input rendered in HTML template\\\",\\\"remediation\\\":\\\"Sanitize userId before injecting into HTML or use a templating engine that auto-escapes\\\",\\\"source\\\":\\\"security-reviewer\\\"}]\\n```\"}],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":450,\"output_tokens\":210}}",
-  "timestamp": "2026-05-11T20:01:00Z"
-}
