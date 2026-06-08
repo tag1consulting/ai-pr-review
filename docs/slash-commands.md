@@ -33,17 +33,22 @@ This is a thin wrapper (~70 lines) that delegates to a [reusable workflow](https
 
 ### 2. Add a `GH_TOKEN` secret {#pat-requirement}
 
-The starter template passes `secrets.GH_TOKEN` as the GitHub token. This **must** be a Personal Access Token (PAT) or GitHub App token — the built-in `GITHUB_TOKEN` does not work for the `dismiss` command.
+The starter template uses **two tokens**:
 
-**Why:** GitHub restricts the `GITHUB_TOKEN` in `pull_request_review_comment`-triggered workflows from calling the `resolveReviewThread` GraphQL mutation. The token technically has `pull-requests: write` permission, but GitHub's integration security model blocks this specific mutation unless the token is a PAT or App token.
+- **`secrets.GH_TOKEN`** (PAT or GitHub App token) — required only for the `dismiss` command's `resolveReviewThread` GraphQL mutation and review-dismissal REST calls.
+- **`secrets.GITHUB_TOKEN`** (the built-in token, auto-available in every repository) — used for all plain comment posts, reactions, reads, label changes, and checkout. These operations post as **`github-actions[bot]`**.
 
-**Create a PAT:**
+**Why a PAT is still needed for `dismiss`:** GitHub restricts `GITHUB_TOKEN` in `pull_request_review_comment`-triggered workflows from calling the `resolveReviewThread` GraphQL mutation. The token technically has `pull-requests: write` permission, but GitHub's integration security model blocks this specific mutation unless the token is a PAT or App token.
+
+**You do not need to add a `GH_TOKEN` secret** if you only use `rescan`, `review-full`, `skip`, `help`, or the learning-loop commands (`false-positive`, `wont-fix`, `feedback`, `explain`, `revise`). Those all run under `GITHUB_TOKEN`. The `dismiss` command will fail without `GH_TOKEN`.
+
+**Create a PAT for `dismiss` support:**
 - Classic PAT: go to Settings → Developer settings → Personal access tokens → Tokens (classic). Grant the `repo` scope.
 - Fine-grained PAT: grant **Read and write** access to **Pull requests** and **Read** access to **Metadata** on the target repository.
 
 Then add it as a repository secret named `GH_TOKEN` (Settings → Secrets and variables → Actions → New repository secret).
 
-> **Note:** The `rescan`, `review-full`, `skip`, and `help` commands work with `GITHUB_TOKEN`. Both dismiss paths (`/ai-pr-review dismiss` as a thread reply and `/ai-pr-review dismiss F<n>` as a top-level comment) require a PAT. If you don't use either dismiss command, you can pass `github.token` instead — but all dismiss functionality will fail.
+> **Known edge:** A few confirmation messages inside the `dismiss` command's resolve/dismiss steps still post under the PAT rather than `GITHUB_TOKEN`, because those messages are interleaved with the GraphQL mutation in the same shell step. This affects only the dismiss-outcome confirmation comment, not the lookup/list/learning-loop replies. A future refactor will move those to `GITHUB_TOKEN` as well.
 
 ### 3. Verify your API key secret
 

@@ -56,3 +56,6 @@ jobs:
       # GITHUB_TOKEN from pull_request_review_comment events cannot call the
       # resolveReviewThread GraphQL mutation used by /ai-pr-review dismiss.
       github-token: ${{ secrets.GH_TOKEN }}
+      # Built-in GITHUB_TOKEN: used for all plain comment posts, reactions,
+      # reads, and label changes so those operations post as github-actions[bot].
+      actions-token: ${{ secrets.GITHUB_TOKEN }}
