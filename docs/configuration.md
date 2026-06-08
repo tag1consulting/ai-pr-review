@@ -23,8 +23,10 @@ nav_order: 2
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
+| `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). Lower values produce more deterministic output. |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `16384` | Max output tokens per LLM agent call (clamped to 256–65536). |
+| `max-tokens-per-agent` | No | `16384` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 in v1.3.0. |
+| `analyzer-concurrency` | No | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `parallel: false`. Requires the Python engine. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 | `ignore-merge-commits` | No | `true` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. Set to `false` to review all commits including upstream merges. |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
@@ -149,6 +151,7 @@ These variables enable optional capabilities that are off by default. All requir
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `AI_ANALYZER_CONCURRENCY` | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `AI_PARALLEL=false`. Requires the Python engine. |
 | `AI_ANALYZER_DIFF_SCOPE` | `cap` | Controls how out-of-diff native static-analyzer findings are handled (requires the Python engine). Native analyzers (phpcs, phpstan, ruff, golangci-lint, etc.) lint entire files, so a small change can produce many diagnostics on unchanged lines. `cap` (default): downgrade those findings to Low severity and collapse them into a `<details>` section in the summary comment — they remain visible but do not trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour, pre-v1.2 default). LLM-agent findings are never affected regardless of this setting. |
 
 #### Learning loop

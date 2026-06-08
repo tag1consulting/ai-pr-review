@@ -250,6 +250,13 @@ class ReviewConfig(BaseModel):
             )
         return normalized
 
+    @field_validator("temperature")
+    @classmethod
+    def _validate_temperature(cls, v: float) -> float:
+        if not (0.0 <= v <= 2.0):
+            raise ValueError(f"temperature must be in [0, 2], got {v}")
+        return v
+
     @field_validator("confidence_threshold")
     @classmethod
     def _validate_confidence(cls, v: int) -> int:

@@ -113,14 +113,31 @@ inputs:
     required: false
     default: '25'
 
+  temperature:
+    description: >
+      Sampling temperature for LLM calls. Controls output randomness; lower values
+      produce more deterministic responses. Must be a float in [0, 2]. The default
+      (0.3) is tuned for code review. Sets AI_TEMPERATURE.
+    required: false
+    default: '0.3'
+
   max-tokens-per-agent:
     description: >
       Maximum number of output tokens each LLM agent may generate per call.
       Lower values reduce cost and latency; higher values allow more detailed output
       on large diffs. Must be a positive integer; values outside [256, 65536] are
-      clamped to that range.
+      clamped to that range with a warning. Default changed from 32768 to 16384 in v1.3.0.
     required: false
-    default: '32768'
+    default: '16384'
+
+  analyzer-concurrency:
+    description: >
+      Maximum number of native static-analyzer subprocesses to run simultaneously.
+      Defaults to 4. Set to 1 to restore sequential behaviour (equivalent to setting
+      parallel: false). Ignored when parallel: false is set (concurrency is forced to 1).
+      Requires the Python engine. Sets AI_ANALYZER_CONCURRENCY.
+    required: false
+    default: '4'
 
   enable-suggestions:
     description: >
@@ -257,7 +274,9 @@ runs:
         HEAD_SHA: ${{ inputs.head-sha }}
         AI_PARALLEL: ${{ inputs.parallel }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
+        AI_TEMPERATURE: ${{ inputs.temperature }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
+        AI_ANALYZER_CONCURRENCY: ${{ inputs.analyzer-concurrency }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
         AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}

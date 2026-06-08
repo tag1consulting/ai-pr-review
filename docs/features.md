@@ -7,6 +7,24 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v1.3.0
+
+**Concurrent native analyzer wrappers (PR #454, closes #354).** Native static-analyzer subprocesses (`shellcheck`, `trufflehog`, `semgrep`, `ruff`, and others) previously ran sequentially. They now run concurrently via `anyio.to_thread.run_sync` under a shared `CapacityLimiter`. Use the new `analyzer-concurrency` action input (or `AI_ANALYZER_CONCURRENCY` env var) to control the cap (default 4). Setting `parallel: false` forces the cap to 1 (restoring sequential behavior). Results are always returned in the original analyzer-list order for deterministic output. Python engine only. See [Configuration → analyzer-concurrency](configuration#static-analyzer-options).
+
+**SARIF-equivalent skip for native wrappers (PR #454, closes #353).** When `AI_SARIF_PATHS` includes a SARIF file whose filename stem matches `ruff`, `semgrep`, or `hadolint` (case-insensitive), the corresponding native wrapper is suppressed and an INFO log is printed. This avoids running the same analyzer twice when you supply SARIF output from your own CI step. When `AI_SARIF_PATHS` is empty, behavior is unchanged. Python engine only.
+
+**`AI_TEMPERATURE` is now honored in Python engine LLM requests (PR #453, closes #356).** The `temperature` action input (and `AI_TEMPERATURE` env var) was already validated but was never forwarded to the underlying LLM provider call. All agents, the pr-summarizer, and the issue-linker now receive the configured temperature. Default is 0.3 (unchanged). Python engine only.
+
+**`max_tokens_per_agent` default lowered and clamped (PR #453, closes #357).** The default output-token budget per agent call is now **16384** (previously 32768 in the Python engine; docs and the bash engine said 8192 — now all three agree). Out-of-range values are clamped at config load time with a `WARNING` to stderr: below 256 is raised to 256, above 65536 is lowered to 65536. If you relied on the Python engine's prior 32768 default, add `max-tokens-per-agent: 32768` to restore it.
+
+**`ignore-merge-commits` now defaults to `true` (PR #450, closes #448).** Merge commits that pull upstream base-branch changes into a PR are now excluded from the diff by default, so only the PR author's own commits are reviewed. **Breaking change**: if your PRs contain base-branch merge commits and you rely on them appearing in the diff, add `ignore-merge-commits: false` (or `AI_REVIEW_IGNORE_MERGE_COMMITS=false`) to restore the previous behavior.
+
+**Context enrichment now defaults to `true` in the container image (PR #451, closes #391).** The container image ships `tree-sitter-language-pack` and `ripgrep`, so the dependencies required for context enrichment are always present. The `context-enrichment` input now defaults to `true` in `container-action/action.yml`. Direct-action consumers keep the `false` default.
+
+**Issue-linker pre-fetches open issues via `gh issue list` (PR #447, closes #446).** The issue-linker agent now receives a pre-fetched list of open issues injected into its prompt, so it can resolve referenced `#N` numbers to real titles and surface genuinely related issues by keyword matching. Python engine only.
+
+**Slash-command replies now post as `github-actions[bot]` (PR #452).** Slash-command and learning-loop replies previously posted as the PAT owner. They now post as `github-actions[bot]`. Callers of `slash-commands.yml` must add `actions-token: ${{ secrets.GITHUB_TOKEN }}` to the `secrets:` block. See [Slash commands](slash-commands.md) for the updated configuration.
+
 ## What's new in v1.2.0
 
 **Diff-scope severity cap for native analyzer findings (PR #444, closes #359).** Native static analyzers (phpcs, phpstan, ruff, golangci-lint, semgrep, etc.) lint entire files — a single changed line in a large legacy file can produce hundreds of diagnostics on unchanged code. The new `analyzer-diff-scope` input (or `AI_ANALYZER_DIFF_SCOPE` env var) controls how those out-of-diff findings are handled. `cap` (default): downgrade out-of-diff analyzer findings to Low severity and collapse them into a `<details>` section in the review body — they remain visible but never trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged (full-file linting behavior, pre-v1.2 default). LLM-agent findings are never affected regardless of this setting. Python engine only. See [Configuration → analyzer-diff-scope](configuration#static-analyzer-options).
@@ -25,7 +43,7 @@ render_with_liquid: false
 
 **Learning loop feedback context fix (PR #429).** The feedback store now correctly populates `source`, `file`, and `rule_id` fields for `issue_comment` events, so feedback entries written via `/ai-pr-review false-positive` and related commands carry the full context needed for relevance-ranked re-injection.
 
-**Agent output token budget and ordering fix (PR #432).** Agent prompts now emit the `json-findings` block first (before prose explanations), and the default `max-tokens-per-agent` cap has been raised to match the documented default of 32768. Both issues were causing findings to be silently truncated on large diffs.
+**Agent output token budget and ordering fix (PR #432).** Agent prompts now emit the `json-findings` block first (before prose explanations), reducing silent truncation on large diffs. The per-agent output budget was subsequently lowered to 16384 in v1.3.0; see the v1.3.0 notes above.
 
 **E2E validation workflow (PR #433).** A Claude Code workflow (`ai-pr-review-e2e`) now builds the container image from the current checkout and runs live reviews against all three test platforms (GitHub, GitLab, Bitbucket) as part of the release process.
 
