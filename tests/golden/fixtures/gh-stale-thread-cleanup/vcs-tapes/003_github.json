@@ -1,9 +1,0 @@
-{
-  "type": "vcs",
-  "provider": "github",
-  "method": "POST",
-  "url": "https://api.github.com/graphql",
-  "request_body": "{\"query\":\"mutation resolveReviewThread($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { id isResolved } } }\",\"variables\":{\"threadId\":\"PRRT_kwDOABCDEF4ABCDE2\"}}",
-  "response_body": "{\"data\":{\"resolveReviewThread\":{\"thread\":{\"id\":\"PRRT_kwDOABCDEF4ABCDE2\",\"isResolved\":true}}}}",
-  "timestamp": "2026-05-11T20:03:06Z"
-}

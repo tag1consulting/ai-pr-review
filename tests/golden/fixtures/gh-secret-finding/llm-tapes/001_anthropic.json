@@ -1,8 +1,0 @@
-{
-  "type": "llm",
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-6",
-  "request_body": "{\"model\":\"claude-sonnet-4-6\",\"system\":[{\"type\":\"text\",\"text\":\"<diff>...\",\"cache_control\":{\"type\":\"ephemeral\"}},{\"type\":\"text\",\"text\":\"You are a code reviewer.\"}],\"messages\":[{\"role\":\"user\",\"content\":\"Please perform your review now.\"}],\"max_tokens\":8192,\"temperature\":0.3}",
-  "response_body": "{\"id\": \"msg_fixed\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"# Code Review\\n\\n```json-findings\\n[\\n  {\\n    \\\"severity\\\": \\\"Critical\\\",\\n    \\\"confidence\\\": 95,\\n    \\\"file\\\": \\\"config/settings.py\\\",\\n    \\\"line\\\": 4,\\n    \\\"finding\\\": \\\"Hardcoded AWS Access Key ID detected\\\",\\n    \\\"remediation\\\": \\\"Remove immediately and rotate the key. Use environment variables or a secrets manager.\\\",\\n    \\\"source\\\": \\\"trufflehog\\\"\\n  }\\n]\\n```\"}], \"model\": \"claude-sonnet-4-6\", \"stop_reason\": \"end_turn\", \"usage\": {\"input_tokens\": 300, \"output_tokens\": 120}}",
-  "timestamp": "2026-05-11T20:02:00Z"
-}
