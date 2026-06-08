@@ -46,3 +46,4 @@
 {"ts": "2026-06-08T22:57:13Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 6}
 {"ts": "2026-06-08T22:57:14Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 7}
 {"ts": "2026-06-08T22:57:20Z", "command": "wont-fix", "reason": "", "source": "Medium", "file": "action.yml", "rule_id": "", "finding_id": 4}
+{"ts": "2026-06-08T22:57:21Z", "command": "wont-fix", "reason": "", "source": "Medium", "file": "container-action/action.yml", "rule_id": "", "finding_id": 5}
