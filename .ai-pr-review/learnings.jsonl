@@ -35,3 +35,4 @@
 {"ts": "2026-06-08T20:10:00Z", "command": "false-positive", "reason": "docs/getting-started.md is not in this PR&#x27;s diff — the context-enrichment default change landed in PR #451. Not introduced by this PR.", "source": "", "file": "", "rule_id": "", "finding_id": 2}
 {"ts": "2026-06-08T20:12:28Z", "command": "false-positive", "reason": "review.sh:502 is not in this PR&#x27;s diff — the ignore-merge-commits default change landed in PR #451. Not introduced by this PR.", "source": "", "file": "", "rule_id": "", "finding_id": 3}
 {"ts": "2026-06-08T20:12:38Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "context_missing": true}
+{"ts": "2026-06-08T20:53:24Z", "command": "false-positive", "reason": "", "source": "Low", "file": "tests/python/test_scope.py", "rule_id": "", "finding_id": 5}
