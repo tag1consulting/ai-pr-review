@@ -129,7 +129,7 @@ class ReviewConfig(BaseModel):
     # Number of concurrent LLM calls. Derived from parallel in resolve_models().
     concurrency: int = 4
     max_inline: int = 10
-    max_tokens_per_agent: int = 32768
+    max_tokens_per_agent: int = 16384
     enable_suggestions: bool = True
     cache_priming: bool = False
     llm_prompt_caching: str = "auto"
@@ -253,6 +253,26 @@ class ReviewConfig(BaseModel):
             raise ValueError(f"confidence_threshold must be 0-100, got {v}")
         return v
 
+    @field_validator("max_tokens_per_agent")
+    @classmethod
+    def _clamp_max_tokens_per_agent(cls, v: int) -> int:
+        _MIN, _MAX = 256, 65536
+        if v < _MIN:
+            print(
+                f"WARNING: AI_MAX_TOKENS_PER_AGENT={v} is below minimum {_MIN}; clamping to {_MIN}. "
+                "Review will proceed with this value.",
+                file=sys.stderr,
+            )
+            return _MIN
+        if v > _MAX:
+            print(
+                f"WARNING: AI_MAX_TOKENS_PER_AGENT={v} exceeds maximum {_MAX}; clamping to {_MAX}. "
+                "Review will proceed with this value.",
+                file=sys.stderr,
+            )
+            return _MAX
+        return v
+
     @field_validator("analyzer_diff_scope")
     @classmethod
     def _validate_analyzer_diff_scope(cls, v: str) -> str:
@@ -333,7 +353,7 @@ class ReviewConfig(BaseModel):
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
             max_inline=_int("AI_MAX_INLINE", 10),
-            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 32768),
+            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 16384),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
             cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),

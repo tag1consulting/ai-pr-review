@@ -188,6 +188,7 @@ def build_review_runtime(
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,
         max_tokens_per_agent=config.max_tokens_per_agent,
+        temperature=config.temperature,
         language_profile_text=_language_profile_text,
     )
 
