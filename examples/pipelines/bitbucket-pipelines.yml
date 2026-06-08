@@ -22,8 +22,8 @@
 #   AI_REVIEW_MODE          (plain, default: quick; set to 'full' for deep agents)
 #   AI_PR_REVIEW_ENGINE     (plain, default: python; set to 'bash' to use the
 #                            deprecated legacy pipeline — will be removed in a future release)
-#   AI_IGNORE_MERGE_COMMITS (plain, default: false; strip base-branch merges
-#                            from the diff before review)
+#   AI_IGNORE_MERGE_COMMITS (plain, default: true; strip base-branch merges
+#                            from the diff before review; set to false to include upstream merges)
 #
 # Opt-in capabilities (require the Python engine, which is the default):
 #   AI_CONTEXT_ENRICHMENT  (plain, default: false; tree-sitter symbol context)
@@ -67,7 +67,7 @@ pipelines:
             - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
             - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
             - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-python}"
-            - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-false}"
+            - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-true}"
             # Opt-in capabilities (Python engine only — the default)
             - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
             - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"

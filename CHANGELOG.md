@@ -25,6 +25,24 @@ The `examples/workflows/comment-triggers.yml` starter template is updated accord
 
 A small known edge: a few confirmation messages inside the dismiss-path steps (the resolve/dismiss outcome replies interleaved in the same shell step as the GraphQL mutation) still post under the PAT. All other replies, including the `false-positive`/`wont-fix`/`lookup` replies that prompted this fix, now post as `github-actions[bot]`.
 
+#### `ignore-merge-commits` now defaults to `true` (closes #448)
+
+Merge commits that pull upstream base-branch changes into a PR are noise: they re-introduce diffs that were already present on the base branch and already reviewed there. Defaulting `ignore-merge-commits` to `true` means only the PR author's own commits are reviewed by default, which is what most teams want.
+
+**Breaking change for existing consumers**: if your PRs contain base-branch merge commits and you rely on them appearing in the diff, set `ignore-merge-commits: false` (or the repo variable `AI_REVIEW_IGNORE_MERGE_COMMITS=false`) to restore the previous behavior.
+
+Affects all three engines and all three VCS providers. Intra-PR merges (merging one feature branch into another) are still preserved regardless of this setting.
+
+#### Context enrichment now defaults to `true` in the container image (closes #391)
+
+The container image ships `tree-sitter-language-pack` and `ripgrep`, so the dependencies required for context enrichment are always present. The `context-enrichment` input (and `AI_CONTEXT_ENRICHMENT` env var) now defaults to `true` in `container-action/action.yml`.
+
+Direct-action consumers (those using `uses: tag1consulting/ai-pr-review@...` without the container image) keep the `false` default because tree-sitter and ripgrep are not guaranteed in that environment. If either dependency is missing, enrichment silently no-ops — no error is thrown and the review proceeds normally.
+
+To opt out in the container image: `context-enrichment: 'false'`.
+
+Python engine only.
+
 #### issue-linker now pre-fetches the open-issue list via `gh issue list` (closes #446)
 
 The issue-linker agent previously emitted raw `<tool_call>` XML when its prompt instructed the model to run `gh issue list` — a command the text-completion call path cannot execute.

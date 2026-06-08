@@ -34,6 +34,21 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.confidence_threshold == 75
     assert cfg.max_diff_lines == 5000
     assert cfg.parallel is True
+    assert cfg.ignore_merge_commits is True
+
+
+def test_ignore_merge_commits_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ignore-merge-commits defaults to True when AI_IGNORE_MERGE_COMMITS is unset."""
+    monkeypatch.delenv("AI_IGNORE_MERGE_COMMITS", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.ignore_merge_commits is True
+
+
+def test_ignore_merge_commits_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting AI_IGNORE_MERGE_COMMITS=false restores the old behavior."""
+    monkeypatch.setenv("AI_IGNORE_MERGE_COMMITS", "false")
+    cfg = ReviewConfig.from_env()
+    assert cfg.ignore_merge_commits is False
 
 
 def test_engine_field_default() -> None:
@@ -201,6 +216,19 @@ def test_anthropic_premium_default_is_opus_4_8(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
     cfg = ReviewConfig(provider="anthropic").resolve_models()
     assert cfg.model_premium == "claude-opus-4-8"
+
+
+def test_context_enrichment_default_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Container image ships tree-sitter + ripgrep; enrichment should default on."""
+    monkeypatch.delenv("AI_CONTEXT_ENRICHMENT", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.enable_context_enrichment is True
+
+
+def test_context_enrichment_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CONTEXT_ENRICHMENT", "false")
+    cfg = ReviewConfig.from_env()
+    assert cfg.enable_context_enrichment is False
 
 
 def test_bedrock_proxy_premium_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:

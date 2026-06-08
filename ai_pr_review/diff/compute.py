@@ -212,7 +212,7 @@ def compute_diff(
     *,
     last_reviewed_sha: str = "",
     workspace: str = ".",
-    ignore_merge_commits: bool = False,
+    ignore_merge_commits: bool = True,
     review_target: str = "pr",
     exclude_patterns: tuple[str, ...] = (),
     exclude_patterns_mode: str = "append",

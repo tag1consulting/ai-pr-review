@@ -82,8 +82,8 @@ jobs:
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
           # AI_PR_REVIEW_ENGINE: compute engine, python (default) or bash (deprecated)
           engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'python' }}
-          # AI_REVIEW_IGNORE_MERGE_COMMITS: strip upstream base-branch merges from diff (default: false)
-          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
+          # AI_REVIEW_IGNORE_MERGE_COMMITS: strip upstream base-branch merges from diff (default: true; set to false to include upstream merges)
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
           # --- Opt-in capabilities (Python engine only — the default since v1.0.0) ---
           # AI_REVIEW_CONTEXT_ENRICHMENT: tree-sitter + ripgrep symbol-context injection (default: false)
           context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}

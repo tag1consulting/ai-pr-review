@@ -141,10 +141,10 @@ class ReviewConfig(BaseModel):
     disable_gate_architecture: bool = False
     disable_gate_security: bool = False
     disable_gate_edge_case: bool = False
-    ignore_merge_commits: bool = False
+    ignore_merge_commits: bool = True
 
     # --- Context enrichment ---
-    enable_context_enrichment: bool = False
+    enable_context_enrichment: bool = True
     context_max_tokens: int = 8192
     context_lookup_lines: int = 8
 
@@ -343,8 +343,8 @@ class ReviewConfig(BaseModel):
             disable_gate_architecture=_bool("AI_DISABLE_GATE_ARCHITECTURE"),
             disable_gate_security=_bool("AI_DISABLE_GATE_SECURITY"),
             disable_gate_edge_case=_bool("AI_DISABLE_GATE_EDGE_CASE"),
-            ignore_merge_commits=_bool("AI_IGNORE_MERGE_COMMITS"),
-            enable_context_enrichment=_bool("AI_CONTEXT_ENRICHMENT"),
+            ignore_merge_commits=_bool("AI_IGNORE_MERGE_COMMITS", True),
+            enable_context_enrichment=_bool("AI_CONTEXT_ENRICHMENT", True),
             context_max_tokens=_int("AI_CONTEXT_MAX_TOKENS", 8192),
             context_lookup_lines=_int("AI_CONTEXT_LOOKUP_LINES", 8),
             sarif_paths=tuple(
