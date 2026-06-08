@@ -107,9 +107,12 @@ async def run_analyzers(
     ]
 
     # Log any skipped-due-to-SARIF entries so operators can verify the substitution.
+    # Mirror the eligible filter: only log specs whose script actually exists, so the
+    # INFO message implies the native wrapper would have run without the SARIF skip.
     sarif_skipped = [
         spec for spec in _ANALYZERS
         if _is_eligible(spec, changed_files)
+        and (analyzers_dir / spec.script).is_file()
         and spec.name in sarif_skip
     ]
     for spec in sarif_skipped:

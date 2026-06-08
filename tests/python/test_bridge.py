@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import anyio  # noqa: F401 — imported for patching anyio.to_thread in tests
 import pytest
 
 from ai_pr_review.analyzers.bridge import (
