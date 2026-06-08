@@ -56,6 +56,20 @@ Behaviour changes:
 
 Python engine only.
 
+#### `AI_TEMPERATURE` is now honored in Python engine LLM requests (closes #356)
+
+The `AI_TEMPERATURE` environment variable (and `temperature` action input) was already read and validated by the Python engine but was never passed to the `LLMRequest` that each agent, the pr-summarizer, and the issue-linker sends to the LLM provider. All three now receive the configured temperature value.
+
+The default temperature (0.3) is unchanged. Python engine only.
+
+#### `max_tokens_per_agent` default lowered from 32768 to 16384; out-of-range values are now clamped (closes #357)
+
+**Behavior change**: the default output-token budget per agent call is now **16384** (previously 32768 in the Python engine, 8192 in the bash engine — docs were inconsistent with code). If you relied on the Python engine's prior 32768 default, set `max-tokens-per-agent: 32768` (or `AI_MAX_TOKENS_PER_AGENT=32768`) to restore the previous budget.
+
+Out-of-range values are now clamped at config load time: values below 256 are raised to 256 and values above 65536 are lowered to 65536, each with a `WARNING` printed to stderr. This aligns the runtime with the `[256–65536]` range documented in the reference docs.
+
+Python engine only.
+
 ## [1.2.0] - 2026-06-05
 
 ### Added

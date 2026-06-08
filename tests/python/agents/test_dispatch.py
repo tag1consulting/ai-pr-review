@@ -491,6 +491,52 @@ def test_effective_prompt_suggestion_addendum_when_enabled(tmp_path: Path) -> No
     assert degraded is False
 
 
+# ---------------------------------------------------------------------------
+# #356: temperature plumbing into agent LLMRequest
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_run_tier_passes_temperature_to_llm_request(tmp_path: Path) -> None:
+    """Temperature from DispatchContext reaches every LLMRequest in the tier."""
+    ctx = DispatchContext(
+        script_dir=_make_context(tmp_path).script_dir,
+        mode="full",
+        diff_path=_make_context(tmp_path).diff_path,
+        provider="anthropic",
+        standard_model="claude-test",
+        temperature=0.7,
+    )
+    seen_temperatures: list[float] = []
+
+    async def mock_llm(request: object) -> LLMResponse:
+        from ai_pr_review.llm.base import LLMRequest
+        assert isinstance(request, LLMRequest)
+        seen_temperatures.append(request.temperature)
+        return _make_response("ok")
+
+    tier = [get_agent("code-reviewer")]
+    await run_tier(agents=tier, llm_call=mock_llm, context=ctx, semaphore_size=3)
+    assert seen_temperatures == [0.7]
+
+
+@pytest.mark.anyio
+async def test_run_tier_default_temperature_is_point_three(tmp_path: Path) -> None:
+    """When temperature is not set on DispatchContext, LLMRequest gets 0.3."""
+    ctx = _make_context(tmp_path)
+    assert ctx.temperature == 0.3  # verify DispatchContext default
+    seen_temperatures: list[float] = []
+
+    async def mock_llm(request: object) -> LLMResponse:
+        from ai_pr_review.llm.base import LLMRequest
+        assert isinstance(request, LLMRequest)
+        seen_temperatures.append(request.temperature)
+        return _make_response("ok")
+
+    tier = [get_agent("code-reviewer")]
+    await run_tier(agents=tier, llm_call=mock_llm, context=ctx, semaphore_size=3)
+    assert seen_temperatures == [0.3]
+
+
 def test_effective_prompt_no_suggestion_for_architecture_reviewer(tmp_path: Path) -> None:
     """architecture-reviewer is NOT in the suggestion set."""
     script_dir, _ = _make_prompt_dir(tmp_path)

@@ -237,3 +237,60 @@ def test_bedrock_proxy_premium_unchanged(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
     cfg = ReviewConfig(provider="bedrock-proxy").resolve_models()
     assert cfg.model_premium == "global.anthropic.claude-opus-4-7"
+
+
+# ---------------------------------------------------------------------------
+# #357: max_tokens_per_agent clamp
+# ---------------------------------------------------------------------------
+
+def test_max_tokens_per_agent_default() -> None:
+    """Default value is 16384 (not 32768)."""
+    cfg = ReviewConfig()
+    assert cfg.max_tokens_per_agent == 16384
+
+
+def test_max_tokens_per_agent_valid_passthrough() -> None:
+    """Values inside [256, 65536] are stored as-is."""
+    cfg = ReviewConfig(max_tokens_per_agent=8192)
+    assert cfg.max_tokens_per_agent == 8192
+    cfg2 = ReviewConfig(max_tokens_per_agent=65536)
+    assert cfg2.max_tokens_per_agent == 65536
+    cfg3 = ReviewConfig(max_tokens_per_agent=256)
+    assert cfg3.max_tokens_per_agent == 256
+
+
+def test_max_tokens_per_agent_clamp_too_low(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values below 256 are clamped to 256 with a warning."""
+    cfg = ReviewConfig(max_tokens_per_agent=100)
+    assert cfg.max_tokens_per_agent == 256
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "256" in captured.err
+
+
+def test_max_tokens_per_agent_clamp_too_high(capsys: pytest.CaptureFixture[str]) -> None:
+    """Values above 65536 are clamped to 65536 with a warning."""
+    cfg = ReviewConfig(max_tokens_per_agent=99999)
+    assert cfg.max_tokens_per_agent == 65536
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "65536" in captured.err
+
+
+def test_max_tokens_per_agent_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """from_env() reads 16384 when AI_MAX_TOKENS_PER_AGENT is unset."""
+    monkeypatch.delenv("AI_MAX_TOKENS_PER_AGENT", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_tokens_per_agent == 16384
+
+
+def test_max_tokens_per_agent_env_clamp_low(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AI_MAX_TOKENS_PER_AGENT=50 is clamped to 256 via from_env()."""
+    monkeypatch.setenv("AI_MAX_TOKENS_PER_AGENT", "50")
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_tokens_per_agent == 256
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err

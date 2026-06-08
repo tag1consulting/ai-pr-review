@@ -24,7 +24,7 @@ nav_order: 2
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set (thinking tokens consume the output budget). |
+| `max-tokens-per-agent` | No | `16384` | Max output tokens per LLM agent call (clamped to 256–65536). |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 | `ignore-merge-commits` | No | `true` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. Set to `false` to review all commits including upstream merges. |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
@@ -45,7 +45,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | `model-premium` | Override the premium agent model ID (full mode only) |
 | `AI_REVIEW_MAX_DIFF_LINES` | `5000` | `max-diff-lines` | Skip review when diff exceeds this many lines |
 | `AI_REVIEW_MAX_INLINE` | `25` | `max-inline` | Max inline comments per run; excess routed to the summary body |
-| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `8192` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `16384` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | `enable-suggestions` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
 | `AI_PR_REVIEW_ENGINE` | `python` | `engine` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) |

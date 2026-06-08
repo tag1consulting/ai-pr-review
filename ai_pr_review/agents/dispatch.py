@@ -83,6 +83,8 @@ class DispatchContext:
     feedback_addendum: str = ""
     # #316: user-configurable per-agent output cap (0 = use roster default)
     max_tokens_per_agent: int = 0
+    # #356: user-configurable temperature for agent LLM calls
+    temperature: float = 0.3
     # Pre-loaded language profile markdown (concatenated). Loaded once per run
     # in build_review_runtime() and passed here to avoid per-agent disk reads.
     language_profile_text: str = ""
@@ -433,6 +435,7 @@ async def _run_single_agent(
             system_prompt=system_prompt,
             user_message=user_message,
             max_tokens=max_tokens,
+            temperature=context.temperature,
         )
         async with limiter:
             response = await llm_call(request)
