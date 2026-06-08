@@ -84,7 +84,7 @@ jobs:
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
           engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'python' }}
-          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
 
   # Always attempt to remove the ai-review-rescan label after the review,
   # even if the review job was cancelled by the concurrency rule on a new push.
@@ -133,7 +133,7 @@ In the **consuming** repository's settings:
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | Parallel tiered fan-out; set `false` if you hit provider rate limits |
 | `AI_PR_REVIEW_ENGINE` | `python` | Compute engine: `python` (default) or `bash` (deprecated legacy) |
-| `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | Strip upstream base-branch merges from the diff before review |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | Strip upstream base-branch merges from the diff before review |
 
 See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 

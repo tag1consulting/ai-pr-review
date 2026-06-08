@@ -175,7 +175,7 @@ See [examples/README.md](examples/README.md) for the complete setup walkthrough 
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
 | `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `0.12.2` — image tags published by `publish-image.yml` strip the `v` prefix) |
 | `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) — the Python engine is required for the opt-in capabilities below |
-| `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `true` to strip base-branch merge commits from the diff before review (default `false`) |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `false` to disable stripping of base-branch merge commits from the diff before review (default `true`) |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (requires `engine: python`; default `false`) |
 | `AI_REVIEW_SARIF_PATHS` | Variable | No | Comma-separated SARIF 2.1.0 file paths to merge as findings (requires `engine: python`; default `''`) |
 | `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | `true` to enable the learning loop (GitHub-only, requires `engine: python`; default `false`) |
@@ -247,7 +247,7 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
 | `engine` | No | `python` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release). Required for opt-in capabilities below. |
-| `ignore-merge-commits` | No | `false` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. |
+| `ignore-merge-commits` | No | `true` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. Set to `false` to review all commits including upstream merges. |
 | `context-enrichment` | No | `true` (container), `false` (direct action) | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Opt-in capabilities](#opt-in-capabilities). |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. Requires `engine: python`. See `exclude-patterns-mode`. |

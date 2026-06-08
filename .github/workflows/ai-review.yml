@@ -274,8 +274,8 @@ jobs:
           # vars.AI_REVIEW_ENABLE_SUGGESTIONS enables "Apply suggestion" buttons (default true).
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
-          # merge commits before diffing. Trusted repo variable; default false.
-          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
+          # merge commits before diffing. Trusted repo variable; default true.
+          ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
           # --- Epic 3: opt-in capabilities (Python engine only) ---
           # vars.AI_REVIEW_CONTEXT_ENRICHMENT enables tree-sitter symbol-context
           # injection into agent prompts (Capability A). Requires engine=python.

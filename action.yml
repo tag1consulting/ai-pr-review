@@ -148,7 +148,7 @@ inputs:
       Intra-PR merges (merging one feature branch into another) are preserved.
       Falls back to the unfiltered diff if cherry-pick conflicts occur.
     required: false
-    default: 'false'
+    default: 'true'
 
   sarif-paths:
     description: >

@@ -26,7 +26,7 @@ nav_order: 2
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set (thinking tokens consume the output budget). |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
-| `ignore-merge-commits` | No | `false` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. |
+| `ignore-merge-commits` | No | `true` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. Set to `false` to review all commits including upstream merges. |
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Requires the Python engine. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | Controls how `exclude-patterns` interacts with the built-in excludes. `append` (default): user patterns are added to the built-in lockfile/vendor excludes. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. Invalid values are rejected with an error. |
@@ -49,7 +49,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | `enable-suggestions` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
 | `AI_PR_REVIEW_ENGINE` | `python` | `engine` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) |
-| `AI_REVIEW_IGNORE_MERGE_COMMITS` | `false` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
 | `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | `true` (container), `false` (direct action) | `context-enrichment` | Inject tree-sitter symbol-context blocks into agent prompts (requires the Python engine, which is the default). The container image ships `tree-sitter-language-pack` and `ripgrep`, so enrichment is on by default there. Direct-action consumers without those tools get a silent no-op. |
 | `AI_REVIEW_SARIF_PATHS` | `''` | `sarif-paths` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires the Python engine, which is the default). |
