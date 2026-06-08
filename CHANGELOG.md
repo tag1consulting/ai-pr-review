@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### Slash-command replies now post as `github-actions[bot]`
+
+Slash-command and learning-loop replies (reactions, help text, lookup results, false-positive confirmations) previously posted as the user who owns the `GH_TOKEN` PAT. They now post as `github-actions[bot]` by using a split-token approach: the built-in `GITHUB_TOKEN` handles all plain comment posts, reactions, reads, and label changes, while the PAT is retained only for the `dismiss` command's `resolveReviewThread` GraphQL mutation and review-dismissal REST calls, which `GITHUB_TOKEN` cannot perform on `pull_request_review_comment` events.
+
+Callers of the `slash-commands.yml` reusable workflow must now pass an additional `actions-token` secret. Update your wrapper:
+
+```yaml
+secrets:
+  github-token: ${{ secrets.GH_TOKEN }}       # PAT, required for dismiss only
+  actions-token: ${{ secrets.GITHUB_TOKEN }}  # built-in token for replies
+```
+
+The `examples/workflows/comment-triggers.yml` starter template is updated accordingly. No new secret creation is required — `secrets.GITHUB_TOKEN` is available in every repository.
+
+A small known edge: a few confirmation messages inside the dismiss-path steps (the resolve/dismiss outcome replies interleaved in the same shell step as the GraphQL mutation) still post under the PAT. All other replies, including the `false-positive`/`wont-fix`/`lookup` replies that prompted this fix, now post as `github-actions[bot]`.
+
 #### issue-linker now pre-fetches the open-issue list via `gh issue list` (closes #446)
 
 The issue-linker agent previously emitted raw `<tool_call>` XML when its prompt instructed the model to run `gh issue list` — a command the text-completion call path cannot execute.

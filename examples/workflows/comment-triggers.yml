@@ -93,7 +93,9 @@ jobs:
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # GH_TOKEN must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.
-      # GITHUB_TOKEN from pull_request_review_comment events cannot call the
-      # resolveReviewThread GraphQL mutation used by /ai-pr-review dismiss.
+      # Required only for the dismiss command's resolveReviewThread mutation.
       # See: docs/slash-commands.md#pat-requirement
       github-token: ${{ secrets.GH_TOKEN }}
+      # Built-in GITHUB_TOKEN: used for plain comment posts, reactions, reads,
+      # and label changes so those operations post as github-actions[bot].
+      actions-token: ${{ secrets.GITHUB_TOKEN }}
