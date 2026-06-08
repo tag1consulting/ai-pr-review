@@ -502,7 +502,7 @@ main() {
   # Optionally filter out upstream base-branch merges from the diff.
   # Only applies to PR reviews (not standalone) with a resolved DIFF_BASE.
   AI_MERGE_FILTER_FALLBACK_REASON=""
-  if [[ "${AI_IGNORE_MERGE_COMMITS:-false}" == "true" && \
+  if [[ "${AI_IGNORE_MERGE_COMMITS:-true}" == "true" && \
         "$REVIEW_TARGET" != "standalone" && \
         -n "$DIFF_BASE" ]]; then
     if ! compute_filtered_diff "$DIFF_BASE" "$HEAD_SHA"; then

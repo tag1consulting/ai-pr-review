@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### `ignore-merge-commits` now defaults to `true` (closes #448)
+
+Merge commits that pull upstream base-branch changes into a PR are noise: they re-introduce diffs that were already present on the base branch and already reviewed there. Defaulting `ignore-merge-commits` to `true` means only the PR author's own commits are reviewed by default, which is what most teams want.
+
+**Breaking change for existing consumers**: if your PRs contain base-branch merge commits and you rely on them appearing in the diff, set `ignore-merge-commits: false` (or the repo variable `AI_REVIEW_IGNORE_MERGE_COMMITS=false`) to restore the previous behavior.
+
+Affects all three engines and all three VCS providers. Intra-PR merges (merging one feature branch into another) are still preserved regardless of this setting.
+
 #### issue-linker now pre-fetches the open-issue list via `gh issue list` (closes #446)
 
 The issue-linker agent previously emitted raw `<tool_call>` XML when its prompt instructed the model to run `gh issue list` — a command the text-completion call path cannot execute.

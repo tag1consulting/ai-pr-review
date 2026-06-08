@@ -105,7 +105,7 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
     enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
     parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
     engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'python' }}
-    ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'false' }}
+    ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
     # --- Opt-in capabilities (require the Python engine, which is the default) ---
     context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
     sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || '' }}
@@ -129,7 +129,7 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | Variable | No | Enable "Apply suggestion" buttons (default: `true`) |
 | `AI_REVIEW_PARALLEL` | Variable | No | Parallel tiered fan-out; set `false` for sequential (default: `true`) |
 | `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `python` (default) or `bash` (deprecated legacy) |
-| `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `false`) |
+| `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `true`; set to `false` to include upstream merges) |
 | `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default: `latest`); set to `dev` to dogfood pre-release builds or pin to a release |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | **Context enrichment.** Tree-sitter symbol-context injection (default: `false`; requires the Python engine, which is the default) |
 | `AI_REVIEW_SARIF_PATHS` | Variable | No | **SARIF ingestion.** Comma-separated SARIF 2.1.0 paths to merge as findings (default: `''`; requires the Python engine, which is the default) |
