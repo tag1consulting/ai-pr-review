@@ -93,12 +93,19 @@ inputs:
     default: '25'
 
   temperature:
-    description: 'Sampling temperature for LLM calls (float in [0, 2]; default 0.3)'
+    description: >
+      Sampling temperature for LLM calls. Controls output randomness; lower values
+      produce more deterministic responses. Must be a float in [0, 2]. The default
+      (0.3) is tuned for code review. Sets AI_TEMPERATURE.
     required: false
     default: '0.3'
 
   max-tokens-per-agent:
-    description: 'Max output tokens per LLM agent call (clamped to [256, 65536]; default changed to 16384 in v1.3.0)'
+    description: >
+      Maximum number of output tokens each LLM agent may generate per call.
+      Lower values reduce cost and latency; higher values allow more detailed output
+      on large diffs. Must be a positive integer; values outside [256, 65536] are
+      clamped to that range with a warning. Default changed from 32768 to 16384 in v1.3.0.
     required: false
     default: '16384'
 
