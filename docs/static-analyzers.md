@@ -79,3 +79,9 @@ See `examples/workflows/sarif-codeql.yml` for a complete CodeQL + AI review pipe
 - Findings from SARIF files are merged into the same dedup/suppress pipeline as findings from native analyzers and LLM agents.
 - Unreadable or malformed SARIF files emit a `WARNING` log and are skipped (fail-soft).
 
+---
+
+## Bash wrapper implementation reference
+
+Each analyzer ships as a `analyzers/run-<tool>.sh` bash wrapper invoked by `ai_pr_review/analyzers/bridge.py`. For full implementation details — binary flags, input handling, output-field mapping, path normalization, mock env var, and Phase 11 port complexity — see [Analyzer Bash Wrapper Inventory](analyzers-bash-inventory).
+

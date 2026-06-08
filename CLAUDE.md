@@ -127,6 +127,8 @@ For detailed implementation internals (findings pipeline, parallel execution, ca
 
 For contributor how-tos (adding an analyzer, agent, language profile, or VCS provider), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+For the full bash wrapper inventory — binary flags, output-field mapping, path normalization, mock env var, and Phase 11 port complexity for each of the 13 `analyzers/run-*.sh` wrappers — see [docs/analyzers-bash-inventory.md](docs/analyzers-bash-inventory.md).
+
 ## Release process
 
 1. **Run `/comprehensive-review`** on the release branch before tagging.
