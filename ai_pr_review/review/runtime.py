@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ai_pr_review.agents.dispatch import DispatchContext, _unique_language_labels, load_shared_prompt_fragments
+from ai_pr_review.agents.dispatch import (
+    DispatchContext,
+    _unique_language_labels,
+    load_shared_prompt_fragments,
+)
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
