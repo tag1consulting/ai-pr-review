@@ -6,7 +6,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A GitHub Actions composite action that runs multiple LLM agents against a PR diff and posts a structured review (summary comment + inline findings) back to the PR. It is consumed by downstream repos either as a direct action reference (`uses: tag1consulting/ai-pr-review@main`) or as a git submodule.
 
-## Key scripts and their roles
+## Two engines: Python (default) and bash (deprecated, Epic 5 deletion)
+
+The action ships two engine implementations. The **Python engine in `ai_pr_review/`** is the default since Epic 4 (`engine: python` in `action.yml`) and is the runtime path for every consumer. The **bash engine** (`review.sh`, `lib/*.sh`, `post-review*.sh`, `llm-call.sh`, `vcs/common.sh`) is retained only for the Epic 4 sunset window and is scheduled for deletion in Epic 5 (#199). New work goes in the Python engine; bash entries below are kept for reference only.
+
+## Python engine modules (default path)
+
+| Module | Role |
+|--------|------|
+| `ai_pr_review/cli.py` | Click CLI entry point; assembles `Config`, builds runtime, runs preflight (summarizer + issue-linker), invokes `run_review`, emits telemetry and step-summary |
+| `ai_pr_review/orchestrate.py` | `run_review`: phase sequencing — dispatch agents, extract/merge/suppress/scope findings, decide outcome, post summary then findings, advance watermark only after `findings_result.ok` (#493), resolve stale |
+| `ai_pr_review/review/runtime.py` | `build_review_runtime`: assembles `ReviewRuntime` (diff context, manifest, language profiles, agent roster, dispatch context, SARIF extras) consumed by `cli` |
+| `ai_pr_review/review/{compute,outcome,watermark}.py` | Pre-flight diff compute / `APPROVE`/`REQUEST_CHANGES`/`COMMENT` decision / SHA-marker rewrite |
+| `ai_pr_review/agents/dispatch.py` | Agent dispatch: `dispatch_tier` runs eligible agents concurrently via `LLMClient`, builds system + user prompts, applies per-agent token budgets |
+| `ai_pr_review/agents/{roster,gates,summarizer}.py` | Agent specs and tier mapping / conditional eligibility / pr-summarizer wrapper |
+| `ai_pr_review/llm/client.py` + `llm/{anthropic,openai,openai_compatible,google,bedrock}.py` | Provider-specific `LLMRequest`/`LLMResponse` plumbing; Anthropic + Bedrock paths use `cache_control: ephemeral` for prompt caching |
+| `ai_pr_review/findings/{extract,merge,suppress,scope,models}.py` | Findings pipeline: parse `json-findings` blocks → merge across agents → apply suppressions (with verify-type registry checks) → diff-scope filter → typed `Finding` |
+| `ai_pr_review/vcs/{github,gitlab,bitbucket}.py` | Provider HTTP layer: `post_summary`, `post_findings` (inline + body), `advance_sha_watermark`, `resolve_stale`, `post_skip_comment` |
+| `ai_pr_review/vcs/_{body,inline,finding_ids,stale}.py`, `marker.py`, `protocol.py`, `http.py` | Shared formatting / inline-eligibility / F-ID assignment / stale-thread helpers / `VcsProvider` protocol / retrying httpx client |
+| `ai_pr_review/analyzers/bridge.py` + `analyzers/native/*.py` | Native Python ports of all 13 static analyzers (Epic 8); bridge dispatches per-analyzer file-type gates |
+| `ai_pr_review/analyzers/sarif.py` | Ingest external SARIF files (Capability B) and convert to `Finding` objects |
+| `ai_pr_review/context/{treesitter,symbols,budget}.py` | Tree-sitter context-enrichment: parse changed files, extract symbol refs, budget per agent prompt |
+| `ai_pr_review/feedback/{store,inject,models,retention}.py` | Feedback-loop store on the `ai-pr-review-bot` branch; injects recent learnings into prompts (Capability C) |
+| `ai_pr_review/slash/{parser,handlers}.py` | `/ai-pr-review` slash-command dispatcher (rescan, dismiss, false-positive, wont-fix, feedback, explain, revise, help) |
+| `ai_pr_review/diff/{compute,eligibility,linemap}.py` | Diff acquisition, change-line eligibility, line-number maps |
+| `ai_pr_review/manifest.py`, `languages.py`, `language_profiles.py` | Changed-files manifest, language detection (canonical `_EXT_MAP`), language-profile loader |
+| `ai_pr_review/{config,errors,logging,telemetry,pricing}.py` | Typed `Config`, exception hierarchy, structured logging, telemetry-event emit, model pricing |
+
+## Key scripts and their roles (bash engine — DEPRECATED, Epic 5 deletion)
 
 | Script | Role |
 |--------|------|
@@ -34,20 +61,20 @@ A GitHub Actions composite action that runs multiple LLM agents against a PR dif
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 | `bedrock-proxy` | `us.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-opus-4-7` |
 
-## Adding a new agent
+## Adding a new agent (Python engine)
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
-2. In `review.sh`, call `call_agent "<name>" "$AI_MODEL_STANDARD|PREMIUM" "${SCRIPT_DIR}/prompts/<agent-name>.md" "<msg_var>" "<output_var>" [max_tokens]` and push `<output_var>` onto `AGENT_OUTPUTS`.
-3. If the agent should only run conditionally, gate it with a grep check on `$DIFF_FILE`.
-4. Also add the agent to the parallel tier block (Tier 1 or Tier 2).
+2. Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag.
+3. If the agent should only run when specific files change, set `conditional_trigger` to a glob/regex pattern; the gate evaluation lives in `ai_pr_review/agents/gates.py`.
+4. Add unit-test coverage in `tests/python/agents/` for any custom gate logic.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes (the Python recipe is the canonical one; the bash recipe is retained for Epic 5 reference).
 
 ## Adding a language profile
 
-The canonical language list lives in `ai_pr_review/languages.py:_EXT_MAP`; `lib/languages.sh:detect_language()` is a port and must stay in sync with it.
+The canonical language list lives in `ai_pr_review/languages.py:_EXT_MAP`. Until Epic 5 deletes the bash engine, `lib/languages.sh:detect_language()` is a port and must stay in sync with it (drift-checked by parity tests).
 
-Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `lib/languages.sh`).
+Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `ai_pr_review/languages.py`).
 
 | Extension(s) | Language key | Profile file |
 |---|---|---|
@@ -73,7 +100,7 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 ## Test-file detection
 
-`is_test_file()` in `lib/languages.sh` classifies changed files as test files for the manifest:
+`is_test_file()` in `ai_pr_review/languages.py` (and the parallel implementation in `lib/languages.sh` until Epic 5) classifies changed files as test files for the manifest:
 
 | Pattern | Language |
 |---|---|
@@ -108,17 +135,15 @@ Do not set mock vars in production.
 ## Testing locally
 
 ```bash
-# Run the unit test suite (requires bats and jq)
-bats tests/*.bats
+# Python engine — the default and the canonical test suite
+pip install -e ".[dev,context]"
+pytest tests/python -q                  # ~1474 tests, < 60s
+mypy ai_pr_review/                      # 82 source files, must be clean
+ruff check ai_pr_review/ tests/python/  # E,F,W,I,UP,B,SIM rules
 
-# Lint all shell scripts
+# Bash engine (Epic 5 deletion target — keep green until removed)
+bats tests/*.bats                                                          # requires bats + jq
 shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh post-review-gitlab.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
-
-# Smoke-test llm-call.sh against a provider
-export AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key>
-echo "hello" > /tmp/msg.txt
-echo "Say hi" > /tmp/sys.txt
-./llm-call.sh claude-haiku-4-5 /tmp/sys.txt /tmp/msg.txt
 ```
 
 ## Deep reference
