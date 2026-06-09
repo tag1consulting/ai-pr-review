@@ -532,6 +532,104 @@ def test_incremental_run_calls_advance_sha_watermark(tmp_path: Path) -> None:
     anyio.run(_run)
 
 
+def test_incremental_run_skips_watermark_when_post_findings_fails(
+    tmp_path: Path,
+) -> None:
+    """#493: on an incremental run, if post_findings returns a failed result,
+    the SHA watermark must NOT advance — otherwise the next incremental run
+    silently skips findings on the in-flight commits.
+    """
+    provider = _FakeProvider(findings_ok=False)
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        assert result.ok is False, "run is not ok when post_findings fails"
+        assert "post_findings" in provider.last_call_order
+        assert "advance_sha_watermark" not in provider.last_call_order, (
+            "watermark must not advance when post_findings failed; "
+            f"call_order={provider.last_call_order!r}"
+        )
+        assert provider.last_watermark_sha == "", (
+            "watermark SHA must remain unset; "
+            f"got {provider.last_watermark_sha!r}"
+        )
+
+    anyio.run(_run)
+
+
+def test_incremental_run_skips_watermark_when_post_findings_raises(
+    tmp_path: Path,
+) -> None:
+    """#493: same guarantee for the RetryExhaustedError path — if post_findings
+    raises rather than returning a failed result, the watermark still must not
+    advance.
+    """
+    from ai_pr_review.vcs.http import RetryExhaustedError
+
+    class _FailingFindings(_FakeProvider):
+        def post_findings(self, *args: Any, **kwargs: Any) -> FindingsResult:  # type: ignore[override]
+            self.last_call_order.append("post_findings")
+            raise RetryExhaustedError("findings net down after 3 attempts")
+
+    provider = _FailingFindings()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        assert result.ok is False
+        assert "post_findings" in provider.last_call_order
+        assert "advance_sha_watermark" not in provider.last_call_order, (
+            "watermark must not advance when post_findings raised; "
+            f"call_order={provider.last_call_order!r}"
+        )
+
+    anyio.run(_run)
+
+
+def test_incremental_run_watermark_advances_after_findings(tmp_path: Path) -> None:
+    """#493: the watermark advance must happen AFTER post_findings, not before.
+    Locks in the ordering so a future refactor cannot regress to the racy form.
+    """
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        # Must call both, in the correct order.
+        assert "post_findings" in provider.last_call_order
+        assert "advance_sha_watermark" in provider.last_call_order
+        post_idx = provider.last_call_order.index("post_findings")
+        advance_idx = provider.last_call_order.index("advance_sha_watermark")
+        assert post_idx < advance_idx, (
+            "advance_sha_watermark must run AFTER post_findings; "
+            f"call_order={provider.last_call_order!r}"
+        )
+
+    anyio.run(_run)
+
+
 def test_incremental_run_advance_sha_watermark_false_logs_warning(
     tmp_path: Path,
 ) -> None:
