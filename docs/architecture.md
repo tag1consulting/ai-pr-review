@@ -41,7 +41,7 @@ ai-pr-review/
 ├── post-review.sh          # GitHub API posting — used by deprecated bash engine only
 ├── post-review-bitbucket.sh # Bitbucket posting — used by deprecated bash engine only
 ├── post-review-gitlab.sh   # GitLab posting — used by deprecated bash engine only
-├── analyzers/              # Static analyzer shell wrappers — 13 tools; used only by the deprecated bash engine
+├── analyzers/              # Bash wrappers for the same 13 tools — used only by the deprecated bash engine; canonical implementations live in ai_pr_review/analyzers/native/
 ├── prompts/                # Agent system prompts + shared trailers — see deep reference
 ├── config/                 # Configuration and data files
 │   ├── model-pricing.json  # Per-model token pricing for cost estimation

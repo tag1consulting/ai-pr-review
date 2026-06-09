@@ -15,7 +15,7 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
   <div class="feature">
     <h3><span class="feature-icon">&#9670;</span> 13 Static Analyzers</h3>
-    <p>Shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint, and cve-check — all pre-installed in the container image and running as native Python.</p>
+    <p>Shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, and tflint ship as binaries in the container image; cve-check runs as pure Python (OSV.dev HTTP queries, no external binary). All 13 run as native Python.</p>
   </div>
   <div class="feature">
     <h3><span class="feature-icon">&#9670;</span> Works Everywhere</h3>
@@ -30,6 +30,8 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
 ## What's new in v1.4.0
 
 **All 13 static analyzers ported to native Python (Epic 8).** Every analyzer that previously ran as a bash subprocess — shellcheck, ruff, hadolint, kube-linter, phpcs, semgrep, golangci-lint, checkov, phpstan, eslint, tflint, trufflehog, and cve-check — is now a native Python function. The Python engine no longer shells out to bash for any static analysis. Findings schema, severity mappings, and source tags are parity-identical to the bash wrappers. Each analyzer has a corresponding pytest module. See [Features → v1.4.0](features#whats-new-in-v140) for details.
+
+**Still on v1.3.0?** Note the breaking change: `ignore-merge-commits` now defaults to `true` — only the PR author's own commits are reviewed. Set `ignore-merge-commits: false` to restore the previous behavior. See [Features → v1.3.0](features#whats-new-in-v130).
 
 ## What it does
 

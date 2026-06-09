@@ -91,13 +91,13 @@ _ANALYZERS = {
 
 Create `tests/python/test_analyzer_yourtool.py` with fixture-based tests. See `tests/python/test_analyzer_shellcheck.py` for the pattern.
 
-### 4. Create the bash wrapper (bash engine parity)
+### 4. Create the bash wrapper (bash engine parity — optional for new analyzers)
 
-Create `analyzers/run-<tool>.sh` following the existing wrapper pattern. This is only executed when `engine: bash` is explicitly set (deprecated). It must produce the same findings schema and source tag as the Python analyzer.
+The bash engine is deprecated and will be removed in a future major release (targeted for v2.0). New analyzers added after v1.4.0 may omit the bash wrapper entirely; existing wrappers are frozen. If you are backporting an analyzer to the bash engine for compatibility reasons, create `analyzers/run-<tool>.sh` following the existing wrapper pattern — it must produce the same findings schema and source tag as the Python analyzer.
 
-### 5. Wire it into review.sh (bash engine)
+### 5. Wire it into review.sh (bash engine — optional, same caveat as step 4)
 
-In `review.sh`, add the analyzer call to both the parallel and sequential blocks alongside the existing ones. This only matters for the deprecated bash engine path.
+In `review.sh`, add the analyzer call to both the parallel and sequential blocks alongside the existing ones. Skip this step if omitting the bash wrapper.
 
 ### 6. Update documentation
 
