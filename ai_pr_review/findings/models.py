@@ -25,6 +25,8 @@ class Finding(BaseModel):
     remediation: str = ""
     suggested_code: str = ""
     sources: list[str] = Field(default_factory=list)
+    # cve-check only: "dependency-check" tag required for parity with bash output.
+    agent: str = ""
     # Set by apply_diff_scope when a native-analyzer finding falls outside the
     # changed-line set.  Findings with out_of_diff=True are capped to Low
     # severity and rendered in a collapsed body section rather than the main
