@@ -25,9 +25,11 @@ from pydantic import ValidationError
 # Native analyzer imports (Epic 8). Each ported analyzer is imported here and
 # wired into _ANALYZERS via the native_fn field.
 from ai_pr_review.analyzers.native.eslint import _run_eslint
+from ai_pr_review.analyzers.native.golangci_lint import _run_golangci_lint
 from ai_pr_review.analyzers.native.hadolint import _run_hadolint
 from ai_pr_review.analyzers.native.kube_linter import _run_kube_linter
 from ai_pr_review.analyzers.native.phpcs import _run_phpcs
+from ai_pr_review.analyzers.native.phpstan import _run_phpstan
 from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.semgrep import _run_semgrep
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
@@ -52,11 +54,11 @@ _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("trufflehog", "run-trufflehog.sh", []),
     AnalyzerSpec("semgrep", "run-semgrep.sh", [], _run_semgrep),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
-    AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"]),
+    AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"], _run_golangci_lint),
     AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"], _run_hadolint),
     AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"]),
     AnalyzerSpec("phpcs", "run-phpcs.sh", ["php"], _run_phpcs),
-    AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"]),
+    AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"], _run_phpstan),
     AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"], _run_eslint),
     AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"], _run_kube_linter),
     AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"]),
