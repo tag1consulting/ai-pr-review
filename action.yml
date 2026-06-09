@@ -255,6 +255,34 @@ runs:
         [[ -n "$_API_KEY" ]] && echo "::add-mask::$_API_KEY"
         [[ -n "$_GH_TOKEN" ]] && echo "::add-mask::$_GH_TOKEN"
 
+    - name: Validate provider and export API key
+      shell: bash
+      env:
+        _PROVIDER: ${{ inputs.provider }}
+        _API_KEY: ${{ inputs.api-key }}
+      run: |
+        # Valid provider set mirrors config.py:_PROVIDER_DEFAULTS + llm/client.py dispatch.
+        # Keep in sync with: ai_pr_review/config.py (_PROVIDER_DEFAULTS keys + openai-compatible)
+        #                    ai_pr_review/llm/client.py (ValueError message at line ~63)
+        case "$_PROVIDER" in
+          anthropic)
+            echo "ANTHROPIC_API_KEY=$_API_KEY" >> "$GITHUB_ENV"
+            ;;
+          openai|openai-compatible)
+            echo "OPENAI_API_KEY=$_API_KEY" >> "$GITHUB_ENV"
+            ;;
+          google)
+            echo "GOOGLE_API_KEY=$_API_KEY" >> "$GITHUB_ENV"
+            ;;
+          bedrock-proxy)
+            echo "BEDROCK_API_KEY=$_API_KEY" >> "$GITHUB_ENV"
+            ;;
+          *)
+            echo "ERROR: Unknown provider '$_PROVIDER'. Valid values: anthropic | openai | openai-compatible | google | bedrock-proxy" >&2
+            exit 1
+            ;;
+        esac
+
     - name: Run AI review
       shell: bash
       env:
@@ -264,12 +292,9 @@ runs:
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         AI_MODEL_STANDARD: ${{ inputs.model-standard }}
         AI_MODEL_PREMIUM: ${{ inputs.model-premium }}
-        # Map the single api-key input to all provider-specific env vars.
-        # Only the one matching AI_PROVIDER will actually be read.
-        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-        OPENAI_API_KEY: ${{ inputs.api-key }}
-        GOOGLE_API_KEY: ${{ inputs.api-key }}
-        BEDROCK_API_KEY: ${{ inputs.api-key }}
+        # The provider-specific API key is exported to $GITHUB_ENV in the
+        # preceding "Validate provider and export API key" step, so only the
+        # matching var is set in the environment by the time this step runs.
         OPENAI_BASE_URL: ${{ inputs.base-url }}
         BEDROCK_API_URL: ${{ inputs.base-url }}
         # GitHub context
