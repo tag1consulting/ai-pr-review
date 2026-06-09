@@ -28,8 +28,7 @@ _HIGH_SEVERITY_LINTERS = frozenset({"errcheck", "govet", "staticcheck"})
 
 def _find_module_root(go_files: list[str]) -> Path | None:
     """Walk up from the first Go file's directory to find go.mod."""
-    start = Path(go_files[0]).resolve().parent
-    candidate = start
+    candidate = Path(go_files[0]).resolve().parent
     while True:
         if (candidate / "go.mod").is_file():
             return candidate
@@ -37,9 +36,6 @@ def _find_module_root(go_files: list[str]) -> Path | None:
         if parent == candidate:
             break
         candidate = parent
-    # Also check CWD
-    if Path("go.mod").is_file():
-        return Path(".").resolve()
     return None
 
 
