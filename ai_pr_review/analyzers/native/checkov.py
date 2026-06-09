@@ -57,7 +57,8 @@ def _is_iac_file(path: str) -> bool:
     if suffix in (".yaml", ".yml"):
         try:
             content = p.read_text(errors="replace")
-        except OSError:
+        except OSError as exc:
+            logger.warning("[ai-pr-review] WARNING: cannot read %s for IaC sniff: %s", path, exc)
             return False
         if _CFN_YAML_RE.search(content):
             return True
@@ -68,7 +69,8 @@ def _is_iac_file(path: str) -> bool:
     if suffix == ".json":
         try:
             content = p.read_text(errors="replace")
-        except OSError:
+        except OSError as exc:
+            logger.warning("[ai-pr-review] WARNING: cannot read %s for IaC sniff: %s", path, exc)
             return False
         return bool(_CFN_JSON_KEY_RE.search(content) or _AZURE_JSON_KEY_RE.search(content))
 
@@ -80,6 +82,11 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     candidate_files = changed_files.terraform + changed_files.iac + changed_files.dockerfile
     target_files = [f for f in dict.fromkeys(candidate_files) if Path(f).is_file() and _is_iac_file(f)]
     if not target_files:
+        if candidate_files:
+            logger.info(
+                "[ai-pr-review] INFO: checkov: %d candidate file(s) filtered out — none matched IaC sniff patterns.",
+                len(dict.fromkeys(candidate_files)),
+            )
         return []
 
     if not shutil.which("checkov"):
@@ -126,7 +133,10 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     elif isinstance(raw, list):
         frameworks = [item for item in raw if isinstance(item, dict)]
     else:
-        logger.warning("[ai-pr-review] WARNING: checkov produced unexpected output structure; skipping.")
+        logger.warning(
+            "[ai-pr-review] WARNING: checkov produced unexpected output structure (%s); skipping. Preview: %s",
+            type(raw).__name__, repr(raw)[:100],
+        )
         return []
 
     findings: list[Finding] = []
