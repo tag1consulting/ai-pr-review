@@ -284,32 +284,43 @@ def _format_exception_chain(exc: BaseException) -> str:
 LLMCall = Callable[[LLMRequest], Awaitable[LLMResponse]]
 
 
-def _build_user_message(
-    diff_text: str,
-    spec: AgentSpec,
-    context: DispatchContext,
-) -> tuple[str, int]:
-    """Build the user message for an agent, optionally prepending symbol context.
+@dataclass(frozen=True)
+class _EnrichmentBlock:
+    """Pre-computed context-enrichment payload, shared across all agents in a tier.
 
-    Returns ``(message, context_tokens_used)``.  When context enrichment is
-    enabled and the agent is eligible, extracts symbol references from the diff,
-    looks up their definitions via ripgrep, and prepends a ``<symbol-context>``
-    block.  Falls back to raw diff on any error (fail-soft).
+    Built once at the top of ``run_tier`` because every input
+    (``diff_text``, ``changed_files``, ``repo_root``, ``language``,
+    ``context_lookup_lines``, ``context_max_tokens``) is fixed for the run —
+    every agent that opted into enrichment would otherwise reparse the diff
+    and re-run the symbol lookup with identical inputs and identical outputs.
     """
-    if not (context.enable_context_enrichment and spec.context_enrichment_eligible):
-        return diff_text, 0
 
+    text: str
+    tokens: int
+
+
+def _compute_context_enrichment_block(
+    diff_text: str,
+    context: DispatchContext,
+) -> _EnrichmentBlock | None:
+    """Run the diff-parse + symbol-lookup + budget once for the whole tier.
+
+    Returns ``None`` when enrichment is disabled or yields nothing useful;
+    callers fall back to the raw diff. Errors are logged and swallowed so a
+    bad parse never breaks the dispatch (fail-soft, matches per-agent legacy
+    behavior).
+    """
+    if not context.enable_context_enrichment:
+        return None
     try:
         from ai_pr_review.context.budget import build_context_block, estimate_tokens
         from ai_pr_review.context.symbols import lookup_definitions
         from ai_pr_review.context.treesitter import extract_symbol_refs
 
-        # Detect language from changed_files (use the most common extension)
         language = _detect_primary_language(context.changed_files)
         refs = extract_symbol_refs(diff_text, language)
         if not refs:
-            return diff_text, 0
-
+            return None
         defs = lookup_definitions(
             refs,
             context.repo_root,
@@ -317,24 +328,42 @@ def _build_user_message(
             language=language,
             lookup_lines=context.context_lookup_lines,
         )
-        ctx_block = build_context_block(defs, max_tokens=context.context_max_tokens)
-        if ctx_block:
-            ctx_tokens = estimate_tokens(ctx_block)
-            _log.info(
-                "context enrichment: agent=%s refs=%d defs=%d block≈%d tokens",
-                spec.name, len(refs), len(defs), ctx_tokens,
-            )
-            return ctx_block + "\n\n" + diff_text, ctx_tokens
+        ctx_text = build_context_block(defs, max_tokens=context.context_max_tokens)
+        if not ctx_text:
+            return None
+        ctx_tokens = estimate_tokens(ctx_text)
+        _log.info(
+            "context enrichment: lang=%s refs=%d defs=%d block≈%d tokens "
+            "(computed once for the tier)",
+            language, len(refs), len(defs), ctx_tokens,
+        )
+        return _EnrichmentBlock(text=ctx_text, tokens=ctx_tokens)
     except Exception as exc:
         # exc_info=True so unexpected errors (MemoryError, bugs in
         # build_context_block, etc.) are distinguishable from expected
         # failures (missing grammar, ripgrep absent) in production logs.
-        _log.warning(
-            "context enrichment failed for agent %r: %s",
-            spec.name, exc, exc_info=True,
-        )
+        _log.warning("context enrichment failed: %s", exc, exc_info=True)
+        return None
 
-    return diff_text, 0
+
+def _build_user_message(
+    diff_text: str,
+    spec: AgentSpec,
+    context: DispatchContext,
+    enrichment: _EnrichmentBlock | None = None,
+) -> tuple[str, int]:
+    """Build the user message for an agent.
+
+    When ``enrichment`` is provided AND ``spec.context_enrichment_eligible`` is
+    true, prepends the precomputed ``<symbol-context>`` block to the diff and
+    returns the block's token count for telemetry. Otherwise returns the raw
+    diff. The expensive parse + symbol lookup happens once per tier in
+    ``_compute_context_enrichment_block``; this function is now a near-trivial
+    formatter.
+    """
+    if enrichment is None or not spec.context_enrichment_eligible:
+        return diff_text, 0
+    return enrichment.text + "\n\n" + diff_text, enrichment.tokens
 
 
 def _unique_language_labels(changed_files: list[str]) -> list[str]:
@@ -381,6 +410,7 @@ async def _run_single_agent(
     limiter: anyio.abc.CapacityLimiter,
     diff_text: str,
     results: list[AgentResult | FailedAgent],
+    enrichment: _EnrichmentBlock | None = None,
 ) -> None:
     start = time.monotonic()
     tmp_prompt: Path | None = None
@@ -411,8 +441,12 @@ async def _run_single_agent(
         use_premium = spec.tier == 2 and context.mode == "full" and bool(context.premium_model)
         model_id = context.premium_model if use_premium else context.standard_model
 
-        # Build user message (includes context enrichment when enabled).
-        user_message, context_tokens_used = _build_user_message(diff_text, spec, context)
+        # Build user message. The expensive context-enrichment work (diff
+        # parse + symbol lookup) ran once per tier in run_tier(); this just
+        # prepends the precomputed block when the agent opted in.
+        user_message, context_tokens_used = _build_user_message(
+            diff_text, spec, context, enrichment=enrichment,
+        )
 
         system_prompt = prompt_path.read_text()
 
@@ -502,13 +536,21 @@ async def run_tier(
             f"Cannot read diff file '{context.diff_path}': {exc}"
         ) from exc
 
+    # Compute context-enrichment once per tier so the diff parse + symbol
+    # lookup don't repeat per agent (#499). Skipped entirely when no agent in
+    # the tier opted in, even if enrichment is enabled at the run level.
+    enrichment: _EnrichmentBlock | None = None
+    if any(spec.context_enrichment_eligible for spec in agents):
+        enrichment = _compute_context_enrichment_block(diff_text, context)
+
     limiter = anyio.CapacityLimiter(semaphore_size)
     results: list[AgentResult | FailedAgent] = []
 
     async with anyio.create_task_group() as tg:
         for spec in agents:
             tg.start_soon(
-                _run_single_agent, spec, llm_call, context, limiter, diff_text, results
+                _run_single_agent, spec, llm_call, context, limiter, diff_text, results,
+                enrichment,
             )
 
     successes: list[AgentResult] = []

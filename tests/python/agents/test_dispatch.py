@@ -217,6 +217,163 @@ async def test_run_tier_empty_system_prefix_when_no_addenda(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_run_tier_runs_context_enrichment_once_per_tier(tmp_path: Path) -> None:
+    """#499: with multiple eligible agents in a tier, the expensive
+    diff-parse + symbol-lookup must run exactly once for the whole tier
+    (not N times, once per eligible agent).
+
+    Patches the underlying context-enrichment helpers and counts call
+    counts. extract_symbol_refs in particular runs tree-sitter parsing,
+    which dominates the cost.
+    """
+    from unittest.mock import patch
+
+    ctx = _make_context(tmp_path)
+    ctx.enable_context_enrichment = True
+    ctx.changed_files = ["src/foo.py"]
+
+    extract_calls: list[tuple[str, str]] = []
+    lookup_calls: list[Any] = []
+    build_calls: list[int] = []
+
+    def fake_extract(diff_hunk: str, language: str) -> list[Any]:
+        extract_calls.append((language, diff_hunk[:20]))
+        return ["ref1", "ref2"]  # truthy non-empty so lookup proceeds
+
+    def fake_lookup(refs: list[Any], repo_root: Any, changed_files: list[str], **kwargs: Any) -> list[Any]:
+        lookup_calls.append(len(refs))
+        return ["def1", "def2"]
+
+    def fake_build(defs: list[Any], *, max_tokens: int) -> str:
+        build_calls.append(max_tokens)
+        return "<symbol-context>\nctx_block\n</symbol-context>"
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("ok")
+
+    # Two eligible tier-1 agents — code-reviewer and silent-failure-hunter.
+    agents = [get_agent("code-reviewer"), get_agent("silent-failure-hunter")]
+    assert all(spec.context_enrichment_eligible for spec in agents), \
+        "test premise: both agents must be context_enrichment_eligible"
+
+    with (
+        patch("ai_pr_review.context.treesitter.extract_symbol_refs", side_effect=fake_extract),
+        patch("ai_pr_review.context.symbols.lookup_definitions", side_effect=fake_lookup),
+        patch("ai_pr_review.context.budget.build_context_block", side_effect=fake_build),
+    ):
+        successes, failures = await run_tier(
+            agents=agents,
+            llm_call=mock_llm,
+            context=ctx,
+            semaphore_size=2,
+        )
+    assert len(successes) == 2 and len(failures) == 0
+
+    # The expensive work runs ONCE for the tier, not once per eligible agent.
+    assert len(extract_calls) == 1, (
+        f"extract_symbol_refs must run once per tier, not per agent; "
+        f"got {len(extract_calls)} calls"
+    )
+    assert len(lookup_calls) == 1, (
+        f"lookup_definitions must run once per tier; got {len(lookup_calls)} calls"
+    )
+    assert len(build_calls) == 1, (
+        f"build_context_block must run once per tier; got {len(build_calls)} calls"
+    )
+
+
+@pytest.mark.anyio
+async def test_run_tier_skips_enrichment_when_no_eligible_agent(tmp_path: Path) -> None:
+    """When enrichment is enabled at the run level but no agent in this tier
+    opted in, we must skip the parse entirely — not even pay the
+    extract_symbol_refs cost.
+    """
+    from unittest.mock import patch
+
+    ctx = _make_context(tmp_path)
+    ctx.enable_context_enrichment = True
+    ctx.changed_files = ["src/foo.py"]
+
+    extract_calls: list[Any] = []
+
+    def fake_extract(diff_hunk: str, language: str) -> list[Any]:
+        extract_calls.append((language, diff_hunk[:20]))
+        return ["ref1"]
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("ok")
+
+    # blind-hunter is NOT context_enrichment_eligible (roster.py:126); it
+    # asks the model to reason about the diff in isolation, so symbol context
+    # would defeat its purpose.
+    ineligible = get_agent("blind-hunter")
+    assert not ineligible.context_enrichment_eligible, \
+        "test premise: blind-hunter must not be enrichment-eligible"
+
+    with patch("ai_pr_review.context.treesitter.extract_symbol_refs", side_effect=fake_extract):
+        successes, _ = await run_tier(
+            agents=[ineligible],
+            llm_call=mock_llm,
+            context=ctx,
+            semaphore_size=1,
+        )
+    assert len(successes) == 1
+    assert extract_calls == [], (
+        "extract_symbol_refs must NOT run when no agent in the tier opted in"
+    )
+
+
+@pytest.mark.anyio
+async def test_run_tier_enrichment_block_reaches_eligible_agent_user_message(
+    tmp_path: Path,
+) -> None:
+    """The precomputed enrichment block must actually be prepended to the
+    user_message of every eligible agent — not merely computed and dropped.
+    """
+    from unittest.mock import patch
+
+    ctx = _make_context(tmp_path)
+    ctx.enable_context_enrichment = True
+    ctx.changed_files = ["src/foo.py"]
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    SENTINEL = "<symbol-context>\nFOO_DEFINITION_GOES_HERE\n</symbol-context>"
+
+    with (
+        patch(
+            "ai_pr_review.context.treesitter.extract_symbol_refs",
+            side_effect=lambda h, lang: ["r"],
+        ),
+        patch(
+            "ai_pr_review.context.symbols.lookup_definitions",
+            side_effect=lambda *a, **kw: ["d"],
+        ),
+        patch(
+            "ai_pr_review.context.budget.build_context_block",
+            side_effect=lambda d, *, max_tokens: SENTINEL,
+        ),
+    ):
+        await run_tier(
+            agents=[get_agent("code-reviewer"), get_agent("silent-failure-hunter")],
+            llm_call=capture_llm,
+            context=ctx,
+            semaphore_size=2,
+        )
+
+    assert len(captured) == 2
+    for req in captured:
+        assert SENTINEL in req.user_message, (
+            f"enrichment block must be prepended to each eligible agent's user_message; "
+            f"missing in {req!r}"
+        )
+
+
+@pytest.mark.anyio
 async def test_run_tier_populates_elapsed_ms(tmp_path: Path) -> None:
     """AgentResult.elapsed_ms is populated (>= 0) for successful agents."""
     ctx = _make_context(tmp_path)
