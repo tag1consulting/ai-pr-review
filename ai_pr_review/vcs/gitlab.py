@@ -373,15 +373,11 @@ class GitLabProvider:
         Overflow is logged to errors when posting fails — the orchestrator can
         choose to retry as plain body content.
         """
-        from ai_pr_review.diff.linemap import (
-            parse_added_lines,
-            parse_new_file_lines,
-        )
+        from ai_pr_review.diff.linemap import parse_diff_sets
 
-        eligible_new = {(lr.file, lr.line) for lr in parse_added_lines(diff.diff_text)}
-        eligible_ctx = {
-            (lr.file, lr.line) for lr in parse_new_file_lines(diff.diff_text)
-        }
+        _added, _new_file = parse_diff_sets(diff.diff_text)
+        eligible_new = {(lr.file, lr.line) for lr in _added}
+        eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
 
         errors_before = len(self._errors)
         inline_posted = 0

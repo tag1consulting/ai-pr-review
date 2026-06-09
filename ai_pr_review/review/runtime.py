@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ai_pr_review.agents.dispatch import DispatchContext, _unique_language_labels
+from ai_pr_review.agents.dispatch import (
+    DispatchContext,
+    _unique_language_labels,
+    load_shared_prompt_fragments,
+)
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
@@ -170,6 +174,18 @@ async def build_review_runtime(
     _lang_labels = _unique_language_labels(_changed_list)
     _language_profile_text = load_language_profiles(_lang_labels, script_dir)
 
+    # Load shared prompt fragments once per run to avoid per-agent disk reads
+    # inside effective_prompt().  When the prompts directory is absent (e.g. in
+    # tests that use a fake script_dir), skip the load — effective_prompt() will
+    # fall back to reading from disk on first use, raising FileNotFoundError only
+    # if a finding-producing agent actually dispatches.
+    _prompts_dir = script_dir / "prompts"
+    _shared_fragments = (
+        load_shared_prompt_fragments(script_dir, enable_suggestions=config.enable_suggestions)
+        if _prompts_dir.is_dir()
+        else None
+    )
+
     # 8. Build dispatch context.
     dispatch_ctx = DispatchContext(
         script_dir=script_dir,
@@ -190,6 +206,7 @@ async def build_review_runtime(
         max_tokens_per_agent=config.max_tokens_per_agent,
         temperature=config.temperature,
         language_profile_text=_language_profile_text,
+        _shared_prompt_fragments=_shared_fragments,
     )
 
     # 9. Evaluate gates and filter agent roster.

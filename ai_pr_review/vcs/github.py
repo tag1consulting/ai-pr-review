@@ -326,14 +326,13 @@ class GitHubProvider:
         max_inline: int = 25,
         enable_suggestions: bool = True,
     ) -> FindingsResult:
-        from ai_pr_review.diff.linemap import parse_added_lines, parse_new_file_lines
+        from ai_pr_review.diff.linemap import parse_diff_sets
         from ai_pr_review.vcs._body import format_body_finding, join_findings
         from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
 
-        eligible_new = {(lr.file, lr.line) for lr in parse_added_lines(diff.diff_text)}
-        eligible_ctx = {
-            (lr.file, lr.line) for lr in parse_new_file_lines(diff.diff_text)
-        }
+        _added, _new_file = parse_diff_sets(diff.diff_text)
+        eligible_new = {(lr.file, lr.line) for lr in _added}
+        eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
 
         # Assign stable per-PR IDs to ALL findings upfront — inline and body
         # alike — so the ID counter is consistent regardless of where a finding
