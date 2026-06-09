@@ -228,20 +228,17 @@ async def run_review(
     # On the first review (no existing comment) summary_text will always be
     # non-empty, so advance_sha_watermark is never called when there is nothing
     # to advance.
+    # On incremental runs (summary_text empty) we do NOT advance the watermark
+    # here. If we did, and post_findings then failed, the durable summary
+    # comment's sha= marker would have moved forward while the findings for
+    # the in-flight commits were never posted — the next incremental run would
+    # silently skip those commits. Defer the advance to after post_findings.ok
+    # so the run is all-or-nothing, mirroring the resolve_stale gating at
+    # Phase 5 (#493).
     try:
         if not summary_text:
             # Incremental run — don't overwrite the existing summary body.
-            # Just advance the SHA watermark so the next incremental run has
-            # the correct baseline. Treat this as a successful no-op so
-            # findings can still be posted.
-            advanced = provider.advance_sha_watermark(diff.head_sha)
-            if not advanced:
-                logger.warning(
-                    "orchestrate: advance_sha_watermark returned False "
-                    "(no existing summary comment or no-op replacement) for head_sha=%s; "
-                    "next incremental run may re-diff from an older baseline",
-                    diff.head_sha,
-                )
+            # Treat as a successful no-op so findings can still be posted.
             summary_result = SummaryResult(
                 comment_id=None, created=False, updated=False
             )
@@ -288,6 +285,26 @@ async def run_review(
             event=outcome.event,
             error=f"skipped: summary post failed ({summary_result.error})",
         )
+
+    # Incremental-run watermark advance (#493): only after post_findings
+    # succeeded end-to-end. On failure, the watermark stays at the prior SHA
+    # so the next run re-diffs from the right baseline and re-attempts the
+    # missed findings.
+    if not summary_text and findings_result is not None and findings_result.ok:
+        try:
+            advanced = provider.advance_sha_watermark(diff.head_sha)
+            if not advanced:
+                logger.warning(
+                    "orchestrate: advance_sha_watermark returned False "
+                    "(no existing summary comment or no-op replacement) for head_sha=%s; "
+                    "next incremental run may re-diff from an older baseline",
+                    diff.head_sha,
+                )
+        except RetryExhaustedError as exc:
+            logger.error(
+                "advance_sha_watermark retry exhausted: %s; "
+                "next incremental run will re-diff from the prior baseline", exc,
+            )
 
     # Phase 5: stale cleanup runs only after a successful post.
     stale_result: StaleResult | None = None
