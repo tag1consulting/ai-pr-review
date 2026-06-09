@@ -184,6 +184,20 @@ class TestRunKubeLinterFindings:
         assert findings == []
         assert "exited 2" in caplog.text
 
+    def test_missing_reports_key_returns_empty_with_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        f = tmp_path / "deploy.yaml"
+        f.write_text("apiVersion: apps/v1\nkind: Deployment\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.kube_linter.shutil.which", return_value="/usr/bin/kube-linter"),
+            patch("ai_pr_review.analyzers.native.kube_linter.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"summary": "ok"}', stderr="")
+            findings = _run_kube_linter(cf, Path("/dev/null"))
+        assert findings == []
+        assert "missing 'Reports' key" in caplog.text
+
     def test_non_dict_output_returns_empty_with_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         f = tmp_path / "deploy.yaml"
         f.write_text("apiVersion: apps/v1\nkind: Deployment\n")

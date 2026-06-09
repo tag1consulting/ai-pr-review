@@ -85,7 +85,10 @@ def _run_kube_linter(changed_files: ChangedFiles, diff_file: Path) -> list[Findi
         logger.warning("[ai-pr-review] WARNING: kube-linter produced unexpected output structure; skipping.")
         return []
 
-    reports = data.get("Reports") or []
+    if "Reports" not in data:
+        logger.warning("[ai-pr-review] WARNING: kube-linter output missing 'Reports' key; skipping.")
+        return []
+    reports = data["Reports"] or []
     if not isinstance(reports, list):
         return []
 
