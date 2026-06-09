@@ -25,12 +25,18 @@ from pydantic import ValidationError
 # Native analyzer imports (Epic 8). Each ported analyzer is imported here and
 # wired into _ANALYZERS via the native_fn field.
 from ai_pr_review.analyzers.native.checkov import _run_checkov
+from ai_pr_review.analyzers.native.cve_check import _run_cve_check
+from ai_pr_review.analyzers.native.eslint import _run_eslint
+from ai_pr_review.analyzers.native.golangci_lint import _run_golangci_lint
 from ai_pr_review.analyzers.native.hadolint import _run_hadolint
 from ai_pr_review.analyzers.native.kube_linter import _run_kube_linter
 from ai_pr_review.analyzers.native.phpcs import _run_phpcs
+from ai_pr_review.analyzers.native.phpstan import _run_phpstan
 from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.semgrep import _run_semgrep
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
+from ai_pr_review.analyzers.native.tflint import _run_tflint
+from ai_pr_review.analyzers.native.trufflehog import _run_trufflehog
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -49,18 +55,18 @@ class AnalyzerSpec(NamedTuple):
 
 _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], _run_shellcheck),
-    AnalyzerSpec("trufflehog", "run-trufflehog.sh", []),
+    AnalyzerSpec("trufflehog", "run-trufflehog.sh", [], _run_trufflehog),
     AnalyzerSpec("semgrep", "run-semgrep.sh", [], _run_semgrep),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
-    AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"]),
+    AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"], _run_golangci_lint),
     AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"], _run_hadolint),
     AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"], _run_checkov),
     AnalyzerSpec("phpcs", "run-phpcs.sh", ["php"], _run_phpcs),
-    AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"]),
-    AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"]),
+    AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"], _run_phpstan),
+    AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"], _run_eslint),
     AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"], _run_kube_linter),
-    AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"]),
-    AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"]),
+    AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"], _run_tflint),
+    AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"], _run_cve_check),
 ]
 
 _SUBPROCESS_TIMEOUT_SECS = 120
