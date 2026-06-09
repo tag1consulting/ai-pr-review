@@ -33,6 +33,7 @@ from ai_pr_review.analyzers.native.phpstan import _run_phpstan
 from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.semgrep import _run_semgrep
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
+from ai_pr_review.analyzers.native.tflint import _run_tflint
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -61,7 +62,7 @@ _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"], _run_phpstan),
     AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"], _run_eslint),
     AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"], _run_kube_linter),
-    AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"]),
+    AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"], _run_tflint),
     AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"]),
 ]
 
