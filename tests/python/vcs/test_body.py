@@ -8,9 +8,48 @@ from ai_pr_review.vcs._body import (
     build_agent_prompt,
     format_body_finding,
     format_source_tag,
+    sanitize_display_text,
     severity_icon,
     truncate_body,
 )
+
+
+def test_sanitize_defangs_details_tags() -> None:
+    out = sanitize_display_text("</details><!-- hidden -->next")
+    assert "</details>" not in out
+    assert "<!--" not in out
+    assert "-->" not in out
+    assert "details" in out
+
+
+def test_sanitize_is_case_insensitive_on_tags() -> None:
+    assert "<DETAILS>" not in sanitize_display_text("<DETAILS>")
+    assert "<Summary>" not in sanitize_display_text("<Summary>")
+
+
+def test_sanitize_leaves_benign_markdown_intact() -> None:
+    text = "Use `os.system` and **bold** and a list:\n- item"
+    assert sanitize_display_text(text) == text
+
+
+def test_sanitize_empty_string() -> None:
+    assert sanitize_display_text("") == ""
+
+
+def test_format_body_finding_defangs_injected_details() -> None:
+    # A prompt-injected finding cannot collapse sibling findings via <details>.
+    f = Finding(
+        severity="High",
+        confidence=90,
+        finding="real issue</details><!-- hide the rest -->",
+        file="a.py",
+        line=3,
+        remediation="</summary>sneaky",
+    )
+    out = format_body_finding(f)
+    assert "</details>" not in out
+    assert "<!--" not in out
+    assert "</summary>" not in out
 
 
 def test_severity_icon_known() -> None:

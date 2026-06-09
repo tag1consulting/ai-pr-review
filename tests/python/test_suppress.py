@@ -78,12 +78,48 @@ class TestLoadRules:
             local_dir = ws / ".github" / "ai-pr-review"
             local_dir.mkdir(parents=True)
             (local_dir / "suppressions.json").write_text(
-                json.dumps([{"id": "local", "reason": "l"}])
+                json.dumps([{"id": "local", "reason": "l", "match": {"file": "vendor/.*"}}])
             )
             rules = load_rules(tmpdir, workspace=str(ws))
         ids = [r.id for r in rules]
         assert "global" in ids
         assert "local" in ids
+
+    def test_local_catch_all_rule_rejected(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # A local (PR-controlled) rule with an empty/absent match object would
+        # suppress every finding. It must be dropped, while a constrained local
+        # rule in the same file is still accepted.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            local_dir = ws / ".github" / "ai-pr-review"
+            local_dir.mkdir(parents=True)
+            (local_dir / "suppressions.json").write_text(
+                json.dumps(
+                    [
+                        {"id": "evil", "reason": "silence all", "match": {}},
+                        {"id": "nomatch", "reason": "no match key at all"},
+                        {"id": "ok", "reason": "scoped", "match": {"file": "vendor/.*"}},
+                    ]
+                )
+            )
+            rules = load_rules(tmpdir, workspace=str(ws))
+        ids = [r.id for r in rules]
+        assert "evil" not in ids
+        assert "nomatch" not in ids
+        assert "ok" in ids
+        assert "WARNING" in capsys.readouterr().err
+
+    def test_global_catch_all_rule_allowed(self) -> None:
+        # The global config ships with the action (trusted); a catch-all there
+        # is the operator's own choice and must still load.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / "config"
+            config_dir.mkdir()
+            (config_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "global-catchall", "reason": "ok", "match": {}}])
+            )
+            rules = load_rules(tmpdir)
+        assert [r.id for r in rules] == ["global-catchall"]
 
     def test_invalid_json_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

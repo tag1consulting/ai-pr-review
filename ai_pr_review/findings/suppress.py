@@ -60,7 +60,22 @@ def load_rules(
         try:
             local_data = json.loads(local_path.read_text())
             if isinstance(local_data, list):
-                rules_data.extend(local_data)
+                # The local file lives in the checked-out tree, which on a
+                # contributor PR is attacker-controlled. A rule with an empty
+                # (or no) `match` object matches every finding — a catch-all
+                # that would silence the entire review. Reject such rules from
+                # the local file; they remain valid only in the trusted global
+                # config shipped with the action.
+                accepted = [r for r in local_data if isinstance(r, dict) and _has_match_constraint(r)]
+                dropped = len(local_data) - len(accepted)
+                if dropped:
+                    print(
+                        f"WARNING: dropped {dropped} local suppression rule(s) with no match "
+                        "constraint (catch-all rules are not allowed in "
+                        ".github/ai-pr-review/suppressions.json).",
+                        file=sys.stderr,
+                    )
+                rules_data.extend(accepted)
                 print(
                     "Loaded local suppressions from .github/ai-pr-review/suppressions.json",
                     file=sys.stderr,
@@ -69,6 +84,21 @@ def load_rules(
             print(f"WARNING: Could not load local suppressions: {exc}", file=sys.stderr)
 
     return [_parse_rule(r) for r in rules_data if isinstance(r, dict)]
+
+
+def _has_match_constraint(raw: dict[str, Any]) -> bool:
+    """True if a raw rule narrows what it matches.
+
+    A rule with no `match` object, or one whose match keys are all empty/zero,
+    matches every finding. Such catch-all rules are only permitted in the
+    trusted global config, never in the PR-controlled local file.
+    """
+    match = raw.get("match")
+    if not isinstance(match, dict):
+        return False
+    if any(str(match.get(key, "")).strip() for key in ("file", "pattern", "code")):
+        return True
+    return any(_safe_int(match.get(key, 0)) > 0 for key in ("line", "line_start", "line_end"))
 
 
 def _safe_int(val: str | int | float | None) -> int:
