@@ -50,7 +50,9 @@ def _run_hadolint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]
         logger.warning("[ai-pr-review] WARNING: hadolint failed to start: %s", exc)
         return []
 
-    if result.returncode != 0:
+    # Exit code 0 = no findings; 1 = findings present (or --no-fail not supported).
+    # Any other exit code is a real error.
+    if result.returncode not in (0, 1):
         logger.warning(
             "[ai-pr-review] WARNING: hadolint exited %d; skipping. stderr: %s",
             result.returncode, result.stderr[:200],

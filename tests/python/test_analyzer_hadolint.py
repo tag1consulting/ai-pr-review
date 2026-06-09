@@ -156,7 +156,21 @@ class TestRunHadolintFindings:
         assert len(findings) == 1
         assert findings[0].severity == "Low"
 
-    def test_non_zero_returncode_skipped(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_returncode_one_treated_as_findings(self, tmp_path: Path) -> None:
+        payload = json.dumps([{"file": "Dockerfile", "line": 1, "column": 1,
+                                "level": "warning", "code": "DL3009", "message": "test"}])
+        f = tmp_path / "Dockerfile"
+        f.write_text("FROM ubuntu\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.hadolint.shutil.which", return_value="/usr/bin/hadolint"),
+            patch("ai_pr_review.analyzers.native.hadolint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_hadolint(cf, Path("/dev/null"))
+        assert len(findings) == 1
+
+    def test_non_zero_non_one_returncode_skipped(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         f = tmp_path / "Dockerfile"
         f.write_text("FROM ubuntu\n")
         cf = _make_cf([str(f)])
@@ -165,10 +179,10 @@ class TestRunHadolintFindings:
             patch("ai_pr_review.analyzers.native.hadolint.subprocess.run") as mock_run,
             caplog.at_level("WARNING"),
         ):
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error!")
+            mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="error!")
             findings = _run_hadolint(cf, Path("/dev/null"))
         assert findings == []
-        assert "exited 1" in caplog.text
+        assert "exited 2" in caplog.text
 
     def test_timeout_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp
