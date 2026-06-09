@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 # Native analyzer imports (Epic 8). Each ported analyzer is imported here and
 # wired into _ANALYZERS via the native_fn field.
+from ai_pr_review.analyzers.native.hadolint import _run_hadolint
 from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
 from ai_pr_review.findings.models import Finding
@@ -48,7 +49,7 @@ _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("semgrep", "run-semgrep.sh", []),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
     AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"]),
-    AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"]),
+    AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"], _run_hadolint),
     AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"]),
     AnalyzerSpec("phpcs", "run-phpcs.sh", ["php"]),
     AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"]),
