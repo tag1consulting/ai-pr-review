@@ -147,6 +147,11 @@ inputs:
       in the repo using ripgrep, then inject a <symbol-context> block into
       each agent's prompt. Requires tree-sitter-language-pack and ripgrep.
       Only available with the Python engine.
+      Default is 'true' here because the container image ships both
+      tree-sitter-language-pack and ripgrep. The composite action (action.yml)
+      defaults to 'false' since it runs on an arbitrary runner where the tools
+      may be absent; the Python engine no-ops gracefully with a warning when
+      they are missing.
     required: false
     default: 'true'
 

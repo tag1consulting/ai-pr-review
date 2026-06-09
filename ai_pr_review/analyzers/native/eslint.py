@@ -97,6 +97,7 @@ def _run_eslint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         return []
 
     if not _has_eslint_config():
+        logger.warning("[ai-pr-review] WARNING: no eslint config found; skipping.")
         return []
 
     extra_flags: list[str] = []

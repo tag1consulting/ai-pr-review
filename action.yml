@@ -216,6 +216,12 @@ inputs:
       in the repo using ripgrep, then inject a <symbol-context> block into
       each agent's prompt. Requires tree-sitter-language-pack and ripgrep.
       Only available with the Python engine.
+      Default is 'false' here (composite action on an arbitrary runner) vs
+      'true' in container-action (which ships tree-sitter and ripgrep). When
+      the tools are absent the Python engine silently no-ops with a warning,
+      so setting this to 'true' on a bare runner is safe but produces no
+      context. The Python config layer defaults to true; this input overrides
+      it when the composite action is used directly.
     required: false
     default: 'false'
 

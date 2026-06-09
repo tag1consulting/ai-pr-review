@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 _SOURCE = "osv"
 _AGENT = "dependency-check"
 _OSV_API_URL = "https://api.osv.dev/v1/querybatch"
+# Intentionally named _HTTP_TIMEOUT rather than the _TIMEOUT_SECS convention
+# used by the 12 subprocess-bound sibling analyzers.  Those time out a local
+# CLI process (120 s); this times out an httpx HTTP request to the OSV API
+# (10 s) — a different resource type with a much tighter budget.  Keeping the
+# distinct name avoids someone "aligning" the value to 120 s inappropriately.
 _HTTP_TIMEOUT = 10.0
 _BATCH_SIZE = 1000
 
