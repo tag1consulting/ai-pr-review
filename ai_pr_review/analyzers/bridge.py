@@ -25,6 +25,7 @@ from pydantic import ValidationError
 # Native analyzer imports (Epic 8). Each ported analyzer is imported here and
 # wired into _ANALYZERS via the native_fn field.
 from ai_pr_review.analyzers.native.hadolint import _run_hadolint
+from ai_pr_review.analyzers.native.kube_linter import _run_kube_linter
 from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
 from ai_pr_review.findings.models import Finding
@@ -54,7 +55,7 @@ _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("phpcs", "run-phpcs.sh", ["php"]),
     AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"]),
     AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"]),
-    AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"]),
+    AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"], _run_kube_linter),
     AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"]),
     AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"]),
 ]
