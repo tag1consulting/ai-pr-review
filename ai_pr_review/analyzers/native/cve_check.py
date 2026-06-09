@@ -1,9 +1,16 @@
 """Native Python implementation of the cve-check analyzer.
 
-Replaces analyzers/run-cve-check.sh. Parses dependency manifests (go.mod,
-package.json, requirements*.txt, composer.json), queries OSV.dev in a single
-batch request, scores vulnerabilities via CVSS v3.1, and returns Finding
-instances.
+Replaces analyzers/run-cve-check.sh. Parses dependency manifests and lockfiles,
+queries OSV.dev in a single batch request, scores vulnerabilities via CVSS v3.1,
+and returns Finding instances.
+
+Supported sources (lockfiles preferred over range manifests when both are present):
+  npm:        package-lock.json (v1/v2/v3), yarn.lock (v1), pnpm-lock.yaml (v5/v6/v9)
+  Python:     poetry.lock, Pipfile.lock, uv.lock, requirements*.txt (exact pins only)
+  PHP:        composer.lock, composer.json
+  Rust:       Cargo.lock (v1/v2/v3)
+  Ruby:       Gemfile.lock
+  Go:         go.mod (no lockfile; go.sum contains hashes, not usable versions)
 
 Source tag exception: source="osv" (not "cve-check"), and every finding
 carries agent="dependency-check".
@@ -196,25 +203,407 @@ def _parse_composer_json(content: str, file_path: str) -> list[Package]:
     return packages
 
 
+def _parse_package_lock_json(content: str, file_path: str) -> list[Package]:
+    """Parse package-lock.json (lockfileVersion 1, 2, or 3) for exact versions."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        logger.warning("[ai-pr-review] WARNING: failed to parse %s: %s", file_path, exc)
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    packages: list[Package] = []
+
+    # v2/v3: packages dict (keys are "node_modules/<name>" or "")
+    pkgs = data.get("packages")
+    if isinstance(pkgs, dict):
+        for key, entry in pkgs.items():
+            if not key or not isinstance(entry, dict):
+                continue
+            # Strip "node_modules/" prefix (possibly nested: "node_modules/a/node_modules/b")
+            name = re.sub(r"^(node_modules/)+", "", key)
+            if not name:
+                continue
+            ver = entry.get("version")
+            if not isinstance(ver, str) or not _DIGIT_START_RE.match(ver):
+                continue
+            tag = "dev" if entry.get("dev") else "prod"
+            packages.append(Package("npm", name, ver, file_path, tag))
+        return packages
+
+    # v1: dependencies dict (flat, with nested dependencies)
+    deps = data.get("dependencies")
+    if isinstance(deps, dict):
+        _collect_v1_deps(deps, file_path, packages)
+
+    return packages
+
+
+def _collect_v1_deps(deps: dict[str, object], file_path: str, out: list[Package]) -> None:
+    """Recursively collect packages from npm lockfile v1 dependencies."""
+    for name, entry in deps.items():
+        if not isinstance(entry, dict):
+            continue
+        ver = entry.get("version")
+        if isinstance(ver, str) and _DIGIT_START_RE.match(ver):
+            tag = "dev" if entry.get("dev") else "prod"
+            out.append(Package("npm", name, ver, file_path, tag))
+        nested = entry.get("dependencies")
+        if isinstance(nested, dict):
+            _collect_v1_deps(nested, file_path, out)
+
+
+def _parse_yarn_lock(content: str, file_path: str) -> list[Package]:
+    """Parse yarn.lock v1 (classic) format for exact resolved versions."""
+    packages: list[Package] = []
+    # Each stanza: one or more "name@range, name@range2:" header lines, then "  version \"x.y.z\""
+    current_names: list[str] = []
+    version: str | None = None
+
+    for line in content.splitlines():
+        # Skip comments and blank lines
+        if not line or line.startswith("#"):
+            if current_names and version:
+                for name in current_names:
+                    if _DIGIT_START_RE.match(version):
+                        packages.append(Package("npm", name, version, file_path, ""))
+            current_names = []
+            version = None
+            continue
+
+        # Stanza header: "lodash@^4.17.0, lodash@^4.17.1:"
+        if not line.startswith(" ") and line.rstrip().endswith(":"):
+            if current_names and version:
+                for name in current_names:
+                    if _DIGIT_START_RE.match(version):
+                        packages.append(Package("npm", name, version, file_path, ""))
+            current_names = []
+            version = None
+            header = line.rstrip().rstrip(":")
+            for spec in header.split(","):
+                spec = spec.strip()
+                # Extract package name: everything before the last "@" (handles scoped packages)
+                at_idx = spec.rfind("@")
+                if at_idx > 0:
+                    current_names.append(spec[:at_idx])
+            continue
+
+        # Version line inside a stanza
+        m = re.match(r'^\s+version\s+"([^"]+)"', line)
+        if m:
+            version = m.group(1)
+            continue
+
+    # Flush last stanza
+    if current_names and version:
+        for name in current_names:
+            if _DIGIT_START_RE.match(version):
+                packages.append(Package("npm", name, version, file_path, ""))
+
+    # Deduplicate by (name, version) -- yarn.lock lists a package once per unique resolved version
+    seen: set[tuple[str, str]] = set()
+    result: list[Package] = []
+    for p in packages:
+        key = (p.name, p.version)
+        if key not in seen:
+            seen.add(key)
+            result.append(p)
+    return result
+
+
+def _parse_pnpm_lock_yaml(content: str, file_path: str) -> list[Package]:
+    """Parse pnpm-lock.yaml (v5, v6, v9) for exact package versions.
+
+    Avoids a PyYAML dependency by parsing the relevant lines directly.
+    v5/v6: package keys are indented under "packages:" as "  /lodash@4.17.20:"
+    v9:    package keys appear as "  lodash@4.17.20:" under "snapshots:" or "packages:"
+    """
+    packages: list[Package] = []
+    seen: set[tuple[str, str]] = set()
+
+    for line in content.splitlines():
+        stripped = line.rstrip()
+        # Package entry key lines end with ":"
+        if not stripped.endswith(":"):
+            continue
+        # Must be indented by exactly 2 spaces (package sub-key, not a top-level section)
+        if not stripped.startswith("  ") or stripped.startswith("   "):
+            continue
+        key = stripped.strip().rstrip(":").lstrip("/").strip("'\"")
+        # key looks like "lodash@4.17.20" or "@babel/core@7.21.0"
+        at_idx = key.rfind("@")
+        if at_idx <= 0:
+            continue
+        name = key[:at_idx]
+        ver = key[at_idx + 1:]
+        # Strip optional peer suffix: "4.17.20(react@18.0.0)" -> "4.17.20"
+        ver = re.split(r"[(_]", ver)[0]
+        if not _DIGIT_START_RE.match(ver):
+            continue
+        pk = (name, ver)
+        if pk not in seen:
+            seen.add(pk)
+            packages.append(Package("npm", name, ver, file_path, ""))
+
+    return packages
+
+
+def _parse_toml_package_lock(content: str, file_path: str, ecosystem: str) -> list[Package]:
+    """Parse a TOML-like lockfile with [[package]] stanzas.
+
+    Shared implementation for poetry.lock and uv.lock — both use the same
+    [[package]] / name = "..." / version = "..." structure and resolve to
+    the same PyPI ecosystem.
+    """
+    packages: list[Package] = []
+    current_name: str | None = None
+    current_version: str | None = None
+    in_package = False
+
+    for line in content.splitlines():
+        line = line.strip()
+        if line == "[[package]]":
+            if current_name and current_version and _DIGIT_START_RE.match(current_version):
+                packages.append(Package(ecosystem, current_name, current_version, file_path, ""))
+            current_name = None
+            current_version = None
+            in_package = True
+            continue
+        if not in_package:
+            continue
+        m = re.match(r'^name\s*=\s*"([^"]+)"', line)
+        if m:
+            current_name = m.group(1)
+            continue
+        m = re.match(r'^version\s*=\s*"([^"]+)"', line)
+        if m:
+            current_version = m.group(1)
+            continue
+
+    # Flush last entry
+    if current_name and current_version and _DIGIT_START_RE.match(current_version):
+        packages.append(Package(ecosystem, current_name, current_version, file_path, ""))
+
+    return packages
+
+
+def _parse_poetry_lock(content: str, file_path: str) -> list[Package]:
+    """Parse poetry.lock TOML-like format for exact package versions."""
+    return _parse_toml_package_lock(content, file_path, "PyPI")
+
+
+def _parse_pipfile_lock(content: str, file_path: str) -> list[Package]:
+    """Parse Pipfile.lock JSON for exact pinned versions."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        logger.warning("[ai-pr-review] WARNING: failed to parse %s: %s", file_path, exc)
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    packages: list[Package] = []
+    for section, tag in (("default", "prod"), ("develop", "dev")):
+        section_data = data.get(section) or {}
+        if not isinstance(section_data, dict):
+            continue
+        for name, entry in section_data.items():
+            if not isinstance(entry, dict):
+                continue
+            raw_ver = entry.get("version")
+            if not isinstance(raw_ver, str):
+                continue
+            # version field is "==1.2.3"
+            ver = raw_ver.lstrip("=").strip()
+            if not _DIGIT_START_RE.match(ver):
+                continue
+            packages.append(Package("PyPI", name, ver, file_path, tag))
+
+    return packages
+
+
+def _parse_uv_lock(content: str, file_path: str) -> list[Package]:
+    """Parse uv.lock TOML-like format for exact package versions."""
+    return _parse_toml_package_lock(content, file_path, "PyPI")
+
+
+def _parse_composer_lock(content: str, file_path: str) -> list[Package]:
+    """Parse composer.lock JSON for exact installed versions."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        logger.warning("[ai-pr-review] WARNING: failed to parse %s: %s", file_path, exc)
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    packages: list[Package] = []
+    for section in ("packages", "packages-dev"):
+        entries = data.get(section) or []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            ver = entry.get("version")
+            if not isinstance(name, str) or not isinstance(ver, str):
+                continue
+            # composer.lock versions often have "v" prefix: "v5.4.20" -> "5.4.20"
+            ver = ver.lstrip("v")
+            if not _DIGIT_START_RE.match(ver):
+                continue
+            packages.append(Package("Packagist", name, ver, file_path, ""))
+
+    return packages
+
+
+def _parse_cargo_lock(content: str, file_path: str) -> list[Package]:
+    """Parse Cargo.lock TOML-like format for exact crate versions."""
+    packages: list[Package] = []
+    current_name: str | None = None
+    current_version: str | None = None
+    has_source = False
+    in_package = False
+
+    for line in content.splitlines():
+        line = line.strip()
+        if line == "[[package]]":
+            # Only emit packages with a source (skip workspace members)
+            if current_name and current_version and has_source and _DIGIT_START_RE.match(current_version):
+                packages.append(Package("crates.io", current_name, current_version, file_path, ""))
+            current_name = None
+            current_version = None
+            has_source = False
+            in_package = True
+            continue
+        if not in_package:
+            continue
+        m = re.match(r'^name\s*=\s*"([^"]+)"', line)
+        if m:
+            current_name = m.group(1)
+            continue
+        m = re.match(r'^version\s*=\s*"([^"]+)"', line)
+        if m:
+            current_version = m.group(1)
+            continue
+        if line.startswith("source"):
+            has_source = True
+
+    if current_name and current_version and has_source and _DIGIT_START_RE.match(current_version):
+        packages.append(Package("crates.io", current_name, current_version, file_path, ""))
+
+    return packages
+
+
+def _parse_gemfile_lock(content: str, file_path: str) -> list[Package]:
+    """Parse Gemfile.lock for exact gem versions."""
+    packages: list[Package] = []
+    in_gem_section = False
+
+    for line in content.splitlines():
+        stripped = line.rstrip()
+        # Section headers are unindented
+        if not stripped.startswith(" "):
+            in_gem_section = stripped in ("GEM", "GIT", "PATH")
+            continue
+        if not in_gem_section:
+            continue
+        # "  remote: ..." and "  specs:" are section metadata
+        if stripped.lstrip().startswith("remote:") or stripped.lstrip() == "specs:":
+            continue
+        # Gem entries are indented with 4+ spaces: "    rails (7.0.4)"
+        m = re.match(r"^    ([a-zA-Z0-9_\-\.]+)\s+\(([0-9][^)]*)\)", stripped)
+        if m:
+            name = m.group(1)
+            ver = m.group(2).split("-")[0]  # strip platform suffix e.g. "1.2.3-x86_64-linux"
+            if _DIGIT_START_RE.match(ver):
+                packages.append(Package("RubyGems", name, ver, file_path, ""))
+
+    # Deduplicate (same gem may appear under multiple sections)
+    seen: set[tuple[str, str]] = set()
+    result: list[Package] = []
+    for p in packages:
+        key = (p.name, p.version)
+        if key not in seen:
+            seen.add(key)
+            result.append(p)
+    return result
+
+
+# Maps each lockfile basename to its parser and the range-manifest basenames it supersedes.
+# When a lockfile is present, packages from the corresponding range manifests are dropped.
+_LOCKFILE_SUPERSEDES: dict[str, frozenset[str]] = {
+    "package-lock.json": frozenset({"package.json"}),
+    "npm-shrinkwrap.json": frozenset({"package.json"}),
+    "yarn.lock": frozenset({"package.json"}),
+    "pnpm-lock.yaml": frozenset({"package.json"}),
+    "poetry.lock": frozenset({"requirements.txt", "Pipfile", "pyproject.toml"}),
+    "Pipfile.lock": frozenset({"requirements.txt", "Pipfile"}),
+    "uv.lock": frozenset({"requirements.txt", "pyproject.toml"}),
+    "composer.lock": frozenset({"composer.json"}),
+    "Cargo.lock": frozenset({"Cargo.toml"}),
+    "Gemfile.lock": frozenset({"Gemfile"}),
+}
+
+
 def _parse_manifests(manifest_files: list[str]) -> list[Package]:
-    """Parse all changed manifest files and return packages."""
+    """Parse changed manifest/lockfile paths and return packages.
+
+    Lockfiles are preferred over range manifests when both are present in the
+    changed file list. For example, if both package.json and package-lock.json
+    changed, only the lockfile's exact versions are queried -- the range
+    manifest is skipped.
+    """
+    # Determine which range-manifest basenames are superseded by a present lockfile
+    present_basenames = {Path(f).name for f in manifest_files}
+    suppressed: set[str] = set()
+    for lockfile_base, supersedes in _LOCKFILE_SUPERSEDES.items():
+        if lockfile_base in present_basenames:
+            suppressed.update(supersedes)
+
     packages: list[Package] = []
     for path_str in manifest_files:
         p = Path(path_str)
         if not p.is_file():
+            continue
+        base = p.name
+        if base in suppressed:
+            logger.debug(
+                "[ai-pr-review] cve-check: skipping range manifest %s (lockfile present)", path_str
+            )
             continue
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             logger.warning("[ai-pr-review] WARNING: cannot read %s: %s", path_str, exc)
             continue
-        base = p.name
+
         if base == "go.mod":
             packages.extend(_parse_go_mod(content, path_str))
+        elif base in ("package-lock.json", "npm-shrinkwrap.json"):
+            packages.extend(_parse_package_lock_json(content, path_str))
+        elif base == "yarn.lock":
+            packages.extend(_parse_yarn_lock(content, path_str))
+        elif base == "pnpm-lock.yaml":
+            packages.extend(_parse_pnpm_lock_yaml(content, path_str))
         elif base == "package.json":
             packages.extend(_parse_package_json(content, path_str))
+        elif base == "poetry.lock":
+            packages.extend(_parse_poetry_lock(content, path_str))
+        elif base == "Pipfile.lock":
+            packages.extend(_parse_pipfile_lock(content, path_str))
+        elif base == "uv.lock":
+            packages.extend(_parse_uv_lock(content, path_str))
+        elif base == "composer.lock":
+            packages.extend(_parse_composer_lock(content, path_str))
         elif base == "composer.json":
             packages.extend(_parse_composer_json(content, path_str))
+        elif base == "Cargo.lock":
+            packages.extend(_parse_cargo_lock(content, path_str))
+        elif base == "Gemfile.lock":
+            packages.extend(_parse_gemfile_lock(content, path_str))
         elif re.match(r"requirements.*\.txt$", base):
             packages.extend(_parse_requirements_txt(content, path_str))
 

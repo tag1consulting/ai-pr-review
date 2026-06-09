@@ -10,10 +10,19 @@ import pytest
 
 from ai_pr_review.analyzers.native.cve_check import (
     _cvss_v3_score,
+    _parse_cargo_lock,
     _parse_composer_json,
+    _parse_composer_lock,
+    _parse_gemfile_lock,
     _parse_go_mod,
     _parse_package_json,
+    _parse_package_lock_json,
+    _parse_pipfile_lock,
+    _parse_pnpm_lock_yaml,
+    _parse_poetry_lock,
     _parse_requirements_txt,
+    _parse_uv_lock,
+    _parse_yarn_lock,
     _run_cve_check,
 )
 from ai_pr_review.manifest import ChangedFiles
@@ -318,6 +327,346 @@ class TestRunCveCheck:
         cf = _make_cf([str(tmp_path / "nonexistent.go.mod")])
         result = _run_cve_check(cf, Path("/dev/null"))
         assert result == []
+
+
+class TestParsePackageLockJson:
+    def test_v2_parses_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("package-lock.json.sample")
+        result = _parse_package_lock_json(content, str(tmp_path / "package-lock.json"))
+        names = [p.name for p in result]
+        assert "lodash" in names
+        assert "express" in names
+
+    def test_v2_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("package-lock.json.sample")
+        result = _parse_package_lock_json(content, str(tmp_path / "package-lock.json"))
+        lodash = next(p for p in result if p.name == "lodash")
+        assert lodash.version == "4.17.20"
+
+    def test_v2_dev_dependency_tag(self, tmp_path: Path) -> None:
+        content = _load_fixture("package-lock.json.sample")
+        result = _parse_package_lock_json(content, str(tmp_path / "package-lock.json"))
+        jest = next(p for p in result if p.name == "jest")
+        assert jest.tag == "dev"
+
+    def test_v2_ecosystem_is_npm(self, tmp_path: Path) -> None:
+        content = _load_fixture("package-lock.json.sample")
+        result = _parse_package_lock_json(content, str(tmp_path / "package-lock.json"))
+        assert all(p.ecosystem == "npm" for p in result)
+
+    def test_malformed_json_returns_empty(self, tmp_path: Path) -> None:
+        result = _parse_package_lock_json("not json", str(tmp_path / "package-lock.json"))
+        assert result == []
+
+    def test_skips_root_entry(self, tmp_path: Path) -> None:
+        content = _load_fixture("package-lock.json.sample")
+        result = _parse_package_lock_json(content, str(tmp_path / "package-lock.json"))
+        # Root entry ("") should not appear
+        assert all(p.name for p in result)
+
+
+class TestParseYarnLock:
+    def test_parses_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("yarn.lock.sample")
+        result = _parse_yarn_lock(content, str(tmp_path / "yarn.lock"))
+        names = [p.name for p in result]
+        assert "lodash" in names
+        assert "express" in names
+
+    def test_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("yarn.lock.sample")
+        result = _parse_yarn_lock(content, str(tmp_path / "yarn.lock"))
+        lodash = next(p for p in result if p.name == "lodash")
+        assert lodash.version == "4.17.20"
+
+    def test_ecosystem_is_npm(self, tmp_path: Path) -> None:
+        content = _load_fixture("yarn.lock.sample")
+        result = _parse_yarn_lock(content, str(tmp_path / "yarn.lock"))
+        assert all(p.ecosystem == "npm" for p in result)
+
+    def test_deduplicates_packages(self, tmp_path: Path) -> None:
+        content = "lodash@^4.17.0, lodash@^4.17.1:\n  version \"4.17.20\"\n\n"
+        result = _parse_yarn_lock(content, str(tmp_path / "yarn.lock"))
+        lodash_entries = [p for p in result if p.name == "lodash"]
+        assert len(lodash_entries) == 1
+
+    def test_scoped_package(self, tmp_path: Path) -> None:
+        content = "@babel/core@^7.0.0:\n  version \"7.21.0\"\n\n"
+        result = _parse_yarn_lock(content, str(tmp_path / "yarn.lock"))
+        assert any(p.name == "@babel/core" for p in result)
+
+
+class TestParsePnpmLockYaml:
+    def test_parses_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("pnpm-lock.yaml.sample")
+        result = _parse_pnpm_lock_yaml(content, str(tmp_path / "pnpm-lock.yaml"))
+        names = [p.name for p in result]
+        assert "lodash" in names
+        assert "express" in names
+
+    def test_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("pnpm-lock.yaml.sample")
+        result = _parse_pnpm_lock_yaml(content, str(tmp_path / "pnpm-lock.yaml"))
+        lodash = next(p for p in result if p.name == "lodash")
+        assert lodash.version == "4.17.20"
+
+    def test_ecosystem_is_npm(self, tmp_path: Path) -> None:
+        content = _load_fixture("pnpm-lock.yaml.sample")
+        result = _parse_pnpm_lock_yaml(content, str(tmp_path / "pnpm-lock.yaml"))
+        assert all(p.ecosystem == "npm" for p in result)
+
+    def test_scoped_package(self, tmp_path: Path) -> None:
+        content = "packages:\n\n  /@babel/core@7.21.0:\n    resolution: {integrity: sha512-abc}\n"
+        result = _parse_pnpm_lock_yaml(content, str(tmp_path / "pnpm-lock.yaml"))
+        assert any(p.name == "@babel/core" and p.version == "7.21.0" for p in result)
+
+
+class TestParsePoetryLock:
+    def test_parses_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("poetry.lock.sample")
+        result = _parse_poetry_lock(content, str(tmp_path / "poetry.lock"))
+        names = [p.name for p in result]
+        assert "Django" in names
+        assert "requests" in names
+        assert "pytest" in names
+
+    def test_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("poetry.lock.sample")
+        result = _parse_poetry_lock(content, str(tmp_path / "poetry.lock"))
+        django = next(p for p in result if p.name == "Django")
+        assert django.version == "4.0.0"
+
+    def test_ecosystem_is_pypi(self, tmp_path: Path) -> None:
+        content = _load_fixture("poetry.lock.sample")
+        result = _parse_poetry_lock(content, str(tmp_path / "poetry.lock"))
+        assert all(p.ecosystem == "PyPI" for p in result)
+
+
+class TestParsePipfileLock:
+    def test_parses_default_section(self, tmp_path: Path) -> None:
+        content = _load_fixture("Pipfile.lock.sample")
+        result = _parse_pipfile_lock(content, str(tmp_path / "Pipfile.lock"))
+        names = [p.name for p in result]
+        assert "Django" in names
+        assert "requests" in names
+
+    def test_parses_develop_section(self, tmp_path: Path) -> None:
+        content = _load_fixture("Pipfile.lock.sample")
+        result = _parse_pipfile_lock(content, str(tmp_path / "Pipfile.lock"))
+        pytest_pkg = next(p for p in result if p.name == "pytest")
+        assert pytest_pkg.tag == "dev"
+
+    def test_strips_eq_prefix(self, tmp_path: Path) -> None:
+        content = _load_fixture("Pipfile.lock.sample")
+        result = _parse_pipfile_lock(content, str(tmp_path / "Pipfile.lock"))
+        django = next(p for p in result if p.name == "Django")
+        assert django.version == "4.0.0"
+
+    def test_ecosystem_is_pypi(self, tmp_path: Path) -> None:
+        content = _load_fixture("Pipfile.lock.sample")
+        result = _parse_pipfile_lock(content, str(tmp_path / "Pipfile.lock"))
+        assert all(p.ecosystem == "PyPI" for p in result)
+
+    def test_malformed_json_returns_empty(self, tmp_path: Path) -> None:
+        result = _parse_pipfile_lock("not json", str(tmp_path / "Pipfile.lock"))
+        assert result == []
+
+
+class TestParseUvLock:
+    def test_parses_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("uv.lock.sample")
+        result = _parse_uv_lock(content, str(tmp_path / "uv.lock"))
+        names = [p.name for p in result]
+        assert "django" in names
+        assert "requests" in names
+
+    def test_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("uv.lock.sample")
+        result = _parse_uv_lock(content, str(tmp_path / "uv.lock"))
+        django = next(p for p in result if p.name == "django")
+        assert django.version == "4.0.0"
+
+    def test_ecosystem_is_pypi(self, tmp_path: Path) -> None:
+        content = _load_fixture("uv.lock.sample")
+        result = _parse_uv_lock(content, str(tmp_path / "uv.lock"))
+        assert all(p.ecosystem == "PyPI" for p in result)
+
+
+class TestParseComposerLock:
+    def test_parses_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("composer.lock.sample")
+        result = _parse_composer_lock(content, str(tmp_path / "composer.lock"))
+        names = [p.name for p in result]
+        assert "symfony/http-foundation" in names
+        assert "guzzlehttp/guzzle" in names
+
+    def test_parses_dev_packages(self, tmp_path: Path) -> None:
+        content = _load_fixture("composer.lock.sample")
+        result = _parse_composer_lock(content, str(tmp_path / "composer.lock"))
+        names = [p.name for p in result]
+        assert "phpunit/phpunit" in names
+
+    def test_strips_v_prefix(self, tmp_path: Path) -> None:
+        content = _load_fixture("composer.lock.sample")
+        result = _parse_composer_lock(content, str(tmp_path / "composer.lock"))
+        symfony = next(p for p in result if p.name == "symfony/http-foundation")
+        assert symfony.version == "5.4.20"
+
+    def test_ecosystem_is_packagist(self, tmp_path: Path) -> None:
+        content = _load_fixture("composer.lock.sample")
+        result = _parse_composer_lock(content, str(tmp_path / "composer.lock"))
+        assert all(p.ecosystem == "Packagist" for p in result)
+
+    def test_malformed_json_returns_empty(self, tmp_path: Path) -> None:
+        result = _parse_composer_lock("not json", str(tmp_path / "composer.lock"))
+        assert result == []
+
+
+class TestParseCargoLock:
+    def test_parses_external_crates(self, tmp_path: Path) -> None:
+        content = _load_fixture("Cargo.lock.sample")
+        result = _parse_cargo_lock(content, str(tmp_path / "Cargo.lock"))
+        names = [p.name for p in result]
+        assert "serde" in names
+        assert "tokio" in names
+
+    def test_skips_workspace_members(self, tmp_path: Path) -> None:
+        content = _load_fixture("Cargo.lock.sample")
+        result = _parse_cargo_lock(content, str(tmp_path / "Cargo.lock"))
+        names = [p.name for p in result]
+        assert "myapp" not in names
+
+    def test_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("Cargo.lock.sample")
+        result = _parse_cargo_lock(content, str(tmp_path / "Cargo.lock"))
+        serde = next(p for p in result if p.name == "serde")
+        assert serde.version == "1.0.152"
+
+    def test_ecosystem_is_crates_io(self, tmp_path: Path) -> None:
+        content = _load_fixture("Cargo.lock.sample")
+        result = _parse_cargo_lock(content, str(tmp_path / "Cargo.lock"))
+        assert all(p.ecosystem == "crates.io" for p in result)
+
+
+class TestParseGemfileLock:
+    def test_parses_gem_specs(self, tmp_path: Path) -> None:
+        content = _load_fixture("Gemfile.lock.sample")
+        result = _parse_gemfile_lock(content, str(tmp_path / "Gemfile.lock"))
+        names = [p.name for p in result]
+        assert "rails" in names
+        assert "devise" in names
+
+    def test_exact_version(self, tmp_path: Path) -> None:
+        content = _load_fixture("Gemfile.lock.sample")
+        result = _parse_gemfile_lock(content, str(tmp_path / "Gemfile.lock"))
+        rails = next(p for p in result if p.name == "rails")
+        assert rails.version == "7.0.4"
+
+    def test_ecosystem_is_rubygems(self, tmp_path: Path) -> None:
+        content = _load_fixture("Gemfile.lock.sample")
+        result = _parse_gemfile_lock(content, str(tmp_path / "Gemfile.lock"))
+        assert all(p.ecosystem == "RubyGems" for p in result)
+
+    def test_deduplicates_gems(self, tmp_path: Path) -> None:
+        # Gems listed in multiple sections should not appear twice
+        content = _load_fixture("Gemfile.lock.sample")
+        result = _parse_gemfile_lock(content, str(tmp_path / "Gemfile.lock"))
+        names = [p.name for p in result]
+        assert names.count("rails") == 1
+
+    def test_strips_platform_suffix(self, tmp_path: Path) -> None:
+        content = "GEM\n  specs:\n    ffi (1.15.5-x86_64-linux)\n"
+        result = _parse_gemfile_lock(content, str(tmp_path / "Gemfile.lock"))
+        ffi = next((p for p in result if p.name == "ffi"), None)
+        assert ffi is not None
+        assert ffi.version == "1.15.5"
+
+
+class TestLockfilePreference:
+    """Lockfiles are preferred over range manifests when both are changed."""
+
+    def test_package_lock_supersedes_package_json(self, tmp_path: Path) -> None:
+        lock = tmp_path / "package-lock.json"
+        lock.write_text(_load_fixture("package-lock.json.sample"))
+        manifest = tmp_path / "package.json"
+        manifest.write_text(_load_fixture("package.json.sample"))
+
+        cf = _make_cf([str(lock), str(manifest)])
+        with patch(
+            "ai_pr_review.analyzers.native.cve_check._query_osv_batch", return_value=[]
+        ) as mock_query:
+            _run_cve_check(cf, Path("/dev/null"))
+
+        # All queried packages must come from the lockfile (exact versions)
+        if mock_query.call_args:
+            pkgs = mock_query.call_args[0][0]
+            # package-lock has exact 4.17.20; package.json has range ^4.17.20
+            lodash_pkgs = [p for p in pkgs if p.name == "lodash"]
+            assert all(p.version == "4.17.20" for p in lodash_pkgs)
+
+    def test_yarn_lock_supersedes_package_json(self, tmp_path: Path) -> None:
+        lock = tmp_path / "yarn.lock"
+        lock.write_text(_load_fixture("yarn.lock.sample"))
+        manifest = tmp_path / "package.json"
+        manifest.write_text(_load_fixture("package.json.sample"))
+
+        cf = _make_cf([str(lock), str(manifest)])
+        with patch(
+            "ai_pr_review.analyzers.native.cve_check._query_osv_batch", return_value=[]
+        ) as mock_query:
+            _run_cve_check(cf, Path("/dev/null"))
+
+        if mock_query.call_args:
+            pkgs = mock_query.call_args[0][0]
+            sources = {p.file for p in pkgs if p.name == "lodash"}
+            assert all("yarn.lock" in s for s in sources)
+
+    def test_poetry_lock_supersedes_requirements_txt(self, tmp_path: Path) -> None:
+        lock = tmp_path / "poetry.lock"
+        lock.write_text(_load_fixture("poetry.lock.sample"))
+        req = tmp_path / "requirements.txt"
+        req.write_text(_load_fixture("requirements.txt.sample"))
+
+        cf = _make_cf([str(lock), str(req)])
+        with patch(
+            "ai_pr_review.analyzers.native.cve_check._query_osv_batch", return_value=[]
+        ) as mock_query:
+            _run_cve_check(cf, Path("/dev/null"))
+
+        if mock_query.call_args:
+            pkgs = mock_query.call_args[0][0]
+            sources = {p.file for p in pkgs if p.ecosystem == "PyPI"}
+            assert all("poetry.lock" in s for s in sources)
+
+    def test_composer_lock_supersedes_composer_json(self, tmp_path: Path) -> None:
+        lock = tmp_path / "composer.lock"
+        lock.write_text(_load_fixture("composer.lock.sample"))
+        manifest = tmp_path / "composer.json"
+        manifest.write_text(_load_fixture("composer.json.sample"))
+
+        cf = _make_cf([str(lock), str(manifest)])
+        with patch(
+            "ai_pr_review.analyzers.native.cve_check._query_osv_batch", return_value=[]
+        ) as mock_query:
+            _run_cve_check(cf, Path("/dev/null"))
+
+        if mock_query.call_args:
+            pkgs = mock_query.call_args[0][0]
+            sources = {p.file for p in pkgs if p.ecosystem == "Packagist"}
+            assert all("composer.lock" in s for s in sources)
+
+    def test_lockfile_only_no_range_manifest(self, tmp_path: Path) -> None:
+        lock = tmp_path / "Cargo.lock"
+        lock.write_text(_load_fixture("Cargo.lock.sample"))
+        cf = _make_cf([str(lock)])
+        with patch(
+            "ai_pr_review.analyzers.native.cve_check._query_osv_batch", return_value=[]
+        ) as mock_query:
+            _run_cve_check(cf, Path("/dev/null"))
+
+        if mock_query.call_args:
+            pkgs = mock_query.call_args[0][0]
+            assert all(p.ecosystem == "crates.io" for p in pkgs)
 
 
 class TestBridgeIntegration:

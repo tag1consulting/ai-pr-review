@@ -1,0 +1,39 @@
+{
+    "_readme": [
+        "This file is @generated automatically"
+    ],
+    "content-hash": "abc123",
+    "packages": [
+        {
+            "name": "symfony/http-foundation",
+            "version": "v5.4.20",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/http-foundation.git",
+                "reference": "abc123"
+            }
+        },
+        {
+            "name": "guzzlehttp/guzzle",
+            "version": "7.5.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/guzzle/guzzle.git",
+                "reference": "def456"
+            }
+        }
+    ],
+    "packages-dev": [
+        {
+            "name": "phpunit/phpunit",
+            "version": "9.5.27",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/phpunit.git",
+                "reference": "ghi789"
+            }
+        }
+    ],
+    "aliases": [],
+    "minimum-stability": "stable"
+}

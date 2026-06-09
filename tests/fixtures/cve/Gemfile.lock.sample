@@ -1,0 +1,19 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rails (7.0.4)
+      actionmailer (= 7.0.4)
+      railties (= 7.0.4)
+    devise (4.8.1)
+    rspec-rails (6.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  devise (~> 4.8)
+  rails (~> 7.0)
+  rspec-rails (~> 6.0)
+
+BUNDLED WITH
+   2.3.26
