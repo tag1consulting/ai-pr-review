@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-09
+
+### Performance
+
+- **Pre-compile suppression regexes** (#507): `SuppressionRule.match_file` and `match_pattern` are now compiled once in `_parse_rule()` and stored as `re.Pattern` fields. The per-finding/per-rule `re.compile()` calls in `_rule_matches()` are eliminated; a fallback compile path is retained for rules constructed directly (e.g. in tests).
+
+- **Load shared prompt fragments once per run** (#507): `_governance.md`, `_knowledge-cutoff.md`, `_trailer-findings.md`, and `suggestion-addendum.md` are loaded once in `build_review_runtime()` via the new `load_shared_prompt_fragments()` helper, stored in a `_SharedPromptFragments` dataclass, and threaded through `DispatchContext`. `effective_prompt()` uses the pre-loaded bytes; disk reads only occur as a fallback when the context is constructed without them (e.g. in tests).
+
+- **Single-pass unified diff parse** (#507): `parse_diff_sets()` in `diff/linemap.py` returns both the added-line set and the new-file set in a single pass over the diff text. `github.py` and `gitlab.py` now call it once instead of calling `parse_added_lines()` and `parse_new_file_lines()` separately.
+
+- **Hoist manifest IaC regexes to module level** (#507): The IaC heuristic regex (`k8s|kubernetes|helm|...`) and the `Dockerfile.` variant pattern previously compiled inside the per-file loop in `manifest.py` are now module-level constants alongside `_CONFIG_PATTERN` and `_DOC_PATTERN`.
+
+- **Hoist tree-sitter parse to once per tier** (#506, closes #499): `_compute_context_enrichment_block()` now runs once per tier in `run_tier()` and the result is threaded to each agent, eliminating per-agent re-parsing of the diff for symbol extraction.
+
+- **Gate language profile on `context_enrichment_eligible`** (#509, closes #501 item 9): `language_profile_text` is no longer injected into the `system_prefix` of agents with `context_enrichment_eligible=False` (e.g. `blind-hunter`). `blind-hunter`'s prompt instructs the model to ignore all project context; the profile was sending tokens the model was told to discard. `feedback_addendum` continues to reach all agents.
+
+### Fixed
+
+- **Skip comments now upsert instead of always posting new** (#511, closes #501 item 5): `post_skip_comment()` in all three VCS providers (GitHub, GitLab, Bitbucket) now mirrors the `post_summary()` upsert pattern: list existing skip comments by the new `SKIP_MARKER`, PATCH/PUT the first, delete duplicates, and only POST when none exist. A new `SKIP_MARKER` constant (`<!-- ai-pr-review-skip -->`) in `marker.py` serves as the upsert anchor, distinct from `INLINE_MARKER` and `SUMMARY_MARKER_PREFIX`.
+
+- **Drop self-refuting findings** (#505, closes #504): The code-reviewer agent was occasionally emitting findings it then immediately refuted in the same response. These are now detected and dropped before posting.
+
+- **SHA watermark advance deferred until post_findings succeeds** (#496, closes #493): The incremental-review watermark is no longer advanced when posting findings fails, preventing a stale SHA from skipping re-review of unposted findings on the next run.
+
+- **Argument injection via attacker-controlled filenames** (#492): Filenames from the diff are now passed to subprocess calls via safe argument arrays rather than shell interpolation.
+
+- **TruffleHog allowlist hardening** (#492): Allowlist entries are validated and shell-escaped.
+
+- **HTML defanging in display output** (#492): `<`, `>`, and `&` in finding text displayed in GitHub reviews are now defanged to prevent XSS in GitHub's markdown renderer.
+
+- **Local catch-all suppressions rejected** (#495, closes #491): `.ai-pr-review-suppressions.yml` entries that match all files (`match_file: "."` or equivalent) are now rejected with an error; only the global suppression file may carry catch-all rules.
+
+### Changed
+
+- **Provider API key export scoped to matching provider** (#510, closes #501 item 11): `action.yml` now validates `inputs.provider` against the known set (`anthropic`, `openai`, `openai-compatible`, `google`, `bedrock-proxy`) in a dedicated bash step and exports only the matching `*_API_KEY` environment variable. Unknown provider values produce a clear error at workflow time. Previously all four provider key vars were unconditionally set.
+
+- **Shared system prefix for run-shared content** (#503): `feedback_addendum` and `language_profile_text` are placed in `LLMRequest.system_prefix` rather than appended to `system_prompt`, enabling Anthropic and Bedrock multi-breakpoint prompt caching to treat them as run-shared and cache them once across all agents in a run.
+
+- **Lockfile scanning and CVE check improvements** (#490): `cve-check` now parses `poetry.lock` and `uv.lock` with a shared helper; prefers exact package versions over range manifests for more accurate OSV lookups.
+
+### Documentation / consistency
+
+- **`context-enrichment` default split documented** (#508, closes #501 item 6): Both `action.yml` (default `false`) and `container-action/action.yml` (default `true`) now carry explanatory comments documenting why the defaults differ and that the Python engine no-ops gracefully when tree-sitter or ripgrep is absent.
+
+- **`eslint` logs a warning when no config found** (#508, closes #501 item 7): `_run_eslint()` now logs `WARNING: no eslint config found; skipping` instead of silently returning `[]`, matching the behavior of all other native analyzers.
+
+- **`cve_check` timeout constant documented** (#508, closes #501 item 8): A comment above `_HTTP_TIMEOUT = 10.0` in `cve_check.py` explains why the name intentionally differs from the `_TIMEOUT_SECS = 120` convention used by subprocess-bound sibling analyzers.
+
+- **Python engine module map added to CLAUDE.md** (#502): Internal architecture documentation for contributors.
+
 ## [1.4.0] - 2026-06-09
 
 ### Changed
