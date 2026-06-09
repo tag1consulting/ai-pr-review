@@ -58,6 +58,12 @@ ARG PHPCS_VERSION=4.0.1
 ARG DRUPAL_CODER_VERSION=9.0.0
 ARG PHPSTAN_VERSION=2.1.51
 ARG PHPSTAN_DRUPAL_VERSION=2.0.15
+# composer.phar is single-file (PHP, arch-independent). Pin to an exact version
+# and verify its SHA-256 against Composer's published checksum.
+# To update: pick a version from https://getcomposer.org/download/, then
+#   curl -fsSL https://getcomposer.org/download/<version>/composer.phar.sha256sum
+ARG COMPOSER_VERSION=2.10.1
+ARG COMPOSER_SHA256=345b9c6a98da5c30dcbd4b0d99fc8710bf0ae98a3898eea18f7b2ad9dec93f06
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -118,7 +124,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # stage. The resulting /opt/composer vendor tree is COPYied to the final stage
 # and the phpcs/phpstan symlinks are recreated there.
 RUN curl -fsSL -o /usr/local/bin/composer \
-      "https://getcomposer.org/download/latest-stable/composer.phar" && \
+      "https://getcomposer.org/download/${COMPOSER_VERSION}/composer.phar" && \
+    echo "${COMPOSER_SHA256}  /usr/local/bin/composer" | sha256sum -c - && \
     chmod +x /usr/local/bin/composer && \
     COMPOSER_HOME=/opt/composer COMPOSER_ALLOW_SUPERUSER=1 \
       composer global config allow-plugins.dealerdirect/phpcodesniffer-composer-installer true && \

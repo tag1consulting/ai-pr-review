@@ -164,11 +164,23 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
             continue
 
         file_path = _extract_file(item)
-        if file_path in allowlist:
-            continue
-
         detector_name = str(item.get("DetectorName") or "")
         verified = bool(item.get("Verified"))
+
+        if file_path in allowlist:
+            # The allowlist is sourced from .trufflehog.yml in the checked-out
+            # tree, which on a contributor PR is attacker-controlled. Honor it
+            # for unverified findings (legitimate mock/fixture suppression), but
+            # never let it hide a VERIFIED secret — a live, validated credential
+            # must always surface regardless of any PR-supplied suppression.
+            if not verified:
+                continue
+            logger.warning(
+                "[ai-pr-review] WARNING: .trufflehog.yml allowlists %s but the "
+                "secret there is VERIFIED (live); reporting it anyway.",
+                file_path,
+            )
+
         severity, confidence = _classify(item, file_path)
         line_no = _extract_line(item)
         verified_label = "verified" if verified else "unverified"

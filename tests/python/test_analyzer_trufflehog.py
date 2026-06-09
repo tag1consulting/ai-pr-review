@@ -204,6 +204,32 @@ class TestRunTrufflehogFindings:
             findings = _run_trufflehog(cf, Path("/dev/null"))
         assert findings == []
 
+    def test_allowlisted_path_cannot_suppress_verified_secret(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A PR-supplied .trufflehog.yml allowlist must not be able to hide a
+        # VERIFIED (live) secret, even when its path is allowlisted.
+        f = tmp_path / "config.py"
+        f.write_text("secret = 'abc'\n")
+        cf = _make_cf([str(f)])
+        allowlist = {"ai_pr_review/config.py"}
+        ndjson = (
+            '{"DetectorName":"AWS","Verified":true,"Raw":"x",'
+            '"SourceMetadata":{"Data":{"Filesystem":'
+            '{"file":"ai_pr_review/config.py","line":1}}}}\n'
+        )
+        with (
+            patch("ai_pr_review.analyzers.native.trufflehog.shutil.which", return_value="/usr/bin/trufflehog"),
+            patch("ai_pr_review.analyzers.native.trufflehog.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.trufflehog._load_allowlist", return_value=allowlist),
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=ndjson, stderr="")
+            findings = _run_trufflehog(cf, Path("/dev/null"))
+        assert len(findings) == 1
+        assert findings[0].severity == "Critical"
+        assert "VERIFIED" in caplog.text
+
     def test_non_allowlisted_path_not_suppressed(self, tmp_path: Path) -> None:
         fixture = _load_fixture("trufflehog-unverified.json")
         f = tmp_path / "deploy.sh"
