@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-06-02T16:24:00-07:00
+# last_updated: 2026-06-08T17:07:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-18T11:48:00-07:00
-last_updated: 2026-06-02T09:00:00-07:00
+last_updated: 2026-06-09T02:00:00-07:00
 project: ai-pr-review
 project_key: NOKEY
 tracking_system: file-system
@@ -133,3 +133,25 @@ development_status:
   5-7-docs-final-cleanup: backlog
   5-8-final-release: backlog
   epic-5-retrospective: optional
+
+  # ── Epic 8 — Port Analyzer Wrappers to Native Python ────────────────────────
+  # Parent issue #461 OPEN. Milestone: Epic 8 (milestone/9)
+  # Batch 1 (LOW): shellcheck, ruff, hadolint — establish native-analyzer pattern
+  # Batch 2 (LOW-MED): kube-linter, phpcs
+  # Batch 3 (MED): semgrep, golangci-lint, checkov, phpstan, eslint, tflint
+  # Batch 4 (HIGH): trufflehog, cve-check
+  epic-8: done
+  8-1-port-shellcheck: done
+  8-2-port-ruff: done
+  8-3-port-hadolint: done
+  8-4-port-kube-linter: done
+  8-5-port-phpcs: done
+  8-6-port-semgrep: done
+  8-7-port-golangci-lint: done
+  8-8-port-checkov: done
+  8-9-port-phpstan: done
+  8-10-port-eslint: done
+  8-11-port-tflint: done
+  8-12-port-trufflehog: done
+  8-13-port-cve-check: done
+  epic-8-retrospective: optional
