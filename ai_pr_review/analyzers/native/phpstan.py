@@ -83,6 +83,10 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         return []
 
     if not result.stdout.strip():
+        logger.warning(
+            "[ai-pr-review] WARNING: phpstan produced no output. stderr: %s",
+            result.stderr[:200],
+        )
         return []
 
     try:
