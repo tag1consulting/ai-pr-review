@@ -14,8 +14,8 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
     <p>Up to 8 specialized AI agents analyze your code from different perspectives — architecture, security, edge cases, and more.</p>
   </div>
   <div class="feature">
-    <h3><span class="feature-icon">&#9670;</span> 12+ Static Analyzers</h3>
-    <p>Shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, and tflint — all pre-installed in the container image.</p>
+    <h3><span class="feature-icon">&#9670;</span> 13 Static Analyzers</h3>
+    <p>Shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, and tflint ship as binaries in the container image; cve-check runs as pure Python (OSV.dev HTTP queries, no external binary). All 13 run as native Python.</p>
   </div>
   <div class="feature">
     <h3><span class="feature-icon">&#9670;</span> Works Everywhere</h3>
@@ -27,9 +27,11 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
-## What's new in v1.3.0
+## What's new in v1.4.0
 
-**Concurrent static analyzers** — native analyzer wrappers now run simultaneously (default 4 at a time) via the new `analyzer-concurrency` input, reducing wall-clock time on repos where several analyzers are eligible. **SARIF-equivalent skip** — when `AI_SARIF_PATHS` includes a SARIF file named `ruff.sarif`, `semgrep.sarif`, or `hadolint.sarif`, the corresponding native wrapper is suppressed automatically. **Temperature wired through** — the `temperature` input (and `AI_TEMPERATURE` env var) is now forwarded to every LLM call in the Python engine; previously it was validated but ignored. **`max-tokens-per-agent` default lowered to 16384** (from 32768) and clamped at config load time. **Breaking: `ignore-merge-commits` now defaults to `true`** — only the PR author's own commits are reviewed by default; set `ignore-merge-commits: false` to restore the previous behavior. See [Features → v1.3.0](features#whats-new-in-v130) for the full list.
+**All 13 static analyzers ported to native Python (Epic 8).** Every analyzer that previously ran as a bash subprocess — shellcheck, ruff, hadolint, kube-linter, phpcs, semgrep, golangci-lint, checkov, phpstan, eslint, tflint, trufflehog, and cve-check — is now a native Python function. The Python engine no longer shells out to bash for any static analysis. Findings schema, severity mappings, and source tags are parity-identical to the bash wrappers. Each analyzer has a corresponding pytest module. See [Features → v1.4.0](features#whats-new-in-v140) for details.
+
+**Still on v1.3.0?** Note the breaking change: `ignore-merge-commits` now defaults to `true` — only the PR author's own commits are reviewed. Set `ignore-merge-commits: false` to restore the previous behavior. See [Features → v1.3.0](features#whats-new-in-v130).
 
 ## What it does
 

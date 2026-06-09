@@ -7,6 +7,16 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v1.4.0
+
+**All 13 static analyzers ported to native Python (Epic 8, PRs #475–#488, closes #462–#474).** Every analyzer that previously ran as a bash subprocess via `analyzers/run-<tool>.sh` is now a native Python function in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable; the bash wrappers still exist for the deprecated bash engine but are no longer invoked by the default Python engine.
+
+Analyzers ported: shellcheck, ruff, hadolint, kube-linter, phpcs, semgrep, golangci-lint, checkov, phpstan, eslint, tflint, trufflehog, cve-check.
+
+Each tool binary is still invoked via `subprocess.run`, but output is now parsed directly in Python rather than through awk/jq/sed pipelines. Eligibility gating (changed-files filtering, content-sniff checks) runs in Python. Findings schema, severity mappings, confidence values, and source tags are parity-identical to the bash wrappers. Each native analyzer has a corresponding `tests/python/test_analyzer_<tool>.py` pytest module.
+
+No action input changes are required. The `analyzers/run-<tool>.sh` wrappers are unchanged and continue to work for the deprecated bash engine.
+
 ## What's new in v1.3.0
 
 **Concurrent native analyzer wrappers (PR #454, closes #354).** Native static-analyzer subprocesses (`shellcheck`, `trufflehog`, `semgrep`, `ruff`, and others) previously ran sequentially. They now run concurrently via `anyio.to_thread.run_sync` under a shared `CapacityLimiter`. Use the new `analyzer-concurrency` action input (or `AI_ANALYZER_CONCURRENCY` env var) to control the cap (default 4). Setting `parallel: false` forces the cap to 1 (restoring sequential behavior). Results are always returned in the original analyzer-list order for deterministic output. Python engine only. See [Configuration → analyzer-concurrency](configuration#static-analyzer-options).

@@ -34,103 +34,76 @@ mypy ai_pr_review/
 
 ## Adding a static analyzer
 
-Static analyzers are the easiest contribution — self-contained scripts with a consistent pattern.
+Static analyzers live in `ai_pr_review/analyzers/native/` (Python engine, default) and `analyzers/run-<tool>.sh` (deprecated bash engine). The Python path is the canonical one; the bash wrapper is only needed to keep the deprecated engine working.
 
-### 1. Create the wrapper script
+### 1. Create the native Python analyzer
 
-Create `analyzers/run-<tool>.sh`. Every analyzer follows the same contract:
+Create `ai_pr_review/analyzers/native/yourtool.py`. Follow the pattern of an existing simple analyzer (e.g. `hadolint.py` or `ruff.py`):
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+```python
+from __future__ import annotations
+import subprocess
+from pathlib import Path
+from ai_pr_review.models import Finding
 
-CHANGED_FILES="$1"
-# Filter to files your tool cares about
-MATCHING_FILES=$(echo "$CHANGED_FILES" | grep -E '\.(ext1|ext2)$' || true)
-if [[ -z "$MATCHING_FILES" ]]; then
-  echo "[]"
-  exit 0
-fi
-
-# Support mock file for testing
-if [[ -n "${YOURTOOL_MOCK_FILE:-}" ]]; then
-  cat "$YOURTOOL_MOCK_FILE"
-  exit 0
-fi
-
-# Check if binary is installed
-if ! command -v yourtool &>/dev/null; then
-  echo "WARNING: yourtool not found, skipping" >&2
-  echo "[]"
-  exit 0
-fi
-
-# Run the tool and transform output to findings JSON
-yourtool --json $MATCHING_FILES | jq '[.[] | {
-  severity: (if .level == "error" then "High" elif .level == "warning" then "Medium" else "Low" end),
-  confidence: 90,
-  file: .file,
-  line: .line,
-  finding: .message,
-  source: "yourtool"
-}]'
+def run(changed_files: list[str], workspace: str) -> list[Finding]:
+    matching = [f for f in changed_files if f.endswith((".ext1", ".ext2"))]
+    if not matching:
+        return []
+    result = subprocess.run(
+        ["yourtool", "--json"] + matching,
+        capture_output=True, text=True, cwd=workspace,
+    )
+    findings = []
+    for item in _parse(result.stdout):
+        findings.append(Finding(
+            severity=_severity(item),
+            confidence=90,
+            file=item["file"],
+            line=item.get("line"),
+            finding=item["message"],
+            source="yourtool",
+        ))
+    return findings
 ```
 
 Key rules:
-- Accept `$CHANGED_FILES` (newline-separated) as the first argument
+- Accept `changed_files: list[str]` and `workspace: str`; return `list[Finding]`
 - Filter to relevant file extensions early
-- Output a JSON array on stdout matching the findings schema
-- Support a `<TOOL>_MOCK_FILE` env var for testing
-- Return `[]` if the binary is missing (emit WARNING to stderr)
+- Return `[]` and log a warning if the binary is missing (`shutil.which`)
 - Hard-code the `source` field to your tool name
+- Match the severity mapping documented in `docs/analyzers-bash-inventory.md`
 
-### 2. Add test fixtures
+### 2. Register in the bridge
 
-Create `tests/fixtures/yourtool/` with sample tool output files. Create `tests/run_yourtool.bats`:
+In `ai_pr_review/analyzers/bridge.py`, import your function and add it to the `_ANALYZERS` table:
 
-```bash
-#!/usr/bin/env bats
-
-setup() {
-  export YOURTOOL_MOCK_FILE="$BATS_TEST_DIRNAME/fixtures/yourtool/sample-output.json"
-}
-
-@test "yourtool: produces findings from sample output" {
-  run bash analyzers/run-yourtool.sh "src/example.ext1"
-  [[ "$status" -eq 0 ]]
-  echo "$output" | jq -e 'length > 0'
-}
-
-@test "yourtool: returns empty array for no matching files" {
-  run bash analyzers/run-yourtool.sh "README.md"
-  [[ "$status" -eq 0 ]]
-  [[ "$output" == "[]" ]]
-}
-
-@test "yourtool: returns empty array when binary missing" {
-  unset YOURTOOL_MOCK_FILE
-  PATH="/nonexistent" run bash analyzers/run-yourtool.sh "src/example.ext1"
-  [[ "$status" -eq 0 ]]
-  [[ "$output" == "[]" ]]
+```python
+from ai_pr_review.analyzers.native import yourtool as _yourtool
+# ...
+_ANALYZERS = {
+    # ... existing entries ...
+    "yourtool": _yourtool.run,
 }
 ```
 
-### 3. Wire it into review.sh
+### 3. Add Python tests
 
-In `review.sh`, add the analyzer call alongside the existing ones. It runs concurrently with other analyzers in the parallel path:
+Create `tests/python/test_analyzer_yourtool.py` with fixture-based tests. See `tests/python/test_analyzer_shellcheck.py` for the pattern.
 
-```bash
-# In the parallel block (search for "run-shellcheck.sh" to find the right spot):
-run_analyzer "analyzers/run-yourtool.sh" "$CHANGED_FILES" "$YOURTOOL_OUTPUT" &
+### 4. Create the bash wrapper (bash engine parity — optional for new analyzers)
 
-# In the sequential fallback block:
-run_analyzer "analyzers/run-yourtool.sh" "$CHANGED_FILES" "$YOURTOOL_OUTPUT"
-```
+The bash engine is deprecated and will be removed in a future major release (targeted for v2.0). New analyzers added after v1.4.0 may omit the bash wrapper entirely; existing wrappers are frozen. If you are backporting an analyzer to the bash engine for compatibility reasons, create `analyzers/run-<tool>.sh` following the existing wrapper pattern — it must produce the same findings schema and source tag as the Python analyzer.
 
-### 4. Update documentation
+### 5. Wire it into review.sh (bash engine — optional, same caveat as step 4)
+
+In `review.sh`, add the analyzer call to both the parallel and sequential blocks alongside the existing ones. Skip this step if omitting the bash wrapper.
+
+### 6. Update documentation
 
 - Add a row to the analyzer table in `CLAUDE.md` (mock env var table)
 - Add a row to the analyzer table in `README.md` and `docs/static-analyzers.md`
+- Add a row to `docs/analyzers-bash-inventory.md`
 - If bundled in the container, add the install step to `Dockerfile`
 
 ## Adding an agent

@@ -32,7 +32,7 @@ ai-pr-review/
 │   ├── llm/                # Multi-provider LLM clients (Anthropic, OpenAI, Google, Bedrock)
 │   ├── vcs/                # VCS provider clients (GitHub, GitLab, Bitbucket)
 │   ├── findings/           # Findings pipeline: merge, suppress, deduplicate
-│   ├── analyzers/          # Native static analyzer wrappers (Python bridge)
+│   ├── analyzers/          # Native static analyzer wrappers (13 Python implementations + bridge dispatcher)
 │   ├── context/            # Context enrichment (tree-sitter symbol injection; opt-in)
 │   ├── feedback/           # Learning loop: feedback store, injection (opt-in)
 │   └── slash/              # Slash command handling (/ai-pr-review false-positive, etc.)
@@ -41,7 +41,7 @@ ai-pr-review/
 ├── post-review.sh          # GitHub API posting — used by deprecated bash engine only
 ├── post-review-bitbucket.sh # Bitbucket posting — used by deprecated bash engine only
 ├── post-review-gitlab.sh   # GitLab posting — used by deprecated bash engine only
-├── analyzers/              # Static analyzer shell wrappers — 13 tools; see deep reference
+├── analyzers/              # Bash wrappers for the same 13 tools — used only by the deprecated bash engine; canonical implementations live in ai_pr_review/analyzers/native/
 ├── prompts/                # Agent system prompts + shared trailers — see deep reference
 ├── config/                 # Configuration and data files
 │   ├── model-pricing.json  # Per-model token pricing for cost estimation
