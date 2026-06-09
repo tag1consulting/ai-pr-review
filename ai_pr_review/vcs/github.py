@@ -844,15 +844,15 @@ def _build_inline_comment_body(f: Finding, *, finding_id: int | None = None) -> 
         the body-finding render so all findings have a consistent ID token
         regardless of whether they are anchored inline or fall to the body.
     """
-    from ai_pr_review.vcs._body import format_source_tag, severity_icon
+    from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
 
     icon = severity_icon(f.severity)
     tag = format_source_tag(f)
     id_token = f" **[F{finding_id}]**" if finding_id is not None else ""
-    header = f"{icon} **[{f.severity}]**{id_token} {tag} {f.finding}".strip()
+    header = f"{icon} **[{f.severity}]**{id_token} {tag} {sanitize_display_text(f.finding)}".strip()
     parts = [header]
     if f.remediation:
-        parts.append(f"\n**Remediation:** {f.remediation}")
+        parts.append(f"\n**Remediation:** {sanitize_display_text(f.remediation)}")
     if f.suggested_code and "```" not in f.suggested_code:
         parts.append(f"\n```suggestion\n{f.suggested_code}\n```")
     body = "".join(parts)

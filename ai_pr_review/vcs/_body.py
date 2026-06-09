@@ -9,6 +9,7 @@ The review-outcome classification proper lives in
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from typing import Final
 
@@ -30,6 +31,44 @@ _SEVERITY_ICONS: Final[dict[str, str]] = {
 
 def severity_icon(severity: str) -> str:
     return _SEVERITY_ICONS.get(severity.lower(), "🔵")
+
+
+# HTML control sequences that, when smuggled into a finding via prompt
+# injection, would break out of the rendered review structure: <details>/
+# <summary> tags can collapse and hide sibling findings from a human reviewer,
+# and HTML comment markers can comment out following content. The VCS markdown
+# renderers strip dangerous HTML (scripts/handlers), so this is an integrity
+# concern, not XSS — but for a security-review tool, hiding flagged findings is
+# itself a problem. We defang only these structural sequences (leaving benign
+# markdown like code spans, lists, and emphasis intact) by inserting a
+# zero-width space after the opening angle-bracket / first dash.
+_DEFANG_SEQUENCES: Final[tuple[tuple[str, str], ...]] = (
+    ("<details", "<​details"),
+    ("</details", "<​/details"),
+    ("<summary", "<​summary"),
+    ("</summary", "<​/summary"),
+    ("<!--", "<​!--"),
+    ("-->", "--​>"),
+)
+
+
+def sanitize_display_text(text: str) -> str:
+    """Neutralize structure-breaking HTML in LLM-derived display text.
+
+    Applied to ``finding`` and ``remediation`` strings (which can be steered by
+    prompt injection in PR content) before they are interpolated into a posted
+    comment body. Case-insensitive on the tag sequences.
+    """
+    if not text:
+        return text
+    for needle, replacement in _DEFANG_SEQUENCES:
+        if needle.startswith("<") and needle != "<!--":
+            # Case-insensitive replace for HTML tags (e.g. <DETAILS>, <Details>).
+            pattern = re.compile(re.escape(needle), re.IGNORECASE)
+            text = pattern.sub(replacement, text)
+        else:
+            text = text.replace(needle, replacement)
+    return text
 
 
 def format_source_tag(finding: Finding) -> str:
@@ -70,12 +109,12 @@ def format_body_finding(
         header_parts.append(f"**[F{finding_id}]**")
     if source_tag:
         header_parts.append(source_tag)
-    header_parts.append(finding.finding)
+    header_parts.append(sanitize_display_text(finding.finding))
     out = "- " + " ".join(header_parts)
     if location:
         out += f" *(at `{location}`{location_note})*"
     if finding.remediation:
-        out += f"\n  - **Remediation:** {finding.remediation}"
+        out += f"\n  - **Remediation:** {sanitize_display_text(finding.remediation)}"
     if include_suggestion and finding.suggested_code:
         fence_body = finding.suggested_code.replace("```", "``​`")
         out += f"\n  ```\n  {fence_body}\n  ```"

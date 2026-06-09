@@ -59,6 +59,10 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         if Path("vendor/mglaman/phpstan-drupal").is_dir() and Path("vendor/autoload.php").is_file():
             args.append("--autoload-file=vendor/autoload.php")
 
+    # `--` stops option parsing so an attacker-controlled changed-file path
+    # beginning with a dash (e.g. `--autoload-file=evil.php`) is treated as a
+    # path, not a flag. Matches the sibling analyzers (shellcheck, ruff, etc.).
+    args.append("--")
     args += target_files
 
     try:

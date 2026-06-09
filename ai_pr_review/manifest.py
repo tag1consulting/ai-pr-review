@@ -45,6 +45,19 @@ _CONFIG_PATTERN = re.compile(
 _DOC_PATTERN = re.compile(r"\.(md|txt|rst)$")
 
 
+def _is_option_like(path: str) -> bool:
+    """True if any path component begins with '-'.
+
+    Changed-file paths flow verbatim into analyzer argv. A path whose first
+    component (or any component, after a leading './') starts with a dash would
+    be parsed as a CLI flag rather than a filename — an argument-injection
+    vector when an attacker controls the PR diff (e.g. a file named
+    ``--autoload-file=evil.php`` reaching phpstan). Such names cannot be checked
+    out by a normal git client anyway, so dropping them is safe.
+    """
+    return any(part.startswith("-") for part in path.split("/") if part)
+
+
 @dataclass
 class ChangedFiles:
     """Categorized sets of changed file paths."""
@@ -105,9 +118,22 @@ def parse_changed_files_payload(raw: list[object]) -> ChangedFiles:
 
 def build_changed_files(file_list: list[str]) -> ChangedFiles:
     """Categorize a list of changed file paths."""
-    cf = ChangedFiles(all_files=file_list)
+    import logging
 
+    safe_files: list[str] = []
     for f in file_list:
+        if _is_option_like(f):
+            logging.getLogger(__name__).warning(
+                "[ai-pr-review] WARNING: dropping option-like changed-file path "
+                "from analyzer input (argument-injection guard): %r",
+                f,
+            )
+            continue
+        safe_files.append(f)
+
+    cf = ChangedFiles(all_files=safe_files)
+
+    for f in safe_files:
         basename = os.path.basename(f)
         ext = Path(f).suffix.lstrip(".")
         lang = detect_language(ext)

@@ -105,7 +105,7 @@ def _run_eslint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
 
     try:
         result = subprocess.run(
-            [*eslint_cmd, "--format", "json", *extra_flags, *target_files],
+            [*eslint_cmd, "--format", "json", *extra_flags, "--", *target_files],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECS,

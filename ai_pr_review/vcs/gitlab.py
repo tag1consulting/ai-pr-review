@@ -26,6 +26,7 @@ import httpx
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import (
     format_source_tag,
+    sanitize_display_text,
     severity_icon,
     truncate_body,
 )
@@ -523,10 +524,10 @@ class GitLabProvider:
         """Render the markdown body for a GitLab inline discussion."""
         icon = severity_icon(f.severity)
         tag = format_source_tag(f)
-        header = f"{icon} **[{f.severity}]** {tag} {f.finding}".strip()
+        header = f"{icon} **[{f.severity}]** {tag} {sanitize_display_text(f.finding)}".strip()
         parts = [header]
         if f.remediation:
-            parts.append(f"\n**Remediation:** {f.remediation}")
+            parts.append(f"\n**Remediation:** {sanitize_display_text(f.remediation)}")
         if (
             enable_suggestions
             and is_suggestion_safe(f)

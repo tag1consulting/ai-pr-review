@@ -69,6 +69,29 @@ class TestBuildChangedFiles:
         assert "tests/test_foo.py" in cf.tests
         assert "tests/test_foo.py" not in cf.source
 
+    def test_option_like_path_dropped(self) -> None:
+        # Argument-injection guard: a changed-file path whose component begins
+        # with '-' would be parsed as a CLI flag by an analyzer, so it must be
+        # excluded from all categorized lists, including all_files.
+        cf = build_changed_files(["--autoload-file=evil.php", "src/ok.py"])
+        assert "--autoload-file=evil.php" not in cf.all_files
+        assert cf.php == []
+        assert "src/ok.py" in cf.all_files
+        assert "src/ok.py" in cf.python
+
+    def test_option_like_path_nested_component_dropped(self) -> None:
+        # A dash-leading component anywhere in the path is rejected, since the
+        # full path string reaches analyzer argv verbatim.
+        cf = build_changed_files(["src/--plugin=x.js", "./-rf.go"])
+        assert cf.all_files == []
+        assert cf.js_ts == []
+        assert cf.go == []
+
+    def test_leading_dot_slash_path_kept(self) -> None:
+        # A normal relative path with a leading './' is not option-like.
+        cf = build_changed_files(["./src/main.py"])
+        assert "./src/main.py" in cf.all_files
+
     def test_iac_kubernetes_yaml(self) -> None:
         cf = build_changed_files(["k8s/deployment.yaml"])
         assert "k8s/deployment.yaml" in cf.iac
