@@ -1,0 +1,10 @@
+[
+  {
+    "code": "I001",
+    "filename": "app/utils.py",
+    "location": { "row": 1, "column": 1 },
+    "end_location": { "row": 1, "column": 1 },
+    "message": "Import block is un-sorted or un-formatted",
+    "url": null
+  }
+]
