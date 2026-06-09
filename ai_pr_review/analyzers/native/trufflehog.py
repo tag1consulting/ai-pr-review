@@ -38,9 +38,12 @@ def _load_allowlist(workspace: Path) -> set[str]:
     if not config_path.is_file():
         return set()
     try:
-        data = yaml.safe_load(config_path.read_text())
-    except (yaml.YAMLError, OSError) as exc:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace"))
+    except yaml.YAMLError as exc:
         logger.warning("[ai-pr-review] WARNING: failed to parse .trufflehog.yml: %s", exc)
+        return set()
+    except OSError as exc:
+        logger.warning("[ai-pr-review] WARNING: failed to read .trufflehog.yml: %s", exc)
         return set()
     if not isinstance(data, dict):
         return set()
@@ -111,11 +114,12 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
         logger.warning("[ai-pr-review] WARNING: trufflehog not found; skipping.")
         return []
 
-    allowlist = _load_allowlist(Path("."))
+    workspace = diff_file.parent
+    allowlist = _load_allowlist(workspace)
 
     config_args: list[str] = []
-    if Path(".trufflehog.yml").is_file():
-        config_args = ["--config", ".trufflehog.yml"]
+    if (workspace / ".trufflehog.yml").is_file():
+        config_args = ["--config", str(workspace / ".trufflehog.yml")]
 
     cmd = ["trufflehog", "filesystem", "--json", "--no-update"] + config_args + target_files
     try:
@@ -132,13 +136,17 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
         logger.warning("[ai-pr-review] WARNING: trufflehog failed to start: %s", exc)
         return []
 
-    if result.returncode not in (0, 1) and result.returncode != 183:
+    if result.returncode not in (0, 1, 183):
         logger.warning(
             "[ai-pr-review] WARNING: trufflehog exited %d; findings may be incomplete. stderr: %s",
             result.returncode, result.stderr[:200],
         )
 
     if not result.stdout.strip():
+        if result.returncode == 183:
+            logger.info(
+                "[ai-pr-review] INFO: trufflehog exited 183 (findings detected) but stdout was empty."
+            )
         return []
 
     findings: list[Finding] = []
@@ -190,8 +198,9 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
             )
         except (ValueError, TypeError) as exc:
             logger.warning(
-                "[ai-pr-review] WARNING: trufflehog dropped malformed finding: %s; item=%r",
-                exc, repr(item)[:200],
+                "[ai-pr-review] WARNING: trufflehog dropped malformed finding: %s; "
+                "file=%r line=%r severity=%r",
+                exc, file_path, line_no, severity,
             )
 
     return findings
