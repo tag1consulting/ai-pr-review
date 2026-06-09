@@ -221,6 +221,20 @@ class TestRunRuffFindings:
             findings = _run_ruff(cf, Path("/dev/null"))
         assert findings[0].file == "app/views.py"
 
+    def test_non_list_json_returns_empty_with_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        f = tmp_path / "a.py"
+        f.write_text("x = 1\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.ruff.shutil.which", return_value="/usr/bin/ruff"),
+            patch("ai_pr_review.analyzers.native.ruff.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"unexpected": "object"}', stderr="")
+            findings = _run_ruff(cf, Path("/dev/null"))
+        assert findings == []
+        assert "unexpected output structure" in caplog.text
+
     def test_timeout_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp
         f = tmp_path / "a.py"

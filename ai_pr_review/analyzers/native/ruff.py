@@ -64,6 +64,7 @@ def _run_ruff(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         return []
 
     if not isinstance(data, list):
+        logger.warning("[ai-pr-review] WARNING: ruff produced unexpected output structure (not a list); skipping.")
         return []
 
     workspace_prefix = (os.environ.get("GITHUB_WORKSPACE") or os.getcwd()).rstrip("/") + "/"
