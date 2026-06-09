@@ -70,20 +70,20 @@ def _parse_go_mod(content: str, file_path: str) -> list[Package]:
             continue
         is_replace = in_replace or line.startswith("replace ")
         if is_replace and "=>" in line:
-                left, _, right = line.partition("=>")
-                left = left.strip()
-                right = right.strip()
-                left_parts = left.split()
-                old_name = left_parts[-1] if left_parts else ""
-                right_parts = right.split()
-                if right_parts and re.match(r"^[./]", right_parts[0]):
-                    if old_name:
-                        skips.add(old_name)
-                elif len(right_parts) >= 2 and re.match(r"^v", right_parts[1]):
-                    new_name = right_parts[0]
-                    new_ver = right_parts[1].lstrip("v")
-                    if old_name:
-                        replaces[old_name] = (new_name, new_ver)
+            left, _, right = line.partition("=>")
+            left = left.strip()
+            right = right.strip()
+            left_parts = left.split()
+            old_name = left_parts[-1] if left_parts else ""
+            right_parts = right.split()
+            if right_parts and re.match(r"^[./]", right_parts[0]):
+                if old_name:
+                    skips.add(old_name)
+            elif len(right_parts) >= 2 and re.match(r"^v", right_parts[1]):
+                new_name = right_parts[0]
+                new_ver = right_parts[1].lstrip("v")
+                if old_name:
+                    replaces[old_name] = (new_name, new_ver)
 
     packages: list[Package] = []
     in_block = False
@@ -251,9 +251,11 @@ def _query_osv_batch(packages: list[Package]) -> list[dict[str, object]]:
         return []
     if len(results) != len(packages):
         logger.warning(
-            "[ai-pr-review] WARNING: OSV batch returned %d results for %d queries (index mismatch).",
+            "[ai-pr-review] WARNING: OSV batch returned %d results for %d queries "
+            "(index mismatch); truncating to avoid mis-attributed findings.",
             len(results), len(packages),
         )
+        results = results[: len(packages)]
     return [r if isinstance(r, dict) else {} for r in results]
 
 
@@ -485,9 +487,8 @@ def _run_cve_check(changed_files: ChangedFiles, diff_file: Path) -> list[Finding
             continue
 
         for idx, pkg in enumerate(batch):
-            if idx >= len(results):
-                break
-            result = results[idx]
+            result = results[idx] if idx < len(results) else {}
+
             vulns = result.get("vulns") or []
             if not isinstance(vulns, list) or not vulns:
                 continue
