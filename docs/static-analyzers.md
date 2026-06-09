@@ -36,7 +36,7 @@ When a PR modifies a supported dependency manifest, the action queries [OSV.dev]
 | `requirements.txt` | PyPI |
 | `composer.json` | Packagist |
 
-Findings are mapped from CVSS score: >= 9.0 → Critical, 7.0–8.9 → High, 4.0–6.9 → Medium, below 4.0 or unscored → Low. Critical and High findings trigger `REQUEST_CHANGES` on the PR review just like any other high-severity finding.
+Findings are mapped from CVSS score: >= 9.0 → Critical, 7.0–8.9 → High, 4.0–6.9 → Medium, below 4.0 → Low. Unscored or unparseable CVEs map to **High** (fail-safe — the same behavior as the `run-cve-check.sh` `severity_label` function). Critical and High findings trigger `REQUEST_CHANGES` on the PR review just like any other high-severity finding.
 
 No configuration is required — the check runs automatically when a manifest file is in the diff. The OSV.dev API is unauthenticated and free. If the API is unreachable, the check emits a warning and continues — the review is never blocked by CVE-lookup failures.
 
@@ -78,4 +78,10 @@ See `examples/workflows/sarif-codeql.yml` for a complete CodeQL + AI review pipe
 - File URI prefixes (`file:///`, `file://`) are stripped from location paths.
 - Findings from SARIF files are merged into the same dedup/suppress pipeline as findings from native analyzers and LLM agents.
 - Unreadable or malformed SARIF files emit a `WARNING` log and are skipped (fail-soft).
+
+---
+
+## Bash wrapper implementation reference
+
+Each analyzer ships as a `analyzers/run-<tool>.sh` bash wrapper invoked by `ai_pr_review/analyzers/bridge.py`. For full implementation details — binary flags, input handling, output-field mapping, path normalization, mock env var, and Phase 11 port complexity — see [Analyzer Bash Wrapper Inventory](analyzers-bash-inventory).
 
