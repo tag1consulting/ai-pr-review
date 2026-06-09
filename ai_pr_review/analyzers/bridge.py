@@ -34,6 +34,7 @@ from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.semgrep import _run_semgrep
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
 from ai_pr_review.analyzers.native.tflint import _run_tflint
+from ai_pr_review.analyzers.native.trufflehog import _run_trufflehog
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -52,7 +53,7 @@ class AnalyzerSpec(NamedTuple):
 
 _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], _run_shellcheck),
-    AnalyzerSpec("trufflehog", "run-trufflehog.sh", []),
+    AnalyzerSpec("trufflehog", "run-trufflehog.sh", [], _run_trufflehog),
     AnalyzerSpec("semgrep", "run-semgrep.sh", [], _run_semgrep),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
     AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"], _run_golangci_lint),
