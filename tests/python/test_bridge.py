@@ -118,7 +118,7 @@ class TestRunAnalyzers:
         return script
 
     def _bash_only_spec(self, name: str = "mock-tool", script: str = "run-mock.sh",
-                        file_types: list[str] | None = None) -> "AnalyzerSpec":
+                        file_types: list[str] | None = None) -> AnalyzerSpec:
         """Return a bash-only AnalyzerSpec (no native_fn) for testing bash dispatch."""
         return AnalyzerSpec(name, script, file_types or [], None)
 
@@ -211,9 +211,11 @@ class TestRunAnalyzers:
             script.chmod(0o644)
             cf = ChangedFiles(shell=["review.sh"])
             from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                with patch("subprocess.run", side_effect=OSError("permission denied")):
-                    findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            with (
+                patch.object(bridge, "_ANALYZERS", [spec]),
+                patch("subprocess.run", side_effect=OSError("permission denied")),
+            ):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
         assert findings == []
         captured = capsys.readouterr()
         assert "failed to start" in captured.err

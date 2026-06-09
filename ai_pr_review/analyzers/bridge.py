@@ -145,7 +145,7 @@ async def run_analyzers(
                     limiter=limiter,
                 )
             except BaseException as exc:
-                if isinstance(exc, anyio.get_cancelled_exc_class()):
+                if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt, SystemExit)):
                     raise
                 print(
                     f"\n[ai-pr-review] WARNING: {spec.name} native analyzer raised an unexpected error: "
