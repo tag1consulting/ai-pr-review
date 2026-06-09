@@ -21,8 +21,9 @@ source_adr: memory-bank/bmad/adr/0001-learning-store.md
 | 3 | Opt-in Capabilities | 12 | [Epic 3](https://github.com/tag1consulting/ai-pr-review/milestone/4) | [#197](https://github.com/tag1consulting/ai-pr-review/issues/197) |
 | 4 | Soak, Observability, Default Flip | 10 | [Epic 4](https://github.com/tag1consulting/ai-pr-review/milestone/5) | [#198](https://github.com/tag1consulting/ai-pr-review/issues/198) |
 | 5 | Delete Bash | 8 | [Epic 5](https://github.com/tag1consulting/ai-pr-review/milestone/6) | [#199](https://github.com/tag1consulting/ai-pr-review/issues/199) |
+| 8 | Port Analyzer Wrappers to Native Python | 13 | [Epic 8](https://github.com/tag1consulting/ai-pr-review/milestone/9) | [#461](https://github.com/tag1consulting/ai-pr-review/issues/461) |
 
-**59 stories total across 6 epics + 6 epic issues = 65 GitHub issues.** One PR per epic.
+**72 stories total across 7 epics + 7 epic issues = 79 GitHub issues.** One PR per epic.
 
 Story format below: `#NNN — short description — primary PRD requirement`.
 
@@ -126,6 +127,32 @@ Execution-order note: #256 (analyzer wrapper audit) must complete before #251 so
 - #255 — Container slim-down — `5.FR-5`, `5.NFR-1`
 - #257 — Docs final cleanup — `5.FR-7`
 - #258 — Final release
+
+---
+
+---
+
+## Epic 8 — Port Analyzer Wrappers to Native Python
+
+**Parent**: #461 — **Milestone**: [Epic 8](https://github.com/tag1consulting/ai-pr-review/milestone/9) — **Branch**: `rework/epic-8-native-analyzers`
+
+The 13 `analyzers/run-*.sh` wrappers are the only bash code still executing at runtime under the default Python engine. Each port replaces one `subprocess.run(["bash", script_path])` call in `bridge.py` with a native Python function returning `list[Finding]`. Ports sequenced LOW→MED→HIGH complexity. Full parity reference: `docs/analyzers-bash-inventory.md`.
+
+Execution-order note: Batch 1 (LOW) stories establish the native-analyzer pattern before MED and HIGH stories begin.
+
+- #462 — Port run-shellcheck.sh — LOW complexity
+- #463 — Port run-ruff.sh — LOW complexity
+- #464 — Port run-hadolint.sh — LOW complexity
+- #465 — Port run-kube-linter.sh — LOW-MED complexity
+- #466 — Port run-phpcs.sh — LOW-MED complexity
+- #467 — Port run-semgrep.sh — MED complexity
+- #468 — Port run-golangci-lint.sh — MED complexity
+- #469 — Port run-checkov.sh — MED complexity
+- #470 — Port run-phpstan.sh — MED complexity
+- #471 — Port run-eslint.sh — MED complexity
+- #472 — Port run-tflint.sh — MED complexity
+- #473 — Port run-trufflehog.sh — HIGH complexity
+- #474 — Port run-cve-check.sh — HIGH complexity (also resolves #186)
 
 ---
 
