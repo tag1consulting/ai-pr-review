@@ -349,8 +349,13 @@ def _parse_pnpm_lock_yaml(content: str, file_path: str) -> list[Package]:
     return packages
 
 
-def _parse_poetry_lock(content: str, file_path: str) -> list[Package]:
-    """Parse poetry.lock TOML-like format for exact package versions."""
+def _parse_toml_package_lock(content: str, file_path: str, ecosystem: str) -> list[Package]:
+    """Parse a TOML-like lockfile with [[package]] stanzas.
+
+    Shared implementation for poetry.lock and uv.lock — both use the same
+    [[package]] / name = "..." / version = "..." structure and resolve to
+    the same PyPI ecosystem.
+    """
     packages: list[Package] = []
     current_name: str | None = None
     current_version: str | None = None
@@ -360,7 +365,7 @@ def _parse_poetry_lock(content: str, file_path: str) -> list[Package]:
         line = line.strip()
         if line == "[[package]]":
             if current_name and current_version and _DIGIT_START_RE.match(current_version):
-                packages.append(Package("PyPI", current_name, current_version, file_path, ""))
+                packages.append(Package(ecosystem, current_name, current_version, file_path, ""))
             current_name = None
             current_version = None
             in_package = True
@@ -378,9 +383,14 @@ def _parse_poetry_lock(content: str, file_path: str) -> list[Package]:
 
     # Flush last entry
     if current_name and current_version and _DIGIT_START_RE.match(current_version):
-        packages.append(Package("PyPI", current_name, current_version, file_path, ""))
+        packages.append(Package(ecosystem, current_name, current_version, file_path, ""))
 
     return packages
+
+
+def _parse_poetry_lock(content: str, file_path: str) -> list[Package]:
+    """Parse poetry.lock TOML-like format for exact package versions."""
+    return _parse_toml_package_lock(content, file_path, "PyPI")
 
 
 def _parse_pipfile_lock(content: str, file_path: str) -> list[Package]:
@@ -415,35 +425,7 @@ def _parse_pipfile_lock(content: str, file_path: str) -> list[Package]:
 
 def _parse_uv_lock(content: str, file_path: str) -> list[Package]:
     """Parse uv.lock TOML-like format for exact package versions."""
-    packages: list[Package] = []
-    current_name: str | None = None
-    current_version: str | None = None
-    in_package = False
-
-    for line in content.splitlines():
-        line = line.strip()
-        if line == "[[package]]":
-            if current_name and current_version and _DIGIT_START_RE.match(current_version):
-                packages.append(Package("PyPI", current_name, current_version, file_path, ""))
-            current_name = None
-            current_version = None
-            in_package = True
-            continue
-        if not in_package:
-            continue
-        m = re.match(r'^name\s*=\s*"([^"]+)"', line)
-        if m:
-            current_name = m.group(1)
-            continue
-        m = re.match(r'^version\s*=\s*"([^"]+)"', line)
-        if m:
-            current_version = m.group(1)
-            continue
-
-    if current_name and current_version and _DIGIT_START_RE.match(current_version):
-        packages.append(Package("PyPI", current_name, current_version, file_path, ""))
-
-    return packages
+    return _parse_toml_package_lock(content, file_path, "PyPI")
 
 
 def _parse_composer_lock(content: str, file_path: str) -> list[Package]:
