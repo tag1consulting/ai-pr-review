@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 # Native analyzer imports (Epic 8). Each ported analyzer is imported here and
 # wired into _ANALYZERS via the native_fn field.
+from ai_pr_review.analyzers.native.cve_check import _run_cve_check
 from ai_pr_review.analyzers.native.eslint import _run_eslint
 from ai_pr_review.analyzers.native.golangci_lint import _run_golangci_lint
 from ai_pr_review.analyzers.native.hadolint import _run_hadolint
@@ -64,7 +65,7 @@ _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"], _run_eslint),
     AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"], _run_kube_linter),
     AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"], _run_tflint),
-    AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"]),
+    AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"], _run_cve_check),
 ]
 
 _SUBPROCESS_TIMEOUT_SECS = 120
