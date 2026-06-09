@@ -1,4 +1,7 @@
-"""Analyzer bridge — invokes run-*.sh wrappers as subprocesses.
+"""Analyzer bridge — invokes static analyzers and returns Finding instances.
+
+Dispatches to native Python callables (Epic 8) when available, falling back
+to run-*.sh wrappers via subprocess for tools not yet ported.
 
 Uses the typed ChangedFiles from manifest.py to skip analyzers with no
 eligible files (closes #188). Normalizes JSON output into Finding instances.
@@ -10,13 +13,19 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
 from pydantic import ValidationError
 
+# Native analyzer imports (Epic 8). Each ported analyzer is imported here and
+# wired into _ANALYZERS via the native_fn field.
+from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
+
+NativeAnalyzerFn = Callable[[ChangedFiles, Path], list[Finding]]
 
 
 class AnalyzerSpec(NamedTuple):
@@ -25,10 +34,12 @@ class AnalyzerSpec(NamedTuple):
     # Files that must be non-empty in ChangedFiles for this analyzer to run.
     # Empty list = always run.
     required_file_types: list[str]
+    # When set, the native Python callable is used instead of the bash script.
+    native_fn: NativeAnalyzerFn | None = None
 
 
 _ANALYZERS: list[AnalyzerSpec] = [
-    AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"]),
+    AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], _run_shellcheck),
     AnalyzerSpec("trufflehog", "run-trufflehog.sh", []),
     AnalyzerSpec("semgrep", "run-semgrep.sh", []),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"]),
@@ -65,6 +76,11 @@ def run_analyzers(
 
     for spec in _ANALYZERS:
         if not _is_eligible(spec, changed_files):
+            continue
+
+        if spec.native_fn is not None:
+            findings = spec.native_fn(changed_files, Path(diff_file))
+            results.extend(findings)
             continue
 
         script_path = analyzers_dir / spec.script
