@@ -102,4 +102,4 @@ That's it — reviews start firing on the next PR.
 **Contributing**
 
 - [Contributing guide](https://github.com/tag1consulting/ai-pr-review/blob/main/CONTRIBUTING.md) — Step-by-step recipes for adding analyzers, agents, language profiles, and VCS providers
-- [Internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/ARCHITECTURE.md) — Deep implementation details for maintainers
+- [Internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/architecture-internals.md) — Deep implementation details for maintainers

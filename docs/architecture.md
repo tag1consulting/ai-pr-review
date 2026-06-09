@@ -56,7 +56,7 @@ ai-pr-review/
     └── publish-image.yml   # Container image build, push, and signing
 ```
 
-For the full directory listing with per-file annotations, see the [internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/ARCHITECTURE.md).
+For the full directory listing with per-file annotations, see the [internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/architecture-internals.md).
 
 ## Data flow
 
@@ -88,4 +88,4 @@ The **container action** (recommended) ships all static analyzer binaries pre-in
 
 ## Deep reference
 
-For implementation internals — findings pipeline phases, parallel agent execution, prompt caching, code suggestion validation, test architecture, Dockerfile multi-stage layout — see the [internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/ARCHITECTURE.md) (ARCHITECTURE.md).
+For implementation internals — findings pipeline phases, parallel agent execution, prompt caching, code suggestion validation, test architecture, Dockerfile multi-stage layout — see the [internal architecture reference](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/architecture-internals.md) (architecture-internals.md).

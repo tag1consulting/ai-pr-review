@@ -1,6 +1,6 @@
 # Contributing to AI PR Review
 
-Quick recipes for the most common contribution types. For deep implementation details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For the compact AI-agent reference, see [CLAUDE.md](CLAUDE.md).
+Quick recipes for the most common contribution types. For deep implementation details, see [docs/architecture-internals.md](docs/architecture-internals.md). For the compact AI-agent reference, see [CLAUDE.md](CLAUDE.md).
 
 ## Local setup
 
@@ -188,7 +188,7 @@ This is a larger contribution. The pattern:
 5. Add tests in `tests/post_review_<provider>_functions.bats`.
 6. Add a setup guide in `docs/<provider>-setup.md`.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#multi-provider-support-github--bitbucket-cloud--gitlab) for how the provider abstraction works.
+See [docs/architecture-internals.md](docs/architecture-internals.md#multi-provider-support-github--bitbucket-cloud--gitlab) for how the provider abstraction works.
 
 ## Pre-PR checklist
 
@@ -206,6 +206,6 @@ Before opening a pull request:
 ## Code style
 
 - Shell scripts use `set -euo pipefail`
-- Functions are tested via `load_function` extraction in bats (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#test-architecture))
+- Functions are tested via `load_function` extraction in bats (see [docs/architecture-internals.md](docs/architecture-internals.md#test-architecture))
 - Static analyzer scripts use the mock env var pattern for testing — never call real binaries in tests
-- Findings JSON uses the schema documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#agent-output-schema)
+- Findings JSON uses the schema documented in [docs/architecture-internals.md](docs/architecture-internals.md#agent-output-schema)
