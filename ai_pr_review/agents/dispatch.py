@@ -79,7 +79,7 @@ class _SharedPromptFragments:
 def load_shared_prompt_fragments(
     script_dir: Path,
     enable_suggestions: bool = True,
-) -> "_SharedPromptFragments":
+) -> _SharedPromptFragments:
     """Load the four shared prompt fragments from disk once per run.
 
     Raises FileNotFoundError when a required fragment is missing (governance,
@@ -152,7 +152,7 @@ class DispatchContext:
     # them from disk the first time and cache them here. Callers that construct
     # DispatchContext directly (e.g. in tests) may leave this as None — the
     # first effective_prompt call will populate it transparently.
-    _shared_prompt_fragments: "_SharedPromptFragments | None" = field(default=None, repr=False, compare=False)
+    _shared_prompt_fragments: _SharedPromptFragments | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.standard_model:
@@ -190,7 +190,7 @@ def effective_prompt(
     base_prompt_path: Path,
     script_dir: Path,
     enable_suggestions: bool,
-    shared_fragments: "_SharedPromptFragments | None" = None,
+    shared_fragments: _SharedPromptFragments | None = None,
 ) -> tuple[Path, bool]:
     """Compose the effective prompt path and a degraded-flag for an agent.
 
