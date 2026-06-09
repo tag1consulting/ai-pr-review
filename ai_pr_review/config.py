@@ -68,8 +68,6 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # Set by the engine at startup and inherited by analyzer subprocesses;
         # not a user-configured input but must be known to avoid ConfigError.
         "AI_PR_REVIEW_CORRELATION_ID",
-        # --- Analyzer concurrency ---
-        "AI_ANALYZER_CONCURRENCY",
         # --- Telemetry ---
         "AI_TELEMETRY_ENABLED",
         "AI_TELEMETRY_SINK",

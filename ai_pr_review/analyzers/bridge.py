@@ -1,4 +1,7 @@
-"""Analyzer bridge — invokes run-*.sh wrappers as subprocesses.
+"""Analyzer bridge — invokes static analyzers and returns Finding instances.
+
+Dispatches to native Python callables (Epic 8) when available, falling back
+to run-*.sh wrappers via subprocess for tools not yet ported.
 
 Uses the typed ChangedFiles from manifest.py to skip analyzers with no
 eligible files (closes #188). Normalizes JSON output into Finding instances.
@@ -12,14 +15,20 @@ import os
 import subprocess
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
 import anyio
 from pydantic import ValidationError
 
+# Native analyzer imports (Epic 8). Each ported analyzer is imported here and
+# wired into _ANALYZERS via the native_fn field.
+from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
+
+NativeAnalyzerFn = Callable[[ChangedFiles, Path], list[Finding]]
 
 
 class AnalyzerSpec(NamedTuple):
@@ -28,10 +37,12 @@ class AnalyzerSpec(NamedTuple):
     # Files that must be non-empty in ChangedFiles for this analyzer to run.
     # Empty list = always run.
     required_file_types: list[str]
+    # When set, the native Python callable is used instead of the bash script.
+    native_fn: NativeAnalyzerFn | None = None
 
 
 _ANALYZERS: list[AnalyzerSpec] = [
-    AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"]),
+    AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], _run_shellcheck),
     AnalyzerSpec("trufflehog", "run-trufflehog.sh", []),
     AnalyzerSpec("semgrep", "run-semgrep.sh", []),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"]),
@@ -98,21 +109,19 @@ async def run_analyzers(
     analyzers_dir = Path(script_dir) / "analyzers"
     file_list = _file_list(changed_files)
 
-    # Pre-select eligible specs (same logic as the former serial loop).
+    # Pre-select eligible specs. Native analyzers don't require a script file on disk.
     eligible = [
         spec for spec in _ANALYZERS
         if _is_eligible(spec, changed_files)
-        and (analyzers_dir / spec.script).is_file()
+        and (spec.native_fn is not None or (analyzers_dir / spec.script).is_file())
         and spec.name not in sarif_skip
     ]
 
     # Log any skipped-due-to-SARIF entries so operators can verify the substitution.
-    # Mirror the eligible filter: only log specs whose script actually exists, so the
-    # INFO message implies the native wrapper would have run without the SARIF skip.
     sarif_skipped = [
         spec for spec in _ANALYZERS
         if _is_eligible(spec, changed_files)
-        and (analyzers_dir / spec.script).is_file()
+        and (spec.native_fn is not None or (analyzers_dir / spec.script).is_file())
         and spec.name in sarif_skip
     ]
     for spec in sarif_skipped:
@@ -128,6 +137,26 @@ async def run_analyzers(
     limiter = anyio.CapacityLimiter(max(1, concurrency))
 
     async def _run_slot(idx: int, spec: AnalyzerSpec) -> None:
+        if spec.native_fn is not None:
+            try:
+                findings = await anyio.to_thread.run_sync(
+                    functools.partial(spec.native_fn, changed_files, Path(diff_file)),
+                    cancellable=True,
+                    limiter=limiter,
+                )
+            except BaseException as exc:
+                if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt, SystemExit)):
+                    raise
+                print(
+                    f"\n[ai-pr-review] WARNING: {spec.name} native analyzer raised an unexpected error: "
+                    f"{type(exc).__name__}: {exc}; skipping.\n"
+                    f"{traceback.format_exc()}",
+                    file=sys.stderr,
+                )
+                findings = []
+            slots[idx] = findings
+            return
+
         script_path = str(analyzers_dir / spec.script)
         try:
             findings = await anyio.to_thread.run_sync(

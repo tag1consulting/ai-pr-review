@@ -117,30 +117,42 @@ class TestRunAnalyzers:
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         return script
 
+    def _bash_only_spec(self, name: str = "mock-tool", script: str = "run-mock.sh",
+                        file_types: list[str] | None = None) -> AnalyzerSpec:
+        """Return a bash-only AnalyzerSpec (no native_fn) for testing bash dispatch."""
+        return AnalyzerSpec(name, script, file_types or [], None)
+
     @pytest.mark.anyio
     async def test_skips_analyzer_with_no_eligible_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # shellcheck requires shell files
-            self._make_script(tmpdir, "run-shellcheck.sh", "[]")
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
+            self._make_script(tmpdir, "run-mock.sh", "[]")
             cf = ChangedFiles()  # no shell files
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
             assert findings == []
 
     @pytest.mark.anyio
     async def test_runs_eligible_analyzer(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
             payload = json.dumps([{"severity": "Low", "confidence": 55, "finding": "SC2034"}])
-            self._make_script(tmpdir, "run-shellcheck.sh", payload)
+            self._make_script(tmpdir, "run-mock.sh", payload)
             cf = ChangedFiles(shell=["review.sh"])
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
             assert len(findings) == 1
 
     @pytest.mark.anyio
     async def test_missing_script_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Script file does not exist
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
             cf = ChangedFiles(shell=["review.sh"])
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
             assert findings == []
 
     @pytest.mark.anyio
@@ -148,9 +160,12 @@ class TestRunAnalyzers:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            self._make_script(tmpdir, "run-shellcheck.sh", "[]", exit_code=2)
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
+            self._make_script(tmpdir, "run-mock.sh", "[]", exit_code=2)
             cf = ChangedFiles(shell=["review.sh"])
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
             assert findings == []
             captured = capsys.readouterr()
             assert "exited 2" in captured.err
@@ -159,9 +174,12 @@ class TestRunAnalyzers:
     async def test_exit_code_1_accepted(self) -> None:
         """Exit code 1 is valid (grep returns 1 for no-match paths)."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            self._make_script(tmpdir, "run-shellcheck.sh", "[]", exit_code=1)
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
+            self._make_script(tmpdir, "run-mock.sh", "[]", exit_code=1)
             cf = ChangedFiles(shell=["review.sh"])
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
             assert findings == []  # empty but not an error
 
     @pytest.mark.anyio
@@ -186,13 +204,17 @@ class TestRunAnalyzers:
     @pytest.mark.anyio
     async def test_oserror_returns_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
             Path(tmpdir, "analyzers").mkdir()
-            script = Path(tmpdir, "analyzers", "run-shellcheck.sh")
+            script = Path(tmpdir, "analyzers", "run-mock.sh")
             script.write_text("#!/bin/bash\n")
-            # Remove execute permission to trigger OSError on some systems
             script.chmod(0o644)
             cf = ChangedFiles(shell=["review.sh"])
-            with patch("subprocess.run", side_effect=OSError("permission denied")):
+            from ai_pr_review.analyzers import bridge
+            with (
+                patch.object(bridge, "_ANALYZERS", [spec]),
+                patch("subprocess.run", side_effect=OSError("permission denied")),
+            ):
                 findings = await run_analyzers(cf, "/dev/null", tmpdir)
         assert findings == []
         captured = capsys.readouterr()
@@ -201,27 +223,31 @@ class TestRunAnalyzers:
     @pytest.mark.anyio
     async def test_empty_stdout_returns_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Script produces no output
-            self._make_script(tmpdir, "run-shellcheck.sh", "")
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
+            self._make_script(tmpdir, "run-mock.sh", "")
             cf = ChangedFiles(shell=["review.sh"])
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
             assert findings == []
 
     @pytest.mark.anyio
     async def test_env_vars_passed_to_subprocess(self) -> None:
         """DIFF_FILE must be set in the subprocess environment."""
         with tempfile.TemporaryDirectory() as tmpdir:
+            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
             analyzers = Path(tmpdir) / "analyzers"
             analyzers.mkdir()
-            script = analyzers / "run-shellcheck.sh"
-            # Use printf to avoid shell quoting issues with echo and double quotes
+            script = analyzers / "run-mock.sh"
             script.write_text(
                 "#!/bin/bash\n"
                 'printf \'[{"severity":"Low","confidence":50,"finding":"%s"}]\\n\' "$DIFF_FILE"\n'
             )
             script.chmod(script.stat().st_mode | stat.S_IEXEC)
             cf = ChangedFiles(shell=["review.sh"])
-            findings = await run_analyzers(cf, "/tmp/test.diff", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/tmp/test.diff", tmpdir)
             assert len(findings) == 1
             assert "/tmp/test.diff" in findings[0].finding
 
@@ -472,15 +498,18 @@ class TestWarningFormat:
 
     @pytest.mark.anyio
     async def test_oserror_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
+        spec = AnalyzerSpec("mock-tool", "run-mock.sh", ["shell"], None)
         with (
             patch("subprocess.run", side_effect=OSError("permission denied")),
             tempfile.TemporaryDirectory() as tmpdir,
         ):
             Path(tmpdir, "analyzers").mkdir()
-            script = Path(tmpdir, "analyzers", "run-shellcheck.sh")
+            script = Path(tmpdir, "analyzers", "run-mock.sh")
             script.write_text("#!/bin/bash\n")
             script.chmod(0o644)
-            findings = await run_analyzers(ChangedFiles(shell=["review.sh"]), "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(ChangedFiles(shell=["review.sh"]), "/dev/null", tmpdir)
         captured = capsys.readouterr()
         assert findings == []
         assert "[ai-pr-review] WARNING:" in captured.err
@@ -527,7 +556,8 @@ class TestFileList:
 class TestStdinPassthrough:
     def test_subprocess_called_with_file_list_as_input(self) -> None:
         """_run_analyzer must pass the file list to subprocess.run via input=."""
-        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"])
+        # Uses bash-only spec to test the subprocess path directly.
+        spec = AnalyzerSpec("mock-tool", "run-mock.sh", ["shell"])
         cf = ChangedFiles(all_files=["foo.sh", "bar.sh"])
         expected_input = _file_list(cf)
 
@@ -538,7 +568,7 @@ class TestStdinPassthrough:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="[]", stderr="")
 
         with patch("subprocess.run", side_effect=mock_run):
-            _run_analyzer(spec, "/fake/run-shellcheck.sh", "/dev/null", {}, expected_input)
+            _run_analyzer(spec, "/fake/run-mock.sh", "/dev/null", {}, expected_input)
 
         assert "input" in captured_kwargs
         assert captured_kwargs["input"] == "bar.sh\nfoo.sh"
@@ -546,11 +576,12 @@ class TestStdinPassthrough:
     @pytest.mark.anyio
     async def test_run_analyzers_passes_all_files_via_stdin(self) -> None:
         """Integration check: file_list computed from all_files reaches subprocess."""
+        # Uses a bash-only spec (no native_fn) to test the stdin passthrough path.
+        spec = AnalyzerSpec("mock-tool", "run-mock.sh", ["shell"])
         with tempfile.TemporaryDirectory() as tmpdir:
             analyzers = Path(tmpdir) / "analyzers"
             analyzers.mkdir()
-            script = analyzers / "run-shellcheck.sh"
-            # Echo stdin back as a JSON finding so we can assert it arrived.
+            script = analyzers / "run-mock.sh"
             script.write_text(
                 "#!/bin/bash\n"
                 "STDIN=$(cat)\n"
@@ -558,6 +589,8 @@ class TestStdinPassthrough:
             )
             script.chmod(script.stat().st_mode | stat.S_IEXEC)
             cf = ChangedFiles(shell=["review.sh"], all_files=["review.sh"])
-            findings = await run_analyzers(cf, "/dev/null", tmpdir)
+            from ai_pr_review.analyzers import bridge
+            with patch.object(bridge, "_ANALYZERS", [spec]):
+                findings = await run_analyzers(cf, "/dev/null", tmpdir)
         assert len(findings) == 1
         assert "review.sh" in findings[0].finding
