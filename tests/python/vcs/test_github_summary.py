@@ -267,6 +267,38 @@ def test_advance_sha_watermark_updates_existing_marker() -> None:
     assert "olddeadbee" not in new_body
 
 
+def test_advance_sha_watermark_picks_oldest_marker_when_duplicates() -> None:
+    """Consistency: post_summary keeps existing[0] (oldest) and deletes the
+    rest, so advance_sha_watermark must also patch existing[0] — not
+    existing[-1] — so the same comment is the survivor across both code
+    paths. GitLab and Bitbucket both use existing[0] in both flows.
+    """
+    oldest = {
+        "id": 7,
+        "body": f"{SUMMARY_MARKER_PREFIX} sha=01d4ead4ee -->\nfirst",
+    }
+    newest = {
+        "id": 99,
+        "body": f"{SUMMARY_MARKER_PREFIX} sha=01d4ead4ee -->\nlater duplicate",
+    }
+    patched_ids: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=[oldest, newest])
+        if req.method == "PATCH":
+            # Capture which comment id was patched (URL ends in /comments/<id>)
+            patched_ids.append(int(str(req.url).rstrip("/").split("/")[-1]))
+            return httpx.Response(200, json={"id": patched_ids[-1]})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    assert prov.advance_sha_watermark(_VALID_SHA) is True
+    assert patched_ids == [7], (
+        f"advance_sha_watermark must patch the OLDEST marker (id=7); patched={patched_ids}"
+    )
+
+
 def test_advance_sha_watermark_no_existing_returns_false() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[])

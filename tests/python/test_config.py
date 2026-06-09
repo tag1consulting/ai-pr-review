@@ -35,6 +35,18 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.max_diff_lines == 5000
     assert cfg.parallel is True
     assert cfg.ignore_merge_commits is True
+    # action.yml's max-inline default is '25'; CLI default must match so
+    # that workflow-driven and CLI-only callers see the same cap.
+    assert cfg.max_inline == 25
+
+
+def test_max_inline_default_matches_action_yml() -> None:
+    """The bare-constructor default for max_inline must match action.yml's
+    documented default ('25'), so a caller that imports ReviewConfig
+    directly sees the same cap as a caller invoked via the action.
+    """
+    cfg = ReviewConfig()
+    assert cfg.max_inline == 25
 
 
 def test_ignore_merge_commits_default(monkeypatch: pytest.MonkeyPatch) -> None:

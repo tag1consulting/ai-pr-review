@@ -1,14 +1,29 @@
 """Anthropic provider — direct api.anthropic.com calls via httpx.
 
-Preserves the shared-cache layout from llm-call.sh (_build_anthropic_body):
-  When caching is enabled:
+Caching layouts (Anthropic supports up to 4 cache breakpoints per request):
+
+  Caching enabled, system_prefix non-empty (preferred — caches the run-shared
+  system tail across every agent in the run, plus the diff):
+    system: [
+      {type:"text", text:<system_prefix>, cache_control:{type:"ephemeral"}},
+      {type:"text", text:<system_prompt>}
+    ]
+    messages: [
+      {role:"user", content:[
+        {type:"text", text:<user_message>, cache_control:{type:"ephemeral"}}
+      ]}
+    ]
+
+  Caching enabled, system_prefix empty (legacy single-breakpoint layout
+  preserved for backward compatibility):
     system: [
       {type:"text", text:<user_message>, cache_control:{type:"ephemeral"}},
       {type:"text", text:<system_prompt>}
     ]
     messages: [{role:"user", content:"Please perform your review now."}]
-  When caching is disabled (legacy layout):
-    system: <system_prompt>
+
+  Caching disabled:
+    system: <system_prefix>\\n\\n<system_prompt> if system_prefix else <system_prompt>
     messages: [{role:"user", content:<user_message>}]
 """
 
@@ -38,14 +53,38 @@ def _build_body(
     body: dict[str, Any] = {**extra}
     if include_model:
         body["model"] = req.model_id
-    if caching:
+    if caching and req.system_prefix:
+        # Two-breakpoint layout: shared run-scoped prefix caches across every
+        # agent in the run; user_message (the diff) caches separately.
+        body["system"] = [
+            {"type": "text", "text": req.system_prefix, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": req.system_prompt},
+        ]
+        body["messages"] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": req.user_message,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+    elif caching:
+        # Legacy single-breakpoint layout — preserved verbatim for callers
+        # that have not yet adopted system_prefix.
         body["system"] = [
             {"type": "text", "text": req.user_message, "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": req.system_prompt},
         ]
         body["messages"] = [{"role": "user", "content": "Please perform your review now."}]
     else:
-        body["system"] = req.system_prompt
+        if req.system_prefix:
+            body["system"] = req.system_prefix + "\n\n" + req.system_prompt
+        else:
+            body["system"] = req.system_prompt
         body["messages"] = [{"role": "user", "content": req.user_message}]
     body["max_tokens"] = req.max_tokens
     if temperature is not None:
