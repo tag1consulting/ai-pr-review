@@ -79,7 +79,14 @@ def run_analyzers(
             continue
 
         if spec.native_fn is not None:
-            findings = spec.native_fn(changed_files, Path(diff_file))
+            try:
+                findings = spec.native_fn(changed_files, Path(diff_file))
+            except Exception as exc:
+                print(
+                    f"\n[ai-pr-review] WARNING: {spec.name} native analyzer raised {type(exc).__name__}: {exc}; skipping.",
+                    file=sys.stderr,
+                )
+                findings = []
             results.extend(findings)
             continue
 

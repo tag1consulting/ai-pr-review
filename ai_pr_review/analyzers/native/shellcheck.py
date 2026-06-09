@@ -46,8 +46,18 @@ def _scan_file(file_path: str) -> list[Finding]:
             text=True,
             timeout=_TIMEOUT_SECS,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("[ai-pr-review] WARNING: shellcheck timed out after %ss for %r; skipping.", exc.timeout, file_path)
+        return []
+    except OSError as exc:
         logger.warning("[ai-pr-review] WARNING: shellcheck failed for %r: %s", file_path, exc)
+        return []
+
+    if result.returncode not in (0, 1):
+        logger.warning(
+            "[ai-pr-review] WARNING: shellcheck exited %d for %r; skipping. stderr: %s",
+            result.returncode, file_path, result.stderr[:200],
+        )
         return []
 
     if not result.stdout.strip():
@@ -79,12 +89,12 @@ def _scan_file(file_path: str) -> list[Finding]:
                     confidence=_CONFIDENCE,
                     source=_SOURCE,
                     file=file_path,
-                    line=item.get("line"),
+                    line=item.get("line") or None,
                     finding=f"SC{code}: {message}",
                     remediation=f"See https://www.shellcheck.net/wiki/SC{code}",
                 )
             )
         except (ValueError, TypeError) as exc:
-            logger.warning("[ai-pr-review] WARNING: shellcheck dropped malformed finding: %s", exc)
+            logger.warning("[ai-pr-review] WARNING: shellcheck dropped malformed finding from %r: %s; item=%r", file_path, exc, repr(item)[:200])
 
     return findings

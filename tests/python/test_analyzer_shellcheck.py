@@ -136,7 +136,7 @@ class TestScanFile:
         ):
             findings = _scan_file("slow.sh")
         assert findings == []
-        assert "shellcheck failed" in caplog.text
+        assert "shellcheck timed out" in caplog.text
 
     def test_oserror_returns_empty(self, caplog: pytest.LogCaptureFixture) -> None:
         with patch("ai_pr_review.analyzers.native.shellcheck.subprocess.run",
@@ -177,6 +177,37 @@ class TestScanFile:
         assert findings[0].finding == "SC2086: Double quote to prevent globbing."
         assert findings[0].remediation == "See https://www.shellcheck.net/wiki/SC2086"
 
+    def test_non_dict_comment_items_skipped(self) -> None:
+        payload = json.dumps({"comments": [
+            "not-a-dict",
+            {"file": "f.sh", "line": 1, "level": "warning", "code": 2086, "message": "x"},
+        ]})
+        with patch("ai_pr_review.analyzers.native.shellcheck.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _scan_file("f.sh")
+        assert len(findings) == 1
+
+    def test_line_zero_normalized_to_none(self) -> None:
+        """shellcheck emits line=0 for file-scope parse errors; must not drop the finding."""
+        payload = json.dumps({"comments": [
+            {"file": "f.sh", "line": 0, "level": "error", "code": 1073,
+             "message": "Couldn't parse this 'if' expression."}
+        ]})
+        with patch("ai_pr_review.analyzers.native.shellcheck.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _scan_file("f.sh")
+        assert len(findings) == 1
+        assert findings[0].line is None
+        assert findings[0].severity == "High"
+
+    def test_non_zero_non_one_returncode_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch("ai_pr_review.analyzers.native.shellcheck.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="bad invocation")
+            with caplog.at_level("WARNING"):
+                findings = _scan_file("broken.sh")
+        assert findings == []
+        assert "exited 2" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Bridge integration — native_fn dispatched instead of bash script
@@ -205,3 +236,37 @@ class TestBridgeIntegration:
             run_analyzers(cf, "/dev/null", str(tmp_path))
 
         assert called, "Native fn was not called"
+
+    def test_native_fn_skipped_when_ineligible(self, tmp_path: Path) -> None:
+        """native_fn is not called when required_file_types are absent from ChangedFiles."""
+        from ai_pr_review.analyzers import bridge
+        from ai_pr_review.analyzers.bridge import AnalyzerSpec, run_analyzers
+
+        called = []
+
+        def fake_native(changed_files: ChangedFiles, diff_file: Path) -> list:
+            called.append(True)
+            return []
+
+        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], fake_native)
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            run_analyzers(ChangedFiles(), "/dev/null", str(tmp_path))
+
+        assert not called, "Native fn was called despite no eligible files"
+
+    def test_native_fn_exception_is_caught(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """Unhandled exception in native_fn must not abort run_analyzers."""
+        from ai_pr_review.analyzers import bridge
+        from ai_pr_review.analyzers.bridge import AnalyzerSpec, run_analyzers
+
+        def exploding_native(changed_files: ChangedFiles, diff_file: Path) -> list:
+            raise RuntimeError("unexpected crash")
+
+        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], exploding_native)
+        cf = ChangedFiles(shell=["review.sh"])
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            findings = run_analyzers(cf, "/dev/null", str(tmp_path))
+
+        assert findings == []
+        captured = capsys.readouterr()
+        assert "RuntimeError" in captured.err
