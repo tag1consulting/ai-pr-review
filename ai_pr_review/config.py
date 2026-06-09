@@ -131,7 +131,10 @@ class ReviewConfig(BaseModel):
     concurrency: int = 4
     # Number of concurrent analyzer subprocesses. Clamped to 1 when parallel=False.
     analyzer_concurrency: int = 4
-    max_inline: int = 10
+    # Default mirrors action.yml's max-inline default ('25'). Previously 10,
+    # which meant CLI users (no action.yml input) saw a different cap than
+    # workflow-driven users.
+    max_inline: int = 25
     max_tokens_per_agent: int = 16384
     enable_suggestions: bool = True
     cache_priming: bool = False
@@ -363,7 +366,7 @@ class ReviewConfig(BaseModel):
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
             analyzer_concurrency=max(1, _int("AI_ANALYZER_CONCURRENCY", 4)),
-            max_inline=_int("AI_MAX_INLINE", 10),
+            max_inline=_int("AI_MAX_INLINE", 25),
             max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 16384),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
             cache_priming=_bool("AI_CACHE_PRIMING", False),

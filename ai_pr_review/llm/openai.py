@@ -81,7 +81,15 @@ async def call(req: LLMRequest, *, provider: str) -> LLMResponse:
     if not api_key:
         raise LLMError(f"OPENAI_API_KEY is required for AI_PROVIDER={provider}")
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    base_url = os.environ.get("OPENAI_BASE_URL", "")
+    if provider == "openai-compatible" and not base_url:
+        raise LLMError(
+            "AI_PROVIDER=openai-compatible requires base-url (OPENAI_BASE_URL); "
+            "set the action input `base-url` for your endpoint, or use "
+            "AI_PROVIDER=openai to call api.openai.com."
+        )
+    if not base_url:
+        base_url = "https://api.openai.com/v1"
     url = f"{base_url.rstrip('/')}/chat/completions"
 
     body = _build_body(req, provider=provider)

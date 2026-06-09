@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
@@ -155,6 +156,64 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
     assert len(failures) == 0
     names = {r.name for r in successes}
     assert names == {"code-reviewer", "silent-failure-hunter"}
+
+
+@pytest.mark.anyio
+async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
+    tmp_path: Path,
+) -> None:
+    """run_tier must move feedback_addendum + language_profile_text out of the
+    per-agent system_prompt and into LLMRequest.system_prefix, so providers
+    that support multi-breakpoint caching can mark them as run-shared and
+    cache them once across every agent in the run.
+    """
+    ctx = _make_context(tmp_path)
+    ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
+    ctx.language_profile_text = "## Python\nProject uses click + pydantic."
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    # system_prefix carries both addenda, joined with the canonical separator.
+    assert "recent learnings" in req.system_prefix
+    assert "Python" in req.system_prefix
+    # The per-agent system_prompt no longer contains the addenda — the model
+    # still sees them, but via the cacheable prefix slot.
+    assert "recent learnings" not in req.system_prompt
+    assert "Python\nProject uses click" not in req.system_prompt
+
+
+@pytest.mark.anyio
+async def test_run_tier_empty_system_prefix_when_no_addenda(tmp_path: Path) -> None:
+    """When neither feedback_addendum nor language_profile_text is set,
+    system_prefix is empty so the legacy single-breakpoint Anthropic layout
+    is preserved (regression guard for the byte-identical fallback).
+    """
+    ctx = _make_context(tmp_path)
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert captured[0].system_prefix == ""
 
 
 @pytest.mark.anyio

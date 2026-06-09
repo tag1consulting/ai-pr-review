@@ -32,6 +32,21 @@ def test_body_uses_legacy_layout(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_call_raises_when_base_url_missing(monkeypatch):
+    """openai-compatible without OPENAI_BASE_URL must error early with a
+    clear message naming the action input — not silently fall through to
+    api.openai.com.
+    """
+    from ai_pr_review.llm._http import LLMError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    req = make_request()
+    with pytest.raises(LLMError, match="openai-compatible requires base-url"):
+        await call(req)
+
+
+@pytest.mark.anyio
 async def test_call_happy_path(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", COMPAT_URL)

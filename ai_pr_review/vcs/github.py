@@ -289,7 +289,11 @@ class GitHubProvider:
         existing = self._list_summary_comments()
         if not existing:
             return False
-        keep = existing[-1]
+        # Pick the OLDEST marker-bearing comment (existing[0]) so this is
+        # consistent with post_summary, which keeps existing[0] and deletes
+        # the rest. GitLab and Bitbucket use existing[0] in both code paths;
+        # this aligns GitHub with that convention.
+        keep = existing[0]
         keep_id = int(keep["id"])
         old_body = keep.get("body") or ""
         new_body = replace_summary_sha(

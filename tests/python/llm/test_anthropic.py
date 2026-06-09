@@ -92,6 +92,79 @@ def test_body_caching_disabled():
     assert body["messages"] == [{"role": "user", "content": "Code context."}]
 
 
+def test_body_caching_with_system_prefix_uses_two_breakpoints():
+    """When system_prefix is non-empty and caching is enabled, the request
+    must place the shared prefix first in `system` (with cache_control) and
+    move the diff to `messages` (also with cache_control), so two distinct
+    cache breakpoints are used.  This caches the run-shared system tail
+    across every agent in the run.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff content.",
+        system_prefix="Shared run-scoped tail (governance + language profiles + feedback).",
+    )
+    body = _build_body(req, caching=True, extra={})
+
+    # system has the shared prefix first (cached), per-agent prompt second.
+    assert isinstance(body["system"], list)
+    assert len(body["system"]) == 2
+    assert body["system"][0]["text"].startswith("Shared run-scoped tail")
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][1]["text"] == "Per-agent prompt."
+    assert "cache_control" not in body["system"][1]
+
+    # diff lives in messages with its own cache breakpoint.
+    assert body["messages"][0]["role"] == "user"
+    content = body["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert len(content) == 1
+    assert content[0]["text"] == "The diff content."
+    assert content[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_body_caching_without_system_prefix_preserves_legacy_layout():
+    """An empty system_prefix must produce the byte-identical legacy layout
+    (diff in system[0], stub user message) so existing callers that have not
+    adopted system_prefix see no behavior change.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff content.",
+        system_prefix="",  # explicit empty
+    )
+    body = _build_body(req, caching=True, extra={})
+
+    assert body["system"][0]["text"] == "The diff content."
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][1]["text"] == "Per-agent prompt."
+    assert body["messages"] == [
+        {"role": "user", "content": "Please perform your review now."}
+    ]
+
+
+def test_body_no_caching_with_system_prefix_concatenates():
+    """When caching is disabled, system_prefix is concatenated ahead of the
+    per-agent prompt so the model still sees identical content; the two
+    breakpoints are simply not emitted.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff.",
+        system_prefix="Shared tail.",
+    )
+    body = _build_body(req, caching=False, extra={})
+
+    assert body["system"] == "Shared tail.\n\nPer-agent prompt."
+    assert body["messages"] == [{"role": "user", "content": "The diff."}]
+
+
 def test_body_temperature_skipped_for_opus():
     from ai_pr_review.llm.anthropic import _build_body
 

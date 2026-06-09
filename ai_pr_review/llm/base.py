@@ -15,6 +15,14 @@ class LLMRequest:
     temperature: float = 0.3
     # Resolved caching flag — True/False, never "auto" at call time.
     prompt_caching: bool = False
+    # Optional shared, run-scoped system content (language profiles, feedback
+    # addendum, etc.) that is byte-identical across every agent in a single
+    # review.  When non-empty and prompt_caching is enabled on a provider that
+    # supports multiple cache breakpoints (Anthropic, Bedrock), this content
+    # leads the system field with its own cache_control marker so it caches
+    # once per run and is read by every subsequent agent dispatch in that run.
+    # Providers without multi-breakpoint caching prepend it to system_prompt.
+    system_prefix: str = ""
 
 
 @dataclass

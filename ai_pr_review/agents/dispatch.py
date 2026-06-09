@@ -414,15 +414,21 @@ async def _run_single_agent(
         # Build user message (includes context enrichment when enabled).
         user_message, context_tokens_used = _build_user_message(diff_text, spec, context)
 
-        # Inject feedback addendum into system prompt when available.
         system_prompt = prompt_path.read_text()
-        if context.feedback_addendum:
-            system_prompt = system_prompt + "\n\n" + context.feedback_addendum
 
-        # Inject language profile context (mirrors lib/diff.sh:297-306).
-        # Profiles are pre-loaded once per run in build_review_runtime().
+        # Run-shared system tail: feedback addendum + language profiles. These
+        # are byte-identical across every agent in a run, so they go into
+        # LLMRequest.system_prefix where Anthropic/Bedrock can mark them with
+        # a shared cache breakpoint and read them once across the whole run
+        # instead of paying for them per-agent.  Providers without
+        # multi-breakpoint caching concatenate them ahead of system_prompt,
+        # preserving identical model-visible content.
+        prefix_parts: list[str] = []
+        if context.feedback_addendum:
+            prefix_parts.append(context.feedback_addendum)
         if context.language_profile_text:
-            system_prompt = system_prompt + "\n\n" + context.language_profile_text
+            prefix_parts.append(context.language_profile_text)
+        system_prefix = "\n\n".join(prefix_parts)
 
         # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
         max_tokens = (
@@ -436,6 +442,7 @@ async def _run_single_agent(
             user_message=user_message,
             max_tokens=max_tokens,
             temperature=context.temperature,
+            system_prefix=system_prefix,
         )
         async with limiter:
             response = await llm_call(request)
