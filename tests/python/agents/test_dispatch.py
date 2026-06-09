@@ -163,7 +163,8 @@ async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     tmp_path: Path,
 ) -> None:
     """run_tier must move feedback_addendum + language_profile_text out of the
-    per-agent system_prompt and into LLMRequest.system_prefix, so providers
+    per-agent system_prompt and into LLMRequest.system_prefix for
+    context_enrichment_eligible agents (e.g. code-reviewer), so providers
     that support multi-breakpoint caching can mark them as run-shared and
     cache them once across every agent in the run.
     """
@@ -177,6 +178,9 @@ async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
         captured.append(request)
         return _make_response("ok")
 
+    # code-reviewer is context_enrichment_eligible; both addenda must appear.
+    assert get_agent("code-reviewer").context_enrichment_eligible, \
+        "test premise: code-reviewer must be context_enrichment_eligible"
     await run_tier(
         agents=[get_agent("code-reviewer")],
         llm_call=capture_llm,
@@ -192,6 +196,43 @@ async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     # still sees them, but via the cacheable prefix slot.
     assert "recent learnings" not in req.system_prompt
     assert "Python\nProject uses click" not in req.system_prompt
+
+
+@pytest.mark.anyio
+async def test_run_tier_language_profile_excluded_for_ineligible_agent(
+    tmp_path: Path,
+) -> None:
+    """blind-hunter (context_enrichment_eligible=False) must NOT receive the
+    language_profile_text in its system_prefix: its prompt explicitly asks the
+    model to reason about the diff in isolation, so injecting language profiles
+    would defeat its purpose and waste tokens on content the model ignores.
+    The feedback_addendum is run-shared learning signal and must still reach it.
+    """
+    ctx = _make_context(tmp_path)
+    ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
+    ctx.language_profile_text = "## Python\nProject uses click + pydantic."
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    ineligible = get_agent("blind-hunter")
+    assert not ineligible.context_enrichment_eligible, \
+        "test premise: blind-hunter must not be context_enrichment_eligible"
+    await run_tier(
+        agents=[ineligible],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    # Feedback addendum still reaches blind-hunter (run-shared signal).
+    assert "recent learnings" in req.system_prefix
+    # Language profile must NOT appear in the prefix for ineligible agents.
+    assert "Python\nProject uses click" not in req.system_prefix
 
 
 @pytest.mark.anyio

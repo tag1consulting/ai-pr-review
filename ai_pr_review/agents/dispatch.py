@@ -457,10 +457,16 @@ async def _run_single_agent(
         # instead of paying for them per-agent.  Providers without
         # multi-breakpoint caching concatenate them ahead of system_prompt,
         # preserving identical model-visible content.
+        #
+        # Language profiles are gated on context_enrichment_eligible: agents
+        # like blind-hunter explicitly ask the model to reason about the diff
+        # with no project context, so injecting language profiles would defeat
+        # their purpose and waste tokens on content the model is told to ignore.
+        # Feedback addenda are run-shared learning signals and reach all agents.
         prefix_parts: list[str] = []
         if context.feedback_addendum:
             prefix_parts.append(context.feedback_addendum)
-        if context.language_profile_text:
+        if context.language_profile_text and spec.context_enrichment_eligible:
             prefix_parts.append(context.language_profile_text)
         system_prefix = "\n\n".join(prefix_parts)
 
