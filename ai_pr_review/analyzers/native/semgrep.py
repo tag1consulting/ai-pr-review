@@ -108,6 +108,7 @@ def _run_semgrep(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
 
     results = data.get("results") or []
     if not isinstance(results, list):
+        logger.warning("[ai-pr-review] WARNING: semgrep 'results' is not a list; skipping.")
         return []
 
     findings: list[Finding] = []
@@ -128,7 +129,7 @@ def _run_semgrep(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         metadata = extra.get("metadata") or {}
         references = metadata.get("references") or []
         ref = references[0] if references else None
-        remediation = f"See {ref}" if ref else f"Review the semgrep rule: {check_id}"
+        remediation = f"See {ref}" if ref else (f"Review the semgrep rule: {check_id}" if check_id else "No remediation available")
 
         start = item.get("start") or {}
 
