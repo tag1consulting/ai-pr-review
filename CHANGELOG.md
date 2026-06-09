@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-09
+
+### Changed
+
+#### All 13 static analyzers ported to native Python (Epic 8, closes #462–#474)
+
+Every static analyzer that previously ran as a bash subprocess via `analyzers/run-<tool>.sh` is now implemented as a native Python function in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable; the bash wrappers still exist for the deprecated bash engine but are no longer invoked by the default Python engine.
+
+The ported analyzers, in order: shellcheck (#462), ruff (#463), hadolint (#464), kube-linter (#465), phpcs (#466), semgrep (#467), golangci-lint (#468), checkov (#469), phpstan (#470), eslint (#471), tflint (#472), trufflehog (#473), cve-check (#474).
+
+**What changed at runtime:** The Python engine no longer shells out to bash for any static analysis. Each tool binary is still invoked via `subprocess.run`, but the output is now parsed directly in Python rather than through awk/jq/sed pipelines. Eligibility gating (changed-files filtering, content-sniff checks) has moved from bash into the Python functions.
+
+**What is unchanged:** Findings schema, severity mappings, confidence values, and source tags are all parity-identical to the bash wrappers. The `analyzers/run-<tool>.sh` wrappers are unchanged and continue to work for the deprecated bash engine.
+
+**Testing:** Each native analyzer has a corresponding `tests/python/test_analyzer_<tool>.py` pytest module with equivalent coverage to the bats fixtures.
+
 ## [1.3.0] - 2026-06-08
 
 ### Changed

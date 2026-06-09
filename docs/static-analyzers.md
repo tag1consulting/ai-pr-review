@@ -6,7 +6,7 @@ nav_order: 5
 
 # Static Analyzers
 
-The action runs deterministic analyzers alongside the LLM agents. Their findings flow through the same dedup, suppress, and render pipeline as LLM findings. All analyzers run concurrently in the parallel path and fall back to sequential when `parallel: false`. If a binary is missing, the wrapper script emits a WARNING to stderr and returns an empty findings array — the review is never blocked.
+The action runs deterministic analyzers alongside the LLM agents. Their findings flow through the same dedup, suppress, and render pipeline as LLM findings. All analyzers run concurrently in the parallel path and fall back to sequential when `parallel: false`. If a binary is missing, the native analyzer emits a WARNING to stderr and returns an empty findings array — the review is never blocked.
 
 The container action ships all analyzer binaries pre-installed. For the direct-action or submodule paths, install the binaries you need; see [runtime dependencies](installation-direct-action#runtime-dependencies).
 
@@ -81,7 +81,9 @@ See `examples/workflows/sarif-codeql.yml` for a complete CodeQL + AI review pipe
 
 ---
 
-## Bash wrapper implementation reference
+## Implementation reference
 
-Each analyzer ships as a `analyzers/run-<tool>.sh` bash wrapper invoked by `ai_pr_review/analyzers/bridge.py`. For full implementation details — binary flags, input handling, output-field mapping, path normalization, mock env var, and Phase 11 port complexity — see [Analyzer Bash Wrapper Inventory](analyzers-bash-inventory).
+As of v1.4.0, all 13 analyzers are implemented as native Python functions in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable. Each analyzer invokes the tool binary directly via `subprocess.run` and parses the JSON output in Python.
+
+The `analyzers/run-<tool>.sh` bash wrappers still exist for the deprecated bash engine. For the full binary flags, input handling, output-field mapping, path normalization, and mock env var reference, see [Analyzer Bash Wrapper Inventory](analyzers-bash-inventory).
 
