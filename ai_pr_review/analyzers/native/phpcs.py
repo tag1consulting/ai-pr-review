@@ -35,8 +35,10 @@ def _detect_standard() -> str:
         )
         if "Drupal" in result.stdout:
             return "Drupal,DrupalPractice"
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    except subprocess.TimeoutExpired:
+        logger.warning("[ai-pr-review] WARNING: phpcs -i timed out detecting standard; falling back to PSR12.")
+    except OSError as exc:
+        logger.warning("[ai-pr-review] WARNING: phpcs -i failed: %s; falling back to PSR12.", exc)
     return "PSR12"
 
 

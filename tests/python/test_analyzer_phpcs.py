@@ -217,6 +217,39 @@ class TestRunPhpcsFindings:
         main_call_args = mock_run.call_args_list[-1][0][0]
         assert "--standard=Drupal,DrupalPractice" in main_call_args
 
+    def test_standard_detection_timeout_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        import subprocess as sp
+        f = tmp_path / "module.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpcs.shutil.which", return_value="/usr/bin/phpcs"),
+            patch("ai_pr_review.analyzers.native.phpcs.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.side_effect = [
+                sp.TimeoutExpired(cmd="phpcs", timeout=10),
+                MagicMock(returncode=0, stdout='{"totals":{},"files":{}}', stderr=""),
+            ]
+            _run_phpcs(cf, Path("/dev/null"))
+        assert "phpcs -i timed out" in caplog.text
+
+    def test_standard_detection_oserror_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        f = tmp_path / "module.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpcs.shutil.which", return_value="/usr/bin/phpcs"),
+            patch("ai_pr_review.analyzers.native.phpcs.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.side_effect = [
+                OSError("bad interpreter"),
+                MagicMock(returncode=0, stdout='{"totals":{},"files":{}}', stderr=""),
+            ]
+            _run_phpcs(cf, Path("/dev/null"))
+        assert "phpcs -i failed" in caplog.text
+
     def test_psr12_standard_when_drupal_unavailable(self, tmp_path: Path) -> None:
         f = tmp_path / "module.php"
         f.write_text("<?php\n")
