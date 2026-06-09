@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -131,6 +132,92 @@ def test_extract_findings_strips_out_of_diff_injection() -> None:
         "out_of_diff injected via agent JSON must be reset to False by extract_findings"
     )
     assert findings[0].severity == "Critical"
+
+
+# ---------------------------------------------------------------------------
+# Self-refuting finding lint pass (issue #504)
+# ---------------------------------------------------------------------------
+
+# Each parametrize entry is a paraphrase of an actual self-refuting finding
+# emitted by the code-reviewer agent on PR #490 (lockfile parsers). All five
+# were posted at High severity despite the agent's own reasoning concluding
+# the issue was not real. The lint pass must drop them.
+@pytest.mark.parametrize(
+    "narrative",
+    [
+        # F1: yarn.lock stanza flush logic
+        "yarn.lock stanza flush logic is incorrect... On closer inspection the logic is correct.",
+        # F2: _parse_yarn_lock blank-line handling
+        "_parse_yarn_lock flushes on blank lines... This is acceptable for malformed input. No actionable bug.",
+        # F3: scoped-package name extraction
+        "In _parse_yarn_lock, the scoped-package name extraction... No bug — withdraw.",
+        # F4: _parse_pnpm_lock_yaml v9 indentation
+        "_parse_pnpm_lock_yaml skips lines indented by 3+ spaces... No actual bug here — withdraw.",
+        # F5: _parse_gemfile_lock indentation
+        "_parse_gemfile_lock only matches gem entries with 4 spaces... No bug.",
+    ],
+    ids=["F1-on-closer-inspection-correct", "F2-no-actionable-bug",
+         "F3-no-bug-withdraw", "F4-no-actual-bug", "F5-no-bug"],
+)
+def test_extract_findings_drops_self_refuting(
+    narrative: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Self-refuting findings (per _governance.md rule 1) are dropped at extract time.
+
+    Reproduces the PR #490 review pattern: agent emits a High finding whose
+    own narrative concludes "no bug — withdraw" or equivalent. The lint pass
+    in extract_findings must drop these and log a WARNING.
+    """
+    output = f"""
+```json-findings
+[{{"severity": "High", "confidence": 85, "file": "foo.py", "line": 1,
+   "finding": {json.dumps(narrative)}}}]
+```
+"""
+    findings = extract_findings(output, "code-reviewer")
+    assert findings == [], f"self-refuting finding was not dropped: {narrative!r}"
+    captured = capsys.readouterr()
+    assert "self-refuting" in captured.err
+    assert "code-reviewer" in captured.err
+
+
+def test_extract_findings_keeps_real_findings_that_mention_bug_or_correct() -> None:
+    """The lint pass must not false-positive on real findings.
+
+    These narratives genuinely describe bugs or use the word 'correct' in a
+    non-refutation context. They must be retained.
+    """
+    output = """
+```json-findings
+[
+  {"severity": "High", "confidence": 90, "file": "a.py", "line": 1,
+   "finding": "This buffer overflow is a serious bug that needs fixing."},
+  {"severity": "Medium", "confidence": 80, "file": "b.py", "line": 1,
+   "finding": "The current code is incorrect because of an off-by-one error."},
+  {"severity": "Low", "confidence": 76, "file": "c.py", "line": 1,
+   "finding": "The fix correctly handles the None case, but introduces a leak elsewhere."}
+]
+```
+"""
+    findings = extract_findings(output, "code-reviewer")
+    assert len(findings) == 3, f"real findings were dropped as self-refuting: {findings}"
+
+
+def test_extract_findings_drops_self_refuting_in_remediation() -> None:
+    """The lint pass scans both `finding` and `remediation` for refutation phrases.
+
+    Some agents put the "actually no bug" conclusion in the remediation field
+    rather than the finding text itself.
+    """
+    output = """
+```json-findings
+[{"severity": "Medium", "confidence": 85, "file": "x.py", "line": 1,
+  "finding": "Possible stale read in cache layer.",
+  "remediation": "Re-read: actually this is correct, the cache is invalidated upstream. No action needed."}]
+```
+"""
+    findings = extract_findings(output, "code-reviewer")
+    assert findings == [], "self-refuting remediation was not detected"
 
 
 # ---------------------------------------------------------------------------
