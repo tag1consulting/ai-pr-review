@@ -160,6 +160,55 @@ class TestRunTflintFindings:
             findings = _run_tflint(cf, Path("/dev/null"))
         assert findings == []
 
+    def test_exit_code_2_logs_warning_and_skips(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        tf = tmp_path / "main.tf"
+        tf.write_text('resource "x" "y" {}\n')
+        cf = _make_cf([str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
+            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="init error")
+            findings = _run_tflint(cf, Path("/dev/null"))
+        assert findings == []
+        assert "exited 2" in caplog.text
+
+    def test_errors_field_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        tf = tmp_path / "main.tf"
+        tf.write_text('resource "x" "y" {}\n')
+        cf = _make_cf([str(tf)])
+        payload = json.dumps({"issues": [], "errors": [{"message": "plugin load failed"}]})
+        with (
+            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
+            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            findings = _run_tflint(cf, Path("/dev/null"))
+        assert findings == []
+        assert "plugin load failed" in caplog.text
+
+    def test_absolute_path_dir_constructs_correct_file_path(self, tmp_path: Path) -> None:
+        subdir = tmp_path / "vpc"
+        subdir.mkdir()
+        tf = subdir / "main.tf"
+        tf.write_text('resource "x" "y" {}\n')
+        cf = _make_cf([str(tf)])
+        payload = json.dumps({"issues": [{
+            "rule": {"name": "some_rule", "severity": "error", "link": ""},
+            "message": "bad",
+            "range": {"filename": "main.tf", "start": {"line": 1, "column": 1}, "end": {"line": 1, "column": 5}},
+        }], "errors": []})
+        with (
+            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
+            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            findings = _run_tflint(cf, Path("/dev/null"))
+        assert len(findings) == 1
+        assert findings[0].file == str(subdir / "main.tf")
+
     def test_dir_prefix_prepended_for_subdirectory(self, tmp_path: Path) -> None:
         subdir = tmp_path / "modules" / "vpc"
         subdir.mkdir(parents=True)

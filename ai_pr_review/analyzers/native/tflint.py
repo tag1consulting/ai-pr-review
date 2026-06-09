@@ -59,9 +59,14 @@ def _run_tflint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             logger.warning("[ai-pr-review] WARNING: tflint failed to start in %r: %s", d, exc)
             continue
 
+        if result.returncode >= 2:
+            logger.warning(
+                "[ai-pr-review] WARNING: tflint exited %d in %r; stderr: %s",
+                result.returncode, d, result.stderr[:200],
+            )
+            continue
+
         if not result.stdout.strip():
-            if result.returncode != 0 and result.stderr.strip():
-                logger.warning("[ai-pr-review] WARNING: tflint failed in %r: %s", d, result.stderr[:200])
             continue
 
         try:
@@ -79,8 +84,12 @@ def _run_tflint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             logger.warning("[ai-pr-review] WARNING: tflint 'issues' is not a list in %r; skipping.", d)
             continue
 
-        # tflint reports bare filenames relative to --chdir; prepend dir prefix.
-        prefix = "" if d == "." else (d.lstrip("./") + "/") if d.startswith("./") else (d + "/")
+        for err in data.get("errors") or []:
+            if isinstance(err, dict):
+                logger.warning(
+                    "[ai-pr-review] WARNING: tflint reported error in %r: %s",
+                    d, err.get("message", repr(err))[:200],
+                )
 
         for item in issues:
             if not isinstance(item, dict):
@@ -110,7 +119,7 @@ def _run_tflint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         severity=severity,  # type: ignore[arg-type]
                         confidence=_CONFIDENCE,
                         source=_SOURCE,
-                        file=prefix + filename,
+                        file=str(Path(d) / filename) if filename else filename,
                         line=line,
                         finding=f"{rule_name}: {message}",
                         remediation=remediation,
