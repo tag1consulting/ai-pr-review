@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,12 @@ class SuppressionRule:
     match_line_end: int = 0      # #437: line-range upper bound (0 = unbounded)
     match_code: str = ""         # #318: suppress finding whose finding text starts with this code
     verify: str = ""
+    # Pre-compiled patterns for match_file / match_pattern.  Populated by
+    # _parse_rule so _rule_matches never calls re.compile() in a hot loop.
+    # Both default to None; _rule_matches checks the raw string first (fast
+    # path: empty string means no constraint, skip compilation entirely).
+    _match_file_re: re.Pattern[str] | None = field(default=None, repr=False, compare=False)
+    _match_pattern_re: re.Pattern[str] | None = field(default=None, repr=False, compare=False)
 
 
 def load_rules(
@@ -111,16 +117,22 @@ def _safe_int(val: str | int | float | None) -> int:
 
 def _parse_rule(raw: dict[str, Any]) -> SuppressionRule:
     match = raw.get("match", {})
+    match_file = match.get("file", "")
+    match_pattern = match.get("pattern", "")
     return SuppressionRule(
         id=raw.get("id", ""),
         reason=raw.get("reason", ""),
-        match_file=match.get("file", ""),
-        match_pattern=match.get("pattern", ""),
+        match_file=match_file,
+        match_pattern=match_pattern,
         match_line=_safe_int(match.get("line", 0)),
         match_line_start=_safe_int(match.get("line_start", 0)),
         match_line_end=_safe_int(match.get("line_end", 0)),
         match_code=str(match.get("code", "")),
         verify=raw.get("verify", ""),
+        # Pre-compile non-empty patterns once here; _rule_matches uses them
+        # directly rather than calling re.compile() on every finding×rule pair.
+        _match_file_re=re.compile(match_file, re.IGNORECASE) if match_file else None,
+        _match_pattern_re=re.compile(match_pattern, re.IGNORECASE) if match_pattern else None,
     )
 
 
@@ -167,11 +179,13 @@ def _find_matching_rule(
 
 def _rule_matches(finding: Finding, rule: SuppressionRule) -> bool:
     if rule.match_file:
-        file_pat = re.compile(rule.match_file, re.IGNORECASE)
+        # Use the pre-compiled pattern when available (populated by _parse_rule);
+        # fall back to compiling on the fly for rules constructed directly in tests.
+        file_pat = rule._match_file_re or re.compile(rule.match_file, re.IGNORECASE)
         if not file_pat.search(finding.file or ""):
             return False
     if rule.match_pattern:
-        text_pat = re.compile(rule.match_pattern, re.IGNORECASE)
+        text_pat = rule._match_pattern_re or re.compile(rule.match_pattern, re.IGNORECASE)
         combined = f"{finding.finding} {finding.remediation}"
         if not text_pat.search(combined):
             return False

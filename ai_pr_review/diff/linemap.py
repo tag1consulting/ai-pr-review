@@ -39,6 +39,60 @@ def parse_new_file_lines(diff_text: str) -> set[LineRef]:
     return _parse_diff(diff_text, include_context=True)
 
 
+def parse_diff_sets(diff_text: str) -> tuple[set[LineRef], set[LineRef]]:
+    """Return (added_lines, new_file_lines) in a single pass over the diff.
+
+    Callers that need both sets (e.g. post_findings in the VCS providers)
+    should use this helper instead of calling parse_added_lines and
+    parse_new_file_lines separately, halving the number of diff parses.
+
+    Returns:
+        added_lines:    LineRefs for added lines only (+ lines).
+        new_file_lines: LineRefs for added + context lines (all new-file lines).
+    """
+    import io
+
+    added: set[LineRef] = set()
+    new_file: set[LineRef] = set()
+    current_file = ""
+    new_line = 0
+
+    for raw_line in io.StringIO(diff_text):
+        line = raw_line.rstrip("\n")
+        m = _DIFF_GIT.match(line)
+        if m:
+            current_file = m.group(2)
+            new_line = 0
+            continue
+
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+
+        m = _HUNK_HEADER.match(line)
+        if m:
+            new_line = int(m.group(1))
+            continue
+
+        if not current_file or new_line == 0:
+            continue
+
+        if line.startswith("+"):
+            ref = LineRef(current_file, new_line)
+            added.add(ref)
+            new_file.add(ref)
+            new_line += 1
+        elif line.startswith("-"):
+            pass  # deleted line — no new_line increment
+        elif line.startswith("\\"):
+            pass  # "\ No newline at end of file"
+        else:
+            # context line — present in new file, not added
+            new_file.add(LineRef(current_file, new_line))
+            new_line += 1
+
+    return added, new_file
+
+
 def parse_added_lines_io(fh: TextIO) -> set[LineRef]:
     return _parse_diff_io(fh, include_context=False)
 

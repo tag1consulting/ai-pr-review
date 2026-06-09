@@ -62,6 +62,65 @@ class FailedAgent:
     elapsed_ms: int
 
 
+@dataclass(frozen=True)
+class _SharedPromptFragments:
+    """Shared prompt fragments loaded once per run and threaded via DispatchContext.
+
+    All three are required for finding-producing agents; suggestion_addendum is
+    optional (empty string when the file is absent).
+    """
+
+    governance: str
+    knowledge_cutoff: str
+    findings_trailer: str
+    suggestion_addendum: str  # "" when file absent or suggestions disabled
+
+
+def load_shared_prompt_fragments(
+    script_dir: Path,
+    enable_suggestions: bool = True,
+) -> "_SharedPromptFragments":
+    """Load the four shared prompt fragments from disk once per run.
+
+    Raises FileNotFoundError when a required fragment is missing (governance,
+    knowledge-cutoff, or findings trailer). Returns a _SharedPromptFragments
+    with suggestion_addendum="" when the suggestion file is absent or
+    enable_suggestions is False.
+    """
+    prompts_dir = script_dir / "prompts"
+    governance_path = prompts_dir / "_governance.md"
+    cutoff_path = prompts_dir / "_knowledge-cutoff.md"
+    trailer_path = prompts_dir / "_trailer-findings.md"
+    suggestion_path = prompts_dir / "suggestion-addendum.md"
+
+    if not governance_path.exists():
+        raise FileNotFoundError(
+            f"governance fragment not found: {governance_path}; "
+            "this file is required for agents that produce findings"
+        )
+    if not cutoff_path.exists():
+        raise FileNotFoundError(
+            f"knowledge-cutoff fragment not found: {cutoff_path}; "
+            "this file is required for agents that produce findings"
+        )
+    if not trailer_path.exists():
+        raise FileNotFoundError(
+            f"findings trailer not found: {trailer_path}; "
+            "this file is required for agents that emit json-findings blocks"
+        )
+
+    suggestion_text = ""
+    if enable_suggestions and suggestion_path.exists():
+        suggestion_text = suggestion_path.read_text()
+
+    return _SharedPromptFragments(
+        governance=governance_path.read_text(),
+        knowledge_cutoff=cutoff_path.read_text(),
+        findings_trailer=trailer_path.read_text(),
+        suggestion_addendum=suggestion_text,
+    )
+
+
 @dataclass
 class DispatchContext:
     script_dir: Path
@@ -88,6 +147,12 @@ class DispatchContext:
     # Pre-loaded language profile markdown (concatenated). Loaded once per run
     # in build_review_runtime() and passed here to avoid per-agent disk reads.
     language_profile_text: str = ""
+    # Pre-loaded shared prompt fragments (governance, knowledge-cutoff, trailer,
+    # suggestion-addendum). None means not yet loaded; effective_prompt will read
+    # them from disk the first time and cache them here. Callers that construct
+    # DispatchContext directly (e.g. in tests) may leave this as None — the
+    # first effective_prompt call will populate it transparently.
+    _shared_prompt_fragments: "_SharedPromptFragments | None" = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.standard_model:
@@ -125,6 +190,7 @@ def effective_prompt(
     base_prompt_path: Path,
     script_dir: Path,
     enable_suggestions: bool,
+    shared_fragments: "_SharedPromptFragments | None" = None,
 ) -> tuple[Path, bool]:
     """Compose the effective prompt path and a degraded-flag for an agent.
 
@@ -141,6 +207,12 @@ def effective_prompt(
     by the ``finally`` block in ``_run_single_agent``; external callers must
     perform their own cleanup (``Path(p).unlink(missing_ok=True)``) to avoid
     leaks.
+
+    Performance: when ``shared_fragments`` is provided (pre-loaded once per run
+    via ``load_shared_prompt_fragments``), the four shared files are read from
+    memory rather than disk.  When it is None, they are read from disk as
+    before (backward-compatible fallback used by tests and callers that
+    construct DispatchContext without populating _shared_prompt_fragments).
     """
     if agent_name not in _AGENTS_WITH_FINDINGS_TRAILER:
         return base_prompt_path, False
@@ -150,51 +222,73 @@ def effective_prompt(
             f"base prompt not found for agent '{agent_name}': {base_prompt_path}"
         )
 
-    prompts_dir = script_dir / "prompts"
-    governance_path = prompts_dir / "_governance.md"
-    cutoff_path = prompts_dir / "_knowledge-cutoff.md"
-    trailer_path = prompts_dir / "_trailer-findings.md"
-    suggestion_path = prompts_dir / "suggestion-addendum.md"
-
-    if not governance_path.exists():
-        raise FileNotFoundError(
-            f"governance fragment not found: {governance_path}; "
-            "this file is required for agents that produce findings"
-        )
-
-    if not trailer_path.exists():
-        raise FileNotFoundError(
-            f"findings trailer not found: {trailer_path}; "
-            "this file is required for agents that emit json-findings blocks"
-        )
-
-    if not cutoff_path.exists():
-        raise FileNotFoundError(
-            f"knowledge-cutoff fragment not found: {cutoff_path}; "
-            "this file is required for agents that produce findings"
-        )
-
     # Composition order: base → _governance → _knowledge-cutoff → _trailer-findings → (suggestion).
     # Governance leads the shared tail; cutoff/trailer/suggestion bytes stay
     # byte-identical to preserve prompt-cache locality.
-    parts = [
-        base_prompt_path.read_text(),
-        governance_path.read_text(),
-        cutoff_path.read_text(),
-        trailer_path.read_text(),
-    ]
+    if shared_fragments is not None:
+        # Fast path: use pre-loaded fragments (no disk I/O for shared files).
+        parts = [
+            base_prompt_path.read_text(),
+            shared_fragments.governance,
+            shared_fragments.knowledge_cutoff,
+            shared_fragments.findings_trailer,
+        ]
+        degraded = False
+        if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
+            if shared_fragments.suggestion_addendum:
+                parts.append(shared_fragments.suggestion_addendum)
+            else:
+                degraded = True
+                prompts_dir = script_dir / "prompts"
+                suggestion_path = prompts_dir / "suggestion-addendum.md"
+                print(
+                    f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
+                    f"agent '{agent_name}' will run without suggestion instructions",
+                    file=sys.stderr,
+                )
+    else:
+        # Fallback: read all fragments from disk (backward-compatible path for
+        # tests and callers that do not pre-populate _shared_prompt_fragments).
+        prompts_dir = script_dir / "prompts"
+        governance_path = prompts_dir / "_governance.md"
+        cutoff_path = prompts_dir / "_knowledge-cutoff.md"
+        trailer_path = prompts_dir / "_trailer-findings.md"
+        suggestion_path = prompts_dir / "suggestion-addendum.md"
 
-    degraded = False
-    if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
-        if suggestion_path.exists():
-            parts.append(suggestion_path.read_text())
-        else:
-            degraded = True
-            print(
-                f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
-                f"agent '{agent_name}' will run without suggestion instructions",
-                file=sys.stderr,
+        if not governance_path.exists():
+            raise FileNotFoundError(
+                f"governance fragment not found: {governance_path}; "
+                "this file is required for agents that produce findings"
             )
+        if not trailer_path.exists():
+            raise FileNotFoundError(
+                f"findings trailer not found: {trailer_path}; "
+                "this file is required for agents that emit json-findings blocks"
+            )
+        if not cutoff_path.exists():
+            raise FileNotFoundError(
+                f"knowledge-cutoff fragment not found: {cutoff_path}; "
+                "this file is required for agents that produce findings"
+            )
+
+        parts = [
+            base_prompt_path.read_text(),
+            governance_path.read_text(),
+            cutoff_path.read_text(),
+            trailer_path.read_text(),
+        ]
+
+        degraded = False
+        if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
+            if suggestion_path.exists():
+                parts.append(suggestion_path.read_text())
+            else:
+                degraded = True
+                print(
+                    f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
+                    f"agent '{agent_name}' will run without suggestion instructions",
+                    file=sys.stderr,
+                )
 
     fd, tmp_path = tempfile.mkstemp(
         suffix=".md",
@@ -434,6 +528,7 @@ async def _run_single_agent(
             base_path,
             context.script_dir,
             context.enable_suggestions,
+            shared_fragments=context._shared_prompt_fragments,
         )
         if prompt_path != base_path:
             tmp_prompt = prompt_path

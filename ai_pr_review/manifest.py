@@ -43,6 +43,12 @@ _CONFIG_PATTERN = re.compile(
     r"\.(yml|yaml|json|toml|cfg|ini|env)$|Makefile$|Dockerfile$|\.github/"
 )
 _DOC_PATTERN = re.compile(r"\.(md|txt|rst)$")
+# Kubernetes/Helm IaC heuristic — hoisted to module level alongside the other
+# compiled patterns to avoid recompiling on every file in the loop.
+_IAC_PATTERN = re.compile(r"(k8s|kubernetes|helm|charts?|manifests?)/.*\.(ya?ml)$")
+# Dockerfile variant (e.g. Dockerfile.prod) — catches the dot-suffix form that
+# the bare "Dockerfile" check above does not.
+_DOCKERFILE_VARIANT_PATTERN = re.compile(r"Dockerfile\.")
 
 
 def _is_option_like(path: str) -> bool:
@@ -144,7 +150,7 @@ def build_changed_files(file_list: list[str]) -> ChangedFiles:
             continue
 
         # Dockerfile (no extension)
-        if basename == "Dockerfile" or re.search(r"Dockerfile\.", basename):
+        if basename == "Dockerfile" or _DOCKERFILE_VARIANT_PATTERN.search(basename):
             cf.dockerfile.append(f)
             cf.config.append(f)
             continue
@@ -173,7 +179,7 @@ def build_changed_files(file_list: list[str]) -> ChangedFiles:
             cf.js_ts.append(f)
 
         # IaC: Kubernetes/Helm YAML heuristic
-        if re.search(r"(k8s|kubernetes|helm|charts?|manifests?)/.*\.(ya?ml)$", f):
+        if _IAC_PATTERN.search(f):
             cf.iac.append(f)
 
     return cf
