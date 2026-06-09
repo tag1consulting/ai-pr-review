@@ -53,8 +53,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Diff exclude patterns ---
         "AI_EXCLUDE_PATTERNS",
         "AI_EXCLUDE_PATTERNS_MODE",
-        # --- Analyzer diff scope ---
+        # --- Analyzer diff scope and concurrency ---
         "AI_ANALYZER_DIFF_SCOPE",
+        "AI_ANALYZER_CONCURRENCY",
         # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
@@ -67,6 +68,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # Set by the engine at startup and inherited by analyzer subprocesses;
         # not a user-configured input but must be known to avoid ConfigError.
         "AI_PR_REVIEW_CORRELATION_ID",
+        # --- Analyzer concurrency ---
+        "AI_ANALYZER_CONCURRENCY",
         # --- Telemetry ---
         "AI_TELEMETRY_ENABLED",
         "AI_TELEMETRY_SINK",
@@ -128,8 +131,10 @@ class ReviewConfig(BaseModel):
     parallel: bool = True
     # Number of concurrent LLM calls. Derived from parallel in resolve_models().
     concurrency: int = 4
+    # Number of concurrent analyzer subprocesses. Clamped to 1 when parallel=False.
+    analyzer_concurrency: int = 4
     max_inline: int = 10
-    max_tokens_per_agent: int = 32768
+    max_tokens_per_agent: int = 16384
     enable_suggestions: bool = True
     cache_priming: bool = False
     llm_prompt_caching: str = "auto"
@@ -246,11 +251,38 @@ class ReviewConfig(BaseModel):
             )
         return normalized
 
+    @field_validator("temperature")
+    @classmethod
+    def _validate_temperature(cls, v: float) -> float:
+        if not (0.0 <= v <= 2.0):
+            raise ValueError(f"temperature must be in [0, 2], got {v}")
+        return v
+
     @field_validator("confidence_threshold")
     @classmethod
     def _validate_confidence(cls, v: int) -> int:
         if not (0 <= v <= 100):
             raise ValueError(f"confidence_threshold must be 0-100, got {v}")
+        return v
+
+    @field_validator("max_tokens_per_agent")
+    @classmethod
+    def _clamp_max_tokens_per_agent(cls, v: int) -> int:
+        _MIN, _MAX = 256, 65536
+        if v < _MIN:
+            print(
+                f"WARNING: AI_MAX_TOKENS_PER_AGENT={v} is below minimum {_MIN}; clamping to {_MIN}. "
+                "Review will proceed with this value.",
+                file=sys.stderr,
+            )
+            return _MIN
+        if v > _MAX:
+            print(
+                f"WARNING: AI_MAX_TOKENS_PER_AGENT={v} exceeds maximum {_MAX}; clamping to {_MAX}. "
+                "Review will proceed with this value.",
+                file=sys.stderr,
+            )
+            return _MAX
         return v
 
     @field_validator("analyzer_diff_scope")
@@ -332,8 +364,9 @@ class ReviewConfig(BaseModel):
             force_full_diff=_bool("FORCE_FULL_DIFF"),
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
+            analyzer_concurrency=max(1, _int("AI_ANALYZER_CONCURRENCY", 4)),
             max_inline=_int("AI_MAX_INLINE", 10),
-            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 32768),
+            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 16384),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
             cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),
@@ -430,9 +463,12 @@ class ReviewConfig(BaseModel):
 
         # AI_PARALLEL=true → 4 concurrent calls (bash default); false → 1 (serial).
         concurrency = 4 if self.parallel else 1
+        # Mirror: parallel=false also serializes analyzer subprocesses.
+        analyzer_concurrency = 1 if not self.parallel else self.analyzer_concurrency
 
         return self.model_copy(update={
             "model_standard": std,
             "model_premium": prem,
             "concurrency": concurrency,
+            "analyzer_concurrency": analyzer_concurrency,
         })

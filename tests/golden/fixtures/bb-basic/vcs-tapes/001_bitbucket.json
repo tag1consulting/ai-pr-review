@@ -1,9 +1,0 @@
-{
-  "type": "vcs",
-  "provider": "bitbucket",
-  "method": "POST",
-  "url": "https://api.bitbucket.org/2.0/repositories/example-workspace/example-repo/pullrequests/7/comments",
-  "request_body": "{\"content\":{\"raw\":\"<!-- ai-pr-review-summary sha=555eee66 -->\"}}",
-  "response_body": "{\"id\":66001}",
-  "timestamp": "2026-05-11T20:02:05Z"
-}

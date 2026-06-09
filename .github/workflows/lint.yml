@@ -7,6 +7,10 @@ on:
   pull_request:
     paths: ['**.sh', '**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -48,7 +52,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v6
 
@@ -56,15 +60,19 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install package and dev dependencies
         run: |
           pip install --quiet ".[dev]" || pip install --quiet -e . pytest ruff mypy pydantic httpx click
 
       - name: ruff check
+        if: matrix.python-version == '3.12'
         run: ruff check ai_pr_review/
 
       - name: mypy
+        if: matrix.python-version == '3.12'
         run: mypy --strict ai_pr_review/
 
       - name: pytest

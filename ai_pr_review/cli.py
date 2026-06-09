@@ -142,7 +142,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     from ai_pr_review.orchestrate import run_review
     from ai_pr_review.review.runtime import SkipPlan, build_review_runtime
 
-    runtime = build_review_runtime(config)
+    runtime = await build_review_runtime(config)
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
@@ -171,6 +171,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
             base_ref=runtime.base_ref,
             script_dir=runtime.script_dir,
             model=rc.model_standard,
+            temperature=rc.temperature,
             llm_call=_llm_call,
         )
 
@@ -188,6 +189,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
             provider=rc.vcs_provider,
             github_repository=rc.github_repository,
             model=rc.model_standard,
+            temperature=rc.temperature,
             llm_call=_llm_call,
         )
         if issue_linker_md:
@@ -398,6 +400,7 @@ async def _run_summarizer(
     base_ref: str,
     script_dir: Path,
     model: str,
+    temperature: float = 0.3,
     llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
 ) -> str:
     """Run the pr-summarizer agent and return its formatted markdown output.
@@ -456,6 +459,7 @@ async def _run_summarizer(
             system_prompt=system_prompt,
             user_message=user_message,
             max_tokens=4096,
+            temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
         # parse_summarizer_output returns a SummarizerOutput dataclass (not a
@@ -540,6 +544,7 @@ async def _run_issue_linker(
     provider: str,
     github_repository: str,
     model: str,
+    temperature: float = 0.3,
     llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
 ) -> str:
     """Run the issue-linker agent and return its markdown output, or "" to suppress.
@@ -636,6 +641,7 @@ async def _run_issue_linker(
             system_prompt=system_prompt,
             user_message=user_message,
             max_tokens=4096,
+            temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
         text = response.text.strip()

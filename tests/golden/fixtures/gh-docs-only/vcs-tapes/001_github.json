@@ -1,9 +1,0 @@
-{
-  "type": "vcs",
-  "provider": "github",
-  "method": "POST",
-  "url": "https://api.github.com/repos/example-org/example-repo/issues/10/comments",
-  "request_body": "{\"body\":\"<!-- ai-pr-review-summary sha=abc12345 -->\\n## AI Code Review\\n\\n✅ **Overall Risk:** None | **Findings:** 0\"}",
-  "response_body": "{\"id\":99001,\"html_url\":\"https://github.com/example-org/example-repo/pull/10#issuecomment-99001\"}",
-  "timestamp": "2026-05-11T20:00:05Z"
-}

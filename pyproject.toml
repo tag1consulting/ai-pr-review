@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-pr-review"
-version = "1.0.2"
+version = "1.3.0"
 description = "AI-powered PR review engine"
 requires-python = ">=3.11"
 dependencies = [

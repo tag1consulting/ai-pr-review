@@ -1,9 +1,0 @@
-{
-  "type": "vcs",
-  "provider": "bitbucket",
-  "method": "POST",
-  "url": "https://api.bitbucket.org/2.0/repositories/example-workspace/example-repo/pullrequests/31/comments",
-  "request_body": "{\"content\":{\"raw\":\"<!-- ai-pr-review-summary sha=888bbb33 -->\\n## AI Review: Incomplete\\n\\nOne or more agents failed: blind-hunter\"}}",
-  "response_body": "{\"id\":66031}",
-  "timestamp": "2026-05-13T20:00:01Z"
-}

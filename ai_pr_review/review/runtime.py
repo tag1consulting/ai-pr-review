@@ -69,7 +69,7 @@ class ReviewRuntime:
     sarif_elapsed_s: float | None
 
 
-def build_review_runtime(
+async def build_review_runtime(
     config: ReviewConfig,
     *,
     provider_factory: Callable[[], VcsProvider] | None = None,
@@ -188,6 +188,7 @@ def build_review_runtime(
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,
         max_tokens_per_agent=config.max_tokens_per_agent,
+        temperature=config.temperature,
         language_profile_text=_language_profile_text,
     )
 
@@ -214,11 +215,13 @@ def build_review_runtime(
     # 10. Run native static analyzers — fail-soft; findings merged via extra_findings.
     analyzer_findings: list[_Finding] = []
     try:
-        from ai_pr_review.analyzers.bridge import run_analyzers
-        analyzer_findings = run_analyzers(
+        from ai_pr_review.analyzers.bridge import _sarif_covered_names, run_analyzers
+        analyzer_findings = await run_analyzers(
             cf,
             diff_file=str(diff_path),
             script_dir=str(script_dir),
+            concurrency=config.analyzer_concurrency,
+            sarif_skip=_sarif_covered_names(config.sarif_paths),
         )
         if analyzer_findings:
             logger.info(

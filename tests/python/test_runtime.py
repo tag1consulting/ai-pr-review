@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.diff.compute import DiffResult
 from ai_pr_review.findings.models import Finding
@@ -138,7 +140,8 @@ def _make_fake_provider(last_sha: str | None = None) -> _FakeProvider:
 class TestBuildReviewRuntimeFullPath:
     """build_review_runtime() returns a populated ReviewRuntime on the happy path."""
 
-    def test_returns_review_runtime(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_returns_review_runtime(self, tmp_path: Path) -> None:
         config = _make_config()
         provider = _make_fake_provider()
         diff_file = tmp_path / "diff.txt"
@@ -148,11 +151,12 @@ class TestBuildReviewRuntimeFullPath:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            result = build_review_runtime(config, provider_factory=lambda: provider)
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(result, ReviewRuntime)
 
-    def test_runtime_has_non_empty_agents(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_runtime_has_non_empty_agents(self, tmp_path: Path) -> None:
         config = _make_config(review_mode="full")
         provider = _make_fake_provider()
         diff_file = tmp_path / "diff.txt"
@@ -162,12 +166,13 @@ class TestBuildReviewRuntimeFullPath:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert len(runtime.agents) > 0, "expected at least one agent in full mode"
 
-    def test_runtime_orch_config_has_no_sarif_paths(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_runtime_orch_config_has_no_sarif_paths(self, tmp_path: Path) -> None:
         """OrchestrationConfig no longer has sarif_paths — verify field is absent."""
         config = _make_config()
         provider = _make_fake_provider()
@@ -178,12 +183,13 @@ class TestBuildReviewRuntimeFullPath:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert not hasattr(runtime.orch_config, "sarif_paths")
 
-    def test_runtime_carries_resolved_config(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_runtime_carries_resolved_config(self, tmp_path: Path) -> None:
         """runtime.config is the post-resolve_models() copy — models should be set."""
         config = _make_config(model_standard="claude-sonnet-4-6", model_premium="claude-opus-4-7")
         provider = _make_fake_provider()
@@ -194,13 +200,14 @@ class TestBuildReviewRuntimeFullPath:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert runtime.config.model_standard == "claude-sonnet-4-6"
         assert runtime.config.model_premium == "claude-opus-4-7"
 
-    def test_provider_factory_called_exactly_once(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_provider_factory_called_exactly_once(self, tmp_path: Path) -> None:
         config = _make_config()
         provider = _make_fake_provider()
         call_count = 0
@@ -217,7 +224,7 @@ class TestBuildReviewRuntimeFullPath:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            build_review_runtime(config, provider_factory=_factory)
+            await build_review_runtime(config, provider_factory=_factory)
 
         assert call_count == 1
 
@@ -225,7 +232,8 @@ class TestBuildReviewRuntimeFullPath:
 class TestBuildReviewRuntimeSkip:
     """build_review_runtime() returns SkipPlan when compute says skip."""
 
-    def test_returns_skip_plan_on_no_changed_files(self) -> None:
+    @pytest.mark.anyio
+    async def test_returns_skip_plan_on_no_changed_files(self) -> None:
         config = _make_config()
         provider = _make_fake_provider()
 
@@ -233,12 +241,13 @@ class TestBuildReviewRuntimeSkip:
             "ai_pr_review.diff.compute.compute_diff",
             return_value=_make_diff_result(changed_files=[]),
         ):
-            result = build_review_runtime(config, provider_factory=lambda: provider)
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(result, SkipPlan)
         assert result.reason == "no changed files"
 
-    def test_skip_plan_carries_provider(self) -> None:
+    @pytest.mark.anyio
+    async def test_skip_plan_carries_provider(self) -> None:
         config = _make_config()
         provider = _make_fake_provider()
 
@@ -246,12 +255,13 @@ class TestBuildReviewRuntimeSkip:
             "ai_pr_review.diff.compute.compute_diff",
             return_value=_make_diff_result(changed_files=[]),
         ):
-            result = build_review_runtime(config, provider_factory=lambda: provider)
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(result, SkipPlan)
         assert result.provider is provider
 
-    def test_returns_skip_plan_on_diff_too_large(self) -> None:
+    @pytest.mark.anyio
+    async def test_returns_skip_plan_on_diff_too_large(self) -> None:
         config = _make_config(max_diff_lines=3)
         provider = _make_fake_provider()
         big_diff = "\n".join([f"+line {i}" for i in range(10)])
@@ -260,7 +270,7 @@ class TestBuildReviewRuntimeSkip:
             "ai_pr_review.diff.compute.compute_diff",
             return_value=_make_diff_result(diff_text=big_diff),
         ):
-            result = build_review_runtime(config, provider_factory=lambda: provider)
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(result, SkipPlan)
         assert "too large" in result.reason
@@ -269,7 +279,8 @@ class TestBuildReviewRuntimeSkip:
 class TestSarifRoutedViaExtraFindings:
     """SARIF findings from config.sarif_paths flow through orch_config.extra_findings."""
 
-    def test_sarif_paths_loaded_into_extra_findings(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_sarif_paths_loaded_into_extra_findings(self, tmp_path: Path) -> None:
         sarif_finding = Finding(
             finding="test-rule-id",
             path="src/main.py",
@@ -293,12 +304,13 @@ class TestSarifRoutedViaExtraFindings:
             ),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert sarif_finding in runtime.orch_config.extra_findings
 
-    def test_sarif_elapsed_s_propagated_to_runtime(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_sarif_elapsed_s_propagated_to_runtime(self, tmp_path: Path) -> None:
         """sarif_elapsed_s from load_sarif_files is stored on ReviewRuntime, not discarded."""
         config = _make_config(sarif_paths=(str(tmp_path / "results.sarif"),))
         provider = _make_fake_provider()
@@ -313,12 +325,13 @@ class TestSarifRoutedViaExtraFindings:
             ),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert runtime.sarif_elapsed_s == 1.23
 
-    def test_sarif_elapsed_s_is_none_when_no_sarif_paths(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_sarif_elapsed_s_is_none_when_no_sarif_paths(self, tmp_path: Path) -> None:
         """sarif_elapsed_s is None when no SARIF paths are configured."""
         config = _make_config()
         provider = _make_fake_provider()
@@ -329,7 +342,7 @@ class TestSarifRoutedViaExtraFindings:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert runtime.sarif_elapsed_s is None
@@ -338,7 +351,8 @@ class TestSarifRoutedViaExtraFindings:
 class TestExplicitConfigNoBashDefaults:
     """Explicit model fields are not overridden by provider defaults (#319 regression guard)."""
 
-    def test_explicit_models_preserved(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_explicit_models_preserved(self, tmp_path: Path) -> None:
         config = _make_config(
             provider="openai",
             model_standard="gpt-custom-standard",
@@ -352,7 +366,7 @@ class TestExplicitConfigNoBashDefaults:
             patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
             patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
         ):
-            runtime = build_review_runtime(config, provider_factory=lambda: provider)
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
 
         assert isinstance(runtime, ReviewRuntime)
         assert runtime.config.model_standard == "gpt-custom-standard"

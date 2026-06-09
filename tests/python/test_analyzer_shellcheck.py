@@ -215,7 +215,8 @@ class TestScanFile:
 
 
 class TestBridgeIntegration:
-    def test_shellcheck_uses_native_fn(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_shellcheck_uses_native_fn(self, tmp_path: Path) -> None:
         """run_analyzers dispatches to native_fn when set, not bash script."""
         from ai_pr_review.analyzers import bridge
         from ai_pr_review.analyzers.bridge import run_analyzers
@@ -233,11 +234,12 @@ class TestBridgeIntegration:
             for spec in original
         ]
         with patch.object(bridge, "_ANALYZERS", patched):
-            run_analyzers(cf, "/dev/null", str(tmp_path))
+            await run_analyzers(cf, "/dev/null", str(tmp_path))
 
         assert called, "Native fn was not called"
 
-    def test_native_fn_skipped_when_ineligible(self, tmp_path: Path) -> None:
+    @pytest.mark.anyio
+    async def test_native_fn_skipped_when_ineligible(self, tmp_path: Path) -> None:
         """native_fn is not called when required_file_types are absent from ChangedFiles."""
         from ai_pr_review.analyzers import bridge
         from ai_pr_review.analyzers.bridge import AnalyzerSpec, run_analyzers
@@ -250,11 +252,12 @@ class TestBridgeIntegration:
 
         spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], fake_native)
         with patch.object(bridge, "_ANALYZERS", [spec]):
-            run_analyzers(ChangedFiles(), "/dev/null", str(tmp_path))
+            await run_analyzers(ChangedFiles(), "/dev/null", str(tmp_path))
 
         assert not called, "Native fn was called despite no eligible files"
 
-    def test_native_fn_exception_is_caught(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    @pytest.mark.anyio
+    async def test_native_fn_exception_is_caught(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """Unhandled exception in native_fn must not abort run_analyzers."""
         from ai_pr_review.analyzers import bridge
         from ai_pr_review.analyzers.bridge import AnalyzerSpec, run_analyzers
@@ -265,7 +268,7 @@ class TestBridgeIntegration:
         spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], exploding_native)
         cf = ChangedFiles(shell=["review.sh"])
         with patch.object(bridge, "_ANALYZERS", [spec]):
-            findings = run_analyzers(cf, "/dev/null", str(tmp_path))
+            findings = await run_analyzers(cf, "/dev/null", str(tmp_path))
 
         assert findings == []
         captured = capsys.readouterr()

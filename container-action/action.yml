@@ -92,10 +92,27 @@ inputs:
     required: false
     default: '25'
 
-  max-tokens-per-agent:
-    description: 'Max output tokens per LLM agent call'
+  temperature:
+    description: >
+      Sampling temperature for LLM calls. Controls output randomness; lower values
+      produce more deterministic responses. Must be a float in [0, 2]. The default
+      (0.3) is tuned for code review. Sets AI_TEMPERATURE.
     required: false
-    default: '8192'
+    default: '0.3'
+
+  max-tokens-per-agent:
+    description: >
+      Maximum number of output tokens each LLM agent may generate per call.
+      Lower values reduce cost and latency; higher values allow more detailed output
+      on large diffs. Must be a positive integer; values outside [256, 65536] are
+      clamped to that range with a warning. Default changed from 32768 to 16384 in v1.3.0.
+    required: false
+    default: '16384'
+
+  analyzer-concurrency:
+    description: 'Maximum simultaneous native static-analyzer subprocesses (default 4; forced to 1 when parallel: false)'
+    required: false
+    default: '4'
 
   enable-suggestions:
     description: 'Enable "Apply suggestion" buttons on inline review comments (GitHub and GitLab; ignored on Bitbucket; increases token usage)'
@@ -216,7 +233,9 @@ runs:
         HEAD_SHA: ${{ inputs.head-sha }}
         AI_PARALLEL: ${{ inputs.parallel }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
+        AI_TEMPERATURE: ${{ inputs.temperature }}
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
+        AI_ANALYZER_CONCURRENCY: ${{ inputs.analyzer-concurrency }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
         AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
@@ -254,7 +273,9 @@ runs:
           -e HEAD_SHA \
           -e AI_PARALLEL \
           -e AI_MAX_INLINE \
+          -e AI_TEMPERATURE \
           -e AI_MAX_TOKENS_PER_AGENT \
+          -e AI_ANALYZER_CONCURRENCY \
           -e AI_ENABLE_SUGGESTIONS \
           -e AI_PR_REVIEW_ENGINE \
           -e AI_IGNORE_MERGE_COMMITS \

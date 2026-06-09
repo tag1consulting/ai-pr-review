@@ -243,8 +243,10 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
+| `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `8192` | Max output tokens per LLM agent call (clamped to 256–65536). Gemini defaults to `16384` when not set. |
+| `max-tokens-per-agent` | No | `16384` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 in v1.3.0. |
+| `analyzer-concurrency` | No | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `parallel: false`. Requires `engine: python`. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
 | `engine` | No | `python` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release). Required for opt-in capabilities below. |
 | `ignore-merge-commits` | No | `true` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. Set to `false` to review all commits including upstream merges. |
