@@ -9,7 +9,7 @@ import httpx
 
 from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, SUMMARY_MARKER_PREFIX
+from ai_pr_review.vcs.marker import INLINE_MARKER, SKIP_MARKER, SUMMARY_MARKER_PREFIX
 from ai_pr_review.vcs.protocol import VcsProvider
 
 
@@ -226,14 +226,67 @@ def test_post_summary_empty_body_refuses() -> None:
 # post_skip_comment
 # ---------------------------------------------------------------------------
 
+def _skip_item(id_: int) -> dict:
+    return {"id": id_, "content": {"raw": f"AI Review skipped.\n{INLINE_MARKER}\n{SKIP_MARKER}"}}
 
-def test_post_skip_comment_includes_inline_marker() -> None:
-    prov, rec = _make_provider(lambda _r: httpx.Response(201, json={"id": 1}))
+
+def test_post_skip_comment_creates_when_none_exist() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([]))
+        return httpx.Response(201, json={"id": 1})
+
+    prov, rec = _make_provider(handler)
     result = prov.post_skip_comment("No diff.")
     assert result.ok
-    raw = rec.calls[-1][2]["content"]["raw"]
+    assert result.created is True
+    post_call = next(c for c in rec.calls if c[0] == "POST")
+    raw = post_call[2]["content"]["raw"]
     assert INLINE_MARKER in raw
+    assert SKIP_MARKER in raw
     assert "No diff." in raw
+
+
+def test_post_skip_comment_upserts_existing() -> None:
+    existing = [_skip_item(55)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp(existing))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_skip_comment("Diff too large.")
+    assert result.ok
+    assert result.updated is True
+    assert result.comment_id == 55
+    put_call = next(c for c in rec.calls if c[0] == "PUT")
+    assert "/55" in put_call[1]
+    assert "Diff too large." in put_call[2]["content"]["raw"]
+
+
+def test_post_skip_comment_deletes_duplicates() -> None:
+    existing = [_skip_item(10), _skip_item(11), _skip_item(12)]
+    delete_targets: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp(existing))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 10})
+        if req.method == "DELETE":
+            delete_targets.append(str(req.url))
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_skip_comment("Too large.")
+    assert result.updated is True
+    assert result.comment_id == 10
+    assert len(delete_targets) == 2
+    assert all("/11" in u or "/12" in u for u in delete_targets)
 
 
 # ---------------------------------------------------------------------------

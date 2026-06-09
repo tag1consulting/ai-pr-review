@@ -22,6 +22,10 @@ _log = logging.getLogger(__name__)
 INLINE_MARKER: Final[str] = "<!-- ai-pr-review-inline -->"
 SUMMARY_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-summary"
 ID_MAP_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-id-map:"
+# Skip comments get their own marker so _list_skip_comments() can find them
+# independently of _list_summary_comments(). INLINE_MARKER is also appended
+# (for backward-compat stale-cleanup), but SKIP_MARKER is the upsert anchor.
+SKIP_MARKER: Final[str] = "<!-- ai-pr-review-skip -->"
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
@@ -143,6 +147,27 @@ def append_inline_marker(body: str) -> str:
         return INLINE_MARKER
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}{INLINE_MARKER}"
+
+
+def has_skip_marker(body: str) -> bool:
+    """Case-sensitive check for the skip ownership marker."""
+    return SKIP_MARKER in body
+
+
+def append_skip_marker(body: str) -> str:
+    """Append SKIP_MARKER (and INLINE_MARKER) to body (idempotent).
+
+    Both markers are appended so that:
+    - SKIP_MARKER serves as the upsert anchor for _list_skip_comments().
+    - INLINE_MARKER preserves backward-compat with the stale-cleanup path
+      which gates on INLINE_MARKER.
+    """
+    if not has_inline_marker(body):
+        separator = "" if body.endswith("\n") else "\n"
+        body = f"{body}{separator}{INLINE_MARKER}"
+    if not has_skip_marker(body):
+        body = f"{body}\n{SKIP_MARKER}"
+    return body
 
 
 def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
