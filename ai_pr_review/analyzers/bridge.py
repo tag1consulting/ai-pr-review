@@ -27,13 +27,13 @@ from pydantic import ValidationError
 from ai_pr_review.analyzers.native.eslint import _run_eslint
 from ai_pr_review.analyzers.native.golangci_lint import _run_golangci_lint
 from ai_pr_review.analyzers.native.hadolint import _run_hadolint
-from ai_pr_review.analyzers.native.tflint import _run_tflint
 from ai_pr_review.analyzers.native.kube_linter import _run_kube_linter
 from ai_pr_review.analyzers.native.phpcs import _run_phpcs
 from ai_pr_review.analyzers.native.phpstan import _run_phpstan
 from ai_pr_review.analyzers.native.ruff import _run_ruff
 from ai_pr_review.analyzers.native.semgrep import _run_semgrep
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
+from ai_pr_review.analyzers.native.tflint import _run_tflint
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
