@@ -40,8 +40,10 @@ from ai_pr_review.vcs.http import RecordingClient, RetryExhaustedError, RetryPol
 from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
+    append_skip_marker,
     build_summary_marker,
     extract_summary_sha,
+    has_skip_marker,
     replace_summary_sha,
 )
 from ai_pr_review.vcs.protocol import (
@@ -306,12 +308,68 @@ class GitLabProvider:
         return SummaryResult(comment_id=new_id, created=True, updated=False)
 
     # ------------------------------------------------------------------
-    # post_skip_comment
+    # _list_skip_notes / post_skip_comment
     # ------------------------------------------------------------------
+    def _list_skip_notes(self) -> list[dict[str, Any]]:
+        """Return all MR notes whose body contains SKIP_MARKER."""
+        results: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = self.client.request(
+                "GET",
+                self._notes_url(),
+                params={
+                    "per_page": 100,
+                    "page": page,
+                    "sort": "desc",
+                    "order_by": "updated_at",
+                },
+            )
+            if resp.status_code >= 400:
+                self._errors.append(
+                    f"list_skip_notes p{page}: HTTP {resp.status_code}: "
+                    f"{resp.text[:200]}"
+                )
+                return results
+            try:
+                page_data = resp.json() or []
+            except ValueError:
+                self._errors.append(
+                    f"list_skip_notes p{page}: non-JSON body "
+                    f"(status={resp.status_code}): {resp.text[:100]!r}"
+                )
+                return results
+            for item in page_data:
+                body = item.get("body") or ""
+                if has_skip_marker(body):
+                    results.append(item)
+            if len(page_data) < 100:
+                break
+            page += 1
+        return results
+
     def post_skip_comment(self, reason: str) -> SummaryResult:
-        body = append_inline_marker(
+        body = append_skip_marker(
             f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
         )
+        existing = self._list_skip_notes()
+        if existing:
+            keep = existing[0]
+            keep_id = int(keep["id"])
+            resp = self.client.request(
+                "PUT", self._note_url(keep_id), json_body={"body": body}
+            )
+            if resp.status_code >= 400:
+                err = f"update skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
+                self._errors.append(err)
+                return SummaryResult(
+                    comment_id=keep_id, created=False, updated=False, error=err
+                )
+            for dup in existing[1:]:
+                dup_id = int(dup["id"])
+                self.client.request("DELETE", self._note_url(dup_id))
+            return SummaryResult(comment_id=keep_id, created=False, updated=True)
+
         resp = self.client.request(
             "POST", self._notes_url(), json_body={"body": body}
         )

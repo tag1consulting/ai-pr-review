@@ -26,8 +26,10 @@ from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
+    append_skip_marker,
     build_summary_marker,
     extract_summary_sha,
+    has_skip_marker,
     replace_summary_sha,
 )
 from ai_pr_review.vcs.protocol import (
@@ -263,12 +265,54 @@ class GitHubProvider:
         return SummaryResult(comment_id=new_id, created=True, updated=False)
 
     # ------------------------------------------------------------------
-    # post_skip_comment — inline-marker-bearing no-op comment
+    # _list_skip_comments — find existing skip comments by SKIP_MARKER
+    # ------------------------------------------------------------------
+    def _list_skip_comments(self) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        url: str | None = self._issue_comments_url()
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                self._errors.append(
+                    f"list_skip_comments: HTTP {resp.status_code}: {resp.text[:200]}"
+                )
+                return results
+            page = resp.json() or []
+            for item in page:
+                body = item.get("body") or ""
+                if has_skip_marker(body):
+                    results.append(item)
+            next_url = _parse_next_link(resp.headers.get("link", ""))
+            url = next_url
+            params = None
+        return results
+
+    # ------------------------------------------------------------------
+    # post_skip_comment — upsert skip comment (mirrors post_summary)
     # ------------------------------------------------------------------
     def post_skip_comment(self, reason: str) -> SummaryResult:
-        body = append_inline_marker(
+        body = append_skip_marker(
             f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
         )
+        existing = self._list_skip_comments()
+        if existing:
+            keep = existing[0]
+            keep_id = int(keep["id"])
+            resp = self.client.request(
+                "PATCH", self._issue_comment_url(keep_id), json_body={"body": body}
+            )
+            if resp.status_code >= 400:
+                err = f"update skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
+                self._errors.append(err)
+                return SummaryResult(
+                    comment_id=keep_id, created=False, updated=False, error=err
+                )
+            for dup in existing[1:]:
+                dup_id = int(dup["id"])
+                self.client.request("DELETE", self._issue_comment_url(dup_id))
+            return SummaryResult(comment_id=keep_id, created=False, updated=True)
+
         resp = self.client.request(
             "POST", self._issue_comments_url(), json_body={"body": body}
         )
