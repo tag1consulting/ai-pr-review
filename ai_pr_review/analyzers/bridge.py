@@ -28,6 +28,7 @@ from ai_pr_review.analyzers.native.hadolint import _run_hadolint
 from ai_pr_review.analyzers.native.kube_linter import _run_kube_linter
 from ai_pr_review.analyzers.native.phpcs import _run_phpcs
 from ai_pr_review.analyzers.native.ruff import _run_ruff
+from ai_pr_review.analyzers.native.semgrep import _run_semgrep
 from ai_pr_review.analyzers.native.shellcheck import _run_shellcheck
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -48,7 +49,7 @@ class AnalyzerSpec(NamedTuple):
 _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], _run_shellcheck),
     AnalyzerSpec("trufflehog", "run-trufflehog.sh", []),
-    AnalyzerSpec("semgrep", "run-semgrep.sh", []),
+    AnalyzerSpec("semgrep", "run-semgrep.sh", [], _run_semgrep),
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
     AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"]),
     AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"], _run_hadolint),
