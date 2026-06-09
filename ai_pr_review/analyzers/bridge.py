@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 # Native analyzer imports (Epic 8). Each ported analyzer is imported here and
 # wired into _ANALYZERS via the native_fn field.
+from ai_pr_review.analyzers.native.checkov import _run_checkov
 from ai_pr_review.analyzers.native.cve_check import _run_cve_check
 from ai_pr_review.analyzers.native.eslint import _run_eslint
 from ai_pr_review.analyzers.native.golangci_lint import _run_golangci_lint
@@ -59,7 +60,7 @@ _ANALYZERS: list[AnalyzerSpec] = [
     AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
     AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"], _run_golangci_lint),
     AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"], _run_hadolint),
-    AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"]),
+    AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"], _run_checkov),
     AnalyzerSpec("phpcs", "run-phpcs.sh", ["php"], _run_phpcs),
     AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"], _run_phpstan),
     AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"], _run_eslint),
