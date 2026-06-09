@@ -93,6 +93,24 @@ class TestRunEslintFindings:
             mock_run.return_value = MagicMock(returncode=1, stdout=fixture, stderr="")
             return _run_eslint(cf, Path("/dev/null"))
 
+    def test_double_dash_precedes_target_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Argument-injection guard: target files must follow a literal "--".
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".eslintrc.json").write_text('{"rules":{}}\n')
+        f = tmp_path / "app.ts"
+        f.write_text("const x = 1;\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.eslint._find_eslint_bin", return_value=["/usr/bin/eslint"]),
+            patch("ai_pr_review.analyzers.native.eslint._supports_no_warn_ignored", return_value=False),
+            patch("ai_pr_review.analyzers.native.eslint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
+            _run_eslint(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        assert "--" in call_args
+        assert call_args.index("--") < call_args.index(str(f))
+
     def test_error_finding_maps_to_high(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         findings = self._run_with_fixture("eslint-error.json", tmp_path, monkeypatch)
         assert len(findings) == 1

@@ -76,6 +76,22 @@ class TestRunPhpstanGuards:
         call_args = mock_run.call_args[0][0]
         assert "--level=7" in call_args
 
+    def test_double_dash_precedes_target_files(self, tmp_path: Path) -> None:
+        # Argument-injection guard: every target file must follow a literal
+        # "--" so a dash-leading filename cannot be parsed as a phpstan flag.
+        f = tmp_path / "MyService.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
+            _run_phpstan(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        assert "--" in call_args
+        assert call_args.index("--") < call_args.index(str(f))
+
 
 class TestRunPhpstanFindings:
     def _run_with_fixture(self, fixture_name: str, tmp_path: Path) -> list:

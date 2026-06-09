@@ -110,6 +110,22 @@ class TestRunTrufflehogFindings:
             with patch("ai_pr_review.analyzers.native.trufflehog._load_allowlist", return_value=set()):
                 return _run_trufflehog(cf, Path("/dev/null"))
 
+    def test_double_dash_precedes_target_files(self, tmp_path: Path) -> None:
+        # Argument-injection guard: target files must follow a literal "--".
+        f = tmp_path / "settings.py"
+        f.write_text("x = 1\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.trufflehog.shutil.which", return_value="/usr/bin/trufflehog"),
+            patch("ai_pr_review.analyzers.native.trufflehog.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.trufflehog._load_allowlist", return_value=set()),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _run_trufflehog(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        assert "--" in call_args
+        assert call_args.index("--") < call_args.index(str(f))
+
     def _run_with_fixture_simple(self, fixture_name: str, tmp_path: Path) -> list:
         """Simpler helper that patches _load_allowlist directly."""
         fixture = _load_fixture(fixture_name)

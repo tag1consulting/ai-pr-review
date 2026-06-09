@@ -121,7 +121,9 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
     if (workspace / ".trufflehog.yml").is_file():
         config_args = ["--config", str(workspace / ".trufflehog.yml")]
 
-    cmd = ["trufflehog", "filesystem", "--json", "--no-update"] + config_args + target_files
+    # `--` stops option parsing so a changed-file path beginning with a dash is
+    # treated as a path, not a flag (argument-injection guard).
+    cmd = ["trufflehog", "filesystem", "--json", "--no-update"] + config_args + ["--"] + target_files
     try:
         result = subprocess.run(
             cmd,
