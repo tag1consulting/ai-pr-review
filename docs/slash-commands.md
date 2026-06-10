@@ -202,16 +202,22 @@ The comment-trigger workflow runs from the **default branch** of your repository
 
 ## Customizing
 
-The starter template exposes commented-out inputs for common customizations:
+The starter template exposes optional inputs for common customizations, each backed by a repository variable so you can configure them in **Settings → Variables** without editing the workflow file:
 
 ```yaml
-# provider: 'anthropic'        # LLM provider
-# base-url: ''                  # For openai-compatible/bedrock-proxy
-# image-tag: 'latest'           # Pin to a specific container version
-# review-mode-default: 'quick'  # Default mode for rescan command
+provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}        # LLM provider
+base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}                  # For openai-compatible/bedrock-proxy
+image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}          # Pin to a specific container version
+review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || 'quick' }}  # Default mode for rescan command
+
+# Analyzer / agent filtering (Python engine) — honored on rescan and review-full
+analyzers: ${{ vars.AI_REVIEW_ANALYZERS || '' }}                # Allowlist of analyzers (empty = all eligible)
+exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}  # Denylist (e.g. 'phpstan,phpcs')
+agents: ${{ vars.AI_REVIEW_AGENTS || '' }}                      # Allowlist of review agents
+exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}      # Denylist of review agents
 ```
 
-Uncomment and modify as needed. The complete list of inputs is documented in the reusable workflow file (`.github/workflows/slash-commands.yml` in this repository).
+The four `analyzers`/`agents` inputs mirror the main action inputs added in v1.6.0 and are now forwarded through `rescan` and `review-full` as well, so a project that excludes `phpstan,phpcs` on the main review will also skip them on manual rescans. Set the corresponding `AI_REVIEW_*` repo variables once and both paths stay in sync. The complete list of inputs is documented in the reusable workflow file (`.github/workflows/slash-commands.yml` in this repository).
 
 ## Architecture: reusable workflow
 
