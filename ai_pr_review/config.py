@@ -53,6 +53,11 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Diff exclude patterns ---
         "AI_EXCLUDE_PATTERNS",
         "AI_EXCLUDE_PATTERNS_MODE",
+        # --- Analyzer and agent allow/deny selection ---
+        "AI_ANALYZERS",
+        "AI_EXCLUDE_ANALYZERS",
+        "AI_AGENTS",
+        "AI_EXCLUDE_AGENTS",
         # --- Analyzer diff scope and concurrency ---
         "AI_ANALYZER_DIFF_SCOPE",
         "AI_ANALYZER_CONCURRENCY",
@@ -103,6 +108,24 @@ def _check_unknown_ai_vars() -> None:
         matches = difflib.get_close_matches(key, _KNOWN_AI_VARS, n=1, cutoff=0.6)
         suggestion = f" Did you mean {matches[0]!r}?" if matches else ""
         raise ConfigError(f"Unknown AI_* variable {key!r}.{suggestion}")
+
+
+def _validate_names_tuple(
+    values: tuple[str, ...],
+    valid_names: frozenset[str],
+    kind: str,
+) -> tuple[str, ...]:
+    """Validate that every name in *values* is in *valid_names*.
+
+    Raises ValueError with a nearest-match suggestion for the first unknown name,
+    mirroring the behavior of _check_unknown_ai_vars.
+    """
+    for name in values:
+        if name not in valid_names:
+            matches = difflib.get_close_matches(name, valid_names, n=1, cutoff=0.6)
+            suggestion = f" Did you mean {matches[0]!r}?" if matches else ""
+            raise ValueError(f"Unknown {kind} name {name!r}.{suggestion}")
+    return values
 
 
 class ReviewConfig(BaseModel):
@@ -160,6 +183,15 @@ class ReviewConfig(BaseModel):
     # --- Diff exclude patterns ---
     exclude_patterns: tuple[str, ...] = ()
     exclude_patterns_mode: str = "append"
+
+    # --- Analyzer and agent allow/deny selection ---
+    # Empty tuple (the default) means "no filtering" — all eligible items run.
+    # If the allowlist is non-empty, only listed names run (denylist is ignored).
+    # If the allowlist is empty, all names except those in the denylist run.
+    analyzers: tuple[str, ...] = ()
+    exclude_analyzers: tuple[str, ...] = ()
+    agents: tuple[str, ...] = ()
+    exclude_agents: tuple[str, ...] = ()
 
     # --- Analyzer diff-scope ---
     # Controls how out-of-diff native-analyzer findings are handled.
@@ -251,6 +283,23 @@ class ReviewConfig(BaseModel):
                 f"exclude_patterns_mode must be 'append' or 'replace', got {v!r}"
             )
         return normalized
+
+    @field_validator("analyzers", "exclude_analyzers")
+    @classmethod
+    def _validate_analyzer_names(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        if not v:
+            return v
+        # Lazy import to avoid pulling all native analyzer modules into config at startup.
+        from ai_pr_review.analyzers.bridge import ANALYZER_NAMES  # noqa: PLC0415
+        return _validate_names_tuple(v, ANALYZER_NAMES, "analyzer")
+
+    @field_validator("agents", "exclude_agents")
+    @classmethod
+    def _validate_agent_names(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        if not v:
+            return v
+        from ai_pr_review.agents.roster import AGENT_NAMES  # noqa: PLC0415
+        return _validate_names_tuple(v, AGENT_NAMES, "agent")
 
     @field_validator("temperature")
     @classmethod
@@ -392,6 +441,26 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             exclude_patterns_mode=os.environ.get("AI_EXCLUDE_PATTERNS_MODE", "append"),
+            analyzers=tuple(
+                p.strip()
+                for p in os.environ.get("AI_ANALYZERS", "").split(",")
+                if p.strip()
+            ),
+            exclude_analyzers=tuple(
+                p.strip()
+                for p in os.environ.get("AI_EXCLUDE_ANALYZERS", "").split(",")
+                if p.strip()
+            ),
+            agents=tuple(
+                p.strip()
+                for p in os.environ.get("AI_AGENTS", "").split(",")
+                if p.strip()
+            ),
+            exclude_agents=tuple(
+                p.strip()
+                for p in os.environ.get("AI_EXCLUDE_AGENTS", "").split(",")
+                if p.strip()
+            ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),

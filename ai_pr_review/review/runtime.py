@@ -88,7 +88,7 @@ async def build_review_runtime(
     requiring env vars. Defaults to `provider_from_env`.
     """
     from ai_pr_review.agents.gates import evaluate_gates, filter_agents
-    from ai_pr_review.agents.roster import AGENTS
+    from ai_pr_review.agents.roster import AGENTS, agent_allowed
     from ai_pr_review.findings.models import Finding as _Finding
 
     _factory = provider_factory if provider_factory is not None else provider_from_env
@@ -221,6 +221,12 @@ async def build_review_runtime(
     ]
     # Agents marked separately_dispatched run via their own code paths; exclude from generic dispatch.
     mode_filtered = [a for a in mode_filtered if not a.separately_dispatched]
+    # Apply allowlist/denylist narrowing before gate evaluation so gates still apply on top.
+    # Empty allow + empty deny => no filtering (all agents permitted).
+    mode_filtered = [
+        a for a in mode_filtered
+        if agent_allowed(a.name, config.agents, config.exclude_agents)
+    ]
     agents = filter_agents(mode_filtered, gates)
     if not agents:
         logger.warning(
@@ -232,13 +238,25 @@ async def build_review_runtime(
     # 10. Run native static analyzers — fail-soft; findings merged via extra_findings.
     analyzer_findings: list[_Finding] = []
     try:
-        from ai_pr_review.analyzers.bridge import _sarif_covered_names, run_analyzers
+        from ai_pr_review.analyzers.bridge import (
+            ANALYZER_NAMES,
+            _analyzer_skip_names,
+            _sarif_covered_names,
+            run_analyzers,
+        )
+        _disabled = _analyzer_skip_names(config.analyzers, config.exclude_analyzers)
+        if _disabled >= ANALYZER_NAMES:
+            logger.warning(
+                "analyzers: allow/deny configuration disables all known analyzers; "
+                "no static analysis will run"
+            )
         analyzer_findings = await run_analyzers(
             cf,
             diff_file=str(diff_path),
             script_dir=str(script_dir),
             concurrency=config.analyzer_concurrency,
             sarif_skip=_sarif_covered_names(config.sarif_paths),
+            disabled=_disabled,
         )
         if analyzer_findings:
             logger.info(

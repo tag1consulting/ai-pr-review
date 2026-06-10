@@ -71,6 +71,9 @@ _ANALYZERS: list[AnalyzerSpec] = [
 
 _SUBPROCESS_TIMEOUT_SECS = 120
 
+# Public canonical set — used by config validation for the analyzers allowlist/denylist inputs.
+ANALYZER_NAMES: frozenset[str] = frozenset(spec.name for spec in _ANALYZERS)
+
 # #353: Native analyzer names that can be skipped when equivalent SARIF is supplied.
 # Keyed by analyzer name (as in AnalyzerSpec.name). The caller derives which names
 # are covered by inspecting the sarif_paths configuration and passes them here.
@@ -93,6 +96,24 @@ def _sarif_covered_names(sarif_paths: tuple[str, ...]) -> frozenset[str]:
     return frozenset(covered)
 
 
+def _analyzer_skip_names(
+    allow: tuple[str, ...],
+    deny: tuple[str, ...],
+) -> frozenset[str]:
+    """Collapse allowlist/denylist config into a set of analyzer names to skip.
+
+    Semantics:
+    - If *allow* is non-empty, only analyzers in *allow* are permitted; every other
+      analyzer name is in the returned skip set. *deny* is ignored (allowlist takes
+      precedence).
+    - If *allow* is empty, the returned skip set equals *deny*.
+    - Both empty (the default) => empty skip set (no-op / zero behavioral change).
+    """
+    if allow:
+        return ANALYZER_NAMES - frozenset(allow)
+    return frozenset(deny)
+
+
 def _file_list(cf: ChangedFiles) -> str:
     """Return a sorted, deduplicated newline-joined string of all changed file paths."""
     return "\n".join(sorted(set(cf.all_files)))
@@ -106,6 +127,7 @@ async def run_analyzers(
     env: dict[str, str] | None = None,
     concurrency: int = 4,
     sarif_skip: frozenset[str] = frozenset(),
+    disabled: frozenset[str] = frozenset(),
 ) -> list[Finding]:
     """Run eligible analyzers concurrently and return normalised Finding instances.
 
@@ -117,6 +139,10 @@ async def run_analyzers(
         concurrency: Maximum simultaneous analyzer subprocesses.
         sarif_skip: Analyzer names to skip because equivalent SARIF is supplied.
             Derive with _sarif_covered_names(config.sarif_paths).
+        disabled: Analyzer names to skip due to allowlist/denylist configuration.
+            Derive with _analyzer_skip_names(config.analyzers, config.exclude_analyzers).
+            Kept separate from sarif_skip so the SARIF substitution log message stays
+            truthful.
     """
     analyzers_dir = Path(script_dir) / "analyzers"
     file_list = _file_list(changed_files)
@@ -127,6 +153,7 @@ async def run_analyzers(
         if _is_eligible(spec, changed_files)
         and (spec.native_fn is not None or (analyzers_dir / spec.script).is_file())
         and spec.name not in sarif_skip
+        and spec.name not in disabled
     ]
 
     # Log any skipped-due-to-SARIF entries so operators can verify the substitution.

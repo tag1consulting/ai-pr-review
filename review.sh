@@ -223,6 +223,12 @@ warn_capability_misconfig() {
   if [[ -n "${AI_SARIF_PATHS:-}" ]]; then
     echo "::warning::AI_SARIF_PATHS is set but AI_PR_REVIEW_ENGINE=${engine}; SARIF ingestion requires the Python engine and will be IGNORED. Set AI_PR_REVIEW_ENGINE=python to enable." >&2
   fi
+  local allow_deny_var
+  for allow_deny_var in AI_ANALYZERS AI_EXCLUDE_ANALYZERS AI_AGENTS AI_EXCLUDE_AGENTS; do
+    if [[ -n "${!allow_deny_var:-}" ]]; then
+      echo "::warning::${allow_deny_var} is set but AI_PR_REVIEW_ENGINE=${engine}; analyzer/agent allow-deny selection requires the Python engine and will be IGNORED. Set AI_PR_REVIEW_ENGINE=python to enable." >&2
+    fi
+  done
 }
 
 

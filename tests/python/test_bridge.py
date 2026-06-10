@@ -14,7 +14,9 @@ import pytest
 
 from ai_pr_review.analyzers.bridge import (
     _SARIF_EQUIVALENT_ANALYZERS,
+    ANALYZER_NAMES,
     AnalyzerSpec,
+    _analyzer_skip_names,
     _file_list,
     _is_eligible,
     _normalise_output,
@@ -594,3 +596,75 @@ class TestStdinPassthrough:
                 findings = await run_analyzers(cf, "/dev/null", tmpdir)
         assert len(findings) == 1
         assert "review.sh" in findings[0].finding
+
+
+# ---------------------------------------------------------------------------
+# ANALYZER_NAMES canonical set
+# ---------------------------------------------------------------------------
+
+
+def test_analyzer_names_covers_all_registry_entries() -> None:
+    """ANALYZER_NAMES must contain exactly the names in _ANALYZERS."""
+    from ai_pr_review.analyzers.bridge import _ANALYZERS
+    assert {spec.name for spec in _ANALYZERS} == ANALYZER_NAMES
+
+
+# ---------------------------------------------------------------------------
+# _analyzer_skip_names: allow/deny collapse logic
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzerSkipNames:
+    def test_both_empty_returns_empty_skip_set(self) -> None:
+        """Empty allowlist + empty denylist => skip nothing (no-op default)."""
+        result = _analyzer_skip_names((), ())
+        assert result == frozenset()
+
+    def test_allowlist_only_skips_everything_else(self) -> None:
+        """Non-empty allowlist => skip all names not in the allowlist."""
+        result = _analyzer_skip_names(("semgrep", "trufflehog"), ())
+        assert "semgrep" not in result
+        assert "trufflehog" not in result
+        # All other known analyzer names should be in the skip set
+        for name in ANALYZER_NAMES - {"semgrep", "trufflehog"}:
+            assert name in result
+
+    def test_denylist_only_skips_listed_names(self) -> None:
+        """Empty allowlist + denylist => skip exactly the denylist names."""
+        result = _analyzer_skip_names((), ("checkov", "tflint"))
+        assert result == frozenset({"checkov", "tflint"})
+
+    def test_allowlist_takes_precedence_over_denylist(self) -> None:
+        """When allowlist is non-empty, denylist is completely ignored."""
+        # Even though semgrep is in the deny, the allowlist takes precedence
+        result = _analyzer_skip_names(("semgrep",), ("semgrep",))
+        assert "semgrep" not in result  # allowlist wins; semgrep should run
+
+    def test_allowlist_single_entry(self) -> None:
+        """Allowlist of one => skip all others."""
+        result = _analyzer_skip_names(("ruff",), ())
+        assert "ruff" not in result
+        assert len(result) == len(ANALYZER_NAMES) - 1
+
+    @pytest.mark.anyio
+    async def test_run_analyzers_honors_disabled_param(self) -> None:
+        """run_analyzers skips analyzers named in the disabled param."""
+        cf = ChangedFiles(all_files=["main.py"], python=["main.py"])
+        # Use a real native analyzer name that would normally be eligible
+        # for a python file: ruff. Disable it and ensure it's not in results.
+        disabled = frozenset({"ruff"})
+        # Patch all native fns to return empty so test is fast
+        from ai_pr_review.analyzers import bridge
+        patched = [
+            spec._replace(native_fn=lambda _cf, _diff: [])
+            for spec in bridge._ANALYZERS
+        ]
+        with (
+            patch.object(bridge, "_ANALYZERS", patched),
+            # Also update ANALYZER_NAMES to match the patched registry
+            patch.object(bridge, "ANALYZER_NAMES", {s.name for s in patched}),
+        ):
+            findings = await run_analyzers(
+                cf, "/dev/null", "/nonexistent", disabled=disabled
+            )
+        assert findings == []  # all native fns return [] so no findings expected

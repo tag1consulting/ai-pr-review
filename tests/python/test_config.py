@@ -306,3 +306,110 @@ def test_max_tokens_per_agent_env_clamp_low(
     assert cfg.max_tokens_per_agent == 256
     captured = capsys.readouterr()
     assert "WARNING" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Allow/deny selection: analyzers and agents
+# ---------------------------------------------------------------------------
+
+
+def test_analyzer_agent_allowdeny_defaults_are_empty_tuples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All four allow/deny fields default to () when env vars are unset.
+
+    Pins the 'all-unset = no filtering' contract: empty tuple means no
+    allowlist/denylist in effect, so all eligible items run as before.
+    """
+    for var in ("AI_ANALYZERS", "AI_EXCLUDE_ANALYZERS", "AI_AGENTS", "AI_EXCLUDE_AGENTS"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.analyzers == ()
+    assert cfg.exclude_analyzers == ()
+    assert cfg.agents == ()
+    assert cfg.exclude_agents == ()
+
+
+def test_analyzer_agent_allowdeny_empty_string_yields_empty_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicitly empty-string env vars produce empty tuples (not ('',))."""
+    monkeypatch.setenv("AI_ANALYZERS", "")
+    monkeypatch.setenv("AI_EXCLUDE_ANALYZERS", "")
+    monkeypatch.setenv("AI_AGENTS", "")
+    monkeypatch.setenv("AI_EXCLUDE_AGENTS", "")
+    cfg = ReviewConfig.from_env()
+    assert cfg.analyzers == ()
+    assert cfg.exclude_analyzers == ()
+    assert cfg.agents == ()
+    assert cfg.exclude_agents == ()
+
+
+def test_analyzers_parsed_and_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_ANALYZERS is split on commas and whitespace is trimmed."""
+    monkeypatch.setenv("AI_ANALYZERS", "semgrep, trufflehog")
+    cfg = ReviewConfig.from_env()
+    assert cfg.analyzers == ("semgrep", "trufflehog")
+
+
+def test_exclude_analyzers_parsed_and_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_EXCLUDE_ANALYZERS is split on commas and whitespace is trimmed."""
+    monkeypatch.setenv("AI_EXCLUDE_ANALYZERS", "checkov, tflint")
+    cfg = ReviewConfig.from_env()
+    assert cfg.exclude_analyzers == ("checkov", "tflint")
+
+
+def test_agents_parsed_and_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_AGENTS is split on commas and whitespace is trimmed."""
+    monkeypatch.setenv("AI_AGENTS", "code-reviewer, edge-case-hunter")
+    cfg = ReviewConfig.from_env()
+    assert cfg.agents == ("code-reviewer", "edge-case-hunter")
+
+
+def test_exclude_agents_parsed_and_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_EXCLUDE_AGENTS is split on commas and whitespace is trimmed."""
+    monkeypatch.setenv("AI_EXCLUDE_AGENTS", "adversarial-general, blind-hunter")
+    cfg = ReviewConfig.from_env()
+    assert cfg.exclude_agents == ("adversarial-general", "blind-hunter")
+
+
+def test_unknown_analyzer_name_raises_with_suggestion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo'd analyzer name in AI_ANALYZERS fails at config load."""
+    monkeypatch.setenv("AI_ANALYZERS", "semgrap")  # typo of 'semgrep'
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig.from_env()
+    assert "semgrap" in str(exc_info.value)
+    assert "semgrep" in str(exc_info.value)  # suggestion
+
+
+def test_unknown_analyzer_in_denylist_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo'd name in the denylist (AI_EXCLUDE_ANALYZERS) also fails."""
+    monkeypatch.setenv("AI_EXCLUDE_ANALYZERS", "tflent")  # typo of 'tflint'
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig.from_env()
+    assert "tflent" in str(exc_info.value)
+
+
+def test_unknown_agent_name_raises_with_suggestion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo'd agent name in AI_AGENTS fails at config load."""
+    monkeypatch.setenv("AI_AGENTS", "edge-case-huntr")  # typo
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig.from_env()
+    assert "edge-case-huntr" in str(exc_info.value)
+    assert "edge-case-hunter" in str(exc_info.value)  # suggestion
+
+
+def test_unknown_agent_in_denylist_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo'd name in the denylist (AI_EXCLUDE_AGENTS) also fails."""
+    monkeypatch.setenv("AI_EXCLUDE_AGENTS", "adversarial-genral")  # typo
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig.from_env()
+    assert "adversarial-genral" in str(exc_info.value)

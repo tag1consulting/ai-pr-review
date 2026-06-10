@@ -36,6 +36,22 @@ On every PR push, this action:
 | **edge-case-hunter** | Traces every branching path for unhandled gaps |
 | **adversarial-general** | Cynical adversarial review |
 
+Full mode also runs **issue-linker** (GitHub-only, full mode): discovers related issues/PRs and assesses whether they are resolved by the current changes.
+
+## Controlling which agents run
+
+Use the `agents` (allowlist) and `exclude-agents` (denylist) inputs to control which agents run. Both accept a comma-separated list of the agent names above. Empty (default) means all eligible agents run.
+
+```yaml
+# Run only code-reviewer and security-reviewer:
+agents: 'code-reviewer,security-reviewer'
+
+# Run everything except edge-case-hunter and adversarial-general:
+exclude-agents: 'edge-case-hunter,adversarial-general'
+```
+
+When `agents` is set, `exclude-agents` is ignored (allowlist takes precedence). Existing gates still apply on top: a tier-2 agent in the allowlist still won't run in quick mode, and a conditionally-triggered agent still won't run if its trigger didn't fire. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected with an error and a suggestion. Requires `engine: python` (the default). See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
+
 ## Severity icons
 
 Findings use shape-distinct icons for accessibility:
