@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-10
+
+### Added
+
+- **Analyzer and agent allowlist/denylist selection** (#514): Four new action inputs let consumers control which static analyzers and LLM review agents run on each PR.
+  - `analyzers` (allowlist) — run only the listed analyzers; `exclude-analyzers` is ignored when set.
+  - `exclude-analyzers` (denylist) — skip the listed analyzers; all others run.
+  - `agents` (allowlist) — run only the listed agents; `exclude-agents` is ignored when set.
+  - `exclude-agents` (denylist) — skip the listed agents; all others run.
+
+  All four inputs are comma-separated and whitespace-trimmed. Empty (the default) means no filtering — full backward compatibility. When the allowlist is non-empty, the denylist is ignored (allowlist takes precedence). For agents, existing gates (`full_mode_only`, conditional triggers) still apply on top of the allowlist; the allowlist narrows the candidate set but never force-runs a gated agent. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected at config load with a nearest-match suggestion. Python engine only (same treatment as `exclude-patterns` and `sarif-paths`). Corresponding env vars: `AI_ANALYZERS`, `AI_EXCLUDE_ANALYZERS`, `AI_AGENTS`, `AI_EXCLUDE_AGENTS`.
+
 ## [1.5.0] - 2026-06-09
 
 ### Performance
