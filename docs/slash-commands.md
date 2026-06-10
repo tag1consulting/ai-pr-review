@@ -21,15 +21,21 @@ AI PR Review supports commands posted as PR comments. The workflow listens on bo
 
 ## Quick start
 
-### 1. Copy the starter workflow
+### 1. Use the unified workflow template
+
+Slash commands are built into the canonical `pr-review.yml` template — no separate file needed. If you followed the [Getting Started](getting-started) guide and copied `pr-review.yml` to `.github/workflows/ai-pr-review.yml`, slash commands are already wired in via the `slash-commands` job in that file.
+
+If you only have the minimal quickstart workflow (PR review only), replace it with the full template:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/tag1consulting/ai-pr-review/main/examples/workflows/comment-triggers.yml \
-  -o .github/workflows/ai-pr-review-commands.yml
+  https://raw.githubusercontent.com/tag1consulting/ai-pr-review/main/examples/workflows/pr-review.yml \
+  -o .github/workflows/ai-pr-review.yml
 ```
 
-This is a thin wrapper (~70 lines) that delegates to a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in the ai-pr-review repository. All command-parsing, review-dispatch, and dismiss/thread-resolution logic lives upstream — you don't need to maintain it.
+The `slash-commands` job in that template delegates to a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in the ai-pr-review repository. All command-parsing, review-dispatch, and dismiss/thread-resolution logic lives upstream — you don't need to maintain it.
+
+**Existing two-file setup?** If you already have a separate `ai-pr-review-commands.yml` using `comment-triggers.yml`, it continues to work unchanged. No migration is required.
 
 ### 2. Add a `GH_TOKEN` secret {#pat-requirement}
 
@@ -52,16 +58,15 @@ Then add it as a repository secret named `GH_TOKEN` (Settings → Secrets and va
 
 ### 3. Verify your API key secret
 
-The starter template references `secrets.ANTHROPIC_API_KEY`. If you use a different provider, update the `api-key` line and optionally uncomment the `provider` input.
+The template accepts `secrets.AI_REVIEW_API_KEY` or `secrets.ANTHROPIC_API_KEY` — either works without renaming. If you use a different provider, update the `provider` input accordingly.
 
 ### 4. Merge to your default branch
 
 > **This step is required before commands will work.** GitHub runs
 > `issue_comment` and `pull_request_review_comment` workflows from the
-> **default branch** only. If you add slash commands in the same PR as
-> the main review workflow, the review will start working immediately
-> (it uses `pull_request` events), but slash commands won't respond
-> until that PR merges.
+> **default branch** only. If you introduce the workflow file in a PR,
+> the automatic review (`pull_request` trigger) starts working immediately,
+> but slash commands won't respond until that PR merges.
 
 Commit and merge the workflow file. Once it lands on your default branch, post `/ai-pr-review help` in any PR to verify.
 
@@ -194,11 +199,12 @@ The workflow uses emoji reactions on the triggering comment to indicate status:
 
 ## Default-branch dispatch behavior
 
-The comment-trigger workflow runs from the **default branch** of your repository, not the PR branch. This is a GitHub Actions platform behavior.
+The `slash-commands` job (and any `issue_comment` / `pull_request_review_comment` workflow) runs from the **default branch** of your repository, not the PR branch. This is a GitHub Actions platform behavior.
 
 **What this means in practice:**
-- Changes to the comment-trigger workflow only take effect after they are merged to your default branch.
-- A PR that modifies `ai-pr-review-commands.yml` will not use its own updated version of the workflow while that PR is open — it uses the version already on the default branch.
+- Changes to slash-command behavior only take effect after `ai-pr-review.yml` is merged to your default branch.
+- A PR that modifies `ai-pr-review.yml` will not use its own updated version of the slash-commands job while that PR is open — it uses the version already on the default branch.
+- The automatic PR review (`pull_request` trigger) in the same file fires immediately on any branch, including a PR branch — only the comment-triggered jobs require a default-branch merge.
 
 ## Customizing
 
@@ -221,28 +227,31 @@ The four `analyzers`/`agents` inputs mirror the main action inputs added in v1.6
 
 ## Architecture: reusable workflow
 
-The slash command system is implemented as a GitHub Actions [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows):
+The slash command system is implemented as a GitHub Actions [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows). The `slash-commands` job in the unified `ai-pr-review.yml` calls it via `workflow_call`:
 
 ```
 Consumer repo                          ai-pr-review repo
-┌─────────────────────┐                ┌────────────────────────────────┐
-│ ai-pr-review-       │  workflow_call │ .github/workflows/             │
-│   commands.yml      │ ──────────────>│   slash-commands.yml           │
-│ (~70 lines)         │   forwards     │ (handle-command + dismiss jobs)│
-│                     │   event data   │                                │
-│ • on: issue_comment │   + secrets    │ • command parsing              │
-│ • on: pr_review_    │                │ • help / skip / rescan /       │
-│     comment         │                │   review-full dispatch         │
-└─────────────────────┘                │ • dismiss: GraphQL thread      │
-                                       │   resolution + review dismiss  │
-                                       └────────────────────────────────┘
+┌─────────────────────────────┐        ┌────────────────────────────────┐
+│ ai-pr-review.yml            │        │ .github/workflows/             │
+│                             │        │   slash-commands.yml           │
+│ jobs:                       │        │ (handle-command + dismiss jobs)│
+│   review:                   │        │                                │
+│     if: pull_request        │        │ • command parsing              │
+│     runs-on: ubuntu-latest  │        │ • help / skip / rescan /       │
+│     steps: [container-action│        │   review-full dispatch         │
+│                             │ ──────>│ • dismiss: GraphQL thread      │
+│   slash-commands:           │  call  │   resolution + review dismiss  │
+│     if: issue_comment ||    │        │                                │
+│         pr_review_comment   │        └────────────────────────────────┘
+│     uses: slash-commands.yml│
+└─────────────────────────────┘
 ```
 
 **Benefits:**
-- Consumers copy ~70 lines instead of ~455
+- One file configures both automatic review and slash commands
 - Bug fixes and new commands ship upstream — consumers get them automatically on their next run
 - The dismiss job's complex GraphQL logic never needs to be understood or maintained by consumers
-- Review action invocation stays in sync — no risk of consumers' rescan inputs drifting from their main review workflow
+- Review action and slash-command inputs share the same repo variables — no risk of drift
 
 ## Extending the command surface
 

@@ -42,7 +42,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-That's it — reviews start firing on the next PR. Want slash commands? (`/ai-pr-review rescan`, `review-full`, etc.) — see [Slash commands](slash-commands) for the additional workflow file.
+That's it — reviews start firing on the next PR. For slash commands (`/ai-pr-review rescan`, `review-full`, `dismiss`, etc.), use the full template from [`examples/workflows/pr-review.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/pr-review.yml) — it wires both automatic review and slash commands in a single file. See [Slash commands](slash-commands) for details.
 
 ## Supported VCS providers
 

@@ -6,8 +6,8 @@ Copy these files into your repository to enable AI PR/MR reviews.
 
 | File | Purpose |
 |---|---|
-| `workflows/pr-review.yml` | GitHub Actions: automatic review on PR open/sync. **Canonical template** — every input is wired to a `vars.AI_REVIEW_*` repo variable with a safe fallback, so you can flip any knob without editing the workflow. |
-| `workflows/comment-triggers.yml` | GitHub Actions: slash command support — thin wrapper that calls the reusable workflow (`/ai-pr-review rescan`, plus learning-loop commands when enabled) |
+| `workflows/pr-review.yml` | GitHub Actions: **unified single-file setup** — automatic review on PR open/sync AND slash commands (`/ai-pr-review rescan`, dismiss, etc.) in one workflow. **Canonical template** — every input is wired to a `vars.AI_REVIEW_*` repo variable with a safe fallback. |
+| `workflows/comment-triggers.yml` | GitHub Actions: **standalone slash-command wrapper** (two-file setup). Still fully supported for existing consumers. New repos should use `pr-review.yml` instead. |
 | `workflows/sarif-codeql.yml` | GitHub Actions: example **CodeQL + AI review** pipeline using Capability B (SARIF 2.1.0 ingestion) |
 | `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
 | `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
@@ -33,11 +33,34 @@ See [Configuration → Repository variables](../docs/configuration.md#repository
 
 ### 1. Add your LLM API key
 
-Add your provider API key as a repository secret. The examples use `ANTHROPIC_API_KEY`. For other providers, substitute the appropriate secret name and update `api-key` + `provider` in the workflow.
+Add your provider API key as a repository secret named `AI_REVIEW_API_KEY` (or `ANTHROPIC_API_KEY` — both work). For other providers, substitute the appropriate secret name and update `provider` in the workflow.
 
-### 2. Copy the workflow files
+### 2. Copy the unified workflow file
 
-Download the files directly from GitHub into your repo:
+Download the single file into your repo:
+
+```bash
+mkdir -p .github/workflows
+
+curl -fsSL \
+  https://raw.githubusercontent.com/tag1consulting/ai-pr-review/main/examples/workflows/pr-review.yml \
+  -o .github/workflows/ai-pr-review.yml
+```
+
+Or, if you have the repo cloned locally:
+
+```bash
+mkdir -p .github/workflows
+cp /path/to/ai-pr-review/examples/workflows/pr-review.yml .github/workflows/ai-pr-review.yml
+```
+
+Commit and push. The PR review fires automatically on the next opened or updated PR. Slash commands become active once this file is merged to your default branch (GitHub runs `issue_comment` and `pull_request_review_comment` workflows from the default branch only).
+
+#### Two-file setup (existing consumers)
+
+If you already have a separate `ai-pr-review-commands.yml` from an earlier setup, it continues to work unchanged — no migration is required. The reusable workflow it calls has not changed. If you want to consolidate to a single file, copy `pr-review.yml` over your existing `ai-pr-review.yml` and delete `ai-pr-review-commands.yml`.
+
+To add the two-file setup from scratch (advanced use case or custom command wiring):
 
 ```bash
 mkdir -p .github/workflows
@@ -51,25 +74,15 @@ curl -fsSL \
   -o .github/workflows/ai-pr-review-commands.yml
 ```
 
-Or, if you have the repo cloned locally:
-
-```bash
-mkdir -p .github/workflows
-cp /path/to/ai-pr-review/examples/workflows/pr-review.yml       .github/workflows/ai-pr-review.yml
-cp /path/to/ai-pr-review/examples/workflows/comment-triggers.yml .github/workflows/ai-pr-review-commands.yml
-```
-
-Commit and push. The review runs automatically on the next opened or updated PR.
-
 ## Auto-full for release PRs
 
 The example workflow auto-selects full review mode when the source branch starts with `release/`. Customize the `startsWith()` pattern in the `review-mode` expression for your repo's branch convention. See [README > Auto-detecting release PRs](../README.md#auto-detecting-release-prs) for common patterns.
 
 ## Slash commands
 
-The `comment-triggers.yml` starter is a thin wrapper (~70 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in this repository. All command parsing, review dispatch, and dismiss logic lives upstream — consumers don't need to maintain it.
+Slash commands are built into `pr-review.yml` — no additional file needed. The `slash-commands` job in that file calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted in this repository. All command parsing, review dispatch, and dismiss logic lives upstream — consumers don't need to maintain it.
 
-Once the file is merged to your default branch, post these commands in any PR comment:
+Once `pr-review.yml` is merged to your default branch, post these commands in any PR comment:
 
 | Command | Effect |
 |---|---|
@@ -92,8 +105,8 @@ See [docs/slash-commands.md](../docs/slash-commands.md) for full details.
 
 Both `issue_comment` and `pull_request_review_comment` workflows run from the **default branch** of your repository, not from the PR branch. This means:
 
-- Slash commands only work **after `comment-triggers.yml` is merged** to your default branch.
-- If you add slash commands in the same PR as the main review workflow, the review will start working immediately (it uses `pull_request` events), but slash commands won't respond until that PR merges.
+- Slash commands only work **after `ai-pr-review.yml` is merged** to your default branch.
+- If you introduce `ai-pr-review.yml` in a PR, the automatic review (`pull_request` trigger) starts working immediately, but slash commands won't respond until that PR merges to the default branch.
 
 This is a GitHub Actions platform behavior, not a limitation of this action.
 
