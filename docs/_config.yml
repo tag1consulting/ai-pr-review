@@ -35,4 +35,4 @@ exclude:
   - Gemfile.lock
   - node_modules
   - vendor
-  - ARCHITECTURE.md  # maintainer-only deep reference; intentionally no Jekyll frontmatter
+  - architecture-internals.md  # maintainer-only deep reference; intentionally no Jekyll frontmatter

@@ -453,7 +453,7 @@ Costs are calculated using rates from `config/model-pricing.json` and do not ref
 
 At runtime, `review.sh` computes the diff, dispatches LLM agents and static analyzers in parallel, merges and dedupes findings, then hands off to a provider-specific post-review script (`post-review.sh` for GitHub, `post-review-bitbucket.sh` for Bitbucket, `post-review-gitlab.sh` for GitLab) that posts the summary and inline findings and advances the SHA watermark.
 
-For the directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md). For deep implementation internals (findings pipeline, caching, parallel execution, suggestions, test architecture), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For the directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md). For deep implementation internals (findings pipeline, caching, parallel execution, suggestions, test architecture), see [docs/architecture-internals.md](docs/architecture-internals.md).
 
 ## License
 

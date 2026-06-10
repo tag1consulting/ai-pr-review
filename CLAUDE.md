@@ -148,7 +148,7 @@ shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh post-re
 
 ## Deep reference
 
-For detailed implementation internals (findings pipeline, parallel execution, caching, suggestions, suppressions, token accounting, retry/resilience, test architecture, Dockerfile layout), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For detailed implementation internals (findings pipeline, parallel execution, caching, suggestions, suppressions, token accounting, retry/resilience, test architecture, Dockerfile layout), see [docs/architecture-internals.md](docs/architecture-internals.md).
 
 For contributor how-tos (adding an analyzer, agent, language profile, or VCS provider), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
