@@ -50,6 +50,12 @@ jobs:
       # | feedback | explain | revise commands. Disabled by default; the
       # feedback-command job is skipped entirely until this is 'true'.
       enable-feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
+      # --- Analyzer / agent filtering (Python engine) ---
+      # Forwarded to rescan and review-full to keep them in sync with the main review.
+      analyzers: ${{ vars.AI_REVIEW_ANALYZERS || '' }}
+      exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}
+      agents: ${{ vars.AI_REVIEW_AGENTS || '' }}
+      exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}
     secrets:
       api-key: ${{ secrets.AI_REVIEW_API_KEY }}
       # Must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Forward analyzer/agent filters through the slash-command rescan path** (#516): `/ai-pr-review rescan` and `review-full` now accept and forward the `analyzers`, `exclude-analyzers`, `agents`, and `exclude-agents` inputs to the review container, matching the behavior of the main PR-triggered review. Previously a manual rescan re-ran every eligible analyzer/agent regardless of what the calling workflow had excluded. The consumer example wraps each input in an optional `vars.AI_REVIEW_*` repository variable (`AI_REVIEW_ANALYZERS`, `AI_REVIEW_EXCLUDE_ANALYZERS`, `AI_REVIEW_AGENTS`, `AI_REVIEW_EXCLUDE_AGENTS`) so a project can configure filtering once in Settings and have both the main review and all rescan paths honor it.
+
 ## [1.6.0] - 2026-06-10
 
 ### Added

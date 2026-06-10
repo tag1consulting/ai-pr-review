@@ -45,6 +45,47 @@ on:
         type: string
         required: false
         default: 'quick'
+      analyzers:
+        description: >
+          Allowlist of static analyzer names to run (comma-separated). When set, only the
+          listed analyzers run and exclude-analyzers is ignored. Empty (default): all
+          eligible analyzers run. Valid names: shellcheck, trufflehog, semgrep, ruff,
+          golangci-lint, hadolint, checkov, phpcs, phpstan, eslint, kube-linter, tflint,
+          cve-check. Python engine only.
+        type: string
+        required: false
+        default: ''
+      exclude-analyzers:
+        description: >
+          Denylist of static analyzer names to skip (comma-separated). Ignored when
+          analyzers (allowlist) is set. Empty (default): all eligible analyzers run. Valid
+          names: shellcheck, trufflehog, semgrep, ruff, golangci-lint, hadolint, checkov,
+          phpcs, phpstan, eslint, kube-linter, tflint, cve-check. Python engine only.
+        type: string
+        required: false
+        default: ''
+      agents:
+        description: >
+          Allowlist of review agent names to run (comma-separated). When set, only the
+          listed agents run and exclude-agents is ignored. Gates (full_mode_only,
+          conditional triggers) still apply on top. Empty (default): all eligible agents
+          run. Valid names: pr-summarizer, code-reviewer, silent-failure-hunter,
+          architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter,
+          adversarial-general, issue-linker. Python engine only.
+        type: string
+        required: false
+        default: ''
+      exclude-agents:
+        description: >
+          Denylist of review agent names to skip (comma-separated). Ignored when agents
+          (allowlist) is set. Excluding pr-summarizer suppresses the PR summary comment
+          entirely. Empty (default): all eligible agents run. Valid names: pr-summarizer,
+          code-reviewer, silent-failure-hunter, architecture-reviewer, security-reviewer,
+          blind-hunter, edge-case-hunter, adversarial-general, issue-linker. Python engine
+          only.
+        type: string
+        required: false
+        default: ''
       # GitHub context — the caller must forward these from the event payload.
       # workflow_call does not propagate github.event to the callee.
       event-name:
@@ -293,6 +334,10 @@ jobs:
           base-ref: ${{ steps.pr.outputs.base }}
           head-sha: ${{ steps.pr.outputs.sha }}
           review-mode: ${{ inputs.review-mode-default }}
+          analyzers: ${{ inputs.analyzers }}
+          exclude-analyzers: ${{ inputs.exclude-analyzers }}
+          agents: ${{ inputs.agents }}
+          exclude-agents: ${{ inputs.exclude-agents }}
 
       - name: Run review (review-full)
         if: steps.cmd.outputs.command == 'review-full'
@@ -309,6 +354,10 @@ jobs:
           base-ref: ${{ steps.pr.outputs.base }}
           head-sha: ${{ steps.pr.outputs.sha }}
           review-mode: 'full'
+          analyzers: ${{ inputs.analyzers }}
+          exclude-analyzers: ${{ inputs.exclude-analyzers }}
+          agents: ${{ inputs.agents }}
+          exclude-agents: ${{ inputs.exclude-agents }}
 
       - name: React — done
         if: |

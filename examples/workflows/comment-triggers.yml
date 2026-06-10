@@ -35,6 +35,14 @@
 #     from pull_request_review_comment events — the dismiss command requires a PAT.
 #   - Only users with write access to this repo can trigger commands
 #
+# Optional repo variables (Settings -> Variables -> New repository variable):
+#   AI_REVIEW_ANALYZERS          — allowlist of analyzers to run (comma-separated)
+#   AI_REVIEW_EXCLUDE_ANALYZERS  — denylist of analyzers to skip (e.g. 'phpstan,phpcs')
+#   AI_REVIEW_AGENTS             — allowlist of review agents to run (comma-separated)
+#   AI_REVIEW_EXCLUDE_AGENTS     — denylist of review agents to skip
+#   Setting these here ensures rescan and review-full honor the same filtering as the
+#   main PR-triggered review. Leave unset to run all eligible analyzers and agents.
+#
 # IMPORTANT: issue_comment and pull_request_review_comment workflows run from
 # the default branch only. Changes to this file take effect only after they are
 # merged to the default branch.
@@ -90,6 +98,14 @@ jobs:
       # Persistent feedback commands require GH_TOKEN with contents:write on
       # the ai-pr-review-bot branch. OWNER/MEMBER only (enforced upstream).
       enable-feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
+      # --- Analyzer / agent filtering (Python engine) ---
+      # These are forwarded to rescan and review-full to keep them in sync with
+      # the main review. Set the repo variables in Settings -> Variables.
+      # Leave unset (empty) to run all eligible analyzers and agents.
+      analyzers: ${{ vars.AI_REVIEW_ANALYZERS || '' }}
+      exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}
+      agents: ${{ vars.AI_REVIEW_AGENTS || '' }}
+      exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # GH_TOKEN must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.
