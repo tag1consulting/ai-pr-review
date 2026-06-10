@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Unified single-file workflow template** (#518): `examples/workflows/pr-review.yml` now wires both automatic PR review and slash commands (`/ai-pr-review rescan`, `dismiss`, `review-full`, etc.) in a single file. Consumers copy one file to `.github/workflows/ai-pr-review.yml` instead of two. The `review` job fires on `pull_request` events; the `slash-commands` job fires on `issue_comment` and `pull_request_review_comment` events, with per-job `if:` gating so exactly one job runs per event. The two-file setup (`pr-review.yml` + `comment-triggers.yml`) remains fully supported — `comment-triggers.yml` is kept at its existing path with no breaking changes, and the reusable `slash-commands.yml` workflow contract is unchanged. Secret-name backward compatibility is preserved via `${{ secrets.AI_REVIEW_API_KEY || secrets.ANTHROPIC_API_KEY }}`. This repo's own dogfood workflow (`ai-review.yml`) was also updated to the single-file pattern, replacing the separate `ai-review-commands.yml`.
+
 ### Fixed
 
 - **Forward analyzer/agent filters through the slash-command rescan path** (#516): `/ai-pr-review rescan` and `review-full` now accept and forward the `analyzers`, `exclude-analyzers`, `agents`, and `exclude-agents` inputs to the review container, matching the behavior of the main PR-triggered review. Previously a manual rescan re-ran every eligible analyzer/agent regardless of what the calling workflow had excluded. The consumer example wraps each input in an optional `vars.AI_REVIEW_*` repository variable (`AI_REVIEW_ANALYZERS`, `AI_REVIEW_EXCLUDE_ANALYZERS`, `AI_REVIEW_AGENTS`, `AI_REVIEW_EXCLUDE_AGENTS`) so a project can configure filtering once in Settings and have both the main review and all rescan paths honor it.

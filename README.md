@@ -41,7 +41,7 @@ jobs:
 That's it — reviews start firing on the next PR.
 
 **Going further:**
-- [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`)
+- [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`) — now built into the unified `pr-review.yml` template, no separate file needed
 - [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment (default on in the container image), SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All require the Python engine (the default since v1.0.0).
 - [Installation](#installation) — full-mode agents, provider configuration, [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) for the complete repo-variable pattern used by internal consumers
 
@@ -211,7 +211,7 @@ See [docs/local-development.md](docs/local-development.md) for the full referenc
 
 ## Slash commands
 
-Once the comment-trigger workflow is merged to your default branch, users with write access can post commands on any PR:
+Once `ai-pr-review.yml` is merged to your default branch, users with write access can post commands on any PR:
 
 | Command | Effect |
 |---|---|
@@ -226,7 +226,7 @@ Once the comment-trigger workflow is merged to your default branch, users with w
 | `/ai-pr-review explain` | Ask the agent for a longer explanation (stub for now — replies with a canned message). |
 | `/ai-pr-review revise <hint>` | Ask the agent to revise its verdict with a hint (stub for now). |
 
-Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-triggers.yml) to `.github/workflows/` in your repo — it's a thin wrapper (~70 lines) that calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted here, so all command logic is maintained upstream. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch requirement.
+Slash commands are built into the canonical [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) template — copy that single file to `.github/workflows/ai-pr-review.yml` and both automatic review and slash commands are wired in one place. The `slash-commands` job calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted here, so all command logic is maintained upstream. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch requirement.
 
 ## Action inputs
 

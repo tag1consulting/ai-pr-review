@@ -1,4 +1,18 @@
-# AI PR Review — slash command trigger
+# AI PR Review — standalone slash command trigger
+#
+# ── You probably do not need this file ───────────────────────────────────────
+#
+# Since v1.7.0, examples/workflows/pr-review.yml is a unified single-file setup
+# that handles BOTH automatic PR reviews AND slash commands in one workflow.
+# New repositories should copy pr-review.yml instead of this file.
+#
+# This file is kept for existing consumers who already have a two-file setup
+# (ai-pr-review.yml + ai-pr-review-commands.yml).  It continues to work
+# unchanged — the reusable workflow it calls has not changed.  No migration is
+# required.  If you prefer a single file, copy pr-review.yml over your existing
+# ai-pr-review.yml and delete ai-pr-review-commands.yml.
+#
+# ── What this file does ───────────────────────────────────────────────────────
 #
 # Copy this file to .github/workflows/ai-pr-review-commands.yml in your repo.
 #
