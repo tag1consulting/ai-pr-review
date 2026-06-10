@@ -92,6 +92,8 @@ On every PR push, this action:
 | **edge-case-hunter** | Traces every branching path for unhandled gaps |
 | **adversarial-general** | Cynical adversarial review |
 
+Use the `agents` and `exclude-agents` inputs to control which agents run. See [Action inputs](#action-inputs).
+
 ### Severity icons
 
 Findings use shape-distinct icons for accessibility:
@@ -254,6 +256,10 @@ Copy [examples/workflows/comment-triggers.yml](examples/workflows/comment-trigge
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. Requires `engine: python`. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | How `exclude-patterns` interacts with the built-in excludes (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are added after the built-ins. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
+| `analyzers` | No | `''` | Allowlist: comma-separated analyzer names to run. When set, only these analyzers run. Valid names: `shellcheck`, `trufflehog`, `semgrep`, `ruff`, `golangci-lint`, `hadolint`, `checkov`, `phpcs`, `phpstan`, `eslint`, `kube-linter`, `tflint`, `cve-check`. Empty (default): all eligible analyzers run. Requires `engine: python`. |
+| `exclude-analyzers` | No | `''` | Denylist: comma-separated analyzer names to skip. Ignored when `analyzers` is set. Empty (default): no analyzers skipped. Requires `engine: python`. |
+| `agents` | No | `''` | Allowlist: comma-separated agent names to run. When set, only these agents run (existing gates still apply). Valid names: `pr-summarizer`, `code-reviewer`, `silent-failure-hunter`, `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general`, `issue-linker`. Empty (default): all eligible agents run. Requires `engine: python`. |
+| `exclude-agents` | No | `''` | Denylist: comma-separated agent names to skip. Ignored when `agents` is set. Note: excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. Requires `engine: python`. |
 | `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour). LLM-agent findings are never affected. Requires `engine: python`. |
 | `feedback-loop` | No | `false` | Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. Requires `engine: python`. |
 

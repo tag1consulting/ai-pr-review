@@ -172,7 +172,28 @@ if len(_AGENTS_BY_NAME) != len(AGENTS):
         _seen.add(_a.name)
     raise ValueError(f"Duplicate agent names in AGENTS roster: {_dups}")
 
+# Public canonical set — used by config validation for the agents allowlist/denylist inputs.
+AGENT_NAMES: frozenset[str] = frozenset(_AGENTS_BY_NAME)
+
 
 def get_agent(name: str) -> AgentSpec:
     """Return the AgentSpec for the given name, raising KeyError if not found."""
     return _AGENTS_BY_NAME[name]
+
+
+def agent_allowed(
+    name: str,
+    allow: frozenset[str] | tuple[str, ...],
+    deny: frozenset[str] | tuple[str, ...],
+) -> bool:
+    """Return True if *name* is permitted given the allowlist/denylist config.
+
+    Semantics:
+    - If *allow* is non-empty, only names in *allow* are permitted; *deny* is
+      ignored (allowlist takes precedence).
+    - If *allow* is empty, all names except those in *deny* are permitted.
+    - Both empty (the default) => all names permitted (no-op / zero behavioral change).
+    """
+    if allow:
+        return name in allow
+    return name not in deny

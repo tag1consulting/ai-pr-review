@@ -162,9 +162,12 @@ async def _run_review_async(config: ReviewConfig) -> int:
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, rc.provider)
 
+    from ai_pr_review.agents.roster import agent_allowed as _agent_allowed
+
     # Run pr-summarizer on first review (fail-soft; skip on incremental runs).
+    # Also skip if the consumer has excluded it via the agents denylist or allowlist.
     summary_text = runtime.summary_prefix
-    if not runtime.is_incremental:
+    if not runtime.is_incremental and _agent_allowed("pr-summarizer", rc.agents, rc.exclude_agents):
         summary_text += await _run_summarizer(
             diff_text=runtime.diff.diff_text,
             manifest_text=runtime.manifest_text,
@@ -180,8 +183,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # the AI provider (anthropic/openai/bedrock/etc). The guard here avoids a wasted
     # LLM call on non-GitHub repos because the prompt checks for "github" and returns
     # NONE immediately otherwise.
+    # Also skip if the consumer has excluded it via the agents denylist or allowlist.
     # Fail-soft: if it returns NONE or errors, summary_text is unchanged.
-    if not runtime.is_incremental and rc.review_mode == "full" and rc.vcs_provider == "github":
+    if (
+        not runtime.is_incremental
+        and rc.review_mode == "full"
+        and rc.vcs_provider == "github"
+        and _agent_allowed("issue-linker", rc.agents, rc.exclude_agents)
+    ):
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,
             base_ref=runtime.base_ref,

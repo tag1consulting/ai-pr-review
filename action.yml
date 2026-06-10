@@ -199,6 +199,59 @@ inputs:
     required: false
     default: 'append'
 
+  analyzers:
+    description: >
+      Allowlist: comma-separated list of static analyzer names to run. When set,
+      only the listed analyzers run and exclude-analyzers is ignored. Valid names:
+      shellcheck, trufflehog, semgrep, ruff, golangci-lint, hadolint, checkov,
+      phpcs, phpstan, eslint, kube-linter, tflint, cve-check. Entries are split on
+      commas; surrounding whitespace is trimmed and empty entries are dropped.
+      Empty (default): no allowlist — all eligible analyzers run (subject to
+      exclude-analyzers). Unknown names are rejected with an error. Requires the
+      Python engine.
+    required: false
+    default: ''
+
+  exclude-analyzers:
+    description: >
+      Denylist: comma-separated list of static analyzer names to skip. All eligible
+      analyzers except those listed will run. Ignored when analyzers (allowlist) is
+      set. Valid names: shellcheck, trufflehog, semgrep, ruff, golangci-lint,
+      hadolint, checkov, phpcs, phpstan, eslint, kube-linter, tflint, cve-check.
+      Entries are split on commas; surrounding whitespace is trimmed and empty
+      entries are dropped. Empty (default): no denylist — all eligible analyzers
+      run. Unknown names are rejected with an error. Requires the Python engine.
+    required: false
+    default: ''
+
+  agents:
+    description: >
+      Allowlist: comma-separated list of review agent names to run. When set, only
+      the listed agents run and exclude-agents is ignored. Valid names: pr-summarizer,
+      code-reviewer, silent-failure-hunter, architecture-reviewer, security-reviewer,
+      blind-hunter, edge-case-hunter, adversarial-general, issue-linker. Entries are
+      split on commas; surrounding whitespace is trimmed and empty entries are dropped.
+      Gates (full_mode_only, conditional triggers) still apply on top of the allowlist.
+      Empty (default): no allowlist — all eligible agents run (subject to
+      exclude-agents). Unknown names are rejected with an error. Requires the Python
+      engine.
+    required: false
+    default: ''
+
+  exclude-agents:
+    description: >
+      Denylist: comma-separated list of review agent names to skip. All eligible
+      agents except those listed will run. Ignored when agents (allowlist) is set.
+      Valid names: pr-summarizer, code-reviewer, silent-failure-hunter,
+      architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter,
+      adversarial-general, issue-linker. Note: excluding pr-summarizer suppresses
+      the PR summary comment entirely, not just one reviewer. Entries are split on
+      commas; surrounding whitespace is trimmed and empty entries are dropped.
+      Empty (default): no denylist — all eligible agents run. Unknown names are
+      rejected with an error. Requires the Python engine.
+    required: false
+    default: ''
+
   analyzer-diff-scope:
     description: >
       Controls how native static-analyzer findings on lines outside the PR
@@ -314,6 +367,10 @@ runs:
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
         AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
+        AI_ANALYZERS: ${{ inputs.analyzers }}
+        AI_EXCLUDE_ANALYZERS: ${{ inputs.exclude-analyzers }}
+        AI_AGENTS: ${{ inputs.agents }}
+        AI_EXCLUDE_AGENTS: ${{ inputs.exclude-agents }}
         AI_ANALYZER_DIFF_SCOPE: ${{ inputs.analyzer-diff-scope }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}

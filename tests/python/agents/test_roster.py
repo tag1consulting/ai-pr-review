@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from ai_pr_review.agents.roster import AGENTS, AgentSpec, get_agent
+from ai_pr_review.agents.roster import AGENT_NAMES, AGENTS, AgentSpec, agent_allowed, get_agent
 
 # ---------------------------------------------------------------------------
 # AgentSpec validation
@@ -237,3 +237,64 @@ def test_generic_dispatch_excludes_separately_dispatched() -> None:
     assert "pr-summarizer" not in names
     assert "issue-linker" not in names
     assert "code-reviewer" in names
+
+
+# ---------------------------------------------------------------------------
+# AGENT_NAMES canonical set
+# ---------------------------------------------------------------------------
+
+
+def test_agent_names_matches_roster() -> None:
+    """AGENT_NAMES must exactly mirror the roster — no extras, no gaps."""
+    assert {a.name for a in AGENTS} == AGENT_NAMES
+
+
+def test_agent_names_covers_separately_dispatched() -> None:
+    """pr-summarizer and issue-linker must be in AGENT_NAMES for validation."""
+    assert "pr-summarizer" in AGENT_NAMES
+    assert "issue-linker" in AGENT_NAMES
+
+
+# ---------------------------------------------------------------------------
+# agent_allowed: allow/deny truth table
+# ---------------------------------------------------------------------------
+
+
+def test_agent_allowed_both_empty_permits_all() -> None:
+    """Empty allowlist + empty denylist => every agent is permitted (no-op default)."""
+    for name in AGENT_NAMES:
+        assert agent_allowed(name, (), ()) is True
+
+
+def test_agent_allowed_allowlist_restricts_to_listed() -> None:
+    """Non-empty allowlist permits only names in the allowlist."""
+    allow = ("code-reviewer", "edge-case-hunter")
+    for name in AGENT_NAMES:
+        expected = name in allow
+        assert agent_allowed(name, allow, ()) is expected
+
+
+def test_agent_allowed_denylist_blocks_listed() -> None:
+    """Denylist blocks the named agents; all others are permitted."""
+    deny = ("adversarial-general", "blind-hunter")
+    for name in AGENT_NAMES:
+        expected = name not in deny
+        assert agent_allowed(name, (), deny) is expected
+
+
+def test_agent_allowed_allowlist_takes_precedence_over_denylist() -> None:
+    """When allowlist is set, denylist is ignored entirely."""
+    allow = ("code-reviewer",)
+    deny = ("code-reviewer",)  # deny would block it, but allowlist takes precedence
+    # code-reviewer IS in the allowlist, so it should be permitted despite the deny
+    assert agent_allowed("code-reviewer", allow, deny) is True
+    # edge-case-hunter is NOT in the allowlist, so it must be blocked
+    assert agent_allowed("edge-case-hunter", allow, deny) is False
+
+
+def test_agent_allowed_frozenset_inputs() -> None:
+    """agent_allowed accepts frozenset inputs as well as tuples."""
+    allow: frozenset[str] = frozenset({"code-reviewer"})
+    deny: frozenset[str] = frozenset()
+    assert agent_allowed("code-reviewer", allow, deny) is True
+    assert agent_allowed("blind-hunter", allow, deny) is False

@@ -10,6 +10,20 @@ The action runs deterministic analyzers alongside the LLM agents. Their findings
 
 The container action ships all analyzer binaries pre-installed. For the direct-action or submodule paths, install the binaries you need; see [runtime dependencies](installation-direct-action#runtime-dependencies).
 
+## Controlling which analyzers run
+
+Use the `analyzers` (allowlist) and `exclude-analyzers` (denylist) inputs to control which analyzers run. Both accept a comma-separated list of the names in the **Analyzer** column below. Empty (default) means all eligible analyzers run.
+
+```yaml
+# Run only semgrep and trufflehog:
+analyzers: 'semgrep,trufflehog'
+
+# Run everything except checkov and tflint:
+exclude-analyzers: 'checkov,tflint'
+```
+
+When `analyzers` is set, `exclude-analyzers` is ignored (allowlist takes precedence). Unknown names are rejected with an error and a suggestion. Requires `engine: python` (the default). See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
+
 | Analyzer | Language gate | Severity mapping | Confidence | Source tag |
 |----------|--------------|-----------------|------------|------------|
 | **shellcheck** | `.sh`, `.bash` | `error`→High, `warning`→Medium | 95 | `shellcheck` |
