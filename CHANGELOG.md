@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-06-10
+
 ### Added
 
 - **Unified single-file workflow template** (#518): `examples/workflows/pr-review.yml` now wires both automatic PR review and slash commands (`/ai-pr-review rescan`, `dismiss`, `review-full`, etc.) in a single file. Consumers copy one file to `.github/workflows/ai-pr-review.yml` instead of two. The `review` job fires on `pull_request` events; the `slash-commands` job fires on `issue_comment` and `pull_request_review_comment` events, with per-job `if:` gating so exactly one job runs per event. The two-file setup (`pr-review.yml` + `comment-triggers.yml`) remains fully supported — `comment-triggers.yml` is kept at its existing path with no breaking changes, and the reusable `slash-commands.yml` workflow contract is unchanged. Secret-name backward compatibility is preserved via `${{ secrets.AI_REVIEW_API_KEY || secrets.ANTHROPIC_API_KEY }}`. This repo's own dogfood workflow (`ai-review.yml`) was also updated to the single-file pattern, replacing the separate `ai-review-commands.yml`.
