@@ -283,7 +283,7 @@ jobs:
         if: |
           steps.cmd.outputs.command == 'rescan' ||
           steps.cmd.outputs.command == 'review-full'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.repository }}
           ref: refs/pull/${{ inputs.issue-number }}/head
