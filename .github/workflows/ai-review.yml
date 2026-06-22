@@ -264,9 +264,6 @@ jobs:
           # vars.AI_REVIEW_PARALLEL disables tiered parallel fan-out (default true).
           # Set to 'false' if you hit provider rate limits.
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
-          # vars.AI_PR_REVIEW_ENGINE is set to 'python' in this repo's variables.
-          # SARIF ingestion (sarif-paths below) requires the Python engine.
-          engine: ${{ vars.AI_PR_REVIEW_ENGINE || 'python' }}
           # vars.AI_REVIEW_MAX_DIFF_LINES is a trusted repo variable (not user
           # input from a PR), so it's safe to interpolate directly into the
           # composite-action input. Default 5000 matches review.sh.
