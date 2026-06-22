@@ -169,8 +169,8 @@ development_status:
   # Parent issue #362. Issues #353/#354/#358/#359 all CLOSED.
   # Three stories remain: #369 (security prompt audit), #355 (profile routing), #360 remainder (judge pass).
   # Branch: rework/epic-7-quality-research
-  epic-7: in-progress
+  epic-7: done
   7-1-security-prompt-audit: done               # #369
   7-2-profile-routing: done                     # #355
-  7-3-judge-pass: ready-for-dev               # #360 remainder — depends on corroborated flag (already on main via PR #528)
+  7-3-judge-pass: done                          # #360 remainder — depends on corroborated flag (already on main via PR #528)
   epic-7-retrospective: optional

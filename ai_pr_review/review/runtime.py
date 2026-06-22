@@ -311,6 +311,7 @@ async def build_review_runtime(
         suppression_rules = ()
 
     # 13. Build orchestrator config.
+    _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
@@ -320,6 +321,9 @@ async def build_review_runtime(
         suppression_rules=suppression_rules,
         extra_findings=extra_findings,
         analyzer_diff_scope=config.analyzer_diff_scope,
+        enable_judge_pass=config.enable_judge_pass,
+        judge_model=config.model_standard,
+        judge_prompt_path=_judge_prompt_path if _judge_prompt_path.exists() else None,
     )
 
     return ReviewRuntime(

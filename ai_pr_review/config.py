@@ -68,6 +68,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_FEEDBACK_RETENTION_AGE_DAYS",
         # --- Language profile routing ---
         "AI_PROFILE_MAX_TOKENS",
+        # --- Judge pass ---
+        "AI_JUDGE_PASS",
         # --- Structured logging ---
         "AI_LOG_FORMAT",
         "AI_LOG_LEVEL",
@@ -212,6 +214,11 @@ class ReviewConfig(BaseModel):
 
     # --- Language profile routing ---
     profile_max_tokens: int = 4096
+
+    # --- Judge pass ---
+    # On by default per explicit decision (session 2026-06-22). Adds one cheap-model
+    # LLM call per review. Set AI_JUDGE_PASS=false to disable.
+    enable_judge_pass: bool = True
 
     # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
@@ -468,6 +475,7 @@ class ReviewConfig(BaseModel):
             ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
             profile_max_tokens=_int("AI_PROFILE_MAX_TOKENS", 4096),
+            enable_judge_pass=_bool("AI_JUDGE_PASS", True),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
             feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),

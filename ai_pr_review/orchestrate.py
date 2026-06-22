@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ai_pr_review.agents.dispatch import (
     AgentResult,
@@ -81,6 +82,11 @@ class OrchestrationConfig:
     # Controls how out-of-diff native-analyzer findings are handled.
     # Mirrors ReviewConfig.analyzer_diff_scope ("cap" / "drop" / "off").
     analyzer_diff_scope: str = "cap"
+    # Judge pass: one cheap-model LLM call after Phase 2.5 to down-rank weak
+    # single-source findings. On by default (Story 7-3, #360 remainder).
+    enable_judge_pass: bool = True
+    judge_model: str = ""
+    judge_prompt_path: Path | None = None
 
 
 TokenTableRenderer = Callable[[Sequence[AgentResult], float | None], str]
@@ -197,6 +203,24 @@ async def run_review(
             logger.warning(
                 "rollup_repeated_findings failed (head_sha=%s); proceeding without rollup: %s",
                 diff.head_sha, exc, exc_info=True,
+            )
+
+    # Phase 2.75: judge pass — down-rank weak single-source findings.
+    # Runs after merge/suppress/scope/rollup; before outcome classification.
+    # The judge uses a cheap model and sends only the candidate list (no diff).
+    # Fail-soft: any error returns kept unchanged. Corroborated findings exempt.
+    if cfg.enable_judge_pass and kept and cfg.judge_model and cfg.judge_prompt_path:
+        from ai_pr_review.findings.judge import judge_findings
+        try:
+            kept = await judge_findings(
+                kept,
+                llm_call=llm_call,
+                model=cfg.judge_model,
+                prompt_path=cfg.judge_prompt_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "judge pass raised unexpectedly (fail-soft): %s", exc, exc_info=True
             )
 
     # Phase 3: outcome classification.
