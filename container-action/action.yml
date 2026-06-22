@@ -163,6 +163,22 @@ inputs:
     required: false
     default: 'false'
 
+  judge-pass:
+    description: >
+      When true (default), run a cheap-model judge pass after findings are
+      extracted. The judge scores each candidate finding and down-ranks weak
+      single-source results. Corroborated findings are always kept. Adds one
+      LLM call per review. Set to 'false' to disable.
+    required: false
+    default: 'true'
+
+  profile-max-tokens:
+    description: >
+      Maximum token budget for per-agent language-profile context sections.
+      Default: 4096.
+    required: false
+    default: '4096'
+
   exclude-patterns:
     description: >
       Comma-separated list of git pathspec globs to exclude from the diff
@@ -291,6 +307,8 @@ runs:
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
+        AI_JUDGE_PASS: ${{ inputs.judge-pass }}
+        AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
         AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
         AI_ANALYZERS: ${{ inputs.analyzers }}
@@ -334,6 +352,8 @@ runs:
           -e AI_SARIF_PATHS \
           -e AI_CONTEXT_ENRICHMENT \
           -e AI_FEEDBACK_LOOP \
+          -e AI_JUDGE_PASS \
+          -e AI_PROFILE_MAX_TOKENS \
           -e AI_EXCLUDE_PATTERNS \
           -e AI_EXCLUDE_PATTERNS_MODE \
           -e AI_ANALYZERS \
