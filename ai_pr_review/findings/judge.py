@@ -145,7 +145,7 @@ async def judge_findings(
         model_id=model,
         system_prompt=system_prompt,
         user_message=user_message,
-        max_tokens=1024,
+        max_tokens=4096,
         temperature=0.0,
     )
 

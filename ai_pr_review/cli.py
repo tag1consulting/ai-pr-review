@@ -145,7 +145,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
-        result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config)
+        result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config.resolve_models())
         if config.telemetry_enabled:
             try:
                 resolved_cfg = config.resolve_models()

@@ -277,4 +277,4 @@ async def test_judge_llm_request_has_correct_model(tmp_path: Path) -> None:
     await judge_findings([f], llm_call=capture_call, model="claude-haiku-test", prompt_path=prompt)
     assert captured[0].model_id == "claude-haiku-test"
     assert captured[0].temperature == 0.0
-    assert captured[0].max_tokens == 1024
+    assert captured[0].max_tokens == 4096
