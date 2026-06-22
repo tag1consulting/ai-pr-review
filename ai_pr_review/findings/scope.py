@@ -57,12 +57,22 @@ _WHITESPACE = re.compile(r"\s+")
 ROLLUP_THRESHOLD = 5
 
 
+def is_analyzer_source(source: str) -> bool:
+    """Return True when a single source string is a native static-analyzer tag.
+
+    Matches by prefix against ``_ANALYZER_PREFIXES`` (case-insensitive).  This
+    is the canonical per-string predicate reused by ``_is_analyzer`` and by the
+    provenance-weighting module so that ``_ANALYZER_PREFIXES`` remains the sole
+    source of truth.
+    """
+    s = source.lower()
+    return any(s.startswith(p) for p in _ANALYZER_PREFIXES)
+
+
 def _is_analyzer(finding: Finding) -> bool:
     """Return True when a finding originates from a native static analyzer."""
     sources = finding.sources or ([finding.source] if finding.source else [])
-    return any(
-        s.lower().startswith(p) for s in sources for p in _ANALYZER_PREFIXES
-    )
+    return any(is_analyzer_source(s) for s in sources)
 
 
 def apply_diff_scope(

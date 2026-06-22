@@ -32,6 +32,11 @@ class Finding(BaseModel):
     # severity and rendered in a collapsed body section rather than the main
     # findings list.
     out_of_diff: bool = False
+    # Set by merge._collapse_cluster when the proximity cluster contains BOTH
+    # at least one native static-analyzer source AND at least one LLM-agent
+    # source — independent corroboration of the same file+line region.
+    # Internal-only: not serialised by to_dict().
+    corroborated: bool = False
 
     @field_validator("severity", mode="before")
     @classmethod

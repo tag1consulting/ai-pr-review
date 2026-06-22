@@ -11,6 +11,7 @@ cross-source duplicates).
 from __future__ import annotations
 
 from ai_pr_review.findings.models import Finding, Severity
+from ai_pr_review.findings.provenance import boosted_confidence, is_corroborated
 
 _SEVERITY_ORDER: dict[Severity, int] = {
     "Critical": 0,
@@ -106,7 +107,11 @@ def _collapse_cluster(cluster: list[Finding]) -> Finding:
                 seen.add(s)
                 all_sources.append(s)
 
-    return best.model_copy(update={"sources": sorted(all_sources)})
+    update: dict[str, object] = {"sources": sorted(all_sources)}
+    if is_corroborated(all_sources):
+        update["corroborated"] = True
+        update["confidence"] = boosted_confidence(best.confidence)
+    return best.model_copy(update=update)
 
 
 def _dedup_no_file(findings: list[Finding]) -> list[Finding]:

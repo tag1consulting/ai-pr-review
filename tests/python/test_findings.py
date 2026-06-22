@@ -312,6 +312,115 @@ def test_finding_rejects_confidence_out_of_range() -> None:
         Finding(severity="High", confidence=101, finding="x")
 
 
+# ---------------------------------------------------------------------------
+# Provenance weighting integration tests (Story 6-1)
+# ---------------------------------------------------------------------------
+
+
+def test_merge_corroboration_boosts_confidence() -> None:
+    """Analyzer + LLM-agent on the same location → corroborated + boosted."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="semgrep", confidence=90),
+        _make_finding(file="a.py", line=12, source="security-reviewer", confidence=90),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is True
+    assert result[0].confidence == 100  # 90 + 10
+
+
+def test_merge_two_agents_no_boost() -> None:
+    """Two LLM agents — no analyzer present → no corroboration, confidence unchanged."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="code-reviewer", confidence=80),
+        _make_finding(file="a.py", line=12, source="blind-hunter", confidence=80),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is False
+    assert result[0].confidence == 80
+
+
+def test_merge_two_analyzers_no_boost() -> None:
+    """Two analyzers — no LLM agent present → no corroboration."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="semgrep", confidence=90),
+        _make_finding(file="a.py", line=12, source="ruff", confidence=90),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is False
+
+
+def test_merge_single_finding_no_boost() -> None:
+    """A single finding is never corroborated."""
+    findings = [_make_finding(source="semgrep", confidence=90)]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is False
+    assert result[0].confidence == 90
+
+
+def test_merge_corroboration_cap() -> None:
+    """Boost is capped at 100 — 95 + 10 = 100, not 105."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="shellcheck", confidence=95),
+        _make_finding(file="a.py", line=12, source="security-reviewer", confidence=95),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is True
+    assert result[0].confidence == 100
+
+
+def test_merge_distant_not_corroborated() -> None:
+    """Analyzer and agent >3 lines apart → two separate findings, both uncorroborated."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="semgrep", confidence=90),
+        _make_finding(file="a.py", line=50, source="security-reviewer", confidence=90),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 2
+    assert all(f.corroborated is False for f in result)
+
+
+def test_merge_default_source_not_corroborated() -> None:
+    """The 'test' source (the _make_finding default) is neither analyzer nor agent."""
+    # Two 'test' sources nearby — they merge but are not corroborated.
+    findings = [
+        _make_finding(file="a.py", line=10, source="test", confidence=80),
+        _make_finding(file="a.py", line=12, source="test", confidence=80),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is False
+
+
+def test_merge_existing_two_agent_cluster_stays_uncorroborated() -> None:
+    """Regression: the existing proximity test with agent1/agent2 stays uncorroborated."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="agent1"),
+        _make_finding(file="a.py", line=12, source="agent2"),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert sorted(result[0].sources) == ["agent1", "agent2"]
+    assert result[0].corroborated is False
+
+
+def test_merge_existing_proximity_chaining_stays_uncorroborated() -> None:
+    """Regression: three-way chain of unknown sources stays uncorroborated."""
+    findings = [
+        _make_finding(file="a.py", line=1, source="s1"),
+        _make_finding(file="a.py", line=3, source="s2"),
+        _make_finding(file="a.py", line=6, source="s3"),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert sorted(result[0].sources) == ["s1", "s2", "s3"]
+    assert result[0].corroborated is False
+
+
 def test_finding_to_dict() -> None:
     f = Finding(
         severity="High",
