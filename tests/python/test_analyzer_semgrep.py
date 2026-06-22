@@ -263,6 +263,6 @@ class TestBridgeIntegration:
             for spec in bridge._ANALYZERS
         ]
         with patch.object(bridge, "_ANALYZERS", patched):
-            await run_analyzers(cf, "/dev/null", str(tmp_path))
+            await run_analyzers(cf, "/dev/null")
 
         assert called, "Native fn was not called"

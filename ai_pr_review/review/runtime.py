@@ -253,7 +253,6 @@ async def build_review_runtime(
         analyzer_findings = await run_analyzers(
             cf,
             diff_file=str(diff_path),
-            script_dir=str(script_dir),
             concurrency=config.analyzer_concurrency,
             sarif_skip=_sarif_covered_names(config.sarif_paths),
             disabled=_disabled,

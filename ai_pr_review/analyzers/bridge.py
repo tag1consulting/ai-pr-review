@@ -1,18 +1,14 @@
 """Analyzer bridge — invokes static analyzers and returns Finding instances.
 
-Dispatches to native Python callables (Epic 8) when available, falling back
-to run-*.sh wrappers via subprocess for tools not yet ported.
-
+Dispatches to native Python callables for each of the 13 supported analyzers.
 Uses the typed ChangedFiles from manifest.py to skip analyzers with no
-eligible files (closes #188). Normalizes JSON output into Finding instances.
+eligible files (closes #188). Returns Finding instances directly from each
+native callable.
 """
 
 from __future__ import annotations
 
 import functools
-import json
-import os
-import subprocess
 import sys
 import traceback
 from collections.abc import Callable
@@ -20,10 +16,9 @@ from pathlib import Path
 from typing import NamedTuple
 
 import anyio
-from pydantic import ValidationError
 
-# Native analyzer imports (Epic 8). Each ported analyzer is imported here and
-# wired into _ANALYZERS via the native_fn field.
+# Native analyzer imports (Epic 8). Each analyzer is implemented natively in
+# ai_pr_review/analyzers/native/ and wired into _ANALYZERS below.
 from ai_pr_review.analyzers.native.checkov import _run_checkov
 from ai_pr_review.analyzers.native.cve_check import _run_cve_check
 from ai_pr_review.analyzers.native.eslint import _run_eslint
@@ -45,31 +40,27 @@ NativeAnalyzerFn = Callable[[ChangedFiles, Path], list[Finding]]
 
 class AnalyzerSpec(NamedTuple):
     name: str
-    script: str
     # Files that must be non-empty in ChangedFiles for this analyzer to run.
     # Empty list = always run.
     required_file_types: list[str]
-    # When set, the native Python callable is used instead of the bash script.
-    native_fn: NativeAnalyzerFn | None = None
+    native_fn: NativeAnalyzerFn
 
 
 _ANALYZERS: list[AnalyzerSpec] = [
-    AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], _run_shellcheck),
-    AnalyzerSpec("trufflehog", "run-trufflehog.sh", [], _run_trufflehog),
-    AnalyzerSpec("semgrep", "run-semgrep.sh", [], _run_semgrep),
-    AnalyzerSpec("ruff", "run-ruff.sh", ["python"], _run_ruff),
-    AnalyzerSpec("golangci-lint", "run-golangci-lint.sh", ["go"], _run_golangci_lint),
-    AnalyzerSpec("hadolint", "run-hadolint.sh", ["dockerfile"], _run_hadolint),
-    AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"], _run_checkov),
-    AnalyzerSpec("phpcs", "run-phpcs.sh", ["php"], _run_phpcs),
-    AnalyzerSpec("phpstan", "run-phpstan.sh", ["php"], _run_phpstan),
-    AnalyzerSpec("eslint", "run-eslint.sh", ["js_ts"], _run_eslint),
-    AnalyzerSpec("kube-linter", "run-kube-linter.sh", ["iac"], _run_kube_linter),
-    AnalyzerSpec("tflint", "run-tflint.sh", ["terraform"], _run_tflint),
-    AnalyzerSpec("cve-check", "run-cve-check.sh", ["manifest_lockfile"], _run_cve_check),
+    AnalyzerSpec("shellcheck",    ["shell"],                    _run_shellcheck),
+    AnalyzerSpec("trufflehog",    [],                           _run_trufflehog),
+    AnalyzerSpec("semgrep",       [],                           _run_semgrep),
+    AnalyzerSpec("ruff",          ["python"],                   _run_ruff),
+    AnalyzerSpec("golangci-lint", ["go"],                       _run_golangci_lint),
+    AnalyzerSpec("hadolint",      ["dockerfile"],               _run_hadolint),
+    AnalyzerSpec("checkov",       ["terraform", "iac", "dockerfile"], _run_checkov),
+    AnalyzerSpec("phpcs",         ["php"],                      _run_phpcs),
+    AnalyzerSpec("phpstan",       ["php"],                      _run_phpstan),
+    AnalyzerSpec("eslint",        ["js_ts"],                    _run_eslint),
+    AnalyzerSpec("kube-linter",   ["iac"],                      _run_kube_linter),
+    AnalyzerSpec("tflint",        ["terraform"],                _run_tflint),
+    AnalyzerSpec("cve-check",     ["manifest_lockfile"],        _run_cve_check),
 ]
-
-_SUBPROCESS_TIMEOUT_SECS = 120
 
 # Public canonical set — used by config validation for the analyzers allowlist/denylist inputs.
 ANALYZER_NAMES: frozenset[str] = frozenset(spec.name for spec in _ANALYZERS)
@@ -122,21 +113,17 @@ def _file_list(cf: ChangedFiles) -> str:
 async def run_analyzers(
     changed_files: ChangedFiles,
     diff_file: str,
-    script_dir: str,
     *,
-    env: dict[str, str] | None = None,
     concurrency: int = 4,
     sarif_skip: frozenset[str] = frozenset(),
     disabled: frozenset[str] = frozenset(),
 ) -> list[Finding]:
-    """Run eligible analyzers concurrently and return normalised Finding instances.
+    """Run eligible analyzers concurrently and return Finding instances.
 
     Args:
         changed_files: Files changed in the PR.
-        diff_file: Path to the diff file consumed by analyzer wrappers.
-        script_dir: Directory containing the analyzers/ subdirectory.
-        env: Extra environment variables forwarded to each wrapper.
-        concurrency: Maximum simultaneous analyzer subprocesses.
+        diff_file: Path to the diff file passed to each native analyzer.
+        concurrency: Maximum simultaneous analyzer tasks.
         sarif_skip: Analyzer names to skip because equivalent SARIF is supplied.
             Derive with _sarif_covered_names(config.sarif_paths).
         disabled: Analyzer names to skip due to allowlist/denylist configuration.
@@ -144,14 +131,10 @@ async def run_analyzers(
             Kept separate from sarif_skip so the SARIF substitution log message stays
             truthful.
     """
-    analyzers_dir = Path(script_dir) / "analyzers"
-    file_list = _file_list(changed_files)
-
-    # Pre-select eligible specs. Native analyzers don't require a script file on disk.
+    # Pre-select eligible specs.
     eligible = [
         spec for spec in _ANALYZERS
         if _is_eligible(spec, changed_files)
-        and (spec.native_fn is not None or (analyzers_dir / spec.script).is_file())
         and spec.name not in sarif_skip
         and spec.name not in disabled
     ]
@@ -160,7 +143,6 @@ async def run_analyzers(
     sarif_skipped = [
         spec for spec in _ANALYZERS
         if _is_eligible(spec, changed_files)
-        and (spec.native_fn is not None or (analyzers_dir / spec.script).is_file())
         and spec.name in sarif_skip
     ]
     for spec in sarif_skipped:
@@ -176,40 +158,17 @@ async def run_analyzers(
     limiter = anyio.CapacityLimiter(max(1, concurrency))
 
     async def _run_slot(idx: int, spec: AnalyzerSpec) -> None:
-        if spec.native_fn is not None:
-            try:
-                findings = await anyio.to_thread.run_sync(
-                    functools.partial(spec.native_fn, changed_files, Path(diff_file)),
-                    cancellable=True,
-                    limiter=limiter,
-                )
-            except BaseException as exc:
-                if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt, SystemExit)):
-                    raise
-                print(
-                    f"\n[ai-pr-review] WARNING: {spec.name} native analyzer raised an unexpected error: "
-                    f"{type(exc).__name__}: {exc}; skipping.\n"
-                    f"{traceback.format_exc()}",
-                    file=sys.stderr,
-                )
-                findings = []
-            slots[idx] = findings
-            return
-
-        script_path = str(analyzers_dir / spec.script)
         try:
             findings = await anyio.to_thread.run_sync(
-                functools.partial(
-                    _run_analyzer, spec, script_path, diff_file, env or {}, file_list
-                ),
+                functools.partial(spec.native_fn, changed_files, Path(diff_file)),
                 cancellable=True,
                 limiter=limiter,
             )
         except BaseException as exc:
-            if isinstance(exc, anyio.get_cancelled_exc_class()):
+            if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt, SystemExit)):
                 raise
             print(
-                f"\n[ai-pr-review] WARNING: {spec.name} raised an unexpected error: "
+                f"\n[ai-pr-review] WARNING: {spec.name} native analyzer raised an unexpected error: "
                 f"{type(exc).__name__}: {exc}; skipping.\n"
                 f"{traceback.format_exc()}",
                 file=sys.stderr,
@@ -233,73 +192,3 @@ def _is_eligible(spec: AnalyzerSpec, cf: ChangedFiles) -> bool:
     if not spec.required_file_types:
         return True
     return any(bool(getattr(cf, ft, [])) for ft in spec.required_file_types)
-
-
-def _run_analyzer(
-    spec: AnalyzerSpec,
-    script_path: str,
-    diff_file: str,
-    extra_env: dict[str, str],
-    file_list: str = "",
-) -> list[Finding]:
-    run_env = {**os.environ, **extra_env, "DIFF_FILE": diff_file}
-    try:
-        result = subprocess.run(
-            ["bash", script_path],
-            capture_output=True,
-            text=True,
-            input=file_list,
-            env=run_env,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired:
-        print(
-            f"\n[ai-pr-review] WARNING: {spec.name} timed out after {_SUBPROCESS_TIMEOUT_SECS}s; skipping.",
-            file=sys.stderr,
-        )
-        return []
-    except OSError as exc:
-        print(f"\n[ai-pr-review] WARNING: {spec.name} failed to start: {exc}; skipping.", file=sys.stderr)
-        return []
-
-    if result.returncode not in (0, 1):
-        print(
-            f"\n[ai-pr-review] WARNING: {spec.name} exited {result.returncode}; skipping. "
-            f"stderr: {result.stderr[:200]}",
-            file=sys.stderr,
-        )
-        return []
-
-    output = result.stdout.strip()
-    if not output:
-        return []
-
-    return _normalise_output(output, spec.name)
-
-
-def _normalise_output(output: str, source: str) -> list[Finding]:
-    """Parse JSON array of findings from analyzer stdout."""
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError:
-        print(
-            f"\n[ai-pr-review] WARNING: {source} produced non-JSON output; skipping. Preview: {output[:200]}",
-            file=sys.stderr,
-        )
-        return []
-
-    if not isinstance(data, list):
-        return []
-
-    findings: list[Finding] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        if not item.get("source"):
-            item["source"] = source
-        try:
-            findings.append(Finding.model_validate(item))
-        except ValidationError as exc:
-            print(f"WARNING: {source} dropped malformed finding: {exc}", file=sys.stderr)
-
-    return findings
