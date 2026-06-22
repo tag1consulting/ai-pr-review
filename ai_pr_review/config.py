@@ -39,7 +39,6 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_DRY_RUN",
         "AI_IGNORE_MERGE_COMMITS",
         "AI_PR_REVIEW_RECORD_DIR",
-        "AI_PR_REVIEW_ENGINE",
         "AI_PR_REVIEW_COMPUTE_OUTPUT",
         "AI_PR_REVIEW_SCRIPT_DIR",
         # Claude Code sets this in its agent environment; not a user-configured var.
@@ -240,8 +239,7 @@ class ReviewConfig(BaseModel):
     # --- PHP ---
     phpstan_level: int = 3
 
-    # --- Engine / recording ---
-    engine: str = "python"
+    # --- Recording ---
     record_dir: str = ""
     compute_output: str = ""
 
@@ -265,13 +263,6 @@ class ReviewConfig(BaseModel):
     def _validate_vcs_provider(cls, v: str) -> str:
         if v not in ("github", "bitbucket", "gitlab"):
             raise ValueError(f"vcs_provider must be github/bitbucket/gitlab, got {v!r}")
-        return v
-
-    @field_validator("engine")
-    @classmethod
-    def _validate_engine(cls, v: str) -> str:
-        if v not in ("bash", "python"):
-            raise ValueError(f"engine must be 'bash' or 'python', got {v!r}")
         return v
 
     @field_validator("exclude_patterns_mode")
@@ -492,7 +483,6 @@ class ReviewConfig(BaseModel):
             ),
             ci_job_token=os.environ.get("CI_JOB_TOKEN", ""),
             phpstan_level=_int("PHPSTAN_LEVEL", 3),
-            engine=os.environ.get("AI_PR_REVIEW_ENGINE", "python"),
             record_dir=os.environ.get("AI_PR_REVIEW_RECORD_DIR", ""),
             compute_output=os.environ.get("AI_PR_REVIEW_COMPUTE_OUTPUT", ""),
             log_format=os.environ.get("AI_LOG_FORMAT", "human"),
@@ -504,8 +494,8 @@ class ReviewConfig(BaseModel):
     def resolve_models(self) -> ReviewConfig:
         """Return a copy with provider model defaults applied.
 
-        Mirrors the provider default table in review.sh so direct Python
-        invocation works without bash pre-filling AI_MODEL_STANDARD.
+        Fills in AI_MODEL_STANDARD / AI_MODEL_PREMIUM defaults per provider
+        when they are not set in the environment.
         openai-compatible is left as-is (user must specify).
         """
         _PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {

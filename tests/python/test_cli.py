@@ -150,7 +150,6 @@ class TestComputeCommand:
             "BASE_REF": "main",
             "HEAD_SHA": "abc1234",
             "PR_NUMBER": "42",
-            "AI_PR_REVIEW_ENGINE": "python",
         }
 
     def test_config_error_exits_1(self) -> None:

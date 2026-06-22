@@ -3,9 +3,8 @@
 Subcommands:
 - `compute`: run the compute phase only, writing a JSON payload to
   AI_PR_REVIEW_COMPUTE_OUTPUT. Retained for backwards compatibility.
-- `review`: end-to-end Python pipeline (compute -> dispatch agents ->
-  extract findings -> outcome -> post via VcsProvider). Replaces the
-  bash post-review scripts when AI_PR_REVIEW_ENGINE=python.
+- `review`: end-to-end pipeline (compute -> dispatch agents ->
+  extract findings -> outcome -> post via VcsProvider).
 - `slash`: handle one ``/ai-pr-review`` comment command.
 """
 
@@ -97,12 +96,12 @@ def compute(output: str) -> None:
 
 @cli.command()
 def review() -> None:
-    """Run the end-to-end Python review pipeline.
+    """Run the end-to-end review pipeline.
 
     Builds the VCS provider, runs compute -> dispatch -> post in one process.
-    Reads configuration from the same environment variables review.sh
-    consumed (PR_NUMBER, BASE_REF, HEAD_SHA, GITHUB_REPOSITORY, etc.) plus
-    VCS_PROVIDER for selecting the posting target.
+    Reads configuration from environment variables (PR_NUMBER, BASE_REF,
+    HEAD_SHA, GITHUB_REPOSITORY, etc.) and VCS_PROVIDER for selecting the
+    posting target.
 
     Exit codes:
       0 — review posted successfully (or skipped cleanly)

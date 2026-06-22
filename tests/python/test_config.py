@@ -30,7 +30,6 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = ReviewConfig.from_env()
     assert cfg.provider == "anthropic"
     assert cfg.review_mode == "quick"
-    assert cfg.engine == "python"
     assert cfg.confidence_threshold == 75
     assert cfg.max_diff_lines == 5000
     assert cfg.parallel is True
@@ -63,25 +62,24 @@ def test_ignore_merge_commits_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.ignore_merge_commits is False
 
 
-def test_engine_field_default() -> None:
-    """ReviewConfig() bare constructor should default engine to 'python'."""
-    cfg = ReviewConfig()
-    assert cfg.engine == "python"
-
-
 def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_REVIEW_MODE", "full")
-    monkeypatch.setenv("AI_PR_REVIEW_ENGINE", "python")
     monkeypatch.setenv("AI_CONFIDENCE_THRESHOLD", "50")
     cfg = ReviewConfig.from_env()
     assert cfg.review_mode == "full"
-    assert cfg.engine == "python"
     assert cfg.confidence_threshold == 50
 
 
 def test_unknown_ai_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_TOTALLY_MADE_UP", "1")
     with pytest.raises(ConfigError, match="AI_TOTALLY_MADE_UP"):
+        ReviewConfig.from_env()
+
+
+def test_engine_env_var_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_PR_REVIEW_ENGINE is no longer a known var; callers setting it get a ConfigError."""
+    monkeypatch.setenv("AI_PR_REVIEW_ENGINE", "python")
+    with pytest.raises(ConfigError, match="AI_PR_REVIEW_ENGINE"):
         ReviewConfig.from_env()
 
 
@@ -118,11 +116,6 @@ def test_deprecated_aliases_are_disjoint_from_known_vars() -> None:
 def test_invalid_review_mode() -> None:
     with pytest.raises(ValueError):
         ReviewConfig.model_validate({"review_mode": "invalid"})
-
-
-def test_invalid_engine() -> None:
-    with pytest.raises(ValueError):
-        ReviewConfig.model_validate({"engine": "ruby"})
 
 
 def test_invalid_confidence_threshold() -> None:

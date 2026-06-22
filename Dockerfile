@@ -222,8 +222,6 @@ COPY THIRD-PARTY-LICENSES/ /opt/ai-pr-review/THIRD-PARTY-LICENSES/
 COPY ai_pr_review/      /opt/ai-pr-review/ai_pr_review/
 COPY pyproject.toml     /opt/ai-pr-review/pyproject.toml
 
-RUN chmod +x /opt/ai-pr-review/*.sh /opt/ai-pr-review/analyzers/*.sh
-
 # Run as non-root
 RUN groupadd -r app --gid 1001 && \
     useradd -r -g app --uid 1001 -d /home/app -m app && \
@@ -238,4 +236,9 @@ USER 1001:1001
 
 WORKDIR /workspace
 
-ENTRYPOINT ["/opt/ai-pr-review/review.sh"]
+# Point the Python engine at the asset directories (prompts/, language-profiles/,
+# config/) copied to /opt/ai-pr-review. Without this var, runtime.py falls back
+# to a dist-packages path that does not contain these directories.
+ENV AI_PR_REVIEW_SCRIPT_DIR=/opt/ai-pr-review
+
+ENTRYPOINT ["python3", "-m", "ai_pr_review", "review"]

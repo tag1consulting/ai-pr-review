@@ -151,10 +151,8 @@ inputs:
 
   engine:
     description: >
-      Compute engine to use. 'python' (default) is the supported engine; 'bash'
-      is the deprecated legacy pipeline (will be removed in a future major release).
-      Context enrichment, SARIF ingestion, and the learning loop all require the
-      Python engine. Sets AI_PR_REVIEW_ENGINE.
+      Deprecated no-op. The bash engine was removed in v2.0.0; Python is the only
+      engine. Accepted for backward compatibility and ignored.
     required: false
     default: 'python'
 
@@ -362,7 +360,6 @@ runs:
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ANALYZER_CONCURRENCY: ${{ inputs.analyzer-concurrency }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
-        AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
@@ -374,4 +371,5 @@ runs:
         AI_ANALYZER_DIFF_SCOPE: ${{ inputs.analyzer-diff-scope }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
-      run: bash "${{ github.action_path }}/review.sh"
+        AI_PR_REVIEW_SCRIPT_DIR: ${{ github.action_path }}
+      run: python3 -m ai_pr_review review
