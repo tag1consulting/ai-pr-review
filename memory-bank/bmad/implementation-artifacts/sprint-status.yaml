@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-06-08T17:07:00-07:00
+# last_updated: 2026-06-22T14:00:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -133,6 +133,15 @@ development_status:
   5-7-docs-final-cleanup: done           # #257 commit 878c355
   5-8-final-release: done                # #258 tagged v2.0.0 at 8ba85f4; release live
   epic-5-retrospective: optional
+
+  # ── Epic 6 — Python-Engine Hardening ────────────────────────────────────────
+  # Parent issue #361. #356/#357/#358 all CLOSED. One story remains.
+  # #360 (partial): provenance weighting — deterministic confidence boost when
+  # static analyzer + LLM agent agree on the same file+line region.
+  # Branch: feat/epic6-provenance-weighting
+  epic-6: in-progress
+  6-1-provenance-weighting: review          # #360 partial; story file: stories/6-1-provenance-weighting.md
+  epic-6-retrospective: optional
 
   # ── Epic 8 — Port Analyzer Wrappers to Native Python ────────────────────────
   # Parent issue #461 OPEN. Milestone: Epic 8 (milestone/9)
