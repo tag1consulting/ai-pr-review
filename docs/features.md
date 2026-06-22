@@ -7,6 +7,32 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.0.0
+
+**Bash engine removed; Python is the sole engine (closes #199, #251–#258).** The bash orchestrator and all supporting shell code have been deleted (~9,600 lines across 59 files): `review.sh`, `llm-call.sh`, the `lib/*.sh` helpers, `vcs/common.sh`, the three `post-review*.sh` scripts, all 13 `analyzers/run-*.sh` wrappers (superseded by the native Python analyzers shipped in v1.4.0), the 33-file `.bats` suite, and `docs/analyzers-bash-inventory.md`. Python has been the default engine since v1.0.0; this release completes the transition.
+
+**CI and container changes.** The `shellcheck` and `test` (bats) jobs are removed from `.github/workflows/lint.yml`; pytest is the sole test runner. `jq` is removed from the runtime image (it was used only by the bash scripts), and the image `ENTRYPOINT` is now `python3 -m ai_pr_review review`. Asset directories (`prompts/`, `language-profiles/`, `config/`) continue to mount at `/opt/ai-pr-review/`.
+
+**`AI_PR_REVIEW_ENGINE` deprecated; `engine` input is now a no-op.** Setting the `AI_PR_REVIEW_ENGINE` environment variable emits a deprecation warning and is otherwise ignored. The `engine` action input is retained as a deprecated no-op (`engine: python` and `engine: bash` both run Python silently). Container-action and composite/direct-action consumers need no changes; the composite action now includes an explicit `pip install` step (invalidate any pip cache to pick it up).
+
+## What's new in v1.6.1
+
+**Unified single-file workflow template (PR #518).** `examples/workflows/pr-review.yml` now wires both automatic PR review and slash commands (`/ai-pr-review rescan`, `dismiss`, `review-full`, etc.) in a single file: copy one file to `.github/workflows/ai-pr-review.yml` instead of two. The `review` job fires on `pull_request` events and the `slash-commands` job fires on `issue_comment`/`pull_request_review_comment` events, with per-job `if:` gating so exactly one runs per event. The two-file setup (`pr-review.yml` + `comment-triggers.yml`) remains fully supported with no breaking changes, and secret-name backward compatibility is preserved via `${{ secrets.AI_REVIEW_API_KEY || secrets.ANTHROPIC_API_KEY }}`.
+
+**Analyzer/agent filters forwarded through the slash-command rescan path (PRs #516, #517).** `/ai-pr-review rescan` and `review-full` now accept and forward the `analyzers`, `exclude-analyzers`, `agents`, and `exclude-agents` inputs to the review container, matching the main PR-triggered review. Previously a manual rescan re-ran every eligible analyzer/agent regardless of what the calling workflow excluded. The consumer example wraps each input in an optional `vars.AI_REVIEW_*` repository variable so a project can configure filtering once and have both the main review and all rescan paths honor it.
+
+## What's new in v1.6.0
+
+**Analyzer and agent allowlist/denylist selection (PR #514).** Four new action inputs control which static analyzers and LLM review agents run on each PR: `analyzers` (allowlist) and `exclude-analyzers` (denylist) for static analyzers, and `agents` (allowlist) and `exclude-agents` (denylist) for review agents. All four are comma-separated and whitespace-trimmed; empty (the default) means no filtering. When an allowlist is non-empty its corresponding denylist is ignored (allowlist takes precedence). Existing agent gates (`full_mode_only`, conditional triggers) still apply on top of the allowlist; it narrows the candidate set but never force-runs a gated agent. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected at config load with a nearest-match suggestion. Corresponding env vars: `AI_ANALYZERS`, `AI_EXCLUDE_ANALYZERS`, `AI_AGENTS`, `AI_EXCLUDE_AGENTS`. See [Configuration](configuration). Python engine only.
+
+## What's new in v1.5.0
+
+**Performance pass (PR #507, #506, #509).** Suppression-rule regexes are pre-compiled once in `_parse_rule()` rather than on every finding/rule check. Shared prompt fragments (`_governance.md`, `_knowledge-cutoff.md`, `_trailer-findings.md`, `suggestion-addendum.md`) are loaded once per run and threaded through `DispatchContext` instead of re-read per agent. The unified diff is parsed in a single pass (`parse_diff_sets()` returns both the added-line set and new-file set at once). Tree-sitter context enrichment is computed once per tier instead of once per agent, and the language profile is no longer injected into agents that ignore project context (e.g. `blind-hunter`).
+
+**Security hardening (PR #492, #495).** Filenames from the diff are passed to subprocess calls via safe argument arrays rather than shell interpolation, closing an argument-injection vector via attacker-controlled filenames. TruffleHog allowlist entries are validated and shell-escaped. `<`, `>`, and `&` in finding text are defanged to prevent XSS in GitHub's markdown renderer. Local `.ai-pr-review-suppressions.yml` files may no longer carry catch-all (match-all-files) rules; only the global suppression file may.
+
+**Correctness fixes (PR #511, #505, #496, #510).** Skip comments now upsert in place (via a new `<!-- ai-pr-review-skip -->` marker) instead of always posting a fresh comment, mirroring the summary-comment pattern across GitHub, GitLab, and Bitbucket. Findings the code-reviewer agent immediately refutes in the same response are dropped before posting. The incremental-review SHA watermark is no longer advanced when posting findings fails. `action.yml` exports only the `*_API_KEY` matching the configured `provider`; unknown provider values fail fast. `cve-check` now parses `poetry.lock` and `uv.lock` and prefers exact package versions for more accurate OSV lookups.
+
 ## What's new in v1.4.0
 
 **All 13 static analyzers ported to native Python (Epic 8, PRs #475–#488, closes #462–#474).** Every analyzer is implemented as a native Python function in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable.
@@ -67,7 +93,7 @@ No action input changes are required.
 
 ## What's new in v1.0.0
 
-**Python engine is now the only engine.** The bash pipeline has been removed. All review logic runs through the Python implementation.
+**Python engine is now the default (issue #249, PR #388).** Consumers who do not set `engine:` automatically use the Python engine starting with this release. Setting `engine: bash` (or `AI_PR_REVIEW_ENGINE=bash`) still works but emits a deprecation warning; the bash pipeline was removed in v2.0.0. A 14-day field soak (80 reviews, zero P0/P1 bugs) preceded the default flip, and Opus 4.8 was set as the Anthropic premium default for full-mode reviews.
 
 ## What's new in v0.12.2
 
