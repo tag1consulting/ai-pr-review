@@ -76,11 +76,13 @@ def test_unknown_ai_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         ReviewConfig.from_env()
 
 
-def test_engine_env_var_removed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AI_PR_REVIEW_ENGINE is no longer a known var; callers setting it get a ConfigError."""
+def test_engine_env_var_deprecated(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """AI_PR_REVIEW_ENGINE is deprecated in v2.0.0; emits a warning but does not raise."""
     monkeypatch.setenv("AI_PR_REVIEW_ENGINE", "python")
-    with pytest.raises(ConfigError, match="AI_PR_REVIEW_ENGINE"):
-        ReviewConfig.from_env()
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_PR_REVIEW_ENGINE" in captured.err
+    assert "deprecated" in captured.err
 
 
 def test_unknown_ai_var_typo_suggestion(monkeypatch: pytest.MonkeyPatch) -> None:

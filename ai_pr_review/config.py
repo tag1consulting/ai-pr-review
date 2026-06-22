@@ -85,6 +85,9 @@ _DEPRECATED_AI_VAR_ALIASES: dict[str, str] = {
     # GitHub Actions workflow uses AI_REVIEW_IGNORE_MERGE_COMMITS as a repo
     # variable name; the engine reads AI_IGNORE_MERGE_COMMITS.
     "AI_REVIEW_IGNORE_MERGE_COMMITS": "AI_IGNORE_MERGE_COMMITS",
+    # Bash engine selection var removed in v2.0.0; accept silently so consumers
+    # that still pass engine: python don't get a hard ConfigError during rollout.
+    "AI_PR_REVIEW_ENGINE": "",
 }
 
 
@@ -97,11 +100,17 @@ def _check_unknown_ai_vars() -> None:
             continue
         if key in _DEPRECATED_AI_VAR_ALIASES:
             canonical = _DEPRECATED_AI_VAR_ALIASES[key]
-            print(
-                f"WARNING: {key!r} is not read by the engine; "
-                f"use {canonical!r} instead.",
-                file=sys.stderr,
-            )
+            if canonical:
+                print(
+                    f"WARNING: {key!r} is not read by the engine; "
+                    f"use {canonical!r} instead.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"WARNING: {key!r} is deprecated and ignored (removed in v2.0.0).",
+                    file=sys.stderr,
+                )
             continue
         # Find closest documented match for a helpful error.
         matches = difflib.get_close_matches(key, _KNOWN_AI_VARS, n=1, cutoff=0.6)

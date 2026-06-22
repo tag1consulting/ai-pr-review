@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Container image: `jq` removed from the runtime image (was used only by bash scripts); the image ENTRYPOINT is now `python3 -m ai_pr_review review`. Asset directories (`prompts/`, `language-profiles/`, `config/`) continue to be mounted at `/opt/ai-pr-review/` via `ENV AI_PR_REVIEW_SCRIPT_DIR=/opt/ai-pr-review`.
 
-- **`AI_PR_REVIEW_ENGINE` environment variable removed**: The internal engine-selection variable has been removed from `ai_pr_review/config.py`. Setting it now raises `ConfigError`. The `engine` action input (in both `action.yml` and `container-action/action.yml`) is retained as a **deprecated no-op** for backward compatibility — workflows with `engine: python` or `engine: bash` continue to work; the value is accepted and ignored.
+- **`AI_PR_REVIEW_ENGINE` environment variable deprecated**: The internal engine-selection variable has been removed from `ai_pr_review/config.py`. Setting it now emits a deprecation warning and is otherwise ignored. The `engine` action input (in both `action.yml` and `container-action/action.yml`) is retained as a **deprecated no-op** for backward compatibility — workflows with `engine: python` or `engine: bash` continue to work; the value is accepted and ignored.
 
 ### Migration guide
 
@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Bitbucket Pipelines container users:** Replace `/opt/ai-pr-review/review.sh` with `python3 -m ai_pr_review review`.
 
-**`AI_PR_REVIEW_ENGINE` env var:** Setting this now raises `ConfigError`. Remove it from any scripts or CI configuration that set it explicitly.
+**`AI_PR_REVIEW_ENGINE` env var:** Setting this now emits a deprecation warning and is otherwise ignored. It is safe to leave it in existing scripts during rollout; remove it when convenient.
 
 ## [1.6.1] - 2026-06-10
 
