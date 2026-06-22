@@ -669,3 +669,191 @@ def test_incremental_run_advance_sha_watermark_false_logs_warning(
     assert "abc1234567" in log_output, (
         f"Warning must include the head_sha for correlation; got: {log_output!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Judge pass (Story 7-3, #360 remainder)
+# ---------------------------------------------------------------------------
+
+
+def _make_agent_spec(name: str = "code-reviewer", prompt_name: str | None = None) -> AgentSpec:
+    from ai_pr_review.agents.roster import get_agent
+    return get_agent(name)
+
+
+def _make_dispatch_context_with_prompts(tmp_path: Path, diff_text: str = "") -> DispatchContext:
+    """Like _make_dispatch_context but also creates the minimal prompt files needed for agents."""
+    diff_path = tmp_path / "diff.txt"
+    diff_path.write_text(diff_text)
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    for name in ("_governance", "_knowledge-cutoff", "_trailer-findings", "suggestion-addendum",
+                 "code-reviewer", "pr-summarizer", "security-reviewer", "silent-failure-hunter",
+                 "architecture-reviewer", "blind-hunter", "edge-case-hunter", "adversarial-general",
+                 "issue-linker"):
+        (prompts_dir / f"{name}.md").write_text(f"## {name}\n")
+    return DispatchContext(
+        script_dir=tmp_path,
+        mode="full",
+        diff_path=diff_path,
+        provider="anthropic",
+        standard_model="claude-sonnet-4-6",
+        premium_model="claude-opus-4-7",
+    )
+
+
+def test_orchestrate_judge_on_downranks_weak_finding(tmp_path: Path) -> None:
+    """Judge-on path: weak finding is downranked (lower confidence + out_of_diff),
+    corroborated finding is kept unchanged. Both still reach post_findings."""
+    import json
+
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    weak_finding = {
+        "severity": "Medium",
+        "confidence": 80,
+        "file": "app.py",
+        "line": 10,
+        "finding": "Vague speculation",
+        "remediation": "Consider reviewing",
+        # source intentionally omitted; extract_findings stamps "code-reviewer"
+    }
+    strong_finding = {
+        "severity": "High",
+        "confidence": 90,
+        "file": "db.py",
+        "line": 42,
+        "finding": "SQL injection via f-string",
+        "remediation": "Use parameterized queries",
+        # source intentionally omitted; extract_findings stamps "code-reviewer"
+        # so that when merged with the semgrep analyzer_finding, sources become
+        # ["code-reviewer", "semgrep"] and is_corroborated() returns True.
+    }
+    agent_output = _findings_block([weak_finding, strong_finding])
+
+    judge_prompt_path = tmp_path / "finding-judge.md"
+    judge_prompt_path.write_text("finding-quality judge")
+
+    JUDGE_MARKER = "finding-quality judge"
+
+    judge_verdicts = json.dumps({
+        "verdicts": [
+            {"id": 0, "verdict": "downrank", "reason": "vague"},
+            {"id": 1, "verdict": "downrank", "reason": "would downrank"},
+        ]
+    })
+
+    async def smart_llm(req: LLMRequest) -> LLMResponse:
+        if JUDGE_MARKER in req.system_prompt:
+            return LLMResponse(text=judge_verdicts, input_tokens=50, output_tokens=20, stop_reason="end_turn")
+        return LLMResponse(text=agent_output, input_tokens=100, output_tokens=200, stop_reason="end_turn")
+
+    # Make the strong_finding corroborated by seeding it as an extra_finding
+    # from a static analyzer so merge._collapse_cluster sets corroborated=True.
+    from ai_pr_review.findings.models import Finding
+    analyzer_finding = Finding(
+        severity="High",
+        confidence=90,
+        file="db.py",
+        line=42,
+        finding="SQL injection via f-string",
+        source="semgrep",
+        sources=["semgrep"],
+        corroborated=False,
+    )
+
+    cfg = OrchestrationConfig(
+        enable_judge_pass=True,
+        judge_model="claude-test",
+        judge_prompt_path=judge_prompt_path,
+        extra_findings=(analyzer_finding,),
+    )
+
+    async def _run() -> None:
+        # Use a minimal agent spec that will produce findings.
+        from ai_pr_review.agents.roster import AGENTS
+        agents = [a for a in AGENTS if a.name == "code-reviewer"]
+
+        # Diff includes both changed lines so apply_diff_scope does not cap them.
+        # app.py: line 10 is added; db.py: line 42 is added.
+        # parse_added_lines() requires "diff --git" header for file detection.
+        diff_text = (
+            "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n"
+            "@@ -8,3 +8,4 @@\n a\n b\n+evil(request.args['x'])\n c\n"
+            "diff --git a/db.py b/db.py\n--- a/db.py\n+++ b/db.py\n"
+            "@@ -40,3 +40,4 @@\n x\n a\n+query = f'SELECT'\n b\n"
+        )
+        result = await run_review(
+            diff=DiffContext(diff_text=diff_text, head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=agents,
+            llm_call=smart_llm,
+            dispatch_context=ctx,
+            provider=provider,
+            config=cfg,
+        )
+        # Both findings must reach post_findings (judge never drops)
+        assert result.findings is not None
+        findings_by_file = {f.file: f for f in result.findings}
+        # Weak finding must have been downranked (confidence lowered, routed to body)
+        weak = findings_by_file.get("app.py")
+        assert weak is not None, f"app.py finding missing; all findings: {result.findings}"
+        assert weak.confidence == 80 - 15  # JUDGE_DOWNRANK_AMOUNT
+        assert weak.out_of_diff is True
+        # Corroborated finding must be kept unchanged (exempt from judge downranking)
+        strong = findings_by_file.get("db.py")
+        assert strong is not None, f"db.py finding missing; all findings: {result.findings}"
+        assert strong.corroborated is True
+        assert strong.out_of_diff is False
+
+    anyio.run(_run)
+
+
+def test_orchestrate_judge_off_leaves_findings_unchanged(tmp_path: Path) -> None:
+    """Judge-off path: enable_judge_pass=False; findings reach post_findings unchanged."""
+
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+
+    weak_finding = {
+        "severity": "Medium",
+        "confidence": 80,
+        "file": "app.py",
+        "line": 10,
+        "finding": "Vague speculation",
+        "remediation": "Consider reviewing",
+        "source": "adversarial-general",
+    }
+    agent_output = _findings_block([weak_finding])
+
+    judge_called = False
+
+    async def smart_llm(req: LLMRequest) -> LLMResponse:
+        nonlocal judge_called
+        if "finding-quality judge" in req.system_prompt:
+            judge_called = True
+        return LLMResponse(text=agent_output, input_tokens=100, output_tokens=200, stop_reason="end_turn")
+
+    cfg = OrchestrationConfig(enable_judge_pass=False)
+
+    async def _run() -> None:
+        from ai_pr_review.agents.roster import AGENTS
+        agents = [a for a in AGENTS if a.name == "code-reviewer"]
+
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text here", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=agents,
+            llm_call=smart_llm,
+            dispatch_context=ctx,
+            provider=provider,
+            config=cfg,
+        )
+        # Judge must not have been called
+        assert not judge_called
+        # Finding must be unchanged
+        assert len(result.findings) == 1
+        assert result.findings[0].confidence == 80
+        assert result.findings[0].out_of_diff is False
+
+    anyio.run(_run)

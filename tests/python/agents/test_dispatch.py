@@ -18,6 +18,7 @@ from ai_pr_review.agents.dispatch import (
     run_tier,
 )
 from ai_pr_review.agents.roster import AGENTS, get_agent
+from ai_pr_review.language_profile_sections import ProfileRouter
 from ai_pr_review.llm.base import LLMResponse
 
 # ---------------------------------------------------------------------------
@@ -158,11 +159,19 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
     assert names == {"code-reviewer", "silent-failure-hunter"}
 
 
+def _make_profile_router(tmp_path: Path, profile_text: str) -> ProfileRouter:
+    """Build a ProfileRouter from a single in-memory profile string."""
+    profile_dir = tmp_path / "language-profiles"
+    profile_dir.mkdir(exist_ok=True)
+    (profile_dir / "python.md").write_text(profile_text)
+    return ProfileRouter(["Python"], tmp_path)
+
+
 @pytest.mark.anyio
 async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     tmp_path: Path,
 ) -> None:
-    """run_tier must move feedback_addendum + language_profile_text out of the
+    """run_tier must move feedback_addendum + language profile out of the
     per-agent system_prompt and into LLMRequest.system_prefix for
     context_enrichment_eligible agents (e.g. code-reviewer), so providers
     that support multi-breakpoint caching can mark them as run-shared and
@@ -170,7 +179,10 @@ async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     """
     ctx = _make_context(tmp_path)
     ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
-    ctx.language_profile_text = "## Python\nProject uses click + pydantic."
+    ctx.profile_router = _make_profile_router(
+        tmp_path, "## Python-Specific Review Context\n\n### Common Python Bugs\nProject uses click + pydantic."
+    )
+    ctx.profile_max_tokens = 8192
 
     captured: list[Any] = []
 
@@ -195,7 +207,7 @@ async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     # The per-agent system_prompt no longer contains the addenda — the model
     # still sees them, but via the cacheable prefix slot.
     assert "recent learnings" not in req.system_prompt
-    assert "Python\nProject uses click" not in req.system_prompt
+    assert "Project uses click + pydantic" not in req.system_prompt
 
 
 @pytest.mark.anyio
@@ -203,14 +215,17 @@ async def test_run_tier_language_profile_excluded_for_ineligible_agent(
     tmp_path: Path,
 ) -> None:
     """blind-hunter (context_enrichment_eligible=False) must NOT receive the
-    language_profile_text in its system_prefix: its prompt explicitly asks the
+    language profile in its system_prefix: its prompt explicitly asks the
     model to reason about the diff in isolation, so injecting language profiles
     would defeat its purpose and waste tokens on content the model ignores.
     The feedback_addendum is run-shared learning signal and must still reach it.
     """
     ctx = _make_context(tmp_path)
     ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
-    ctx.language_profile_text = "## Python\nProject uses click + pydantic."
+    ctx.profile_router = _make_profile_router(
+        tmp_path, "## Python-Specific Review Context\n\n### Common Python Bugs\nProject uses click + pydantic."
+    )
+    ctx.profile_max_tokens = 8192
 
     captured: list[Any] = []
 
@@ -232,12 +247,12 @@ async def test_run_tier_language_profile_excluded_for_ineligible_agent(
     # Feedback addendum still reaches blind-hunter (run-shared signal).
     assert "recent learnings" in req.system_prefix
     # Language profile must NOT appear in the prefix for ineligible agents.
-    assert "Python\nProject uses click" not in req.system_prefix
+    assert "Project uses click + pydantic" not in req.system_prefix
 
 
 @pytest.mark.anyio
 async def test_run_tier_empty_system_prefix_when_no_addenda(tmp_path: Path) -> None:
-    """When neither feedback_addendum nor language_profile_text is set,
+    """When neither feedback_addendum nor profile_router is set,
     system_prefix is empty so the legacy single-breakpoint Anthropic layout
     is preserved (regression guard for the byte-identical fallback).
     """

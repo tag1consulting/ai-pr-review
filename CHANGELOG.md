@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Improved
+
+- `feat(routing)`: per-agent language-profile section routing — each agent receives only profile sections relevant to its review focus (`security`, `bugs`, `edge`, `idioms`, `general`), packed under a configurable `AI_PROFILE_MAX_TOKENS` budget (default 4096); the token table gains a "Language profiles" supplementary row for visibility (#355)
+- `improve(prompts)`: align security-reviewer prompt with Anthropic security-guidance plugin checklist, adding: SSRF, LLM prompt injection, gate/action field mismatch, IaC omitted-arg (Terraform/Pulumi/CDK), GitHub Actions `pull_request_target`/`workflow_dispatch` trust, XXE via Python stdlib XML parsers, DOM XSS sinks (`outerHTML`, `insertAdjacentHTML`, `document.write`), AES ECB mode, Node.js `createCipher`/`createDecipher`, Go shell-invocation pattern, extended Python deserialization (`marshal`, `shelve`, `joblib`, `pandas.read_pickle`, `numpy allow_pickle`), ML model unsafe loading (`torch.load` without `weights_only=True`), missing SRI on external scripts, GitHub Actions workflow injection via untrusted context expressions, and parser/validator differential analysis (#369)
+- `feat(judge)`: LLM judge pass (Phase 2.75) — after merge/suppress/scope, one cheap-model call scores candidate findings and down-ranks weak single-source results by lowering confidence and routing them to the review body; corroborated findings (static analyzer + LLM agreement) are exempt from down-ranking; enabled by default (`AI_JUDGE_PASS=true`); always fail-soft (any judge error returns findings unchanged) (#360)
+
 ## [2.0.0] - 2026-06-22
 
 ### Removed (breaking)
