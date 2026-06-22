@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-22
+
+### Removed (breaking)
+
+- **Bash engine deleted** (closes #199, #251, #252, #253, #254, #255, #257, #258): The bash orchestrator and all supporting shell code have been removed. Python has been the default engine since v1.0.0 (Epic 4, 2026-06-02); this release completes the transition.
+
+  Files deleted (~9,600 LOC across 59 shell files):
+  - `review.sh` (main bash orchestrator)
+  - `llm-call.sh` (bash LLM client)
+  - `lib/agents.sh`, `lib/diff.sh`, `lib/finding-ids.sh`, `lib/findings.sh`, `lib/languages.sh`, `lib/pricing.sh`
+  - `vcs/common.sh`
+  - `post-review.sh`, `post-review-gitlab.sh`, `post-review-bitbucket.sh`
+  - All 13 `analyzers/run-*.sh` wrappers (now superseded by the native Python implementations in `ai_pr_review/analyzers/native/`, shipped in v1.4.0)
+  - `tests/*.bats` (33 bats test files) and `tests/test_helper.bash`
+  - `docs/analyzers-bash-inventory.md`
+
+  CI change: the `shellcheck` and `test` (bats) jobs in `.github/workflows/lint.yml` have been removed; pytest is the sole test runner.
+
+  Container image: `jq` removed from the runtime image (was used only by bash scripts); the image ENTRYPOINT is now `python3 -m ai_pr_review review`. Asset directories (`prompts/`, `language-profiles/`, `config/`) continue to be mounted at `/opt/ai-pr-review/` via `ENV AI_PR_REVIEW_SCRIPT_DIR=/opt/ai-pr-review`.
+
+- **`AI_PR_REVIEW_ENGINE` environment variable removed**: The internal engine-selection variable has been removed from `ai_pr_review/config.py`. Setting it now raises `ConfigError`. The `engine` action input (in both `action.yml` and `container-action/action.yml`) is retained as a **deprecated no-op** for backward compatibility — workflows with `engine: python` or `engine: bash` continue to work; the value is accepted and ignored.
+
+### Migration guide
+
+**Most consumers require no changes.** If your workflow has:
+
+```yaml
+- uses: tag1consulting/ai-pr-review@v1
+  with:
+    engine: python   # safe to keep; now a no-op
+```
+
+or the Bitbucket container variant:
+
+```yaml
+- /opt/ai-pr-review/review.sh  # update this line
+```
+
+For Bitbucket Pipelines container users, replace `/opt/ai-pr-review/review.sh` with `python3 -m ai_pr_review review`.
+
+Any script that reads `AI_PR_REVIEW_ENGINE` from the environment should remove that logic.
+
 ## [1.6.1] - 2026-06-10
 
 ### Added
