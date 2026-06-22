@@ -31,8 +31,6 @@ Match fields (all optional, combined with AND logic):
 
 `line_start` and `line_end` are both optional. When used together they target a specific line window within a file. Either bound may be omitted to leave that end open (e.g. `line_end` only means "up to line N from the beginning of the file"). A finding with no line number is never matched by a range rule.
 
-Note: Line-range matching (`line_start`/`line_end`) requires the Python engine (the default). The deprecated bash engine does not support this field.
-
 Example — suppress findings only within unmodified upstream lines in a vendored patch file:
 
 ```json
@@ -124,8 +122,7 @@ it may incorrectly flag the version as "unreleased", "invalid", or
 The action hardens against this in two layers:
 
 1. **Prompt-level guard.** All 7 finding-producing agents receive the
-   `_knowledge-cutoff.md` shared trailer via `effective_prompt()` in
-   `review.sh`. This hard constraint forbids "unreleased version" findings
+   `_knowledge-cutoff.md` shared trailer. This hard constraint forbids "unreleased version" findings
    based on training-data recall. The model is instructed to omit such
    findings entirely unless the version string is malformed, explicitly
    downgraded, or covered by a cited CVE.
@@ -136,7 +133,7 @@ The action hardens against this in two layers:
    real typo (e.g. `ruby-9.9.9`), the registry lookup fails and the finding is
    restored.
 
-The CVE check (`analyzers/run-cve-check.sh`) is the complement: it queries
+The CVE check is the complement: it queries
 OSV.dev against changed dependency manifests and emits a new finding when a
 declared version has a known vulnerability. It does not emit "doesn't exist"
 findings.

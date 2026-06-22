@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import json
-import stat
-import subprocess
-import tempfile
+import threading
+import time
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -19,8 +16,6 @@ from ai_pr_review.analyzers.bridge import (
     _analyzer_skip_names,
     _file_list,
     _is_eligible,
-    _normalise_output,
-    _run_analyzer,
     _sarif_covered_names,
     run_analyzers,
 )
@@ -33,75 +28,29 @@ from ai_pr_review.manifest import ChangedFiles
 
 class TestIsEligible:
     def test_no_required_types_always_eligible(self) -> None:
-        spec = AnalyzerSpec("trufflehog", "run-trufflehog.sh", [])
+        spec = AnalyzerSpec("trufflehog", [], lambda cf, d: [])
         cf = ChangedFiles()
         assert _is_eligible(spec, cf) is True
 
     def test_required_type_present(self) -> None:
-        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"])
+        spec = AnalyzerSpec("shellcheck", ["shell"], lambda cf, d: [])
         cf = ChangedFiles(shell=["review.sh"])
         assert _is_eligible(spec, cf) is True
 
     def test_required_type_absent(self) -> None:
-        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"])
+        spec = AnalyzerSpec("shellcheck", ["shell"], lambda cf, d: [])
         cf = ChangedFiles()
         assert _is_eligible(spec, cf) is False
 
     def test_multi_type_any_match(self) -> None:
-        spec = AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"])
+        spec = AnalyzerSpec("checkov", ["terraform", "iac", "dockerfile"], lambda cf, d: [])
         cf = ChangedFiles(dockerfile=["Dockerfile"])
         assert _is_eligible(spec, cf) is True
 
     def test_multi_type_none_match(self) -> None:
-        spec = AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"])
+        spec = AnalyzerSpec("checkov", ["terraform", "iac", "dockerfile"], lambda cf, d: [])
         cf = ChangedFiles(python=["main.py"])
         assert _is_eligible(spec, cf) is False
-
-
-# ---------------------------------------------------------------------------
-# _normalise_output
-# ---------------------------------------------------------------------------
-
-
-class TestNormaliseOutput:
-    def test_valid_findings(self) -> None:
-        data = [{"severity": "High", "confidence": 80, "finding": "SQL injection risk"}]
-        result = _normalise_output(json.dumps(data), "test-analyzer")
-        assert len(result) == 1
-        assert result[0].severity == "High"
-        assert result[0].source == "test-analyzer"
-
-    def test_source_from_data_takes_precedence(self) -> None:
-        data = [{"severity": "Low", "confidence": 60, "finding": "X", "source": "custom"}]
-        result = _normalise_output(json.dumps(data), "fallback")
-        assert result[0].source == "custom"
-
-    def test_non_json_returns_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = _normalise_output("not json", "test-analyzer")
-        assert result == []
-        captured = capsys.readouterr()
-        assert "non-JSON" in captured.err
-
-    def test_non_list_returns_empty(self) -> None:
-        result = _normalise_output(json.dumps({"key": "val"}), "test-analyzer")
-        assert result == []
-
-    def test_malformed_finding_skipped(self, capsys: pytest.CaptureFixture[str]) -> None:
-        # Missing required 'finding' field
-        data = [{"severity": "High", "confidence": 80}]
-        result = _normalise_output(json.dumps(data), "test-analyzer")
-        assert result == []
-        captured = capsys.readouterr()
-        assert "malformed" in captured.err
-
-    def test_non_dict_items_skipped(self) -> None:
-        data = ["not a dict", {"severity": "Low", "confidence": 50, "finding": "ok"}]
-        result = _normalise_output(json.dumps(data), "test-analyzer")
-        assert len(result) == 1
-
-    def test_empty_array(self) -> None:
-        result = _normalise_output("[]", "test-analyzer")
-        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -110,148 +59,52 @@ class TestNormaliseOutput:
 
 
 class TestRunAnalyzers:
-    def _make_script(self, tmpdir: str, name: str, output: str, exit_code: int = 0) -> Path:
-        """Create a mock bash script in tmpdir/analyzers/ that prints output."""
-        analyzers = Path(tmpdir) / "analyzers"
-        analyzers.mkdir(exist_ok=True)
-        script = analyzers / name
-        script.write_text(f"#!/bin/bash\necho '{output}'\nexit {exit_code}\n")
-        script.chmod(script.stat().st_mode | stat.S_IEXEC)
-        return script
-
-    def _bash_only_spec(self, name: str = "mock-tool", script: str = "run-mock.sh",
-                        file_types: list[str] | None = None) -> AnalyzerSpec:
-        """Return a bash-only AnalyzerSpec (no native_fn) for testing bash dispatch."""
-        return AnalyzerSpec(name, script, file_types or [], None)
-
     @pytest.mark.anyio
     async def test_skips_analyzer_with_no_eligible_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            self._make_script(tmpdir, "run-mock.sh", "[]")
-            cf = ChangedFiles()  # no shell files
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-            assert findings == []
+        calls: list[str] = []
+
+        def fake_native(cf: ChangedFiles, diff: Path) -> list:
+            calls.append("called")
+            return []
+
+        spec = AnalyzerSpec("mock-tool", ["shell"], fake_native)
+        cf = ChangedFiles()  # no shell files
+        from ai_pr_review.analyzers import bridge
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            findings = await run_analyzers(cf, "/dev/null")
+        assert findings == []
+        assert calls == []  # native fn was not invoked
 
     @pytest.mark.anyio
     async def test_runs_eligible_analyzer(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            payload = json.dumps([{"severity": "Low", "confidence": 55, "finding": "SC2034"}])
-            self._make_script(tmpdir, "run-mock.sh", payload)
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-            assert len(findings) == 1
+        from ai_pr_review.findings.models import Finding
+
+        def fake_native(cf: ChangedFiles, diff: Path) -> list:
+            return [Finding(severity="Low", confidence=55, finding="SC2034")]
+
+        spec = AnalyzerSpec("mock-tool", ["shell"], fake_native)
+        cf = ChangedFiles(shell=["review.sh"])
+        from ai_pr_review.analyzers import bridge
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            findings = await run_analyzers(cf, "/dev/null")
+        assert len(findings) == 1
 
     @pytest.mark.anyio
-    async def test_missing_script_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-            assert findings == []
-
-    @pytest.mark.anyio
-    async def test_non_zero_exit_code_other_than_1_skipped(
+    async def test_native_exception_returns_empty_and_warns(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            self._make_script(tmpdir, "run-mock.sh", "[]", exit_code=2)
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-            assert findings == []
-            captured = capsys.readouterr()
-            assert "exited 2" in captured.err
+        """Unhandled exception in native_fn must not abort run_analyzers."""
+        def exploding(cf: ChangedFiles, diff: Path) -> list:
+            raise RuntimeError("boom")
 
-    @pytest.mark.anyio
-    async def test_exit_code_1_accepted(self) -> None:
-        """Exit code 1 is valid (grep returns 1 for no-match paths)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            self._make_script(tmpdir, "run-mock.sh", "[]", exit_code=1)
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-            assert findings == []  # empty but not an error
-
-    @pytest.mark.anyio
-    async def test_timeout_returns_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
-        spec = AnalyzerSpec("slow", "run-slow.sh", [])
-        with (
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired("bash", 120)),
-            tempfile.TemporaryDirectory() as tmpdir,
-        ):
-            Path(tmpdir, "analyzers").mkdir()
-            script = Path(tmpdir, "analyzers", "run-slow.sh")
-            script.write_text("#!/bin/bash\nsleep 999\n")
-            script.chmod(script.stat().st_mode | stat.S_IEXEC)
-            cf = ChangedFiles()
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
+        spec = AnalyzerSpec("mock-tool", ["shell"], exploding)
+        cf = ChangedFiles(shell=["review.sh"])
+        from ai_pr_review.analyzers import bridge
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            findings = await run_analyzers(cf, "/dev/null")
         assert findings == []
         captured = capsys.readouterr()
-        assert "timed out" in captured.err
-
-    @pytest.mark.anyio
-    async def test_oserror_returns_empty(self, capsys: pytest.CaptureFixture[str]) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            Path(tmpdir, "analyzers").mkdir()
-            script = Path(tmpdir, "analyzers", "run-mock.sh")
-            script.write_text("#!/bin/bash\n")
-            script.chmod(0o644)
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with (
-                patch.object(bridge, "_ANALYZERS", [spec]),
-                patch("subprocess.run", side_effect=OSError("permission denied")),
-            ):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-        assert findings == []
-        captured = capsys.readouterr()
-        assert "failed to start" in captured.err
-
-    @pytest.mark.anyio
-    async def test_empty_stdout_returns_empty(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            self._make_script(tmpdir, "run-mock.sh", "")
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-            assert findings == []
-
-    @pytest.mark.anyio
-    async def test_env_vars_passed_to_subprocess(self) -> None:
-        """DIFF_FILE must be set in the subprocess environment."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = self._bash_only_spec("mock-tool", "run-mock.sh", ["shell"])
-            analyzers = Path(tmpdir) / "analyzers"
-            analyzers.mkdir()
-            script = analyzers / "run-mock.sh"
-            script.write_text(
-                "#!/bin/bash\n"
-                'printf \'[{"severity":"Low","confidence":50,"finding":"%s"}]\\n\' "$DIFF_FILE"\n'
-            )
-            script.chmod(script.stat().st_mode | stat.S_IEXEC)
-            cf = ChangedFiles(shell=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/tmp/test.diff", tmpdir)
-            assert len(findings) == 1
-            assert "/tmp/test.diff" in findings[0].finding
+        assert "WARNING" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -261,50 +114,28 @@ class TestRunAnalyzers:
 
 @pytest.mark.anyio
 async def test_concurrency_peak_does_not_exceed_cap() -> None:
-    """Peak active analyzers must not exceed the concurrency cap.
-
-    We replace _run_analyzer with a slow synchronous version and measure how
-    many tasks are executing at once from within the async coroutine layer. The
-    CapacityLimiter is acquired *before* `to_thread.run_sync` is called, so we
-    measure the slot acquisition, not the subprocess itself.
-    """
-    import threading
-    specs = [
-        AnalyzerSpec("a1", "run-a1.sh", []),
-        AnalyzerSpec("a2", "run-a2.sh", []),
-        AnalyzerSpec("a3", "run-a3.sh", []),
-        AnalyzerSpec("a4", "run-a4.sh", []),
-    ]
+    """Peak active analyzers must not exceed the concurrency cap."""
     peak = 0
     active = 0
     lock = threading.Lock()
 
-    def slow_analyzer(spec: AnalyzerSpec, *args: Any, **kwargs: Any) -> list:
+    def slow_native(cf: ChangedFiles, diff: Path) -> list:
         nonlocal peak, active
         with lock:
             active += 1
             peak = max(peak, active)
-        import time
         time.sleep(0.01)
         with lock:
             active -= 1
         return []
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        analyzers = Path(tmpdir) / "analyzers"
-        analyzers.mkdir()
-        # Script files must exist for the eligible check to pass
-        for spec in specs:
-            s = analyzers / spec.script
-            s.write_text("#!/bin/bash\necho '[]'\n")
-            s.chmod(s.stat().st_mode | stat.S_IEXEC)
-
-        from ai_pr_review.analyzers import bridge
-        with (
-            patch.object(bridge, "_ANALYZERS", specs),
-            patch.object(bridge, "_run_analyzer", side_effect=slow_analyzer),
-        ):
-            findings = await run_analyzers(ChangedFiles(), "/dev/null", tmpdir, concurrency=2)
+    specs = [
+        AnalyzerSpec(f"a{i}", [], slow_native)
+        for i in range(4)
+    ]
+    from ai_pr_review.analyzers import bridge
+    with patch.object(bridge, "_ANALYZERS", specs):
+        findings = await run_analyzers(ChangedFiles(), "/dev/null", concurrency=2)
 
     assert peak <= 2
     assert findings == []
@@ -315,34 +146,21 @@ async def test_one_analyzer_failure_does_not_abort_others(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """An unexpected exception in one analyzer task must not cancel the rest."""
-    crash_spec = AnalyzerSpec("crasher", "run-crasher.sh", [])
-    ok_spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"])
+    from ai_pr_review.findings.models import Finding
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        analyzers = Path(tmpdir) / "analyzers"
-        analyzers.mkdir()
-        # shellcheck returns a valid finding
-        payload = json.dumps([{"severity": "Low", "confidence": 55, "finding": "SC2034"}])
-        ok_script = analyzers / "run-shellcheck.sh"
-        ok_script.write_text(f"#!/bin/bash\necho '{payload}'\n")
-        ok_script.chmod(ok_script.stat().st_mode | stat.S_IEXEC)
-        # crasher exists but raises in _run_analyzer via subprocess
-        crash_script = analyzers / "run-crasher.sh"
-        crash_script.write_text("#!/bin/bash\necho '[]'\n")
-        crash_script.chmod(crash_script.stat().st_mode | stat.S_IEXEC)
+    def crashing(cf: ChangedFiles, diff: Path) -> list:
+        raise RuntimeError("simulated crash")
 
-        from ai_pr_review.analyzers import bridge
-        with patch.object(bridge, "_ANALYZERS", [crash_spec, ok_spec]):
-            original_run_analyzer = bridge._run_analyzer
+    def ok_native(cf: ChangedFiles, diff: Path) -> list:
+        return [Finding(severity="Low", confidence=55, finding="SC2034")]
 
-            def patched(spec: AnalyzerSpec, *args: Any, **kwargs: Any) -> Any:
-                if spec.name == "crasher":
-                    raise RuntimeError("simulated crash")
-                return original_run_analyzer(spec, *args, **kwargs)
+    crash_spec = AnalyzerSpec("crasher", [], crashing)
+    ok_spec = AnalyzerSpec("shellcheck", ["shell"], ok_native)
+    cf = ChangedFiles(shell=["review.sh"])
 
-            with patch.object(bridge, "_run_analyzer", side_effect=patched):
-                cf = ChangedFiles(shell=["review.sh"])
-                findings = await run_analyzers(cf, "/dev/null", tmpdir, concurrency=4)
+    from ai_pr_review.analyzers import bridge
+    with patch.object(bridge, "_ANALYZERS", [crash_spec, ok_spec]):
+        findings = await run_analyzers(cf, "/dev/null", concurrency=4)
 
     # shellcheck finding survives despite crasher failing
     assert len(findings) == 1
@@ -355,24 +173,20 @@ async def test_one_analyzer_failure_does_not_abort_others(
 @pytest.mark.anyio
 async def test_findings_returned_in_spec_order() -> None:
     """Findings must come back in the same order as the _ANALYZERS list."""
+    from ai_pr_review.findings.models import Finding
+
+    def make_fn(label: str):
+        def fn(cf: ChangedFiles, diff: Path) -> list:
+            return [Finding(severity="Low", confidence=55, finding=f"{label}-finding")]
+        return fn
+
     specs = [
-        AnalyzerSpec("first", "run-first.sh", []),
-        AnalyzerSpec("second", "run-second.sh", []),
+        AnalyzerSpec("first", [], make_fn("first")),
+        AnalyzerSpec("second", [], make_fn("second")),
     ]
-    payload_first = json.dumps([{"severity": "Low", "confidence": 55, "finding": "first-finding"}])
-    payload_second = json.dumps([{"severity": "Low", "confidence": 55, "finding": "second-finding"}])
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        analyzers = Path(tmpdir) / "analyzers"
-        analyzers.mkdir()
-        for spec, payload in [(specs[0], payload_first), (specs[1], payload_second)]:
-            s = analyzers / spec.script
-            s.write_text(f"#!/bin/bash\necho '{payload}'\n")
-            s.chmod(s.stat().st_mode | stat.S_IEXEC)
-
-        from ai_pr_review.analyzers import bridge
-        with patch.object(bridge, "_ANALYZERS", specs):
-            findings = await run_analyzers(ChangedFiles(), "/dev/null", tmpdir)
+    from ai_pr_review.analyzers import bridge
+    with patch.object(bridge, "_ANALYZERS", specs):
+        findings = await run_analyzers(ChangedFiles(), "/dev/null")
 
     assert len(findings) == 2
     assert findings[0].finding == "first-finding"
@@ -414,26 +228,24 @@ async def test_run_analyzers_skips_sarif_covered_analyzer(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Native ruff wrapper is skipped when ruff.sarif is configured."""
-    ruff_spec = AnalyzerSpec("ruff", "run-ruff.sh", ["python"])
-    shellcheck_spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"])
-    payload = json.dumps([{"severity": "Low", "confidence": 55, "finding": "SC2034"}])
+    from ai_pr_review.findings.models import Finding
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        analyzers = Path(tmpdir) / "analyzers"
-        analyzers.mkdir()
-        # Both scripts exist and would produce findings if run.
-        for spec, data in [(ruff_spec, "[]"), (shellcheck_spec, payload)]:
-            s = analyzers / spec.script
-            s.write_text(f"#!/bin/bash\necho '{data}'\n")
-            s.chmod(s.stat().st_mode | stat.S_IEXEC)
+    def ruff_fn(cf: ChangedFiles, diff: Path) -> list:
+        return []
 
-        from ai_pr_review.analyzers import bridge
-        with patch.object(bridge, "_ANALYZERS", [ruff_spec, shellcheck_spec]):
-            cf = ChangedFiles(python=["app.py"], shell=["review.sh"])
-            findings = await run_analyzers(
-                cf, "/dev/null", tmpdir,
-                sarif_skip=_sarif_covered_names(("results/ruff.sarif",)),
-            )
+    def shellcheck_fn(cf: ChangedFiles, diff: Path) -> list:
+        return [Finding(severity="Low", confidence=55, finding="SC2034")]
+
+    ruff_spec = AnalyzerSpec("ruff", ["python"], ruff_fn)
+    shellcheck_spec = AnalyzerSpec("shellcheck", ["shell"], shellcheck_fn)
+
+    from ai_pr_review.analyzers import bridge
+    with patch.object(bridge, "_ANALYZERS", [ruff_spec, shellcheck_spec]):
+        cf = ChangedFiles(python=["app.py"], shell=["review.sh"])
+        findings = await run_analyzers(
+            cf, "/dev/null",
+            sarif_skip=_sarif_covered_names(("results/ruff.sarif",)),
+        )
 
     # ruff was skipped; shellcheck finding present
     assert len(findings) == 1
@@ -446,22 +258,18 @@ async def test_run_analyzers_skips_sarif_covered_analyzer(
 @pytest.mark.anyio
 async def test_run_analyzers_no_sarif_skip_runs_all() -> None:
     """When sarif_skip is empty, no native analyzer is suppressed."""
-    ruff_spec = AnalyzerSpec("ruff", "run-ruff.sh", ["python"])
-    payload = json.dumps([{"severity": "Low", "confidence": 55, "finding": "E501"}])
+    from ai_pr_review.findings.models import Finding
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        analyzers = Path(tmpdir) / "analyzers"
-        analyzers.mkdir()
-        s = analyzers / "run-ruff.sh"
-        s.write_text(f"#!/bin/bash\necho '{payload}'\n")
-        s.chmod(s.stat().st_mode | stat.S_IEXEC)
+    def ruff_fn(cf: ChangedFiles, diff: Path) -> list:
+        return [Finding(severity="Low", confidence=55, finding="E501")]
 
-        from ai_pr_review.analyzers import bridge
-        with patch.object(bridge, "_ANALYZERS", [ruff_spec]):
-            findings = await run_analyzers(
-                ChangedFiles(python=["app.py"]), "/dev/null", tmpdir,
-                sarif_skip=frozenset(),
-            )
+    ruff_spec = AnalyzerSpec("ruff", ["python"], ruff_fn)
+    from ai_pr_review.analyzers import bridge
+    with patch.object(bridge, "_ANALYZERS", [ruff_spec]):
+        findings = await run_analyzers(
+            ChangedFiles(python=["app.py"]), "/dev/null",
+            sarif_skip=frozenset(),
+        )
 
     assert len(findings) == 1
     assert findings[0].finding == "E501"
@@ -481,45 +289,16 @@ def test_sarif_equivalent_analyzers_constant() -> None:
 
 class TestWarningFormat:
     @pytest.mark.anyio
-    async def test_timeout_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
-        spec = AnalyzerSpec("slow-tool", "run-slow.sh", [])
-        with (
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="bash", timeout=120)),
-            tempfile.TemporaryDirectory() as tmpdir,
-        ):
-            Path(tmpdir, "analyzers").mkdir()
-            script = Path(tmpdir, "analyzers", "run-slow.sh")
-            script.write_text("#!/bin/bash\nsleep 9999\n")
-            script.chmod(script.stat().st_mode | stat.S_IEXEC)
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(ChangedFiles(), "/dev/null", tmpdir)
+    async def test_native_exception_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
+        def exploding(cf: ChangedFiles, diff: Path) -> list:
+            raise RuntimeError("boom")
+
+        spec = AnalyzerSpec("slow-tool", [], exploding)
+        from ai_pr_review.analyzers import bridge
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            findings = await run_analyzers(ChangedFiles(), "/dev/null")
         captured = capsys.readouterr()
         assert findings == []
-        assert "[ai-pr-review] WARNING:" in captured.err
-
-    @pytest.mark.anyio
-    async def test_oserror_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
-        spec = AnalyzerSpec("mock-tool", "run-mock.sh", ["shell"], None)
-        with (
-            patch("subprocess.run", side_effect=OSError("permission denied")),
-            tempfile.TemporaryDirectory() as tmpdir,
-        ):
-            Path(tmpdir, "analyzers").mkdir()
-            script = Path(tmpdir, "analyzers", "run-mock.sh")
-            script.write_text("#!/bin/bash\n")
-            script.chmod(0o644)
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(ChangedFiles(shell=["review.sh"]), "/dev/null", tmpdir)
-        captured = capsys.readouterr()
-        assert findings == []
-        assert "[ai-pr-review] WARNING:" in captured.err
-
-    def test_non_json_warning_format(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = _normalise_output("not json at all", "my-analyzer")
-        captured = capsys.readouterr()
-        assert result == []
         assert "[ai-pr-review] WARNING:" in captured.err
 
 
@@ -548,54 +327,6 @@ class TestFileList:
         cf = ChangedFiles(all_files=["z.py", "a.py", "z.py", "m.py", "a.py"])
         result = _file_list(cf)
         assert result == "a.py\nm.py\nz.py"
-
-
-# ---------------------------------------------------------------------------
-# stdin passthrough via subprocess.run input= kwarg
-# ---------------------------------------------------------------------------
-
-
-class TestStdinPassthrough:
-    def test_subprocess_called_with_file_list_as_input(self) -> None:
-        """_run_analyzer must pass the file list to subprocess.run via input=."""
-        # Uses bash-only spec to test the subprocess path directly.
-        spec = AnalyzerSpec("mock-tool", "run-mock.sh", ["shell"])
-        cf = ChangedFiles(all_files=["foo.sh", "bar.sh"])
-        expected_input = _file_list(cf)
-
-        captured_kwargs: dict = {}
-
-        def mock_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
-            captured_kwargs.update(kwargs)
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout="[]", stderr="")
-
-        with patch("subprocess.run", side_effect=mock_run):
-            _run_analyzer(spec, "/fake/run-mock.sh", "/dev/null", {}, expected_input)
-
-        assert "input" in captured_kwargs
-        assert captured_kwargs["input"] == "bar.sh\nfoo.sh"
-
-    @pytest.mark.anyio
-    async def test_run_analyzers_passes_all_files_via_stdin(self) -> None:
-        """Integration check: file_list computed from all_files reaches subprocess."""
-        # Uses a bash-only spec (no native_fn) to test the stdin passthrough path.
-        spec = AnalyzerSpec("mock-tool", "run-mock.sh", ["shell"])
-        with tempfile.TemporaryDirectory() as tmpdir:
-            analyzers = Path(tmpdir) / "analyzers"
-            analyzers.mkdir()
-            script = analyzers / "run-mock.sh"
-            script.write_text(
-                "#!/bin/bash\n"
-                "STDIN=$(cat)\n"
-                'printf \'[{"severity":"Low","confidence":50,"finding":"%s"}]\\n\' "$STDIN"\n'
-            )
-            script.chmod(script.stat().st_mode | stat.S_IEXEC)
-            cf = ChangedFiles(shell=["review.sh"], all_files=["review.sh"])
-            from ai_pr_review.analyzers import bridge
-            with patch.object(bridge, "_ANALYZERS", [spec]):
-                findings = await run_analyzers(cf, "/dev/null", tmpdir)
-        assert len(findings) == 1
-        assert "review.sh" in findings[0].finding
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +396,6 @@ class TestAnalyzerSkipNames:
             patch.object(bridge, "ANALYZER_NAMES", {s.name for s in patched}),
         ):
             findings = await run_analyzers(
-                cf, "/dev/null", "/nonexistent", disabled=disabled
+                cf, "/dev/null", disabled=disabled
             )
         assert findings == []  # all native fns return [] so no findings expected

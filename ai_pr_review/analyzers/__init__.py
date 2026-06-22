@@ -1,1 +1,1 @@
-"""Analyzer bridge — dispatch to existing bash analyzer wrappers."""
+"""Analyzer bridge — dispatch to native Python analyzer callables."""

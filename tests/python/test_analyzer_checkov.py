@@ -374,7 +374,7 @@ class TestBridgeIntegration:
             for spec in bridge._ANALYZERS
         ]
         with patch.object(bridge, "_ANALYZERS", patched):
-            await run_analyzers(cf, "/dev/null", str(tmp_path))
+            await run_analyzers(cf, "/dev/null")
 
         assert called, "Native fn was not called"
 
@@ -389,8 +389,8 @@ class TestBridgeIntegration:
             called.append(True)
             return []
 
-        spec = AnalyzerSpec("checkov", "run-checkov.sh", ["terraform", "iac", "dockerfile"], fake_native)
+        spec = AnalyzerSpec("checkov", ["terraform", "iac", "dockerfile"], fake_native)
         with patch.object(bridge, "_ANALYZERS", [spec]):
-            await run_analyzers(ChangedFiles(), "/dev/null", str(tmp_path))
+            await run_analyzers(ChangedFiles(), "/dev/null")
 
         assert not called

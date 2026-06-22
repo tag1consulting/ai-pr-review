@@ -20,8 +20,6 @@
 # Optional repository variables:
 #   AI_PROVIDER             (plain, default: anthropic)
 #   AI_REVIEW_MODE          (plain, default: quick; set to 'full' for deep agents)
-#   AI_PR_REVIEW_ENGINE     (plain, default: python; set to 'bash' to use the
-#                            deprecated legacy pipeline — will be removed in a future release)
 #   AI_IGNORE_MERGE_COMMITS (plain, default: true; strip base-branch merges
 #                            from the diff before review; set to false to include upstream merges)
 #
@@ -31,7 +29,7 @@
 #                           file paths to merge as findings)
 # Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only — no-op on Bitbucket.
 #
-# `clone.depth: full` is required: review.sh calls `git fetch origin $BASE_REF`
+# `clone.depth: full` is required: the action calls `git fetch origin $BASE_REF`
 # to compute the diff, and the default shallow Pipelines clone does not always
 # include the base branch history.
 
@@ -66,7 +64,6 @@ pipelines:
             - export VCS_PROVIDER=bitbucket
             - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
             - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
-            - export AI_PR_REVIEW_ENGINE="${AI_PR_REVIEW_ENGINE:-python}"
             - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-true}"
             # Opt-in capabilities (Python engine only — the default)
             - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
@@ -77,4 +74,4 @@ pipelines:
             - export GITHUB_REPOSITORY="${BITBUCKET_WORKSPACE}/${BITBUCKET_REPO_SLUG}"
             # BITBUCKET_EMAIL + BITBUCKET_API_TOKEN come from repo variables.
             # ANTHROPIC_API_KEY (or your provider's key) also from repo variables.
-            - /opt/ai-pr-review/review.sh
+            - python3 -m ai_pr_review review

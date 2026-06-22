@@ -4,8 +4,8 @@
 # so findings from both are merged into a single review comment.
 #
 # Requirements:
-#   - Python engine (`engine: python`) — SARIF ingestion is implemented in
-#     the Python pipeline only.  Because the Python engine ships in the
+#   - Python engine — SARIF ingestion is implemented in the Python pipeline
+#     only.  Because the Python engine ships in the
 #     container image, this workflow uses `container-action` rather than
 #     the root composite action (which would need pip + Python deps on the
 #     Actions runner).
@@ -57,7 +57,6 @@ jobs:
           # vars.AI_REVIEW_IMAGE_TAG pins the container image. Default
           # 'latest'; set to 'dev' to dogfood pre-release builds.
           image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
-          engine: 'python'
           # Comma-separated paths to SARIF 2.1.0 files. Findings merge
           # into the same dedup/suppress pipeline as native analyzers.
           sarif-paths: 'results/codeql.sarif'

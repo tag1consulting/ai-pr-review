@@ -42,7 +42,7 @@ That's it — reviews start firing on the next PR.
 
 **Going further:**
 - [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`) — now built into the unified `pr-review.yml` template, no separate file needed
-- [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment (default on in the container image), SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop. All require the Python engine (the default since v1.0.0).
+- [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment (default on in the container image), SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop.
 - [Installation](#installation) — full-mode agents, provider configuration, [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) for the complete repo-variable pattern used by internal consumers
 
 ## Supported VCS providers
@@ -176,11 +176,10 @@ See [examples/README.md](examples/README.md) for the complete setup walkthrough 
 | `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
 | `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `0.12.2` — image tags published by `publish-image.yml` strip the `v` prefix) |
-| `AI_PR_REVIEW_ENGINE` | Variable | No | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) — the Python engine is required for the opt-in capabilities below |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `false` to disable stripping of base-branch merge commits from the diff before review (default `true`) |
-| `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (requires `engine: python`; default `false`) |
-| `AI_REVIEW_SARIF_PATHS` | Variable | No | Comma-separated SARIF 2.1.0 file paths to merge as findings (requires `engine: python`; default `''`) |
-| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | `true` to enable the learning loop (GitHub-only, requires `engine: python`; default `false`) |
+| `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (default `false`) |
+| `AI_REVIEW_SARIF_PATHS` | Variable | No | Comma-separated SARIF 2.1.0 file paths to merge as findings (default `''`) |
+| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | `true` to enable the learning loop (GitHub-only; default `false`) |
 
 See [Configuration → Repository variables](docs/configuration.md#repository-variables) for the full list including the runtime tuning vars (`AI_REVIEW_MAX_DIFF_LINES`, `AI_REVIEW_MAX_INLINE`, `AI_REVIEW_MAX_TOKENS_PER_AGENT`, `AI_REVIEW_ENABLE_SUGGESTIONS`, `AI_REVIEW_PARALLEL`).
 
@@ -248,26 +247,26 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
 | `max-tokens-per-agent` | No | `16384` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 in v1.3.0. |
-| `analyzer-concurrency` | No | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `parallel: false`. Requires `engine: python`. |
+| `analyzer-concurrency` | No | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `parallel: false`. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
-| `engine` | No | `python` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release). Required for opt-in capabilities below. |
+| `engine` | No | `python` | Deprecated no-op. The bash engine was removed; Python is the only engine. Accepted for backward compatibility and ignored. |
 | `ignore-merge-commits` | No | `true` | Strip base-branch merge commits before diff computation. Reviews only the PR author's own commits. Set to `false` to review all commits including upstream merges. |
-| `context-enrichment` | No | `true` (container), `false` (direct action) | Inject tree-sitter symbol-context blocks into agent prompts (requires `engine: python`). See [Opt-in capabilities](#opt-in-capabilities). |
-| `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings (requires `engine: python`). |
-| `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. Requires `engine: python`. See `exclude-patterns-mode`. |
+| `context-enrichment` | No | `true` (container), `false` (direct action) | Inject tree-sitter symbol-context blocks into agent prompts. See [Opt-in capabilities](#opt-in-capabilities). |
+| `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings. |
+| `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | How `exclude-patterns` interacts with the built-in excludes (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are added after the built-ins. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
-| `analyzers` | No | `''` | Allowlist: comma-separated analyzer names to run. When set, only these analyzers run. Valid names: `shellcheck`, `trufflehog`, `semgrep`, `ruff`, `golangci-lint`, `hadolint`, `checkov`, `phpcs`, `phpstan`, `eslint`, `kube-linter`, `tflint`, `cve-check`. Empty (default): all eligible analyzers run. Requires `engine: python`. |
-| `exclude-analyzers` | No | `''` | Denylist: comma-separated analyzer names to skip. Ignored when `analyzers` is set. Empty (default): no analyzers skipped. Requires `engine: python`. |
-| `agents` | No | `''` | Allowlist: comma-separated agent names to run. When set, only these agents run (existing gates still apply). Valid names: `pr-summarizer`, `code-reviewer`, `silent-failure-hunter`, `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general`, `issue-linker`. Empty (default): all eligible agents run. Requires `engine: python`. |
-| `exclude-agents` | No | `''` | Denylist: comma-separated agent names to skip. Ignored when `agents` is set. Note: excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. Requires `engine: python`. |
-| `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour). LLM-agent findings are never affected. Requires `engine: python`. |
-| `feedback-loop` | No | `false` | Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. Requires `engine: python`. |
+| `analyzers` | No | `''` | Allowlist: comma-separated analyzer names to run. When set, only these analyzers run. Valid names: `shellcheck`, `trufflehog`, `semgrep`, `ruff`, `golangci-lint`, `hadolint`, `checkov`, `phpcs`, `phpstan`, `eslint`, `kube-linter`, `tflint`, `cve-check`. Empty (default): all eligible analyzers run. |
+| `exclude-analyzers` | No | `''` | Denylist: comma-separated analyzer names to skip. Ignored when `analyzers` is set. Empty (default): no analyzers skipped. |
+| `agents` | No | `''` | Allowlist: comma-separated agent names to run. When set, only these agents run (existing gates still apply). Valid names: `pr-summarizer`, `code-reviewer`, `silent-failure-hunter`, `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general`, `issue-linker`. Empty (default): all eligible agents run. |
+| `exclude-agents` | No | `''` | Denylist: comma-separated agent names to skip. Ignored when `agents` is set. Note: excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. |
+| `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour). LLM-agent findings are never affected. |
+| `feedback-loop` | No | `false` | Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. |
 
 Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).
 
 ## Opt-in capabilities
 
-Three optional features can be enabled independently — all off by default, all require the Python engine (the default since v1.0.0).
+Three optional features can be enabled independently — all off by default.
 
 | Capability | Action input | Env var | Default | Description |
 |-----------|-------------|---------|---------|-------------|
@@ -394,7 +393,7 @@ The action auto-detects languages from file extensions (19 language keys) and in
 | `lua.md` | Lua |
 | `perl.md` | Perl |
 
-To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `lib/languages.sh` for the relevant file extensions. See CLAUDE.md for the full extension-to-language mapping.
+To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `ai_pr_review/languages.py` for the relevant file extensions. See CLAUDE.md for the full extension-to-language mapping.
 
 ## Dependency vulnerability check
 
@@ -438,7 +437,7 @@ CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, 
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the summary comment (`engine: python`) or the review body (`engine: bash`). On incremental runs the table is refreshed in place — the first-run PR summary is preserved and only the token data is replaced. The table uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
+After each review run, a collapsible **Token usage by agent** table is appended to the summary comment. On incremental runs the table is refreshed in place — the first-run PR summary is preserved and only the token data is replaced. The table uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
 
 | Column | Description |
 |--------|-------------|
@@ -457,7 +456,7 @@ Costs are calculated using rates from `config/model-pricing.json` and do not ref
 
 ## Architecture
 
-At runtime, `review.sh` computes the diff, dispatches LLM agents and static analyzers in parallel, merges and dedupes findings, then hands off to a provider-specific post-review script (`post-review.sh` for GitHub, `post-review-bitbucket.sh` for Bitbucket, `post-review-gitlab.sh` for GitLab) that posts the summary and inline findings and advances the SHA watermark.
+At runtime, `python3 -m ai_pr_review review` (`ai_pr_review/cli.py`) computes the diff, dispatches LLM agents and static analyzers in parallel, merges and dedupes findings, then posts the summary and inline findings via the appropriate VCS provider module (`ai_pr_review/vcs/github.py`, `gitlab.py`, or `bitbucket.py`) and advances the SHA watermark.
 
 For the directory layout, data-flow diagram, and dependency notes, see [docs/architecture.md](docs/architecture.md). For deep implementation internals (findings pipeline, caching, parallel execution, suggestions, test architecture), see [docs/architecture-internals.md](docs/architecture-internals.md).
 

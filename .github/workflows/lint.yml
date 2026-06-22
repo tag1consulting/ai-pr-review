@@ -3,9 +3,9 @@ name: Lint & Test
 on:
   push:
     branches: [main]
-    paths: ['**.sh', '**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
+    paths: ['**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
   pull_request:
-    paths: ['**.sh', '**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
+    paths: ['**.py', 'tests/**', 'pyproject.toml', 'ai_pr_review/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,37 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  shellcheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Run shellcheck
-        run: |
-          shellcheck -S warning \
-            review.sh \
-            llm-call.sh \
-            post-review.sh \
-            post-review-bitbucket.sh \
-            post-review-gitlab.sh \
-            lib/pricing.sh \
-            lib/languages.sh \
-            analyzers/run-shellcheck.sh \
-            analyzers/run-cve-check.sh
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bats jq
-
-      - name: Run tests
-        run: bats tests/*.bats
-
   python:
     name: Python (${{ matrix.python-version }})
     runs-on: ubuntu-latest

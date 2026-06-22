@@ -120,7 +120,7 @@ inputs:
     default: 'true'
 
   engine:
-    description: "Compute engine: 'python' (default) or 'bash' (deprecated legacy; will be removed in a future major release). Context enrichment, SARIF ingestion, and the learning loop all require the Python engine."
+    description: "Deprecated no-op. The bash engine was removed in v2.0.0; Python is the only engine. Accepted for backward compatibility and ignored."
     required: false
     default: 'python'
 
@@ -287,7 +287,6 @@ runs:
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ANALYZER_CONCURRENCY: ${{ inputs.analyzer-concurrency }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
-        AI_PR_REVIEW_ENGINE: ${{ inputs.engine }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
@@ -331,7 +330,6 @@ runs:
           -e AI_MAX_TOKENS_PER_AGENT \
           -e AI_ANALYZER_CONCURRENCY \
           -e AI_ENABLE_SUGGESTIONS \
-          -e AI_PR_REVIEW_ENGINE \
           -e AI_IGNORE_MERGE_COMMITS \
           -e AI_SARIF_PATHS \
           -e AI_CONTEXT_ENRICHMENT \

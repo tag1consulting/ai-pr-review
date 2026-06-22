@@ -7,8 +7,8 @@ from pydantic import ValidationError
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.findings.scope import (
-    ROLLUP_THRESHOLD,
     _ANALYZER_PREFIXES,
+    ROLLUP_THRESHOLD,
     _is_analyzer,
     apply_diff_scope,
     rollup_repeated_findings,

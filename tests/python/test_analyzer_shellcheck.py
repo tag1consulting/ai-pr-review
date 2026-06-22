@@ -234,7 +234,7 @@ class TestBridgeIntegration:
             for spec in original
         ]
         with patch.object(bridge, "_ANALYZERS", patched):
-            await run_analyzers(cf, "/dev/null", str(tmp_path))
+            await run_analyzers(cf, "/dev/null")
 
         assert called, "Native fn was not called"
 
@@ -250,9 +250,9 @@ class TestBridgeIntegration:
             called.append(True)
             return []
 
-        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], fake_native)
+        spec = AnalyzerSpec("shellcheck", ["shell"], fake_native)
         with patch.object(bridge, "_ANALYZERS", [spec]):
-            await run_analyzers(ChangedFiles(), "/dev/null", str(tmp_path))
+            await run_analyzers(ChangedFiles(), "/dev/null")
 
         assert not called, "Native fn was called despite no eligible files"
 
@@ -265,10 +265,10 @@ class TestBridgeIntegration:
         def exploding_native(changed_files: ChangedFiles, diff_file: Path) -> list:
             raise RuntimeError("unexpected crash")
 
-        spec = AnalyzerSpec("shellcheck", "run-shellcheck.sh", ["shell"], exploding_native)
+        spec = AnalyzerSpec("shellcheck", ["shell"], exploding_native)
         cf = ChangedFiles(shell=["review.sh"])
         with patch.object(bridge, "_ANALYZERS", [spec]):
-            findings = await run_analyzers(cf, "/dev/null", str(tmp_path))
+            findings = await run_analyzers(cf, "/dev/null")
 
         assert findings == []
         captured = capsys.readouterr()

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-22
+
+### Removed (breaking)
+
+- **Bash engine deleted** (closes #199, #251, #252, #253, #254, #255, #257, #258): The bash orchestrator and all supporting shell code have been removed. Python has been the default engine since v1.0.0 (Epic 4, 2026-06-02); this release completes the transition.
+
+  Files deleted (~9,600 LOC across 59 shell files):
+  - `review.sh` (main bash orchestrator)
+  - `llm-call.sh` (bash LLM client)
+  - `lib/agents.sh`, `lib/diff.sh`, `lib/finding-ids.sh`, `lib/findings.sh`, `lib/languages.sh`, `lib/pricing.sh`
+  - `vcs/common.sh`
+  - `post-review.sh`, `post-review-gitlab.sh`, `post-review-bitbucket.sh`
+  - All 13 `analyzers/run-*.sh` wrappers (now superseded by the native Python implementations in `ai_pr_review/analyzers/native/`, shipped in v1.4.0)
+  - `tests/*.bats` (33 bats test files) and `tests/test_helper.bash`
+  - `docs/analyzers-bash-inventory.md`
+
+  CI change: the `shellcheck` and `test` (bats) jobs in `.github/workflows/lint.yml` have been removed; pytest is the sole test runner.
+
+  Container image: `jq` removed from the runtime image (was used only by bash scripts); the image ENTRYPOINT is now `python3 -m ai_pr_review review`. Asset directories (`prompts/`, `language-profiles/`, `config/`) continue to be mounted at `/opt/ai-pr-review/` via `ENV AI_PR_REVIEW_SCRIPT_DIR=/opt/ai-pr-review`.
+
+- **`AI_PR_REVIEW_ENGINE` environment variable deprecated**: The internal engine-selection variable has been removed from `ai_pr_review/config.py`. Setting it now emits a deprecation warning and is otherwise ignored. The `engine` action input (in both `action.yml` and `container-action/action.yml`) is retained as a **deprecated no-op** for backward compatibility — workflows with `engine: python` or `engine: bash` continue to work; the value is accepted and ignored.
+
+### Migration guide
+
+**Container-action consumers (`uses: ./container-action` or the ghcr.io image directly) require no changes.** The Python package is pre-installed in the container image and the new ENTRYPOINT is set automatically.
+
+**Composite/direct-action consumers (`uses: tag1consulting/ai-pr-review@main`):** The composite action now includes an explicit `pip install` step that installs the `ai_pr_review` package onto the runner before invoking it. This step was absent before v2.0.0, making the composite action non-functional on any runner where the package was not already installed. In practice, consumers using the composite action should see no behavior change — the install step is additive — but if your workflow caches pip packages, you may need to invalidate that cache to pick up this new install step.
+
+**`engine` input:** still accepted; now a no-op. `engine: python` and `engine: bash` both silently run Python. No action required.
+
+**Bitbucket Pipelines container users:** Replace `/opt/ai-pr-review/review.sh` with `python3 -m ai_pr_review review`.
+
+**`AI_PR_REVIEW_ENGINE` env var:** Setting this now emits a deprecation warning and is otherwise ignored. It is safe to leave it in existing scripts during rollout; remove it when convenient.
+
 ## [1.6.1] - 2026-06-10
 
 ### Added

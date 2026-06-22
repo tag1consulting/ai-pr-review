@@ -22,7 +22,7 @@ analyzers: 'semgrep,trufflehog'
 exclude-analyzers: 'checkov,tflint'
 ```
 
-When `analyzers` is set, `exclude-analyzers` is ignored (allowlist takes precedence). Unknown names are rejected with an error and a suggestion. Requires `engine: python` (the default). See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
+When `analyzers` is set, `exclude-analyzers` is ignored (allowlist takes precedence). Unknown names are rejected with an error and a suggestion. See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
 
 | Analyzer | Language gate | Severity mapping | Confidence | Source tag |
 |----------|--------------|-----------------|------------|------------|
@@ -97,9 +97,5 @@ See `examples/workflows/sarif-codeql.yml` for a complete CodeQL + AI review pipe
 
 ## Implementation reference
 
-As of v1.4.0, all 13 analyzers are implemented as native Python functions in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable. Each analyzer invokes the tool binary directly via `subprocess.run` and parses the JSON output in Python.
-
-The `analyzers/run-<tool>.sh` bash wrappers still exist for the deprecated bash engine. For the full binary flags, input handling, output-field mapping, and path normalization reference for those wrappers, see [Analyzer Bash Wrapper Inventory](analyzers-bash-inventory).
-
-**Note:** the `<TOOL>_MOCK_FILE` env vars documented in the inventory (e.g. `SHELLCHECK_MOCK_FILE`) apply only to the bash wrappers. The native Python analyzers are tested via pytest fixtures — see `tests/python/test_analyzer_<tool>.py` for each tool's test coverage.
+All 13 analyzers are implemented as native Python functions in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable. Each analyzer invokes the tool binary directly via `subprocess.run` and parses the JSON output in Python. See `tests/python/test_analyzer_<tool>.py` for each tool's test coverage.
 

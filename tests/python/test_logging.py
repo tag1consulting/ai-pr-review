@@ -228,38 +228,34 @@ class TestMaskSecrets:
 # ---------------------------------------------------------------------------
 
 class TestCorrelationIdBoundary:
-    def test_correlation_id_in_subprocess_env(self, monkeypatch, tmp_path):
-        """AI_PR_REVIEW_CORRELATION_ID is forwarded to analyzer subprocesses.
+    @pytest.mark.anyio
+    async def test_correlation_id_visible_to_native_analyzers(self, monkeypatch):
+        """AI_PR_REVIEW_CORRELATION_ID set in os.environ is visible to native analyzer callables.
 
-        bridge._run_analyzer merges os.environ into run_env before calling
-        subprocess.run, so the correlation ID set in os.environ propagates.
+        Native analyzers run in a thread pool that shares the process environment, so
+        the correlation ID set before run_analyzers is accessible to the callable.
         """
-        import subprocess
-        from unittest.mock import MagicMock
+        import os
+        from unittest.mock import patch
 
-        from ai_pr_review.analyzers.bridge import AnalyzerSpec, _run_analyzer
+        from ai_pr_review.analyzers.bridge import AnalyzerSpec, run_analyzers
+        from ai_pr_review.manifest import ChangedFiles
 
-        captured_envs: list[dict] = []
+        observed_ids: list[str] = []
 
-        def fake_run(*args, **kwargs):
-            env = kwargs.get("env") or {}
-            captured_envs.append(dict(env))
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "[]"
-            result.stderr = ""
-            return result
+        def capturing_native(cf, diff):
+            observed_ids.append(os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""))
+            return []
 
         monkeypatch.setenv("AI_PR_REVIEW_CORRELATION_ID", "propagate1")
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        spec = AnalyzerSpec("test", [], capturing_native)
 
-        # diff_file doesn't need to exist — subprocess.run is mocked
-        spec = AnalyzerSpec("test", "run-test.sh", [])
-        _run_analyzer(spec, "/fake/run-test.sh", "/fake/diff.txt", {})
+        from ai_pr_review.analyzers import bridge
+        with patch.object(bridge, "_ANALYZERS", [spec]):
+            await run_analyzers(ChangedFiles(), "/dev/null")
 
-        assert captured_envs, "_run_analyzer should have called subprocess.run"
-        assert captured_envs[0].get("AI_PR_REVIEW_CORRELATION_ID") == "propagate1", (
-            f"correlation ID not forwarded: {captured_envs[0]}"
+        assert observed_ids == ["propagate1"], (
+            f"correlation ID not visible to native analyzer: {observed_ids}"
         )
 
     def test_inbound_correlation_id_reused(self, monkeypatch):
