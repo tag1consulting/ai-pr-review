@@ -5,7 +5,7 @@
 **Story Key:** 7-2-profile-routing
 **GitHub Issue:** #355
 **Parent Epic Issue:** #362
-**Status:** ready-for-dev
+**Status:** done
 
 ---
 

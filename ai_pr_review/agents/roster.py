@@ -14,7 +14,7 @@ conditional_trigger values (consumed by dispatch/gates layers):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, get_args
 
 ConditionalTrigger = Literal[
@@ -40,6 +40,7 @@ class AgentSpec:
     full_mode_only: bool
     context_enrichment_eligible: bool
     separately_dispatched: bool = False
+    profile_focus: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -77,6 +78,7 @@ AGENTS: list[AgentSpec] = [
         full_mode_only=False,
         context_enrichment_eligible=True,
         separately_dispatched=True,
+        profile_focus=frozenset(),  # summarizer does not review code; receives no profile sections
     ),
     AgentSpec(
         name="code-reviewer",
@@ -86,6 +88,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=False,
         context_enrichment_eligible=True,
+        profile_focus=frozenset({"security", "bugs", "edge", "idioms", "general"}),
     ),
     AgentSpec(
         name="silent-failure-hunter",
@@ -95,6 +98,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=False,
         context_enrichment_eligible=True,
+        profile_focus=frozenset({"bugs", "edge"}),
     ),
     # --- Tier 2: full mode only ---
     AgentSpec(
@@ -105,6 +109,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
+        profile_focus=frozenset({"security", "bugs", "edge", "idioms", "general"}),
     ),
     AgentSpec(
         name="security-reviewer",
@@ -114,6 +119,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
+        profile_focus=frozenset({"security"}),
     ),
     AgentSpec(
         # Diff-only by design (#189): no symbol context injected.
@@ -124,6 +130,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=False,
+        # context_enrichment_eligible=False means routing code never runs for this agent.
     ),
     AgentSpec(
         name="edge-case-hunter",
@@ -133,6 +140,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
+        profile_focus=frozenset({"edge", "bugs"}),
     ),
     AgentSpec(
         name="adversarial-general",
@@ -142,6 +150,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
+        profile_focus=frozenset({"security", "bugs", "edge", "idioms", "general"}),
     ),
     AgentSpec(
         # GitHub-only: discovers related issues/PRs and assesses resolution.
@@ -158,6 +167,7 @@ AGENTS: list[AgentSpec] = [
         full_mode_only=True,
         context_enrichment_eligible=False,
         separately_dispatched=True,
+        # context_enrichment_eligible=False means routing code never runs for this agent.
     ),
 ]
 

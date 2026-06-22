@@ -714,6 +714,12 @@ def _build_token_table_accordion(
         (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
         default=0,
     )
+    # Profile routing gives each agent a different section subset; take the max
+    # as a representative figure (the largest profile slice sent to any agent).
+    profile_tokens = max(
+        (ar.profile_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+        default=0,
+    )
 
     pricing_file = str(script_dir / "config" / "model-pricing.json")
     try:
@@ -729,6 +735,7 @@ def _build_token_table_accordion(
             token_log,
             pricing_data,
             context_tokens=context_tokens,
+            profile_tokens=profile_tokens,
             sarif_elapsed_s=sarif_elapsed_s,
         )
     except Exception as exc:

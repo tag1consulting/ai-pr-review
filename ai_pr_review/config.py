@@ -66,6 +66,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_FEEDBACK_MAX_TOKENS",
         "AI_FEEDBACK_RETENTION_COUNT",
         "AI_FEEDBACK_RETENTION_AGE_DAYS",
+        # --- Language profile routing ---
+        "AI_PROFILE_MAX_TOKENS",
         # --- Structured logging ---
         "AI_LOG_FORMAT",
         "AI_LOG_LEVEL",
@@ -207,6 +209,9 @@ class ReviewConfig(BaseModel):
     # "drop" -- remove out-of-diff analyzer findings entirely.
     # "off"  -- pass through unchanged (full-file linting behaviour).
     analyzer_diff_scope: str = "cap"
+
+    # --- Language profile routing ---
+    profile_max_tokens: int = 4096
 
     # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
@@ -462,6 +467,7 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
+            profile_max_tokens=_int("AI_PROFILE_MAX_TOKENS", 4096),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
             feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),

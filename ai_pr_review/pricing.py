@@ -101,6 +101,7 @@ def emit_token_table(
     pricing_data: list[dict[str, object]],
     *,
     context_tokens: int = 0,
+    profile_tokens: int = 0,
     sarif_elapsed_s: float | None = None,
 ) -> str:
     """Render the token-usage markdown table. Matches bash emit_token_table output."""
@@ -190,6 +191,20 @@ def emit_token_table(
             # 6-col: Agent | Model | Input(value) | Output | Total | Cost
             lines.append(
                 f"| Context enrichment | *(context)* | {context_tokens}"
+                " | — | — | — |"
+            )
+
+    if profile_tokens > 0:
+        if any_cache:
+            # 8-col: Agent | Model | Input(value) | Output | CW | CR | Total | Cost
+            lines.append(
+                f"| Language profiles | *(profile)* | {profile_tokens}"
+                " | — | — | — | — | — |"
+            )
+        else:
+            # 6-col: Agent | Model | Input(value) | Output | Total | Cost
+            lines.append(
+                f"| Language profiles | *(profile)* | {profile_tokens}"
                 " | — | — | — |"
             )
 

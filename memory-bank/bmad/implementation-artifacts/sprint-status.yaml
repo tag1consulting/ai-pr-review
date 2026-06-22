@@ -171,6 +171,6 @@ development_status:
   # Branch: rework/epic-7-quality-research
   epic-7: in-progress
   7-1-security-prompt-audit: done               # #369
-  7-2-profile-routing: ready-for-dev           # #355
+  7-2-profile-routing: done                     # #355
   7-3-judge-pass: ready-for-dev               # #360 remainder — depends on corroborated flag (already on main via PR #528)
   epic-7-retrospective: optional

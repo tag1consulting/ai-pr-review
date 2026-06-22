@@ -49,6 +49,11 @@ class AgentResult:
     Zero when context enrichment was disabled or produced no context.
     E4.S3: used by the CLI to populate the Context enrichment row in the
     token cost table."""
+    profile_tokens_used: int = 0
+    """Token count of the routed language-profile section prepended for this agent.
+    Zero when profile routing was disabled or produced no text.
+    Story 7-2: used by the CLI to populate the Language profiles row in the
+    token cost table."""
     elapsed_ms: int = 0
     """Wall-clock milliseconds from call start to response received.
     E4.S4: used by cli.py to populate agent_latency_ms in TelemetryEvent."""
@@ -144,9 +149,12 @@ class DispatchContext:
     max_tokens_per_agent: int = 0
     # #356: user-configurable temperature for agent LLM calls
     temperature: float = 0.3
-    # Pre-loaded language profile markdown (concatenated). Loaded once per run
-    # in build_review_runtime() and passed here to avoid per-agent disk reads.
-    language_profile_text: str = ""
+    # Per-agent language-profile router (Story 7-2, #355). Built once per run in
+    # build_review_runtime() from all detected language profiles. None means no
+    # profiles were loaded (e.g. non-code changes, or tests that don't set it).
+    profile_router: object | None = field(default=None, repr=False)
+    # Token cap applied per agent when assembling the routed profile section.
+    profile_max_tokens: int = 4096
     # Pre-loaded shared prompt fragments (governance, knowledge-cutoff, trailer,
     # suggestion-addendum). None means not yet loaded; effective_prompt will read
     # them from disk the first time and cache them here. Callers that construct
@@ -558,11 +566,25 @@ async def _run_single_agent(
         # with no project context, so injecting language profiles would defeat
         # their purpose and waste tokens on content the model is told to ignore.
         # Feedback addenda are run-shared learning signals and reach all agents.
+        #
+        # Profile routing (Story 7-2): each agent receives only the profile
+        # sections relevant to its profile_focus, packed under profile_max_tokens.
+        # This makes system_prefix differ per agent, reducing cross-agent prompt-cache
+        # reuse for the profile block — but delivers smaller, more relevant context.
         prefix_parts: list[str] = []
+        profile_tokens_used = 0
         if context.feedback_addendum:
             prefix_parts.append(context.feedback_addendum)
-        if context.language_profile_text and spec.context_enrichment_eligible:
-            prefix_parts.append(context.language_profile_text)
+        if spec.context_enrichment_eligible and context.profile_router is not None:
+            from ai_pr_review.context.budget import estimate_tokens
+            from ai_pr_review.language_profile_sections import ProfileRouter
+            if isinstance(context.profile_router, ProfileRouter):
+                routed_text = context.profile_router.route(
+                    spec.profile_focus, context.profile_max_tokens
+                )
+                if routed_text:
+                    prefix_parts.append(routed_text)
+                    profile_tokens_used = estimate_tokens(routed_text)
         system_prefix = "\n\n".join(prefix_parts)
 
         # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
@@ -597,6 +619,7 @@ async def _run_single_agent(
             truncated=truncated,
             prompt_degraded=prompt_degraded,
             context_tokens_used=context_tokens_used,
+            profile_tokens_used=profile_tokens_used,
             elapsed_ms=elapsed,
         ))
     except BaseException as exc:

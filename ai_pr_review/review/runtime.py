@@ -21,7 +21,7 @@ from ai_pr_review.agents.dispatch import (
     load_shared_prompt_fragments,
 )
 from ai_pr_review.config import ReviewConfig
-from ai_pr_review.language_profiles import load_language_profiles
+from ai_pr_review.language_profile_sections import ProfileRouter
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
@@ -170,9 +170,11 @@ async def build_review_runtime(
     cf = parse_changed_files_payload(raw_paths)
     _changed_list = cf.all_files
 
-    # 7. Load language profiles once for the whole run (avoid per-agent disk reads).
+    # 7. Build language-profile router once per run (avoid per-agent disk reads).
+    # ProfileRouter parses all detected profiles into classified sections so
+    # each agent receives only the subset relevant to its profile_focus.
     _lang_labels = _unique_language_labels(_changed_list)
-    _language_profile_text = load_language_profiles(_lang_labels, script_dir)
+    _profile_router = ProfileRouter(_lang_labels, script_dir) if _lang_labels else None
 
     # Load shared prompt fragments once per run to avoid per-agent disk reads
     # inside effective_prompt().  When the prompts directory is absent (e.g. in
@@ -205,7 +207,8 @@ async def build_review_runtime(
         feedback_addendum=feedback_addendum,
         max_tokens_per_agent=config.max_tokens_per_agent,
         temperature=config.temperature,
-        language_profile_text=_language_profile_text,
+        profile_router=_profile_router,
+        profile_max_tokens=config.profile_max_tokens,
         _shared_prompt_fragments=_shared_fragments,
     )
 
