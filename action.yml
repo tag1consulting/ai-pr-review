@@ -284,6 +284,25 @@ inputs:
     required: false
     default: 'false'
 
+  judge-pass:
+    description: >
+      When true (default), run a cheap-model judge pass after findings are
+      extracted. The judge scores each candidate finding and down-ranks weak
+      single-source results by lowering confidence and routing them to the
+      review body instead of as inline comments. Corroborated findings
+      (static-analyzer + LLM-agent agreement) are always kept. Adds one LLM
+      call per review. Set to 'false' to disable.
+    required: false
+    default: 'true'
+
+  profile-max-tokens:
+    description: >
+      Maximum token budget for per-agent language-profile context sections.
+      Each agent receives only the profile sections relevant to its review
+      focus, packed under this budget. Default: 4096.
+    required: false
+    default: '4096'
+
 runs:
   using: composite
   steps:
@@ -379,5 +398,7 @@ runs:
         AI_ANALYZER_DIFF_SCOPE: ${{ inputs.analyzer-diff-scope }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
+        AI_JUDGE_PASS: ${{ inputs.judge-pass }}
+        AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}
         AI_PR_REVIEW_SCRIPT_DIR: ${{ github.action_path }}
       run: python3 -m ai_pr_review review

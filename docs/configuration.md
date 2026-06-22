@@ -176,6 +176,18 @@ These variables enable optional capabilities that are off by default.
 | `AI_FEEDBACK_RETENTION_COUNT` | `500` | Maximum number of feedback entries to keep (rolling window; oldest dropped first). |
 | `AI_FEEDBACK_RETENTION_AGE_DAYS` | `365` | Drop entries older than this many days. Set to `0` to disable age-based pruning. |
 
+#### Judge pass
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_JUDGE_PASS` | `true` | Run a cheap-model judge pass (Phase 2.75) after findings are extracted, merged, suppressed, and scoped. The judge sends a single compact LLM call (no diff text) and returns `keep` or `downrank` per finding. `downrank` lowers the finding's confidence by 15 points and routes it to the review body instead of as an inline comment — the finding is still reported. Corroborated findings (static-analyzer + LLM-agent agreement on the same file+line) are exempt from `downrank`. Always fail-soft: any judge error returns findings unchanged. Set to `false` to disable and restore pre-v2.1 behavior. |
+
+#### Per-agent language-profile routing
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_PROFILE_MAX_TOKENS` | `4096` | Maximum token budget for per-agent language-profile context. Each eligible agent receives only the profile sections relevant to its review focus (`security`, `bugs`, `edge`, `idioms`, `general`), packed under this budget. Reduce to lower token spend on multi-language PRs; increase if profile context is being truncated in telemetry. |
+
 > **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
 
 ### Telemetry hooks
