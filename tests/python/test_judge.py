@@ -218,6 +218,39 @@ async def test_judge_empty_input_no_llm_call(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_judge_fail_soft_on_verdicts_not_a_list(tmp_path: Path) -> None:
+    """Covers the isinstance(verdicts, list) guard — ValueError triggers fail-soft."""
+    prompt = tmp_path / "finding-judge.md"
+    prompt.write_text("You are a finding-quality judge.")
+
+    f = _finding(confidence=80)
+    bad_response = LLMResponse(text='{"verdicts": "not-a-list"}', input_tokens=5, output_tokens=5)
+    call = AsyncMock(return_value=bad_response)
+
+    result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
+    assert len(result) == 1
+    assert result[0].confidence == 80  # unchanged — fail-soft
+
+
+def test_apply_verdicts_malformed_entry_skipped() -> None:
+    """Malformed verdict entries are skipped; valid entries still apply."""
+    weak = _finding(confidence=70, finding="weak finding")
+    strong = _finding(confidence=90, finding="strong finding")
+    result, count = _apply_verdicts(
+        [weak, strong],
+        [
+            {"id": "not-an-int", "verdict": "downrank"},  # malformed — skipped
+            {"id": 1, "verdict": "downrank", "reason": "vague"},  # valid
+        ],
+    )
+    assert result[0].confidence == 70  # malformed entry skipped → keep
+    assert result[0].out_of_diff is False
+    assert result[1].confidence == 90 - JUDGE_DOWNRANK_AMOUNT  # valid entry applied
+    assert result[1].out_of_diff is True
+    assert count == 1
+
+
+@pytest.mark.anyio
 async def test_judge_missing_prompt_file_fail_soft(tmp_path: Path) -> None:
     nonexistent = tmp_path / "nonexistent.md"
     f = _finding(confidence=80)

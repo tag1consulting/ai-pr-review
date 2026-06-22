@@ -74,6 +74,8 @@ def split_sections(profile_text: str) -> list[ProfileSection]:
 
     for line in profile_text.splitlines():
         if line.startswith("## ") and not line.startswith("### "):
+            # Only the last ## title before the first ### is kept; all 19
+            # bundled language profiles have exactly one ## header each.
             title_line = line
         elif line.startswith("### "):
             stripped_heading = line[4:].strip()
