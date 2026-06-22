@@ -5,26 +5,13 @@ Quick recipes for the most common contribution types. For deep implementation de
 ## Local setup
 
 ```bash
-# Prerequisites: bash 4+, jq, bats-core, shellcheck
+# Prerequisites: Python 3.11+, uv or pip
 git clone git@github.com:tag1consulting/ai-pr-review.git
 cd ai-pr-review
-
-# Run the full test suite
-bats tests/*.bats
-
-# Lint shell scripts
-shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh \
-  post-review-gitlab.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
-```
-
-### Python engine setup
-
-```bash
-# Prerequisites: Python 3.11+, uv or pip
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"   # installs pytest, ruff, mypy, and runtime deps
 
-# Run the Python test suite
+# Run the test suite
 pytest tests/python/ -q
 
 # Lint and type-check
@@ -34,7 +21,7 @@ mypy ai_pr_review/
 
 ## Adding a static analyzer
 
-Static analyzers live in `ai_pr_review/analyzers/native/` (Python engine, default) and `analyzers/run-<tool>.sh` (deprecated bash engine). The Python path is the canonical one; the bash wrapper is only needed to keep the deprecated engine working.
+Static analyzers live in `ai_pr_review/analyzers/native/`.
 
 ### 1. Create the native Python analyzer
 
@@ -72,7 +59,7 @@ Key rules:
 - Filter to relevant file extensions early
 - Return `[]` and log a warning if the binary is missing (`shutil.which`)
 - Hard-code the `source` field to your tool name
-- Match the severity mapping documented in `docs/analyzers-bash-inventory.md`
+- Match the severity mapping used by existing analyzers: `"Critical"` (90 confidence) → `"High"` → `"Medium"` → `"Low"` (50 confidence), following the patterns in `ai_pr_review/analyzers/native/`
 
 ### 2. Register in the bridge
 
@@ -91,19 +78,10 @@ _ANALYZERS = {
 
 Create `tests/python/test_analyzer_yourtool.py` with fixture-based tests. See `tests/python/test_analyzer_shellcheck.py` for the pattern.
 
-### 4. Create the bash wrapper (bash engine parity — optional for new analyzers)
-
-The bash engine is deprecated and will be removed in a future major release (targeted for v2.0). New analyzers added after v1.4.0 may omit the bash wrapper entirely; existing wrappers are frozen. If you are backporting an analyzer to the bash engine for compatibility reasons, create `analyzers/run-<tool>.sh` following the existing wrapper pattern — it must produce the same findings schema and source tag as the Python analyzer.
-
-### 5. Wire it into review.sh (bash engine — optional, same caveat as step 4)
-
-In `review.sh`, add the analyzer call to both the parallel and sequential blocks alongside the existing ones. Skip this step if omitting the bash wrapper.
-
-### 6. Update documentation
+### 4. Update documentation
 
 - Add a row to the analyzer table in `CLAUDE.md` (mock env var table)
 - Add a row to the analyzer table in `README.md` and `docs/static-analyzers.md`
-- Add a row to `docs/analyzers-bash-inventory.md`
 - If bundled in the container, add the install step to `Dockerfile`
 
 ## Adding an agent
@@ -112,54 +90,38 @@ In `review.sh`, add the analyzer call to both the parallel and sequential blocks
 
 Create `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` fenced code block. Look at existing prompts for the pattern.
 
-### 2. Wire it into review.sh
+### 2. Register in the agent roster
 
-```bash
-# Choose the context message variant:
-#   CODE_CONTEXT_MSG  — most agents (code-focused, no commit log)
-#   FULL_CONTEXT_MSG  — agents that need project context (pr-summarizer, architecture-reviewer)
-#   BLIND_MSG         — zero-context agents (blind-hunter only)
+Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag.
 
-call_agent "your-agent" "$AI_MODEL_STANDARD" \
-  "${SCRIPT_DIR}/prompts/your-agent.md" \
-  "$CODE_CONTEXT_MSG" "$YOUR_AGENT_OUTPUT" "$AI_MAX_TOKENS_PER_AGENT"
-AGENT_OUTPUTS+=("$YOUR_AGENT_OUTPUT")
-```
+### 3. Add conditional gate logic (if needed)
 
-### 3. Add to parallel execution
+If the agent should only run when specific files change, set `conditional_trigger` to a glob/regex pattern; the gate evaluation lives in `ai_pr_review/agents/gates.py`.
 
-Place the agent into a tier in the parallel code path. Tier 1 runs on every review; Tier 2 runs only in full mode:
+### 4. Add unit tests
 
-```bash
-# In the parallel block:
-TIER1_OUTPUTS+=("$YOUR_AGENT_OUTPUT")   # or TIER2_OUTPUTS
-call_agent_bg "your-agent" "$AI_MODEL_STANDARD" \
-  "${SCRIPT_DIR}/prompts/your-agent.md" \
-  "$CODE_CONTEXT_MSG" "$YOUR_AGENT_OUTPUT" "$AI_MAX_TOKENS_PER_AGENT" &
-```
+Add unit-test coverage in `tests/python/agents/` for any custom gate logic.
 
-Also add the sequential `call_agent` in the `else` branch.
+### 5. Enable suggestions (optional)
 
-### 4. Enable suggestions (optional)
-
-If your agent produces concrete line-level fixes, add your agent name to the `agents_with_suggestion_addendum` pattern string inside `effective_prompt()` in `lib/agents.sh` so it appends `prompts/suggestion-addendum.md` to its system prompt.
+If your agent produces concrete line-level fixes, ensure the prompt includes the suggestion addendum instructions or reference `prompts/suggestion-addendum.md` from the agent's prompt.
 
 ## Adding a language profile
 
-1. Create `language-profiles/<language>.md` — the filename (without `.md`) must match the lowercase language key from `detect_language()` in `lib/languages.sh`.
-2. The file content is injected verbatim into `FULL_CONTEXT_MSG` and `CODE_CONTEXT_MSG` when that language is detected in the diff.
-3. See [CLAUDE.md](CLAUDE.md#adding-a-language-profile) for the full extension-to-language mapping.
+1. Create `language-profiles/<language>.md` — the filename (without `.md`) must match the lowercase language key returned by `detect_language()` in `ai_pr_review/languages.py`.
+2. Register the new extension(s) in `ai_pr_review/languages.py:_EXT_MAP` if they are not already mapped.
+3. The file content is injected verbatim into the agent prompt context when that language is detected in the diff.
+4. See [CLAUDE.md](CLAUDE.md#adding-a-language-profile) for the full extension-to-language mapping.
 
 ## Adding a VCS provider
 
 This is a larger contribution. The pattern:
 
-1. Create `post-review-<provider>.sh` following the structure of `post-review-bitbucket.sh` or `post-review-gitlab.sh`.
-2. Source `vcs/common.sh` for shared helpers (`severity_icon`, `format_source_tag`, `classify_risk`, `format_body_finding`, `build_agent_prompt`, `parse_valid_lines`, `parse_diff_new_lines`, `mktemp_tracked`, `cleanup`).
-3. Implement the provider-specific functions: `truncate_body`, `find_existing_summary_id`, `build_comment_body`, `post_summary_with_findings`, `update_sha_marker`, `_cleanup_duplicate_summary_comments`.
-4. Add a `VCS_PROVIDER` case in `review.sh` to select your script.
-5. Add tests in `tests/post_review_<provider>_functions.bats`.
-6. Add a setup guide in `docs/<provider>-setup.md`.
+1. Create `ai_pr_review/vcs/<provider>.py` following the structure of `ai_pr_review/vcs/bitbucket.py` or `ai_pr_review/vcs/gitlab.py`.
+2. Implement the `VcsProvider` protocol defined in `ai_pr_review/vcs/protocol.py`: `post_summary`, `post_findings`, `advance_sha_watermark`, `resolve_stale`, and `post_skip_comment`.
+3. Register the new provider in `ai_pr_review/vcs/__init__.py` and wire it into `ai_pr_review/cli.py`.
+4. Add tests in `tests/python/vcs/test_<provider>.py`.
+5. Add a setup guide in `docs/<provider>-setup.md`.
 
 See [docs/architecture-internals.md](docs/architecture-internals.md#multi-provider-support-github--bitbucket-cloud--gitlab) for how the provider abstraction works.
 
@@ -167,18 +129,15 @@ See [docs/architecture-internals.md](docs/architecture-internals.md#multi-provid
 
 Before opening a pull request:
 
-- [ ] `bats tests/*.bats` — all tests pass
-- [ ] `shellcheck` on any modified `.sh` files
-- [ ] `pytest tests/python/ -q` — Python tests pass (if you touched `ai_pr_review/`)
+- [ ] `pytest tests/python/ -q` — all tests pass
 - [ ] `ruff check ai_pr_review/` and `mypy ai_pr_review/` — no new lint or type errors
-- [ ] Update `CLAUDE.md` if you changed interfaces (new env vars, new scripts, changed function signatures)
-- [ ] If you added an `AI_*` env var, register it in `_KNOWN_AI_VARS` in `ai_pr_review/config.py` and add a `from_env()` field — otherwise the Python engine raises `ConfigError` at startup
+- [ ] Update `CLAUDE.md` if you changed interfaces (new env vars, changed function signatures)
+- [ ] If you added an `AI_*` env var, register it in `_KNOWN_AI_VARS` in `ai_pr_review/config.py` and add a `from_env()` field — otherwise the engine raises `ConfigError` at startup
 - [ ] Update `README.md` and `docs/` pages if you changed user-facing behavior
 - [ ] Run `/comprehensive-review --quick` to catch issues before the CI review
 
 ## Code style
 
-- Shell scripts use `set -euo pipefail`
-- Functions are tested via `load_function` extraction in bats (see [docs/architecture-internals.md](docs/architecture-internals.md#test-architecture))
-- Static analyzer scripts use the mock env var pattern for testing — never call real binaries in tests
+- Python code follows PEP 8; ruff enforces E, F, W, I, UP, B, and SIM rule sets
+- Native analyzer modules use the mock env var pattern for testing — never call real binaries in tests
 - Findings JSON uses the schema documented in [docs/architecture-internals.md](docs/architecture-internals.md#agent-output-schema)

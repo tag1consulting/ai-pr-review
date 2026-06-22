@@ -50,7 +50,7 @@ agents: 'code-reviewer,security-reviewer'
 exclude-agents: 'edge-case-hunter,adversarial-general'
 ```
 
-When `agents` is set, `exclude-agents` is ignored (allowlist takes precedence). Existing gates still apply on top: a tier-2 agent in the allowlist still won't run in quick mode, and a conditionally-triggered agent still won't run if its trigger didn't fire. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected with an error and a suggestion. Requires `engine: python` (the default). See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
+When `agents` is set, `exclude-agents` is ignored (allowlist takes precedence). Existing gates still apply on top: a tier-2 agent in the allowlist still won't run in quick mode, and a conditionally-triggered agent still won't run if its trigger didn't fire. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected with an error and a suggestion. See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
 
 ## Severity icons
 
@@ -124,4 +124,4 @@ The action auto-detects languages from file extensions and injects per-language 
 | `java.md` | Java |
 | `c++.md` | C and C++ |
 
-To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `lib/languages.sh` for the relevant file extensions.
+To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `ai_pr_review/languages.py` for the relevant file extensions.

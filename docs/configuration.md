@@ -54,7 +54,6 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `16384` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | `enable-suggestions` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
-| `AI_PR_REVIEW_ENGINE` | `python` | `engine` | Compute engine: `python` (default) or `bash` (deprecated legacy; will be removed in a future major release) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
 | `AI_REVIEW_IMAGE_TAG` | `latest` | `image-tag` | Container image tag to pull (e.g. `latest`, `1.2.3`). Pin for reproducible runs. |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | `true` (container), `false` (direct action) | `context-enrichment` | Inject tree-sitter symbol-context blocks into agent prompts (requires the Python engine, which is the default). The container image ships `tree-sitter-language-pack` and `ripgrep`, so enrichment is on by default there. Direct-action consumers without those tools get a silent no-op. |
@@ -114,7 +113,7 @@ to change them.
 |----------|---------|-------------|
 | `FORCE_FULL_DIFF` | `false` | Bypass the SHA watermark and review the full PR diff. Prefer the `ai-review-rescan` PR label instead — it sets this automatically. |
 | `STANDALONE_DEPTH` | `''` | In standalone mode, diff the last N commits when base and head resolve to the same SHA. If unset, diffs the entire tree. |
-| `LLM_RETRY_COUNT` | `3` (bash) / `2` (python) | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
+| `LLM_RETRY_COUNT` | `2` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings. Findings below this are dropped before suppressions. |
 | `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Disables the docs-only heuristic gate; `architecture-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
@@ -128,7 +127,7 @@ to change them.
 
 ### Opt-in capabilities
 
-These variables enable optional capabilities that are off by default. All require the Python engine (the default since v1.0.0; set explicitly with `AI_PR_REVIEW_ENGINE=python` if you have overridden the default) unless stated otherwise.
+These variables enable optional capabilities that are off by default.
 
 #### Context enrichment
 
@@ -148,7 +147,7 @@ These variables enable optional capabilities that are off by default. All requir
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated list of git pathspec glob patterns to exclude from the diff before the LLM reads it (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically if missing. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Use to reduce LLM token costs on large generated or documentation-only files. Requires the Python engine (the default since v1.0.0). |
+| `AI_EXCLUDE_PATTERNS` | `''` | Comma-separated list of git pathspec glob patterns to exclude from the diff before the LLM reads it (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically if missing. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Use to reduce LLM token costs on large generated or documentation-only files. |
 | `AI_EXCLUDE_PATTERNS_MODE` | `append` | Controls how `AI_EXCLUDE_PATTERNS` interacts with the built-in exclude list (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are appended after the built-ins. `replace`: only user patterns are used and the built-in list is dropped. Setting `replace` with an empty `AI_EXCLUDE_PATTERNS` logs a warning and falls back to the built-in list to avoid producing an unfiltered diff silently. Invalid values (anything other than `append` or `replace`) are rejected with an error at startup. |
 
 #### Analyzer and agent selection
@@ -181,7 +180,7 @@ These variables enable optional capabilities that are off by default. All requir
 
 ### Telemetry hooks
 
-These variables configure the Python engine's telemetry system (`engine: python` only). Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues.
+These variables configure the telemetry system. Telemetry is fail-soft: all I/O errors are logged as warnings and the review continues.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -200,7 +199,7 @@ All v2 additions are forward-compatible: consumers parsing v1 events that ignore
 
 ### Structured logging
 
-These variables configure the Python engine's logging system (`engine: python` only). Set them in your workflow `env:` block.
+These variables configure the logging system. Set them in your workflow `env:` block.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

@@ -9,43 +9,43 @@ render_with_liquid: false
 
 ## What's new in v1.4.0
 
-**All 13 static analyzers ported to native Python (Epic 8, PRs #475–#488, closes #462–#474).** Every analyzer that previously ran as a bash subprocess via `analyzers/run-<tool>.sh` is now a native Python function in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable; the bash wrappers still exist for the deprecated bash engine but are no longer invoked by the default Python engine.
+**All 13 static analyzers ported to native Python (Epic 8, PRs #475–#488, closes #462–#474).** Every analyzer is implemented as a native Python function in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable.
 
-Analyzers ported: shellcheck, ruff, hadolint, kube-linter, phpcs, semgrep, golangci-lint, checkov, phpstan, eslint, tflint, trufflehog, cve-check.
+Analyzers: shellcheck, ruff, hadolint, kube-linter, phpcs, semgrep, golangci-lint, checkov, phpstan, eslint, tflint, trufflehog, cve-check.
 
-Each tool binary is still invoked via `subprocess.run`, but output is now parsed directly in Python rather than through awk/jq/sed pipelines. Eligibility gating (changed-files filtering, content-sniff checks) runs in Python. Findings schema, severity mappings, confidence values, and source tags are parity-identical to the bash wrappers. Each native analyzer has a corresponding `tests/python/test_analyzer_<tool>.py` pytest module.
+Each tool binary is invoked via `subprocess.run`, with output parsed directly in Python. Eligibility gating (changed-files filtering, content-sniff checks) runs in Python. Each native analyzer has a corresponding `tests/python/test_analyzer_<tool>.py` pytest module.
 
-No action input changes are required. The `analyzers/run-<tool>.sh` wrappers are unchanged and continue to work for the deprecated bash engine.
+No action input changes are required.
 
 ## What's new in v1.3.0
 
-**Concurrent native analyzer wrappers (PR #454, closes #354).** Native static-analyzer subprocesses (`shellcheck`, `trufflehog`, `semgrep`, `ruff`, and others) previously ran sequentially. They now run concurrently via `anyio.to_thread.run_sync` under a shared `CapacityLimiter`. Use the new `analyzer-concurrency` action input (or `AI_ANALYZER_CONCURRENCY` env var) to control the cap (default 4). Setting `parallel: false` forces the cap to 1 (restoring sequential behavior). Results are always returned in the original analyzer-list order for deterministic output. Python engine only. See [Configuration → analyzer-concurrency](configuration#static-analyzer-options).
+**Concurrent native analyzer wrappers (PR #454, closes #354).** Native static-analyzer subprocesses (`shellcheck`, `trufflehog`, `semgrep`, `ruff`, and others) previously ran sequentially. They now run concurrently via `anyio.to_thread.run_sync` under a shared `CapacityLimiter`. Use the new `analyzer-concurrency` action input (or `AI_ANALYZER_CONCURRENCY` env var) to control the cap (default 4). Setting `parallel: false` forces the cap to 1 (restoring sequential behavior). Results are always returned in the original analyzer-list order for deterministic output. See [Configuration → analyzer-concurrency](configuration#static-analyzer-options).
 
-**SARIF-equivalent skip for native wrappers (PR #454, closes #353).** When `AI_SARIF_PATHS` includes a SARIF file whose filename stem matches `ruff`, `semgrep`, or `hadolint` (case-insensitive), the corresponding native wrapper is suppressed and an INFO log is printed. This avoids running the same analyzer twice when you supply SARIF output from your own CI step. When `AI_SARIF_PATHS` is empty, behavior is unchanged. Python engine only.
+**SARIF-equivalent skip for native wrappers (PR #454, closes #353).** When `AI_SARIF_PATHS` includes a SARIF file whose filename stem matches `ruff`, `semgrep`, or `hadolint` (case-insensitive), the corresponding native wrapper is suppressed and an INFO log is printed. This avoids running the same analyzer twice when you supply SARIF output from your own CI step. When `AI_SARIF_PATHS` is empty, behavior is unchanged.
 
-**`AI_TEMPERATURE` is now honored in Python engine LLM requests (PR #453, closes #356).** The `temperature` action input (and `AI_TEMPERATURE` env var) was already validated but was never forwarded to the underlying LLM provider call. All agents, the pr-summarizer, and the issue-linker now receive the configured temperature. Default is 0.3 (unchanged). Python engine only.
+**`AI_TEMPERATURE` is now honored in LLM requests (PR #453, closes #356).** The `temperature` action input (and `AI_TEMPERATURE` env var) was already validated but was never forwarded to the underlying LLM provider call. All agents, the pr-summarizer, and the issue-linker now receive the configured temperature. Default is 0.3 (unchanged).
 
-**`max_tokens_per_agent` default lowered and clamped (PR #453, closes #357).** The default output-token budget per agent call is now **16384** (previously 32768 in the Python engine; docs and the bash engine said 8192 — now all three agree). Out-of-range values are clamped at config load time with a `WARNING` to stderr: below 256 is raised to 256, above 65536 is lowered to 65536. If you relied on the Python engine's prior 32768 default, add `max-tokens-per-agent: 32768` to restore it.
+**`max_tokens_per_agent` default lowered and clamped (PR #453, closes #357).** The default output-token budget per agent call is now **16384**. Out-of-range values are clamped at config load time with a `WARNING` to stderr: below 256 is raised to 256, above 65536 is lowered to 65536.
 
 **`ignore-merge-commits` now defaults to `true` (PR #450, closes #448).** Merge commits that pull upstream base-branch changes into a PR are now excluded from the diff by default, so only the PR author's own commits are reviewed. **Breaking change**: if your PRs contain base-branch merge commits and you rely on them appearing in the diff, add `ignore-merge-commits: false` (or `AI_REVIEW_IGNORE_MERGE_COMMITS=false`) to restore the previous behavior.
 
 **Context enrichment now defaults to `true` in the container image (PR #451, closes #391).** The container image ships `tree-sitter-language-pack` and `ripgrep`, so the dependencies required for context enrichment are always present. The `context-enrichment` input now defaults to `true` in `container-action/action.yml`. Direct-action consumers keep the `false` default.
 
-**Issue-linker pre-fetches open issues via `gh issue list` (PR #447, closes #446).** The issue-linker agent now receives a pre-fetched list of open issues injected into its prompt, so it can resolve referenced `#N` numbers to real titles and surface genuinely related issues by keyword matching. Python engine only.
+**Issue-linker pre-fetches open issues via `gh issue list` (PR #447, closes #446).** The issue-linker agent now receives a pre-fetched list of open issues injected into its prompt, so it can resolve referenced `#N` numbers to real titles and surface genuinely related issues by keyword matching.
 
 **Slash-command replies now post as `github-actions[bot]` (PR #452).** Slash-command and learning-loop replies previously posted as the PAT owner. They now post as `github-actions[bot]`. Callers of `slash-commands.yml` must add `actions-token: ${{ secrets.GITHUB_TOKEN }}` to the `secrets:` block. See [Slash commands](slash-commands.md) for the updated configuration.
 
 ## What's new in v1.2.0
 
-**Diff-scope severity cap for native analyzer findings (PR #444, closes #359).** Native static analyzers (phpcs, phpstan, ruff, golangci-lint, semgrep, etc.) lint entire files — a single changed line in a large legacy file can produce hundreds of diagnostics on unchanged code. The new `analyzer-diff-scope` input (or `AI_ANALYZER_DIFF_SCOPE` env var) controls how those out-of-diff findings are handled. `cap` (default): downgrade out-of-diff analyzer findings to Low severity and collapse them into a `<details>` section in the review body — they remain visible but never trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged (full-file linting behavior, pre-v1.2 default). LLM-agent findings are never affected regardless of this setting. Python engine only. See [Configuration → analyzer-diff-scope](configuration#static-analyzer-options).
+**Diff-scope severity cap for native analyzer findings (PR #444, closes #359).** Native static analyzers (phpcs, phpstan, ruff, golangci-lint, semgrep, etc.) lint entire files — a single changed line in a large legacy file can produce hundreds of diagnostics on unchanged code. The new `analyzer-diff-scope` input (or `AI_ANALYZER_DIFF_SCOPE` env var) controls how those out-of-diff findings are handled. `cap` (default): downgrade out-of-diff analyzer findings to Low severity and collapse them into a `<details>` section in the review body — they remain visible but never trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged (full-file linting behavior, pre-v1.2 default). LLM-agent findings are never affected regardless of this setting. See [Configuration → analyzer-diff-scope](configuration#static-analyzer-options).
 
-**`exclude-patterns-mode` validation (PR #443, closes #442).** The `exclude-patterns-mode` input (and `AI_EXCLUDE_PATTERNS_MODE` env var) now validates that the value is `append` or `replace` — any other value raises an error at startup rather than silently falling through to append behavior. Values are case-insensitive (`APPEND`, `Replace`, etc. are all accepted and normalized to lowercase). Python engine only.
+**`exclude-patterns-mode` validation (PR #443, closes #442).** The `exclude-patterns-mode` input (and `AI_EXCLUDE_PATTERNS_MODE` env var) now validates that the value is `append` or `replace` — any other value raises an error at startup rather than silently falling through to append behavior. Values are case-insensitive (`APPEND`, `Replace`, etc. are all accepted and normalized to lowercase).
 
 ## What's new in v1.1.0
 
-**Config-driven diff exclude patterns (PR #438, closes #436).** The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Default mode is `append`, which adds user patterns after the built-in lockfile/`vendor/`/`node_modules/` excludes; set `exclude-patterns-mode: replace` (or `AI_EXCLUDE_PATTERNS_MODE=replace`) to drop the built-ins entirely. Python engine only. See [docs/configuration.md](docs/configuration.md#diff-exclude-patterns).
+**Config-driven diff exclude patterns (PR #438, closes #436).** The diff exclude list is now configurable. Use the new `exclude-patterns` action input (or `AI_EXCLUDE_PATTERNS` env var) to supply comma-separated git pathspec glob patterns that are excluded from the diff before the LLM reads them — reducing token costs directly on repos with large generated, documentation-only, or vendored trees. The `":!"` pathspec prefix is added automatically. Default mode is `append`, which adds user patterns after the built-in lockfile/`vendor/`/`node_modules/` excludes; set `exclude-patterns-mode: replace` (or `AI_EXCLUDE_PATTERNS_MODE=replace`) to drop the built-ins entirely. See [docs/configuration.md](docs/configuration.md#diff-exclude-patterns).
 
-**Line-range suppression rules (PR #439, closes #437).** Suppression rules now support `match.line_start` and `match.line_end` fields, scoping a rule to a specific line window within a file. This resolves the granularity gap for repos that vendor upstream code and apply patches: a rule can now target only the upstream line window (e.g. lines 1–200) so that findings on the user's own patched lines (201+) are never silenced. Multi-line findings match on overlap. A finding with no line number is never matched by a range rule. Python engine only. See [docs/suppression.md](docs/suppression.md).
+**Line-range suppression rules (PR #439, closes #437).** Suppression rules now support `match.line_start` and `match.line_end` fields, scoping a rule to a specific line window within a file. This resolves the granularity gap for repos that vendor upstream code and apply patches: a rule can now target only the upstream line window (e.g. lines 1–200) so that findings on the user's own patched lines (201+) are never silenced. Multi-line findings match on overlap. A finding with no line number is never matched by a range rule. See [docs/suppression.md](docs/suppression.md).
 
 ## What's new in v1.0.2
 
@@ -61,15 +61,13 @@ No action input changes are required. The `analyzers/run-<tool>.sh` wrappers are
 
 **Agent prompt parity with claude-comprehensive-review (PRs #414–#419).** Six agents — `pr-summarizer`, `edge-case-hunter`, `blind-hunter`, `adversarial-general`, `architecture-reviewer`, and `security-reviewer` — received targeted prompt improvements ported from the companion CCR plugin: tighter output structure, improved finding signal-to-noise, and better alignment with the shared language profiles.
 
-**Analyzer correctness fixes (PRs #420–#423).** `run-semgrep.sh` gains stdin support and ruleset strategy documentation. `run-cve-check.sh` fixes range version truncation and `requirements.txt` pinning. `run-shellcheck.sh` and `run-trufflehog.sh` receive correctness improvements ported from CCR. All 12 analyzer wrappers now accept stdin input via the analyzer bridge.
+**Analyzer correctness fixes (PRs #420–#423).** The semgrep analyzer gains stdin support and ruleset strategy documentation. The cve-check analyzer fixes range version truncation and `requirements.txt` pinning. shellcheck and trufflehog receive correctness improvements. All analyzers accept stdin input via the analyzer bridge.
 
 **Learning loop data quality fix (PR #425).** `source`, `file`, and `rule_id` fields are now correctly populated in `learnings.jsonl` entries, making relevance-ranked feedback injection more accurate.
 
 ## What's new in v1.0.0
 
-**Python engine is now the default.** `AI_PR_REVIEW_ENGINE` now defaults to `python`. Consumers who do not set `engine:` in their workflow will automatically use the Python engine. The bash pipeline is deprecated: it continues to work when explicitly set (`engine: bash` / `AI_PR_REVIEW_ENGINE=bash`) but emits a deprecation warning and will be removed in a future major release. To migrate, remove the `engine: bash` line from your workflow (or change it to `engine: python`). Context enrichment, SARIF ingestion, and the learning loop all require the Python engine and are unaffected — they remain opt-in via their existing env vars.
-
-**Bash deprecation warning.** When `AI_PR_REVIEW_ENGINE=bash` is set explicitly, the bash entrypoint now emits a `::warning::` annotation in GitHub Actions (visible as a plain warning on GitLab/Bitbucket) reminding you to migrate. The review continues to completion — this is fail-soft.
+**Python engine is now the only engine.** The bash pipeline has been removed. All review logic runs through the Python implementation.
 
 ## What's new in v0.12.2
 
@@ -119,9 +117,9 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 **GitLab stale discussion resolution scoped to bot-owned discussions (PR #338, issue #184).** `resolve_stale_discussions` previously matched any discussion where the bot appeared as _any_ note author, including reply threads started by other users. It now only resolves discussions where the bot is the first-note author and the body contains the `<!-- ai-pr-review-inline -->` inline marker. The marker is appended to all newly posted inline discussions, so existing discussions are unaffected.
 
-**Bash `dismiss_stale_reviews` hardened against silent failures (PR #342, issues #329, #325).** A jq parse failure on the GitHub reviews API response now emits a warning and returns early instead of silently continuing with an empty review ID list. An empty `newest_review_id` is similarly guarded.
+**`dismiss_stale_reviews` hardened against silent failures (PR #342, issues #329, #325).** A parse failure on the GitHub reviews API response now emits a warning and returns early instead of silently continuing with an empty review ID list. An empty `newest_review_id` is similarly guarded.
 
-**Python engine observability and correctness improvements (PR #341, issues #327–#333).**
+**Observability and correctness improvements (PR #341, issues #327–#333).**
 - `ImportError` is no longer swallowed in the feedback loop and analyzer bridge fail-soft blocks — genuine import failures now propagate.
 - `_safe_int` is no longer called twice per review ID in `github.py`'s bot review collection loop.
 - SARIF load failure log now includes the file paths being loaded.
@@ -133,15 +131,15 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 ## What's new in v0.10.0
 
-**Language profiles — 19 languages (PR #322).** Agent prompts now include per-language context blocks for every language detected in the diff. Profiles cover Python, Go, TypeScript, JavaScript, PHP, Shell, Ruby, Rust, Java, C++, Kotlin, Swift, C#, Scala, SQL, Lua, Perl, YAML, and Terraform. Each profile supplies language-specific patterns, common pitfalls, and framework conventions so agents apply targeted checks rather than generic heuristics. Profiles are loaded from `language-profiles/` and injected into the `DispatchContext`; the bash engine reads them from the same directory via `build_file_manifest()`.
+**Language profiles — 19 languages (PR #322).** Agent prompts now include per-language context blocks for every language detected in the diff. Profiles cover Python, Go, TypeScript, JavaScript, PHP, Shell, Ruby, Rust, Java, C++, Kotlin, Swift, C#, Scala, SQL, Lua, Perl, YAML, and Terraform. Each profile supplies language-specific patterns, common pitfalls, and framework conventions so agents apply targeted checks rather than generic heuristics. Profiles are loaded from `language-profiles/` and injected into the `DispatchContext`.
 
-**Premature review dismissal fix (PR #324, issue #323).** Fixed a race condition where a stale `CHANGES_REQUESTED` review could be auto-dismissed before the current run finished posting its own review. Both the bash engine (`post-review.sh`) and the Python engine (`vcs/github.py`) now track the total bot-review count and always protect the newest bot review from dismissal. A `_safe_int()` helper guards against non-integer review IDs in both paths.
+**Premature review dismissal fix (PR #324, issue #323).** Fixed a race condition where a stale `CHANGES_REQUESTED` review could be auto-dismissed before the current run finished posting its own review. The action now tracks the total bot-review count and always protects the newest bot review from dismissal. A `_safe_int()` helper guards against non-integer review IDs.
 
 **Python engine runtime assembly refactor (PR #321).** `_run_review_async()` in `cli.py` has been reduced from ~230 lines to ~65 lines. A new `build_review_runtime()` factory in `ai_pr_review/review/runtime.py` assembles the fully prepared `ReviewRuntime` dataclass — provider construction, diff computation, feedback loading, agent gate evaluation, static analyzer runs, SARIF ingestion, suppression rule loading, and `OrchestrationConfig` construction — and hands it to `orchestrate.run_review()`, which reads no environment and constructs no dependencies. This makes the Python engine's runtime flow reusable for non-CLI entry points (server harness, batch runner). SARIF findings now flow through `OrchestrationConfig.extra_findings` rather than being loaded inline in the orchestrator.
 
 ## What's new in v0.9.4
 
-**Token table moved to review body (`engine: python`).** The collapsible **Token usage by agent** table now appears in the same review comment as the findings (Approved / Changes Requested / Comment), matching the bash engine. Previously the Python engine appended the table to the long-lived PR summary comment, which was rewritten on every incremental run. The summary comment now carries only the first-run walkthrough and is never overwritten on subsequent pushes.
+**Token table moved to review body.** The collapsible **Token usage by agent** table now appears in the same review comment as the findings (Approved / Changes Requested / Comment). The summary comment now carries only the first-run walkthrough and is never overwritten on subsequent pushes.
 
 ## What's new in v0.9.3
 
@@ -151,23 +149,23 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 **Token table enhancements.** The collapsible token cost table now includes two additional optional rows: a **Context enrichment** row showing the token count of the `<symbol-context>` block (when `AI_CONTEXT_ENRICHMENT=1` and context was non-empty), and a **SARIF ingestion** row showing the wall-clock parse time (when `AI_SARIF_PATHS` is configured). The Output column also displays the configured per-agent output cap when one is set (e.g. `1234 / 4096`).
 
-**`cache_priming` default changed to `false`.** `AI_CACHE_PRIMING` now defaults to `false` in the Python engine, aligning with the bash engine default. Previously the Python engine defaulted to `true`. If you rely on cache priming, add `AI_CACHE_PRIMING=true` explicitly to your workflow.
+**`cache_priming` default changed to `false`.** `AI_CACHE_PRIMING` now defaults to `false`. If you rely on cache priming, add `AI_CACHE_PRIMING=true` explicitly to your workflow.
 
 **`slash-commands.yml` `shell: bash` fix.** The `feedback-command` job in the bundled slash-commands workflow was missing a `shell: bash` declaration, causing step failures on some runner configurations. This is fixed.
 
 ## What's new in v0.9.2
 
-**Token cost table updated on every run (PR #304).** Previously (`engine: python`) the collapsible token cost table was only posted on the first review run and never refreshed. It now updates on every incremental run: the first-run PR summary text is preserved and only the `<details>` accordion is replaced with fresh token data from the latest run.
+**Token cost table updated on every run (PR #304).** The collapsible token cost table now updates on every incremental run: the first-run PR summary text is preserved and only the `<details>` accordion is replaced with fresh token data from the latest run.
 
 **Token table upsert bug fixes.** Fixed two bugs introduced in v0.9.1: (1) `_upsert_token_table` was a synchronous call inside an async function, blocking the anyio event loop during the GitHub API call; converted to `async def` with `anyio.to_thread.run_sync`. (2) HTTP-level errors from the VCS provider (403, 404, 422) were silently swallowed because providers return `SummaryResult(ok=False)` rather than raising — the return value is now checked and logged as a warning.
 
-**`phpstan_level` default aligned to bash engine.** The Python engine was defaulting to `PHPSTAN_LEVEL=5`; the bash engine and documentation both specify `3`. Both are now `3`.
+**`phpstan_level` default set to 3.** `PHPSTAN_LEVEL` now defaults to `3`.
 
 ## What's new in v0.9.1
 
-**Language detection expanded to 23 languages (PR #297).** The Python engine (`engine: python`) now detects Kotlin, Swift, C#, Scala, Terraform, YAML, SQL, Lua, Perl, plus Drupal PHP extensions (`.module`, `.theme`, `.inc`) and Ruby build files (`.rake`, `.gemspec`). Tree-sitter context enrichment (Capability A) covers all 23 language keys.
+**Language detection expanded to 23 languages (PR #297).** The action now detects Kotlin, Swift, C#, Scala, Terraform, YAML, SQL, Lua, Perl, plus Drupal PHP extensions (`.module`, `.theme`, `.inc`) and Ruby build files (`.rake`, `.gemspec`). Tree-sitter context enrichment (Capability A) covers all 23 language keys.
 
-**PR summarizer and token cost table wired (PR #299).** On first-run reviews (`engine: python`), the engine now automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. The token cost table is updated on every run (see v0.9.2 below); the PR summary is posted on first run only.
+**PR summarizer and token cost table wired (PR #299).** On first-run reviews, the action automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. The token cost table is updated on every run (see v0.9.2 below); the PR summary is posted on first run only.
 
 **Structured logging (PR #300).** Set `AI_LOG_FORMAT=json` to get machine-readable log output with `timestamp`, `level`, `logger`, `correlation_id`, and `message` fields — suitable for Datadog, CloudWatch, and similar aggregators. Correlation IDs flow through every log record for the duration of a review run. Three-layer secret masking prevents credentials from appearing in log output. See [Configuration → Structured logging](configuration#structured-logging) for the full env-var reference.
 
@@ -175,12 +173,7 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 ## What's new in v0.9.0
 
-**Python engine end-to-end.** `engine: python` now routes compute,
-agent dispatch, and PR/MR posting through the Python implementation across
-GitHub, GitLab, and Bitbucket. As of v1.0.0 the Python engine is the default;
-the bash pipeline is deprecated.
-
-**Three opt-in capability groups (all default off, all require the Python engine, which is the default since v1.0.0).** See
+**Three opt-in capability groups (all default off).** See
 [Configuration → Opt-in capabilities](configuration#opt-in-capabilities)
 for the full env-var reference.
 
@@ -264,7 +257,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
 
-**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient curl errors (connection refused, timeout, network failure) are retried with exponential backoff and jitter. Controlled by the `LLM_RETRY_COUNT` env var (default: 3 for the bash engine, 2 for the Python engine).
+**LLM retries**: Transient API failures (HTTP 408, 429, 500, 502, 503, 504, and Cloudflare 520–524) and transient network errors (connection refused, timeout) are retried with exponential backoff and jitter. Controlled by the `LLM_RETRY_COUNT` env var (default: 2).
 
 **Parallel execution**: Agents run in a tiered fan-out by default — Tier 1 issues up to ~3 concurrent LLM calls alongside any triggered static analyzers; Tier 2 (full mode only) issues up to 5 concurrent LLM calls. The concurrency numbers apply to LLM calls only (for rate-limit planning); static analyzers run concurrently with them but do not consume LLM quota. If your provider's rate limits cannot sustain this throughput, set `parallel: false` to revert to sequential execution.
 
@@ -274,7 +267,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the **review body** — the same comment that carries the findings (Approved / Changes Requested / Comment). Both the Python and bash engines now behave identically in this regard. The long-lived PR summary comment carries only the first-run walkthrough and is not rewritten on subsequent runs.
+After each review run, a collapsible **Token usage by agent** table is appended to the **review body** — the same comment that carries the findings (Approved / Changes Requested / Comment). The long-lived PR summary comment carries only the first-run walkthrough and is not rewritten on subsequent runs.
 
 The table layout adapts based on cache activity:
 

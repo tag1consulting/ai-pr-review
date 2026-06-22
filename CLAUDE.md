@@ -6,11 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A GitHub Actions composite action that runs multiple LLM agents against a PR diff and posts a structured review (summary comment + inline findings) back to the PR. It is consumed by downstream repos either as a direct action reference (`uses: tag1consulting/ai-pr-review@main`) or as a git submodule.
 
-## Two engines: Python (default) and bash (deprecated, Epic 5 deletion)
+The action uses the Python engine in `ai_pr_review/`.
 
-The action ships two engine implementations. The **Python engine in `ai_pr_review/`** is the default since Epic 4 (`engine: python` in `action.yml`) and is the runtime path for every consumer. The **bash engine** (`review.sh`, `lib/*.sh`, `post-review*.sh`, `llm-call.sh`, `vcs/common.sh`) is retained only for the Epic 4 sunset window and is scheduled for deletion in Epic 5 (#199). New work goes in the Python engine; bash entries below are kept for reference only.
-
-## Python engine modules (default path)
+## Python engine modules
 
 | Module | Role |
 |--------|------|
@@ -33,24 +31,6 @@ The action ships two engine implementations. The **Python engine in `ai_pr_revie
 | `ai_pr_review/manifest.py`, `languages.py`, `language_profiles.py` | Changed-files manifest, language detection (canonical `_EXT_MAP`), language-profile loader |
 | `ai_pr_review/{config,errors,logging,telemetry,pricing}.py` | Typed `Config`, exception hierarchy, structured logging, telemetry-event emit, model pricing |
 
-## Key scripts and their roles (bash engine — DEPRECATED, Epic 5 deletion)
-
-| Script | Role |
-|--------|------|
-| `review.sh` | Main orchestrator: diff computation, phase sequencing, agent dispatch (parallel tiers), context assembly, invokes the provider-specific post-review script |
-| `lib/agents.sh` | LLM agent dispatch: `call_agent`, `call_agent_bg`, `wait_tier_pids`, `collect_parallel_results`, `cache_priming_effective`, `effective_prompt` |
-| `lib/findings.sh` | Findings pipeline: `extract_findings`, `merge_findings`, `apply_suppressions` (with verify-type handlers for npm, PyPI, Go, Cargo, Docker Hub, GitHub releases, ruby-lang.org) |
-| `lib/diff.sh` | Diff helpers: `post_skip_comment` (VCS-provider skip comment), `build_file_manifest` (language detection, file categorization, manifest building, language profiles, project context) |
-| `lib/pricing.sh` | Token pricing and cost estimation: `model_pricing`, `model_display_name`, `format_cost`, `emit_token_table` |
-| `lib/languages.sh` | Language detection: `detect_language`, `is_test_file` |
-| `llm-call.sh` | Stateless curl-based LLM client; dispatches to the correct provider based on `AI_PROVIDER`; writes response to stdout, emits `TOKENS:` line to stderr. Anthropic and Bedrock paths enable prompt caching via `cache_control: ephemeral` markers (gated by `LLM_PROMPT_CACHING`; default `auto`). |
-| `post-review.sh` | GitHub API layer: resolves/dismisses stale review threads, posts summary comment, posts findings as a PR review with inline comments, advances SHA watermark |
-| `post-review-bitbucket.sh` | Bitbucket Cloud API layer: upserts one summary comment containing findings, advances SHA watermark |
-| `post-review-gitlab.sh` | GitLab API layer: upserts summary note, posts inline MR discussions with suggestion fences, resolves stale bot discussions, advances SHA watermark |
-| `vcs/common.sh` | Shared helpers sourced by all post-review scripts: `severity_icon`, `format_source_tag`, `classify_risk`, `format_body_finding`, `build_agent_prompt`, `parse_valid_lines`, `parse_diff_new_lines`, `mktemp_tracked`, `cleanup` |
-| `analyzers/run-*.sh` | Static analyzer wrappers (shellcheck, cve-check, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint); each outputs findings in the standard JSON schema |
-| `action.yml` | GitHub Actions composite action definition; maps inputs to env vars and calls `review.sh` |
-
 ## Provider model defaults
 
 | Provider | Standard model | Premium model |
@@ -68,11 +48,11 @@ The action ships two engine implementations. The **Python engine in `ai_pr_revie
 3. If the agent should only run when specific files change, set `conditional_trigger` to a glob/regex pattern; the gate evaluation lives in `ai_pr_review/agents/gates.py`.
 4. Add unit-test coverage in `tests/python/agents/` for any custom gate logic.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes (the Python recipe is the canonical one; the bash recipe is retained for Epic 5 reference).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes.
 
 ## Adding a language profile
 
-The canonical language list lives in `ai_pr_review/languages.py:_EXT_MAP`. Until Epic 5 deletes the bash engine, `lib/languages.sh:detect_language()` is a port and must stay in sync with it (drift-checked by parity tests).
+The canonical language list lives in `ai_pr_review/languages.py:_EXT_MAP`.
 
 Create `language-profiles/<language>.md` (filename must match the lowercase language key returned by `detect_language()` in `ai_pr_review/languages.py`).
 
@@ -100,7 +80,7 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 ## Test-file detection
 
-`is_test_file()` in `ai_pr_review/languages.py` (and the parallel implementation in `lib/languages.sh` until Epic 5) classifies changed files as test files for the manifest:
+`is_test_file()` in `ai_pr_review/languages.py` classifies changed files as test files for the manifest:
 
 | Pattern | Language |
 |---|---|
@@ -113,37 +93,13 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 | `*_test.cpp`, `*_test.cc`, `*_test.ts` | C++/TS |
 | Any file under `/tests/`, `/test/`, or `/spec/` | Any |
 
-## Static analyzer mock env vars (testing only)
-
-| Script | Mock env var | Fixture directory |
-|--------|-------------|-------------------|
-| `analyzers/run-cve-check.sh` | `OSV_MOCK_FILE` | `tests/fixtures/cve/` |
-| `analyzers/run-semgrep.sh` | `SEMGREP_MOCK_FILE` | `tests/fixtures/semgrep/` |
-| `analyzers/run-trufflehog.sh` | `TRUFFLEHOG_MOCK_FILE` | `tests/fixtures/trufflehog/` |
-| `analyzers/run-ruff.sh` | `RUFF_MOCK_FILE` | `tests/fixtures/ruff/` |
-| `analyzers/run-golangci-lint.sh` | `GOLANGCI_MOCK_FILE` | `tests/fixtures/golangci/` |
-| `analyzers/run-hadolint.sh` | `HADOLINT_MOCK_FILE` | `tests/fixtures/hadolint/` |
-| `analyzers/run-checkov.sh` | `CHECKOV_MOCK_FILE` | `tests/fixtures/checkov/` |
-| `analyzers/run-phpcs.sh` | `PHPCS_MOCK_FILE` | `tests/fixtures/phpcs/` |
-| `analyzers/run-eslint.sh` | `ESLINT_MOCK_FILE` | `tests/fixtures/eslint/` |
-| `analyzers/run-phpstan.sh` | `PHPSTAN_MOCK_FILE` | `tests/fixtures/phpstan/` |
-| `analyzers/run-kube-linter.sh` | `KUBELINTER_MOCK_FILE` | `tests/fixtures/kubelinter/` |
-| `analyzers/run-tflint.sh` | `TFLINT_MOCK_FILE` | `tests/fixtures/tflint/` |
-
-Do not set mock vars in production.
-
 ## Testing locally
 
 ```bash
-# Python engine — the default and the canonical test suite
 pip install -e ".[dev,context]"
-pytest tests/python -q                  # ~1474 tests, < 60s
+pytest tests/python -q                  # < 60s
 mypy ai_pr_review/                      # 82 source files, must be clean
 ruff check ai_pr_review/ tests/python/  # E,F,W,I,UP,B,SIM rules
-
-# Bash engine (Epic 5 deletion target — keep green until removed)
-bats tests/*.bats                                                          # requires bats + jq
-shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh post-review-gitlab.sh analyzers/run-shellcheck.sh analyzers/run-cve-check.sh
 ```
 
 ## Deep reference
@@ -151,8 +107,6 @@ shellcheck review.sh llm-call.sh post-review.sh post-review-bitbucket.sh post-re
 For detailed implementation internals (findings pipeline, parallel execution, caching, suggestions, suppressions, token accounting, retry/resilience, test architecture, Dockerfile layout), see [docs/architecture-internals.md](docs/architecture-internals.md).
 
 For contributor how-tos (adding an analyzer, agent, language profile, or VCS provider), see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-For the full bash wrapper inventory — binary flags, output-field mapping, path normalization, mock env var, and Phase 11 port complexity for each of the 13 `analyzers/run-*.sh` wrappers — see [docs/analyzers-bash-inventory.md](docs/analyzers-bash-inventory.md).
 
 ## Release process
 

@@ -103,7 +103,7 @@ The `reason` text is sanitized before storage:
 
 1. Set `feedback-loop: 'true'` in `action.yml` inputs (review action) and `enable-feedback-loop: 'true'` in the reusable slash-commands workflow inputs (command handling).
 2. Ensure `GH_TOKEN` (a PAT or GitHub App token) has `contents:write` permission on the repository. The `ai-pr-review-bot` branch is created automatically on first write.
-3. The Python engine is required for feedback injection. Python is the default as of v1.0.0; no action needed unless you have explicitly set `engine: bash`.
+3. No additional engine configuration is required.
 
 ## Access control
 
