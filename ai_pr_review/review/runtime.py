@@ -312,6 +312,12 @@ async def build_review_runtime(
 
     # 13. Build orchestrator config.
     _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"
+    _judge_prompt_resolved = _judge_prompt_path if _judge_prompt_path.exists() else None
+    if config.enable_judge_pass and _judge_prompt_resolved is None:
+        logger.warning(
+            "AI_JUDGE_PASS=true but judge prompt not found at %s; judge pass disabled",
+            _judge_prompt_path,
+        )
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
@@ -323,7 +329,7 @@ async def build_review_runtime(
         analyzer_diff_scope=config.analyzer_diff_scope,
         enable_judge_pass=config.enable_judge_pass,
         judge_model=config.model_standard,
-        judge_prompt_path=_judge_prompt_path if _judge_prompt_path.exists() else None,
+        judge_prompt_path=_judge_prompt_resolved,
     )
 
     return ReviewRuntime(

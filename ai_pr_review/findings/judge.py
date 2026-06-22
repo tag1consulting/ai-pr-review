@@ -38,7 +38,13 @@ JudgeVerdict = Literal["keep", "downrank"]
 
 
 def _build_candidate_payload(kept: list[Finding]) -> str:
-    """Serialize findings as a compact JSON array for the judge prompt."""
+    """Serialize findings as a compact JSON array for the judge prompt.
+
+    The ``id`` field is the list index in ``kept``. ``_apply_verdicts`` maps
+    verdicts back using the same index via ``enumerate``. The two functions
+    must always receive the same list in the same order; no sort or filter
+    may occur between them.
+    """
     items = []
     for idx, f in enumerate(kept):
         items.append({
@@ -95,6 +101,8 @@ def _apply_verdicts(
         verdict = id_to_verdict.get(idx, "keep")
         if verdict == "downrank":
             new_confidence = max(0, finding.confidence - JUDGE_DOWNRANK_AMOUNT)
+            # model_copy skips validator re-runs; safe here — only confidence and
+            # out_of_diff are updated and neither has cross-field validation.
             result.append(finding.model_copy(update={"confidence": new_confidence, "out_of_diff": True}))
             downrank_count += 1
         else:
@@ -148,7 +156,11 @@ async def judge_findings(
         return kept
 
     try:
-        parsed = json.loads(response.text)
+        # Strip optional markdown code fence the LLM may wrap around the JSON.
+        text = response.text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        parsed = json.loads(text)
         verdicts: list[dict[str, object]] = parsed["verdicts"]
         if not isinstance(verdicts, list):
             raise ValueError(f"verdicts is not a list: {type(verdicts)}")
