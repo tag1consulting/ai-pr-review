@@ -114,10 +114,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Semgrep-maintained rules (e.g. p/ci, p/security-audit) are licensed under the
 # Semgrep Rules License v1.0, which restricts internal/non-competing/non-SaaS
 # use and is not freely redistributable inside this tool's image. Instead,
-# run-semgrep.sh falls back to `--config=auto`, which fetches rules at runtime
-# (the user fetches them, mirroring the composite-action model). This keeps the
-# distributed image free of use-restricted rule content. See
-# memory-bank/license-audit-2026-06-01.md.
+# the native semgrep analyzer falls back to `--config=auto`, which fetches
+# rules at runtime (the user fetches them, mirroring the composite-action
+# model). This keeps the distributed image free of use-restricted rule content.
+# See memory-bank/license-audit-2026-06-01.md.
 
 # phpcs with Drupal coding standards + phpstan with phpstan-drupal.
 # composer.phar itself is only needed at build time, so it stays in the builder
@@ -151,12 +151,11 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Runtime-only dependencies.
 #
-# curl is required at runtime — it is invoked by llm-call.sh,
-# post-review-{github,bitbucket,gitlab}.sh (provider API calls), and
-# analyzers/run-cve-check.sh (OSV.dev queries).
+# curl is required at runtime — the Python engine uses httpx which may invoke
+# curl for some network operations; several analyzer tools also use it.
 #
-# git is required at runtime — the action scripts invoke git against the
-# mounted workspace.
+# git is required at runtime — the Python engine invokes git against the
+# mounted workspace for diff computation and branch operations.
 # hadolint ignore=DL3008
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
@@ -164,7 +163,6 @@ RUN apt-get update -qq && \
       ca-certificates \
       curl \
       git \
-      jq \
       php-cli \
       php-xml \
       php-mbstring \
@@ -204,17 +202,11 @@ COPY --from=builder /opt/composer /opt/composer
 RUN ln -s /opt/composer/vendor/bin/phpcs   /usr/local/bin/phpcs && \
     ln -s /opt/composer/vendor/bin/phpstan /usr/local/bin/phpstan
 
-# Action scripts are copied LAST so source-only changes don't invalidate any
-# of the heavy layers above.
-COPY review.sh post-review*.sh llm-call.sh \
-     /opt/ai-pr-review/
-
-COPY analyzers/         /opt/ai-pr-review/analyzers/
+# Asset directories are copied LAST so source-only changes don't invalidate
+# any of the heavy layers above.
 COPY config/            /opt/ai-pr-review/config/
-COPY lib/               /opt/ai-pr-review/lib/
 COPY prompts/           /opt/ai-pr-review/prompts/
 COPY language-profiles/ /opt/ai-pr-review/language-profiles/
-COPY vcs/               /opt/ai-pr-review/vcs/
 # Third-party license texts for the bundled analyzers (shellcheck, semgrep,
 # trufflehog, etc.). Required for redistribution of these tools inside the image.
 COPY THIRD-PARTY-LICENSES/ /opt/ai-pr-review/THIRD-PARTY-LICENSES/
