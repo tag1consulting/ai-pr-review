@@ -72,6 +72,9 @@ def _apply_verdicts(
     for v in verdicts:
         try:
             vid = int(v["id"])  # type: ignore[call-overload]
+            if not (0 <= vid < len(kept)):
+                logger.warning("judge: verdict id %d out of range [0, %d); skipping", vid, len(kept))
+                continue
             verdict_str = str(v.get("verdict", "keep"))
             id_to_verdict[vid] = verdict_str
         except (KeyError, TypeError, ValueError):
@@ -141,7 +144,7 @@ async def judge_findings(
     try:
         response = await llm_call(request)
     except Exception as exc:
-        logger.warning("judge: LLM call failed (fail-soft); keeping findings unchanged: %s", exc)
+        logger.warning("judge: LLM call failed (fail-soft); keeping findings unchanged: %s", exc, exc_info=True)
         return kept
 
     try:
@@ -149,7 +152,7 @@ async def judge_findings(
         verdicts: list[dict[str, object]] = parsed["verdicts"]
         if not isinstance(verdicts, list):
             raise ValueError(f"verdicts is not a list: {type(verdicts)}")
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning(
             "judge: could not parse verdict response (fail-soft): %s; response=%r",
             exc, response.text[:500],

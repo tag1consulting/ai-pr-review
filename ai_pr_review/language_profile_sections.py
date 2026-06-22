@@ -20,11 +20,14 @@ matching tag sets is used.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from ai_pr_review.context.budget import estimate_tokens
 from ai_pr_review.language_profiles import load_language_profiles
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ def split_sections(profile_text: str) -> list[ProfileSection]:
         if line.startswith("## ") and not line.startswith("### "):
             title_line = line
         elif line.startswith("### "):
+            stripped_heading = line[4:].strip()
             if current_heading:
                 body = "\n".join(current_body_lines).strip()
                 full_body = f"{title_line}\n\n### {current_heading}\n{body}" if title_line else f"### {current_heading}\n{body}"
@@ -83,7 +87,7 @@ def split_sections(profile_text: str) -> list[ProfileSection]:
                         tags=classify_section(current_heading),
                     )
                 )
-            current_heading = line[4:].strip()
+            current_heading = stripped_heading
             current_body_lines = []
         elif current_heading:
             current_body_lines.append(line)
@@ -118,6 +122,11 @@ class ProfileRouter:
             # blank-line separators.  Split them apart by ## headers so
             # split_sections processes one profile at a time.
             self._sections = _split_all_profiles(raw_text)
+            if not self._sections:
+                logger.warning(
+                    "ProfileRouter: profiles loaded but produced no parseable sections (labels=%s)",
+                    labels,
+                )
 
     def route(self, focus: frozenset[str], max_tokens: int) -> str:
         """Return assembled profile text for *focus*, packed under *max_tokens*.
@@ -137,7 +146,7 @@ class ProfileRouter:
                 continue
             section_tokens = estimate_tokens(section.body)
             if tokens_used + section_tokens > max_tokens:
-                break
+                continue
             parts.append(section.body)
             tokens_used += section_tokens
 
