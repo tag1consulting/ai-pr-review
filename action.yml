@@ -3,9 +3,9 @@ description: >
   AI-powered pull request review using multiple LLM agents.
   Posts a summary comment and inline review findings on the PR.
 
-  NOTE: This is the legacy composite action. It installs shellcheck on the
-  runner but does not install semgrep, trufflehog, ruff, or golangci-lint.
-  New consumers should use the container-action variant instead:
+  NOTE: This composite action installs shellcheck on the runner but does not
+  install semgrep, trufflehog, ruff, or golangci-lint. New consumers should
+  use the container-action variant instead:
     uses: tag1consulting/ai-pr-review/container-action@main
   The container action pulls a pre-built image with all analyzer binaries
   pinned at verified versions. See container-action/action.yml.
@@ -333,6 +333,14 @@ runs:
             exit 1
             ;;
         esac
+
+    - name: Install ai-pr-review Python package
+      shell: bash
+      run: |
+        # ubuntu-24.04 (PEP 668) requires --break-system-packages for pip installs
+        # outside a virtualenv. The flag is silently ignored on older runners that
+        # do not enforce PEP 668, so it is safe to always pass it.
+        pip install --quiet --break-system-packages "${{ github.action_path }}"
 
     - name: Run AI review
       shell: bash

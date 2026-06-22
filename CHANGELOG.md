@@ -31,23 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migration guide
 
-**Most consumers require no changes.** If your workflow has:
+**Container-action consumers (`uses: ./container-action` or the ghcr.io image directly) require no changes.** The Python package is pre-installed in the container image and the new ENTRYPOINT is set automatically.
 
-```yaml
-- uses: tag1consulting/ai-pr-review@v1
-  with:
-    engine: python   # safe to keep; now a no-op
-```
+**Composite/direct-action consumers (`uses: tag1consulting/ai-pr-review@main`):** The composite action now includes an explicit `pip install` step that installs the `ai_pr_review` package onto the runner before invoking it. This step was absent before v2.0.0, making the composite action non-functional on any runner where the package was not already installed. In practice, consumers using the composite action should see no behavior change — the install step is additive — but if your workflow caches pip packages, you may need to invalidate that cache to pick up this new install step.
 
-or the Bitbucket container variant:
+**`engine` input:** still accepted; now a no-op. `engine: python` and `engine: bash` both silently run Python. No action required.
 
-```yaml
-- /opt/ai-pr-review/review.sh  # update this line
-```
+**Bitbucket Pipelines container users:** Replace `/opt/ai-pr-review/review.sh` with `python3 -m ai_pr_review review`.
 
-For Bitbucket Pipelines container users, replace `/opt/ai-pr-review/review.sh` with `python3 -m ai_pr_review review`.
-
-Any script that reads `AI_PR_REVIEW_ENGINE` from the environment should remove that logic.
+**`AI_PR_REVIEW_ENGINE` env var:** Setting this now raises `ConfigError`. Remove it from any scripts or CI configuration that set it explicitly.
 
 ## [1.6.1] - 2026-06-10
 
