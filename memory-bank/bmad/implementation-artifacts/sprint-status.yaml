@@ -121,9 +121,9 @@ development_status:
   epic-4-retrospective: optional
 
   # ── Epic 5 — Delete Bash ────────────────────────────────────────────────────
-  # Parent issue #199. Branch: rework/epic-5-delete-bash. PR open (pending merge).
-  # ~9,600 LOC deleted across 59 shell files. Python is sole engine. v2.0.0.
-  epic-5: in-progress
+  # Parent issue #199 CLOSED. PR #525 merged 2026-06-22 at 8ba85f4. v2.0.0 tagged.
+  # ~9,600 LOC deleted across 59 shell files. Python is the sole engine.
+  epic-5: done
   5-1-analyzer-wrapper-audit: done       # #256 closed obsolete (Epic 8 already covered it)
   5-2-delete-orchestrator-and-libs: done # #251 commit 1e316fc
   5-3-delete-post-scripts: done          # #252 commit a596c82
@@ -131,7 +131,7 @@ development_status:
   5-5-entrypoint-simplification: done    # #254 commit 5368b54
   5-6-container-slim-down: done          # #255 commit a1fc912
   5-7-docs-final-cleanup: done           # #257 commit 878c355
-  5-8-final-release: in-progress         # #258 CHANGELOG + e2e gate + PR + tag
+  5-8-final-release: done                # #258 tagged v2.0.0 at 8ba85f4; release live
   epic-5-retrospective: optional
 
   # ── Epic 8 — Port Analyzer Wrappers to Native Python ────────────────────────
