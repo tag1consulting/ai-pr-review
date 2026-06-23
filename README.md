@@ -455,7 +455,7 @@ After each review run, a collapsible **Token usage by agent** table is appended 
 
 When no cache activity is detected, the Cache Write and Cache Read columns are omitted (6-column layout).
 
-When `AI_JUDGE_PASS=true` (the default) and the judge ran on a non-empty finding set, a `judge-pass` row appears as a regular agent row with its tokens included in the Total. Two supplementary informational rows may also appear after Total (they do not affect cost totals):
+When `AI_JUDGE_PASS=true` (the default) and the judge ran on a non-empty finding set, a `judge-pass` row appears as a regular agent row with its tokens included in the Total. Three supplementary informational rows may appear after Total (they do not affect cost totals):
 
 - **Context enrichment** — token count of the `<symbol-context>` block; shown when `AI_CONTEXT_ENRICHMENT=1` and the block was non-empty.
 - **Language profiles** — maximum profile tokens injected across agents; shown when per-agent profile routing (v2.1.0+) was active.
