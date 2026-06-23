@@ -457,7 +457,10 @@ def test_token_table_renderer_forwards_to_post_findings(tmp_path: Path) -> None:
     provider = _FakeProvider()
     ctx = _make_dispatch_context(tmp_path)
 
-    def _renderer(successes: object, sarif_elapsed_s: object) -> str:
+    def _renderer(
+        successes: object, sarif_elapsed_s: object,
+        judge_in: int, judge_out: int, judge_cw: int, judge_cr: int, judge_model: str,
+    ) -> str:
         return "<details>test-token-table</details>"
 
     async def _run() -> None:
@@ -481,7 +484,10 @@ def test_token_table_renderer_exception_is_failsoft(tmp_path: Path) -> None:
     provider = _FakeProvider()
     ctx = _make_dispatch_context(tmp_path)
 
-    def _bad_renderer(successes: object, sarif_elapsed_s: object) -> str:
+    def _bad_renderer(
+        successes: object, sarif_elapsed_s: object,
+        judge_in: int, judge_out: int, judge_cw: int, judge_cr: int, judge_model: str,
+    ) -> str:
         raise RuntimeError("renderer exploded")
 
     async def _run() -> None:

@@ -145,7 +145,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
-        result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config)
+        result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config.resolve_models())
         if config.telemetry_enabled:
             try:
                 resolved_cfg = config.resolve_models()
@@ -204,11 +204,22 @@ async def _run_review_async(config: ReviewConfig) -> int:
             summary_text += "\n\n" + issue_linker_md
 
     def _token_renderer(
-        successes: Sequence[_AgentResult], _sarif_elapsed_unused: float | None
+        successes: Sequence[_AgentResult],
+        _sarif_elapsed_unused: float | None,
+        judge_input_tokens: int,
+        judge_output_tokens: int,
+        judge_cache_creation_tokens: int,
+        judge_cache_read_tokens: int,
+        judge_model: str,
     ) -> str:
         return _build_token_table_accordion(
             successes, runtime.sarif_elapsed_s, runtime.script_dir,
             effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+            judge_input_tokens=judge_input_tokens,
+            judge_output_tokens=judge_output_tokens,
+            judge_cache_creation_tokens=judge_cache_creation_tokens,
+            judge_cache_read_tokens=judge_cache_read_tokens,
+            judge_model=judge_model,
         )
 
     # Honour AI_DRY_RUN — assemble is complete but skip VCS posting.
@@ -244,6 +255,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
         token_table_md=_build_token_table_accordion(
             result.agent_results, runtime.sarif_elapsed_s, runtime.script_dir,
             effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+            judge_input_tokens=result.judge_input_tokens,
+            judge_output_tokens=result.judge_output_tokens,
+            judge_cache_creation_tokens=result.judge_cache_creation_tokens,
+            judge_cache_read_tokens=result.judge_cache_read_tokens,
+            judge_model=result.judge_model,
         ),
     )
 
@@ -671,6 +687,11 @@ def _build_token_table_accordion(
     script_dir: Path,
     *,
     effective_max_tokens: int = 0,
+    judge_input_tokens: int = 0,
+    judge_output_tokens: int = 0,
+    judge_cache_creation_tokens: int = 0,
+    judge_cache_read_tokens: int = 0,
+    judge_model: str = "",
 ) -> str:
     """Return a <details>-wrapped token cost table string, or "" on no-data/error.
 
@@ -704,6 +725,19 @@ def _build_token_table_accordion(
                 cache_read_tokens=tl.cache_read,
                 max_output_tokens=cap,
             ))
+
+    # Add the judge pass as a real token-log entry so its cost is included in
+    # the Total row. Only emit when the judge actually ran (model is non-empty
+    # and at least one token was consumed). The judge uses model_standard.
+    if judge_model and (judge_input_tokens > 0 or judge_output_tokens > 0):
+        token_log.append(TokenEntry(
+            agent="judge-pass",
+            model=judge_model,
+            input_tokens=judge_input_tokens,
+            output_tokens=judge_output_tokens,
+            cache_creation_tokens=judge_cache_creation_tokens,
+            cache_read_tokens=judge_cache_read_tokens,
+        ))
 
     if not token_log:
         return ""
