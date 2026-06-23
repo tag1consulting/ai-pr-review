@@ -9,6 +9,7 @@ import pytest
 
 from ai_pr_review.findings.judge import (
     JUDGE_DOWNRANK_AMOUNT,
+    JudgeResult,
     _apply_verdicts,
     judge_findings,
 )
@@ -133,10 +134,24 @@ async def test_judge_keep_unchanged(tmp_path: Path) -> None:
     call = AsyncMock(return_value=_verdict_response([{"id": 0, "verdict": "keep", "reason": "clear"}]))
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert len(result) == 1
-    assert result[0].confidence == 80
-    assert result[0].out_of_diff is False
+    assert isinstance(result, JudgeResult)
+    assert len(result.findings) == 1
+    assert result.findings[0].confidence == 80
+    assert result.findings[0].out_of_diff is False
     call.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_judge_returns_token_counts_on_success(tmp_path: Path) -> None:
+    prompt = tmp_path / "finding-judge.md"
+    prompt.write_text("You are a finding-quality judge.")
+
+    f = _finding(confidence=80)
+    call = AsyncMock(return_value=_verdict_response([{"id": 0, "verdict": "keep", "reason": "clear"}]))
+
+    result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
+    assert result.input_tokens == 50
+    assert result.output_tokens == 20
 
 
 @pytest.mark.anyio
@@ -148,8 +163,8 @@ async def test_judge_downrank_lowers_confidence(tmp_path: Path) -> None:
     call = AsyncMock(return_value=_verdict_response([{"id": 0, "verdict": "downrank", "reason": "vague"}]))
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert result[0].confidence == 80 - JUDGE_DOWNRANK_AMOUNT
-    assert result[0].out_of_diff is True
+    assert result.findings[0].confidence == 80 - JUDGE_DOWNRANK_AMOUNT
+    assert result.findings[0].out_of_diff is True
 
 
 @pytest.mark.anyio
@@ -161,8 +176,8 @@ async def test_judge_corroborated_exempt(tmp_path: Path) -> None:
     call = AsyncMock(return_value=_verdict_response([{"id": 0, "verdict": "downrank", "reason": "vague"}]))
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert result[0].confidence == 80
-    assert result[0].out_of_diff is False
+    assert result.findings[0].confidence == 80
+    assert result.findings[0].out_of_diff is False
 
 
 @pytest.mark.anyio
@@ -174,8 +189,11 @@ async def test_judge_fail_soft_on_llm_error(tmp_path: Path) -> None:
     call = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert len(result) == 1
-    assert result[0].confidence == 80  # unchanged
+    assert isinstance(result, JudgeResult)
+    assert len(result.findings) == 1
+    assert result.findings[0].confidence == 80  # unchanged
+    assert result.input_tokens == 0
+    assert result.output_tokens == 0
 
 
 @pytest.mark.anyio
@@ -188,8 +206,11 @@ async def test_judge_fail_soft_on_bad_json(tmp_path: Path) -> None:
     call = AsyncMock(return_value=bad_response)
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert len(result) == 1
-    assert result[0].confidence == 80  # unchanged
+    assert len(result.findings) == 1
+    assert result.findings[0].confidence == 80  # unchanged
+    # Token counts are captured even on parse failure — the LLM call did complete.
+    assert result.input_tokens == 5
+    assert result.output_tokens == 5
 
 
 @pytest.mark.anyio
@@ -202,7 +223,8 @@ async def test_judge_fail_soft_on_missing_verdicts_key(tmp_path: Path) -> None:
     call = AsyncMock(return_value=bad_response)
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert result[0].confidence == 80
+    assert result.findings[0].confidence == 80
+    assert result.input_tokens == 5
 
 
 @pytest.mark.anyio
@@ -213,7 +235,9 @@ async def test_judge_empty_input_no_llm_call(tmp_path: Path) -> None:
     call = AsyncMock()
     result = await judge_findings([], llm_call=call, model="claude-test", prompt_path=prompt)
 
-    assert result == []
+    assert isinstance(result, JudgeResult)
+    assert result.findings == []
+    assert result.input_tokens == 0
     call.assert_not_called()
 
 
@@ -228,8 +252,9 @@ async def test_judge_fail_soft_on_verdicts_not_a_list(tmp_path: Path) -> None:
     call = AsyncMock(return_value=bad_response)
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
-    assert len(result) == 1
-    assert result[0].confidence == 80  # unchanged — fail-soft
+    assert len(result.findings) == 1
+    assert result.findings[0].confidence == 80  # unchanged — fail-soft
+    assert result.input_tokens == 5
 
 
 def test_apply_verdicts_malformed_entry_skipped() -> None:
@@ -257,8 +282,10 @@ async def test_judge_missing_prompt_file_fail_soft(tmp_path: Path) -> None:
     call = AsyncMock()
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=nonexistent)
-    assert len(result) == 1
-    assert result[0].confidence == 80
+    assert isinstance(result, JudgeResult)
+    assert len(result.findings) == 1
+    assert result.findings[0].confidence == 80
+    assert result.input_tokens == 0
     call.assert_not_called()
 
 

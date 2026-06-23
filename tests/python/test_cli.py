@@ -248,6 +248,11 @@ class TestScriptDir:
             result.failed_agents = []
             result.outcome = MagicMock()
             result.outcome.event = "COMMENT"
+            result.judge_input_tokens = 0
+            result.judge_output_tokens = 0
+            result.judge_cache_creation_tokens = 0
+            result.judge_cache_read_tokens = 0
+            result.judge_model = ""
             return result
 
         return AsyncMock(side_effect=_fake)

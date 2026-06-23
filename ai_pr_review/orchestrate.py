@@ -55,6 +55,11 @@ class ReviewResult:
     skipped: bool = False
     skip_reason: str = ""
     sarif_elapsed_s: float | None = None
+    judge_input_tokens: int = 0
+    judge_output_tokens: int = 0
+    judge_cache_creation_tokens: int = 0
+    judge_cache_read_tokens: int = 0
+    judge_model: str = ""
 
     @property
     def ok(self) -> bool:
@@ -89,7 +94,9 @@ class OrchestrationConfig:
     judge_prompt_path: Path | None = None
 
 
-TokenTableRenderer = Callable[[Sequence[AgentResult], float | None], str]
+TokenTableRenderer = Callable[
+    [Sequence[AgentResult], float | None, int, int, int, int, str], str
+]
 
 
 async def run_review(
@@ -209,15 +216,26 @@ async def run_review(
     # Runs after merge/suppress/scope/rollup; before outcome classification.
     # The judge uses a cheap model and sends only the candidate list (no diff).
     # Fail-soft: any error returns kept unchanged. Corroborated findings exempt.
+    judge_input_tokens = 0
+    judge_output_tokens = 0
+    judge_cache_creation_tokens = 0
+    judge_cache_read_tokens = 0
+    judge_model_used = ""
     if cfg.enable_judge_pass and kept and cfg.judge_model and cfg.judge_prompt_path:
         from ai_pr_review.findings.judge import judge_findings
         try:
-            kept = await judge_findings(
+            judge_result = await judge_findings(
                 kept,
                 llm_call=llm_call,
                 model=cfg.judge_model,
                 prompt_path=cfg.judge_prompt_path,
             )
+            kept = judge_result.findings
+            judge_input_tokens = judge_result.input_tokens
+            judge_output_tokens = judge_result.output_tokens
+            judge_cache_creation_tokens = judge_result.cache_creation_tokens
+            judge_cache_read_tokens = judge_result.cache_read_tokens
+            judge_model_used = cfg.judge_model
         except Exception as exc:
             logger.warning(
                 "judge pass raised unexpectedly (fail-soft): %s", exc, exc_info=True
@@ -237,7 +255,12 @@ async def run_review(
     token_table = ""
     if token_table_renderer is not None:
         try:
-            token_table = token_table_renderer(successes, sarif_elapsed_s)
+            token_table = token_table_renderer(
+                successes, sarif_elapsed_s,
+                judge_input_tokens, judge_output_tokens,
+                judge_cache_creation_tokens, judge_cache_read_tokens,
+                judge_model_used,
+            )
         except Exception as exc:
             logger.warning(
                 "token table renderer raised (head_sha=%s): %s",
@@ -357,6 +380,11 @@ async def run_review(
         stale=stale_result,
         agent_results=successes,
         sarif_elapsed_s=sarif_elapsed_s,
+        judge_input_tokens=judge_input_tokens,
+        judge_output_tokens=judge_output_tokens,
+        judge_cache_creation_tokens=judge_cache_creation_tokens,
+        judge_cache_read_tokens=judge_cache_read_tokens,
+        judge_model=judge_model_used,
     )
 
 

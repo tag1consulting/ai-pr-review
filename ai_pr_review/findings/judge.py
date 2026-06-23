@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -35,6 +36,17 @@ logger = logging.getLogger(__name__)
 JUDGE_DOWNRANK_AMOUNT: int = 15
 
 JudgeVerdict = Literal["keep", "downrank"]
+
+
+@dataclass(frozen=True)
+class JudgeResult:
+    """Result of a judge pass, including modified findings and token usage."""
+
+    findings: list[Finding]
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
 
 
 def _build_candidate_payload(kept: list[Finding]) -> str:
@@ -117,12 +129,13 @@ async def judge_findings(
     llm_call: LLMCall,
     model: str,
     prompt_path: Path,
-) -> list[Finding]:
+) -> JudgeResult:
     """Run the judge pass: one LLM call to score all candidate findings.
 
-    Returns a modified copy of ``kept`` with downranked findings having
-    lower confidence and ``out_of_diff=True``. The original list is never
-    mutated. On any error the function returns ``kept`` unchanged (fail-soft).
+    Returns a ``JudgeResult`` with a modified copy of ``kept`` (downranked
+    findings have lower confidence and ``out_of_diff=True``) and the token
+    usage for the judge LLM call. On any error the function returns the
+    original ``kept`` unchanged with zero token counts (fail-soft).
 
     Args:
         kept: Final diff-scoped, rolled-up candidate findings (Phase 2.5 output).
@@ -131,13 +144,13 @@ async def judge_findings(
         prompt_path: Path to ``prompts/finding-judge.md``.
     """
     if not kept:
-        return kept
+        return JudgeResult(findings=kept)
 
     try:
         system_prompt = prompt_path.read_text()
     except OSError as exc:
         logger.warning("judge: could not read prompt %s: %s", prompt_path, exc)
-        return kept
+        return JudgeResult(findings=kept)
 
     user_message = _build_candidate_payload(kept)
 
@@ -153,7 +166,7 @@ async def judge_findings(
         response = await llm_call(request)
     except Exception as exc:
         logger.warning("judge: LLM call failed (fail-soft); keeping findings unchanged: %s", exc, exc_info=True)
-        return kept
+        return JudgeResult(findings=kept)
 
     try:
         # Strip optional markdown code fence the LLM may wrap around the JSON.
@@ -169,9 +182,21 @@ async def judge_findings(
             "judge: could not parse verdict response (fail-soft): %s; response=%r",
             exc, response.text[:500],
         )
-        return kept
+        return JudgeResult(
+            findings=kept,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cache_creation_tokens=response.cache_creation_tokens,
+            cache_read_tokens=response.cache_read_tokens,
+        )
 
     modified, downrank_count = _apply_verdicts(kept, verdicts)
     if downrank_count:
         logger.info("judge: %d finding(s) downranked", downrank_count)
-    return modified
+    return JudgeResult(
+        findings=modified,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        cache_creation_tokens=response.cache_creation_tokens,
+        cache_read_tokens=response.cache_read_tokens,
+    )
