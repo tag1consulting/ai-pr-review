@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-06-23
+
+### Fixed
+
+- **Judge `max_tokens` raised from 1024 to 4096**: The default limit was too small for PRs with more than approximately 20 findings, causing the judge's JSON response to be truncated. The truncated response failed to parse, triggering the fail-soft path, which silently returned all findings unjudged. Every review with a moderate-to-large finding count was effectively running with the judge disabled since v2.1.0.
+
+- **`resolve_models()` called before `_orchestrate_skip()`**: The skip path (invoked when the diff is empty or the PR is draft-mode) was reached before provider model defaults were resolved, causing a crash with "model_standard is empty" on any skip-eligible PR.
+
+### Added
+
+- **Judge-pass token usage in the token table**: The judge-pass LLM call now appears as a `judge-pass` row in the PR review token table, with its input and output token counts included in the Total row. The row only appears when the judge actually ran (non-empty input and non-zero token usage). Previously, the judge call's cost was invisible in the table even when it executed successfully.
+
 ## [2.1.0] - 2026-06-22
 
 ### Added
