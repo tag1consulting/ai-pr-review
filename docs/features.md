@@ -7,6 +7,22 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.1.1
+
+**Judge `max_tokens` raised from 1024 to 4096 (silent regression fix).** The judge's JSON response was being truncated on PRs with more than approximately 20 findings, causing parse failure and fail-soft fallback. The result: every moderate-to-large review since v2.1.0 was running with the judge effectively disabled, silently. No configuration change is needed; the fix is automatic.
+
+**Skip-path crash fixed.** The skip path (invoked when the diff is empty or the PR is in draft mode) constructed a `DispatchContext` using `config.model_standard` before `resolve_models()` had been called, leaving `model_standard` empty and causing a crash on any skip-eligible PR. Fixed in `cli.py` by passing `config.resolve_models()` to `_orchestrate_skip()`.
+
+**Judge-pass token usage now visible in the token table.** The judge LLM call now appears as a `judge-pass` row in the token table (see [Token usage table](#token-usage-table)), with its input and output token counts included in the Total row. The row appears only when the judge actually ran (non-empty input and at least one token consumed).
+
+## What's new in v2.1.0
+
+**LLM judge pass (Phase 2.75, `AI_JUDGE_PASS=true`).** After findings are extracted, merged, suppressed, and scoped, a single cheap-model call scores each candidate finding and may `downrank` weak single-source results: confidence is lowered by 15 points and the finding is routed to the review body instead of as an inline comment, so it is still reported but does not trigger a `REQUEST_CHANGES` outcome. `keep` verdicts leave findings unchanged. Corroborated findings (static-analyzer + LLM-agent agreement on the same file/line) are exempt from downranking regardless of the judge's verdict. The judge is always fail-soft — any error returns findings unchanged. Enabled by default; set `AI_JUDGE_PASS=false` to restore pre-v2.1 behavior.
+
+**Per-agent language-profile section routing (`AI_PROFILE_MAX_TOKENS=4096`).** Each agent now receives only the language-profile sections relevant to its review focus, packed under a configurable token budget: `security-reviewer` gets only security sections; `silent-failure-hunter` and `edge-case-hunter` get bug/edge-case sections; broad agents (`code-reviewer`, `architecture-reviewer`, `adversarial-general`) get all sections. The token table gains a "Language profiles" supplementary row showing total profile tokens injected.
+
+**Security-reviewer prompt aligned with Anthropic security-guidance plugin.** New checks added: SSRF, LLM prompt injection, IaC omitted-argument patterns (Terraform/Pulumi/CDK), GitHub Actions `pull_request_target` trust, XXE via Python stdlib XML parsers, DOM XSS sinks, AES ECB mode, unsafe Python deserialization (`marshal`, `shelve`, `joblib`, `pandas.read_pickle`, `numpy allow_pickle`), ML model unsafe loading (`torch.load` without `weights_only=True`), missing SRI on external scripts, and GitHub Actions workflow injection via untrusted context expressions.
+
 ## What's new in v2.0.0
 
 **Bash engine removed; Python is the sole engine (closes #199, #251–#258).** The bash orchestrator and all supporting shell code have been deleted (~9,600 lines across 59 files): `review.sh`, `llm-call.sh`, the `lib/*.sh` helpers, `vcs/common.sh`, the three `post-review*.sh` scripts, all 13 `analyzers/run-*.sh` wrappers (superseded by the native Python analyzers shipped in v1.4.0), the 33-file `.bats` suite, and `docs/analyzers-bash-inventory.md`. Python has been the default engine since v1.0.0; this release completes the transition.
@@ -310,11 +326,18 @@ The table layout adapts based on cache activity:
 
 When `LLM_PROMPT_CACHING` is active (default `auto` for Anthropic/Bedrock), the table expands to 8 columns showing Cache Write and Cache Read alongside the standard columns.
 
+The `judge-pass` row appears as a regular agent row (included in the Total) when the judge actually ran:
+
+| Row | Description | When shown |
+|-----|-------------|------------|
+| `judge-pass` | Tokens consumed by the judge-pass LLM call; included in Total | When `AI_JUDGE_PASS=true` (default) and the judge ran on a non-empty finding set |
+
 Two supplementary rows may appear after the **Total** row. They are informational only and do not affect cost totals:
 
 | Row | Description | When shown |
 |-----|-------------|------------|
 | Context enrichment | Token count of the `<symbol-context>` block prepended to agent prompts | When `AI_CONTEXT_ENRICHMENT=1` and the enrichment block was non-empty |
+| Language profiles | Maximum profile tokens injected across all agents (per-agent routing, v2.1.0+) | When language profiles were injected and the count was non-zero |
 | SARIF ingestion | Wall-clock elapsed time for parsing SARIF files (e.g. `0.34s`) | When `AI_SARIF_PATHS` is configured |
 
 Costs are calculated using public list prices and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.

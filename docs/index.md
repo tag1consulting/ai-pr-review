@@ -27,11 +27,13 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
-## What's new in v1.4.0
+## What's new in v2.1.1
 
-**All 13 static analyzers ported to native Python (Epic 8).** Every analyzer that previously ran as a bash subprocess — shellcheck, ruff, hadolint, kube-linter, phpcs, semgrep, golangci-lint, checkov, phpstan, eslint, tflint, trufflehog, and cve-check — is now a native Python function. The Python engine no longer shells out to bash for any static analysis. Findings schema, severity mappings, and source tags are parity-identical to the bash wrappers. Each analyzer has a corresponding pytest module. See [Features → v1.4.0](features#whats-new-in-v140) for details.
+**Two judge-pass bugs fixed (silent regression since v2.1.0).** The judge's `max_tokens` was 1024 — too small for PRs with 20+ findings, causing JSON truncation and fail-soft fallback that silently disabled the judge on most real reviews. A second bug crashed the review with "model_standard is empty" on any skip-eligible PR (empty diff or draft mode). Both are fixed; no configuration change needed.
 
-**Still on v1.3.0?** Note the breaking change: `ignore-merge-commits` now defaults to `true` — only the PR author's own commits are reviewed. Set `ignore-merge-commits: false` to restore the previous behavior. See [Features → v1.3.0](features#whats-new-in-v130).
+**Judge-pass token cost now visible in the token table.** The judge LLM call now appears as a `judge-pass` row in the token usage table so you can see its contribution to the review cost.
+
+See [Features → v2.1.1](features#whats-new-in-v211) for details.
 
 ## What it does
 

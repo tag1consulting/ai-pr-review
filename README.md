@@ -261,7 +261,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `exclude-agents` | No | `''` | Denylist: comma-separated agent names to skip. Ignored when `agents` is set. Note: excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. |
 | `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour). LLM-agent findings are never affected. |
 | `feedback-loop` | No | `false` | Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. |
-| `judge-pass` | No | `true` | Run a cheap-model judge pass after findings are extracted to down-rank weak single-source findings. Adds one LLM call per review. Set to `false` to disable. |
+| `judge-pass` | No | `true` | Run a cheap-model judge pass after findings are extracted to down-rank weak single-source findings. Adds one LLM call per review; its token usage appears as a `judge-pass` row in the token table. Set to `false` to disable. |
 | `profile-max-tokens` | No | `4096` | Maximum token budget for per-agent language-profile context. Reduce to lower token spend; increase if profile sections are being truncated. |
 
 Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).
@@ -275,7 +275,7 @@ Three optional features can be enabled independently — all off by default.
 | **A. Context enrichment** | `context-enrichment: 'true'` | `AI_CONTEXT_ENRICHMENT=true` | `true` (container), `false` (direct action) | Use tree-sitter + ripgrep to look up cross-file symbol definitions referenced in the diff, then inject a `<symbol-context>` block (token-budget-capped) into eligible agent prompts. Reduces hallucinated "we should check X" findings by giving agents the real definitions. The container image ships both dependencies; direct-action consumers without them get a silent no-op. |
 | **B. SARIF ingestion** | `sarif-paths: 'a.sarif,b.sarif'` | `AI_SARIF_PATHS=a.sarif,b.sarif` | `''` | Parse SARIF 2.1.0 files produced by external scanners (CodeQL, Semgrep, Trivy, Bandit, ...) and merge their findings into the same dedup/suppress/post pipeline as native analyzers. See [examples/workflows/sarif-codeql.yml](examples/workflows/sarif-codeql.yml). |
 | **C. Learning loop** | `feedback-loop: 'true'` + `enable-feedback-loop: 'true'` on the slash-commands workflow | `AI_FEEDBACK_LOOP=true` | `false` | Reviewers post `/ai-pr-review false-positive`, `wont-fix`, or `feedback` to mark findings. Entries persist to a dedicated `ai-pr-review-bot` branch (auto-bootstrapped on first write) and feed into future agent prompts as a `<repo-feedback>` block. Requires `github-token` with `contents:write`. GitHub-only. See [docs/learning-loop.md](docs/learning-loop.md). |
-| **D. Judge pass** | `judge-pass: 'false'` to disable | `AI_JUDGE_PASS=false` | `true` | After findings are extracted, a single cheap-model call scores each candidate finding and down-ranks weak single-source results (lowers confidence, routes to review body instead of inline). Corroborated findings (static-analyzer + LLM-agent agreement on the same location) are exempt. Adds one LLM call per review. Always fail-soft — a judge error returns findings unchanged. |
+| **D. Judge pass** | `judge-pass: 'false'` to disable | `AI_JUDGE_PASS=false` | `true` | After findings are extracted, a single cheap-model call scores each candidate finding and down-ranks weak single-source results (lowers confidence, routes to review body instead of inline). Corroborated findings (static-analyzer + LLM-agent agreement on the same location) are exempt. Adds one LLM call per review; its token cost appears as a `judge-pass` row in the token table. Always fail-soft — a judge error returns findings unchanged. |
 
 See [docs/configuration.md](docs/configuration.md#opt-in-capabilities) for the full env-var reference including retention knobs (`AI_FEEDBACK_RETENTION_COUNT`, `AI_FEEDBACK_RETENTION_AGE_DAYS`), token budgets (`AI_CONTEXT_MAX_TOKENS`, `AI_FEEDBACK_MAX_TOKENS`, `AI_PROFILE_MAX_TOKENS`), and the feedback branch name (`AI_FEEDBACK_BRANCH`).
 
@@ -454,6 +454,12 @@ After each review run, a collapsible **Token usage by agent** table is appended 
 | Est. Cost | Estimated cost at public list prices |
 
 When no cache activity is detected, the Cache Write and Cache Read columns are omitted (6-column layout).
+
+When `AI_JUDGE_PASS=true` (the default) and the judge ran on a non-empty finding set, a `judge-pass` row appears as a regular agent row with its tokens included in the Total. Two supplementary informational rows may also appear after Total (they do not affect cost totals):
+
+- **Context enrichment** — token count of the `<symbol-context>` block; shown when `AI_CONTEXT_ENRICHMENT=1` and the block was non-empty.
+- **Language profiles** — maximum profile tokens injected across agents; shown when per-agent profile routing (v2.1.0+) was active.
+- **SARIF ingestion** — wall-clock elapsed time for SARIF parsing; shown when `AI_SARIF_PATHS` is configured.
 
 Costs are calculated using rates from `config/model-pricing.json` and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
 

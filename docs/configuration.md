@@ -180,7 +180,7 @@ These variables enable optional capabilities that are off by default.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_JUDGE_PASS` | `true` | Run a cheap-model judge pass (Phase 2.75) after findings are extracted, merged, suppressed, and scoped. The judge sends a single compact LLM call (no diff text) and returns `keep` or `downrank` per finding. `downrank` lowers the finding's confidence by 15 points and routes it to the review body instead of as an inline comment — the finding is still reported. Corroborated findings (static-analyzer + LLM-agent agreement on the same file+line) are exempt from `downrank`. Always fail-soft: any judge error returns findings unchanged. Set to `false` to disable and restore pre-v2.1 behavior. |
+| `AI_JUDGE_PASS` | `true` | Run a cheap-model judge pass (Phase 2.75) after findings are extracted, merged, suppressed, and scoped. The judge sends a single compact LLM call (no diff text) and returns `keep` or `downrank` per finding. `downrank` lowers the finding's confidence by 15 points and routes it to the review body instead of as an inline comment — the finding is still reported. Corroborated findings (static-analyzer + LLM-agent agreement on the same file+line) are exempt from `downrank`. Always fail-soft: any judge error returns findings unchanged. The judge call's token usage appears as a `judge-pass` row in the token usage table and is included in the Total. Set to `false` to disable and restore pre-v2.1 behavior. |
 
 #### Per-agent language-profile routing
 
