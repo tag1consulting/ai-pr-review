@@ -38,6 +38,10 @@ include = ["ai_pr_review*"]
 [tool.pytest.ini_options]
 testpaths = ["tests/python", "tests/golden"]
 python_files = ["test_*.py"]
+norecursedirs = ["tests/security/canary-workspace"]
+markers = [
+    "security: security invariant regression tests — failures are security issues, not flaky tests",
+]
 
 [tool.ruff]
 target-version = "py311"

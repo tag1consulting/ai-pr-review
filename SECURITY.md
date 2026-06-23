@@ -4,9 +4,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| v1.4.x (latest) | ✅ |
-| v1.3.x          | ✅ |
-| < v1.3.0        | ❌ |
+| v2.1.x (latest) | ✅ |
+| v2.0.x          | ✅ |
+| < v2.0.0        | ❌ |
 
 ## Reporting a vulnerability
 
@@ -41,7 +41,7 @@ The action reads file contents, paths, and git metadata from `$GITHUB_WORKSPACE`
 - `source` shell files from `$GITHUB_WORKSPACE`, run interpreters on checked-out files, or invoke binaries from the checked-out tree;
 - run linters/formatters/test runners that auto-discover and execute project plugins or fixtures from `$GITHUB_WORKSPACE`.
 
-The container image entrypoint is pinned (`/opt/ai-pr-review/review.sh`). All `source` calls inside the image resolve to `${SCRIPT_DIR}/lib/...` paths inside the image, never `/workspace`. Static analyzers bundled in the image (semgrep, ruff, golangci-lint, shellcheck, trufflehog, phpstan, etc.) are invoked against repository **content** as data; their configuration is the analyzer's own bundled defaults plus opt-in repo-level config files where the analyzer treats the file as data (e.g., `.semgrepignore`).
+The container image entrypoint invokes the Python engine (`python3 -m ai_pr_review review`) directly. Static analyzers bundled in the image (semgrep, ruff, golangci-lint, shellcheck, trufflehog, phpstan, etc.) are invoked against repository **content** as data; their configuration is the analyzer's own bundled defaults plus opt-in repo-level config files where the analyzer treats the file as data (e.g., `.semgrepignore`).
 
 ### Why this matters
 
@@ -53,4 +53,4 @@ If the action ever executed working-tree content under `pull_request_target`, a 
 
 ### Regression guard
 
-A canary fixture/test enforcing this invariant at CI time is tracked in [#494](https://github.com/tag1consulting/ai-pr-review/issues/494). Until that lands, code review on this repo treats any new exec-of-workspace-content code path as a security change requiring the private vulnerability reporting flow.
+A canary fixture lives in `tests/security/canary-workspace/` and is enforced by `tests/python/test_security_canary.py` (marked `@pytest.mark.security`) on every PR via the `Lint & Test` CI job. A failure in those tests is a security regression; see CONTRIBUTING.md for the reporting process. Any new code path that reads from `$GITHUB_WORKSPACE` must be verified against the canary tests before merging.
