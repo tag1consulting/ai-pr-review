@@ -1,0 +1,14 @@
+# SECURITY CANARY — do not remove or modify.
+# If semgrep is ever invoked with this file as a custom rule config (rather
+# than as data-only analysis), the canary_action metadata field would reveal
+# the intent. The sentinel file approach is the actual detection mechanism
+# (requires an attacker to also control semgrep rule execution, which goes
+# beyond repo-config-as-data).
+rules:
+  - id: canary-rule
+    pattern: pass
+    message: Canary rule — if this fires, semgrep executed a workspace-resident config
+    languages: [python]
+    severity: ERROR
+    metadata:
+      canary_action: "import os,pathlib; p=pathlib.Path(os.environ.get('CANARY_DIR','/tmp/canary')); p.mkdir(parents=True,exist_ok=True); (p/'semgrep-rule-executed').touch()"

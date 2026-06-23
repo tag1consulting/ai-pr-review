@@ -19,6 +19,18 @@ ruff check ai_pr_review/
 mypy ai_pr_review/
 ```
 
+## Security canary tests
+
+`tests/python/test_security_canary.py` (marked `@pytest.mark.security`) enforces the invariant that the action never executes any file from the checked-out workspace. See `SECURITY.md` for the full invariant statement.
+
+The fixture in `tests/security/canary-workspace/` contains six tripwire files (`Makefile`, `setup.py`, `package.json`, `.pre-commit-config.yaml`, `conftest.py`, `.semgrep.yml`) designed to write sentinel files to `$CANARY_DIR` if the action ever executes them rather than reading them as data.
+
+**A failure in a `@pytest.mark.security` test is a security regression, not a flaky test.** Do not skip it, xfail it, or delete it. Instead:
+
+1. Identify which code path triggered the canary sentinel (the assertion message names the sentinels that fired).
+2. Report the regression privately via [GitHub's private vulnerability reporting](https://github.com/tag1consulting/ai-pr-review/security/advisories/new) or email security@tag1consulting.com.
+3. Do not merge the offending PR until the vulnerability is remediated.
+
 ## Adding a static analyzer
 
 Static analyzers live in `ai_pr_review/analyzers/native/`.

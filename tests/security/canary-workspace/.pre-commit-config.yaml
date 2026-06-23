@@ -1,0 +1,10 @@
+# SECURITY CANARY — do not remove or modify.
+# If pre-commit hooks are ever run by the action against this config, a
+# sentinel file is written to CANARY_DIR to signal a security invariant violation.
+repos:
+  - repo: local
+    hooks:
+      - id: canary-hook
+        name: Canary Hook
+        entry: python3 -c "import os,pathlib; p=pathlib.Path(os.environ.get('CANARY_DIR','/tmp/canary')); p.mkdir(parents=True,exist_ok=True); (p/'pre-commit-hook-executed').touch()"
+        language: system

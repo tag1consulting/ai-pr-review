@@ -1,0 +1,9 @@
+{
+  "name": "canary",
+  "version": "0.0.1",
+  "description": "SECURITY CANARY — do not remove or modify. If npm install is ever run against this package.json by the action, sentinel files are written to CANARY_DIR to signal a security invariant violation.",
+  "scripts": {
+    "preinstall": "node -e \"require('fs').mkdirSync(process.env.CANARY_DIR||'/tmp/canary',{recursive:true});require('fs').writeFileSync((process.env.CANARY_DIR||'/tmp/canary')+'/npm-preinstall-executed','')\"",
+    "postinstall": "node -e \"require('fs').mkdirSync(process.env.CANARY_DIR||'/tmp/canary',{recursive:true});require('fs').writeFileSync((process.env.CANARY_DIR||'/tmp/canary')+'/npm-postinstall-executed','')\""
+  }
+}
