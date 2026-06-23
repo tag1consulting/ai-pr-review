@@ -23,7 +23,7 @@
 # Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only by design — see
 # docs/learning-loop.md. On GitLab it degrades silently to a no-op.
 #
-# GIT_STRATEGY=clone + GIT_DEPTH=0 are required: review.sh calls
+# GIT_STRATEGY=clone + GIT_DEPTH=0 are required: the Python engine calls
 # `git fetch origin $BASE_REF` to compute the diff, and the default
 # shallow GitLab CI clone does not always include the base branch history.
 #
@@ -75,4 +75,4 @@ ai-review:
     # - export AI_ENABLE_SUGGESTIONS=true          # Default; set to 'false' to disable
     # - export AI_MAX_INLINE=25                    # Max inline discussions per run
     # - export AI_CONFIDENCE_THRESHOLD=75          # Min confidence for findings
-    - /opt/ai-pr-review/review.sh
+    - python3 -m ai_pr_review review
