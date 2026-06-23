@@ -100,8 +100,10 @@ class TestNeverExecuteCheckedOutCode:
         diff_file = str(tmp_path / "test.diff")
         Path(diff_file).write_text("", encoding="utf-8")
 
-        # A missing-dep or I/O error is acceptable; execution of canary files is not.
-        with contextlib.suppress(Exception):
+        # Only suppress expected infrastructure errors (missing deps, missing files).
+        # Unexpected exceptions — including anything raised during workspace execution —
+        # must not be swallowed, so the test fails rather than passing vacuously.
+        with contextlib.suppress(ImportError, FileNotFoundError, OSError):
             asyncio.run(
                 run_analyzers(changed_files=changed_files, diff_file=diff_file)
             )
