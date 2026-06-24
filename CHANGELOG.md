@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-24
+
+### Added
+
+- **`AI_FAIL_ON_FINDINGS` CI gate** (`fail-on-findings` action input, default `false`): exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Pair with branch protection requiring the `review` status check to block auto-merge until the bot approves. Exit code 1 still signals a posting/config error; exit code 0 means approved. (#535)
+
+- **`AI_CONTEXT_MAX_QUERIES` config knob** (`context-max-queries` action input, default `200`): caps the number of ripgrep symbol-lookup queries across all agents in a run. The cap is global (shared via the module-level query cache across Tier 1 and Tier 2 agents), so a typical multi-agent review consumed the previous hardcoded limit of 50 before all agents were enriched. Raise if logs show `context enrichment: max_queries=N reached; remaining symbols skipped`. (#539)
+
+- **Renovate auto-merge**: minor and patch dependency updates now auto-merge via GitHub native auto-merge once CI passes and the bot approves. (#536)
+
+### Fixed
+
+- **Unknown `AI_*` variables warn instead of aborting**: `_check_unknown_ai_vars()` now emits a `WARNING` to stderr and continues rather than raising `ConfigError` (exit 1). Consumers that pin an older container image no longer break when a newer action forwards a variable the image does not recognize. The typo-suggestion hint (`did you mean AI_REVIEW_MODE?`) is preserved in the warning. (#538)
+
+- **`AI_FAIL_ON_FINDINGS` not forwarded to old container images**: the action previously set `AI_FAIL_ON_FINDINGS=false` unconditionally, causing old pinned images (which do not know the variable) to exit 1 with `Configuration error`. The action now only forwards the variable when `fail-on-findings: true` is explicitly set. (#537)
+
 ## [2.1.1] - 2026-06-23
 
 ### Fixed
