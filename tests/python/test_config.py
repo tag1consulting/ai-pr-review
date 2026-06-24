@@ -10,7 +10,6 @@ import ai_pr_review.config as _config_module
 from ai_pr_review.config import (
     _DEPRECATED_AI_VAR_ALIASES,
     _KNOWN_AI_VARS,
-    ConfigError,
     ReviewConfig,
 )
 
@@ -70,10 +69,12 @@ def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.confidence_threshold == 50
 
 
-def test_unknown_ai_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_ai_var_warns(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("AI_TOTALLY_MADE_UP", "1")
-    with pytest.raises(ConfigError, match="AI_TOTALLY_MADE_UP"):
-        ReviewConfig.from_env()
+    ReviewConfig.from_env()  # must not raise
+    captured = capsys.readouterr()
+    assert "AI_TOTALLY_MADE_UP" in captured.err
+    assert "WARNING" in captured.err
 
 
 def test_engine_env_var_deprecated(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -85,10 +86,12 @@ def test_engine_env_var_deprecated(monkeypatch: pytest.MonkeyPatch, capsys: pyte
     assert "deprecated" in captured.err
 
 
-def test_unknown_ai_var_typo_suggestion(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_ai_var_typo_suggestion(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("AI_REVIEW_MDOE", "quick")  # typo: MDOE vs MODE
-    with pytest.raises(ConfigError, match="AI_REVIEW_MODE"):
-        ReviewConfig.from_env()
+    ReviewConfig.from_env()  # must not raise
+    captured = capsys.readouterr()
+    assert "AI_REVIEW_MDOE" in captured.err
+    assert "AI_REVIEW_MODE" in captured.err  # typo suggestion still appears
 
 
 def test_deprecated_alias_does_not_raise(
@@ -157,9 +160,8 @@ def test_exclude_patterns_whitespace_trimmed_from_env(
 def test_all_ai_vars_read_in_from_env_are_known() -> None:
     """Every AI_* var consumed in from_env() must appear in _KNOWN_AI_VARS.
 
-    Prevents the silent ConfigError trap: a new AI_* var added to from_env()
-    but forgotten in _KNOWN_AI_VARS would raise ConfigError for any user who
-    sets that var.
+    Prevents a new AI_* var added to from_env() but forgotten in _KNOWN_AI_VARS
+    from emitting a spurious unknown-variable warning for any user who sets it.
     """
     source = Path(_config_module.__file__).read_text()
     # Extract all "AI_..." string literals from the source
