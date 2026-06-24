@@ -67,7 +67,7 @@ update this manifest. See `memory-bank/license-audit-2026-06-01.md` for the full
 
 ### Base image
 
-The image is built `FROM ubuntu:24.04`. Apt-installed runtime packages (`bash`,
+The image is built `FROM ubuntu:26.04`. Apt-installed runtime packages (`bash`,
 `ca-certificates`, `curl`, `git`, `jq`, `php-cli` + extensions, `python3`, `ripgrep`)
 are carried under Canonical's Ubuntu distribution terms; each package retains its own
 upstream license (a mix of MIT/BSD/GPL/LGPL). These are standard base-distribution
