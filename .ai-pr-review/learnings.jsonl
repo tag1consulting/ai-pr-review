@@ -71,3 +71,4 @@
 {"ts": "2026-06-09T21:18:49Z", "command": "wont-fix", "reason": "Same shape as F8: speculative log for hypothetical future Cargo.lock format change. Current logic is correct (tested); skipping workspace members without a &#x27;source&#x27; line is intentional and documented.", "source": "silent-failure-hunter", "file": "ai_pr_review/analyzers/native/cve_check.py", "rule_id": ""}
 {"ts": "2026-06-09T21:21:20Z", "command": "false-positive", "reason": "the bot&#x27;s own analysis ends &#x27;No bug — withdraw.&#x27; Self-refuting (retry — first feedback-store attempt failed).", "source": "code-reviewer", "file": "ai_pr_review/analyzers/native/cve_check.py", "rule_id": ""}
 {"ts": "2026-06-23T16:27:31Z", "command": "false-positive", "reason": "false-positive", "source": "", "file": "", "rule_id": "", "finding_id": 1}
+{"ts": "2026-06-24T20:57:24Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 2}
