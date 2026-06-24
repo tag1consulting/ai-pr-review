@@ -20,6 +20,8 @@ from ai_pr_review.vcs._inline import (
     is_inline_eligible,
     is_suggestion_range_valid,
     is_suggestion_safe,
+    partition_findings,
+    split_body_findings,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
@@ -402,39 +404,45 @@ class GitHubProvider:
                 )
         id_map = assemble_id_map(prior_bodies, list(findings))
 
+        inline_candidates, body_findings = partition_findings(
+            list(findings), eligible_new=eligible_new, max_inline=max_inline
+        )
         inline_comments: list[dict[str, Any]] = []
         original_inline_comments: list[dict[str, Any]] = []
-        body_findings: list[Finding] = []
-        for f in findings:
-            if len(inline_comments) < max_inline:
-                payload = _build_inline_comment_payload(
-                    f,
-                    eligible_new=eligible_new,
-                    eligible_context=eligible_ctx,
-                    enable_suggestions=enable_suggestions,
-                    finding_id=id_map.get(fingerprint(f)),
-                )
-                if payload is not None:
-                    inline_comments.append(payload)
-                    continue
-            # Fell through to body-findings
-            body_findings.append(f)
+        for f in inline_candidates:
+            payload = _build_inline_comment_payload(
+                f,
+                eligible_new=eligible_new,
+                eligible_context=eligible_ctx,
+                enable_suggestions=enable_suggestions,
+                finding_id=id_map.get(fingerprint(f)),
+            )
+            if payload is not None:
+                inline_comments.append(payload)
+            else:
+                body_findings.append(f)
 
+        in_diff_body, ood_body = split_body_findings(body_findings)
         body_bullets: list[str] = []
         ood_bullets: list[str] = []
-        for f in body_findings:
+        for f in in_diff_body:
             loc_note = ""
             if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
                 loc_note = " *(line not in diff)*"
-            bullet = format_body_finding(
+            body_bullets.append(format_body_finding(
                 f,
                 location_note=loc_note,
                 finding_id=id_map.get(fingerprint(f)),
-            )
-            if f.out_of_diff:
-                ood_bullets.append(bullet)
-            else:
-                body_bullets.append(bullet)
+            ))
+        for f in ood_body:
+            loc_note = ""
+            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
+                loc_note = " *(line not in diff)*"
+            ood_bullets.append(format_body_finding(
+                f,
+                location_note=loc_note,
+                finding_id=id_map.get(fingerprint(f)),
+            ))
 
         # Build body
         body = _render_review_body(
