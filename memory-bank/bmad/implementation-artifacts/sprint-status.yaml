@@ -192,6 +192,13 @@ development_status:
   # ── Epic 11 — CLI Decomposition ──────────────────────────────────────────────
   # GitHub issue #497: _run_review_async does too much; _emit_telemetry duplicated
   # at three call sites. Extract preflight + reporting modules; collapse telemetry.
-  epic-11: in-progress
-  11-1-cli-refactor: ready-for-dev                # #497 — story at memory-bank/bmad/stories/11-1-cli-refactor.md
+  epic-11: done
+  11-1-cli-refactor: done                         # #497 — PR #543 merged at 5d084d2
   epic-11-retrospective: optional
+
+  # ── Epic 12 — Container Maintenance ──────────────────────────────────────────
+  # GitHub issue #349: bump container base from ubuntu:24.04 (Python 3.12) to
+  # ubuntu:26.04 (Python 3.14) now that soak has long since ended.
+  epic-12: in-progress
+  12-1-ubuntu26-python314-bump: ready-for-dev     # #349 — story at memory-bank/bmad/stories/12-1-ubuntu26-python314-bump.md
+  epic-12-retrospective: optional
