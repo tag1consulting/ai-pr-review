@@ -277,6 +277,9 @@ jobs:
           # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
           # merge commits before diffing. Trusted repo variable; default true.
           ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
+          # vars.AI_REVIEW_FAIL_ON_FINDINGS exits with code 2 on REQUEST_CHANGES or COMMENT.
+          # Leave unset (false) for normal dogfood runs; set true to gate Renovate auto-merge.
+          fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'false' }}
           # --- Epic 3: opt-in capabilities (Python engine only) ---
           # vars.AI_REVIEW_CONTEXT_ENRICHMENT enables tree-sitter symbol-context
           # injection into agent prompts (Capability A). Requires engine=python.

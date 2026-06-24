@@ -124,6 +124,14 @@ inputs:
     required: false
     default: 'python'
 
+  fail-on-findings:
+    description: >
+      When true, exit with code 2 if the review outcome is REQUEST_CHANGES or COMMENT
+      (incomplete/unknown risk). Use this to block CI gates (e.g. Renovate auto-merge)
+      until the bot approves. Exit code 1 still signals a posting/config error.
+    required: false
+    default: 'false'
+
   ignore-merge-commits:
     description: >
       When true, strip merge commits that pulled in upstream base-branch changes
@@ -308,6 +316,7 @@ runs:
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
         AI_JUDGE_PASS: ${{ inputs.judge-pass }}
+        AI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
         AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
         AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
@@ -353,6 +362,7 @@ runs:
           -e AI_CONTEXT_ENRICHMENT \
           -e AI_FEEDBACK_LOOP \
           -e AI_JUDGE_PASS \
+          -e AI_FAIL_ON_FINDINGS \
           -e AI_PROFILE_MAX_TOKENS \
           -e AI_EXCLUDE_PATTERNS \
           -e AI_EXCLUDE_PATTERNS_MODE \

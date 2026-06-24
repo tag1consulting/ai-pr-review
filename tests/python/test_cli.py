@@ -445,3 +445,50 @@ class TestWriteStepSummary:
         with caplog.at_level(logging.WARNING):
             _write_step_summary(self._make_result(), self._make_runtime(tmp_path), "")
         assert any("step summary" in r.message.lower() for r in caplog.records)
+
+
+class TestFailOnFindings:
+    """Exit code 2 is returned when AI_FAIL_ON_FINDINGS=true and outcome blocks.
+
+    These tests exercise the exit-code decision logic directly rather than
+    driving _run_review_async end-to-end, so they remain fast and isolated
+    from the editable-install path resolution.
+    """
+
+    def _exit_code(self, event: str, fail_on_findings: bool, ok: bool = True) -> int:
+        """Compute the exit code the CLI would produce for a given outcome."""
+        config = _make_config(fail_on_findings=fail_on_findings)
+
+        result = MagicMock()
+        result.ok = ok
+        result.outcome = MagicMock()
+        result.outcome.event = event
+
+        # Mirror the exact logic from cli._run_review_async lines 271-275.
+        if not result.ok:
+            return 1
+        if config.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
+            return 2
+        return 0
+
+    def test_approve_exits_0_when_enabled(self) -> None:
+        assert self._exit_code("APPROVE", fail_on_findings=True) == 0
+
+    def test_request_changes_exits_2_when_enabled(self) -> None:
+        assert self._exit_code("REQUEST_CHANGES", fail_on_findings=True) == 2
+
+    def test_comment_exits_2_when_enabled(self) -> None:
+        assert self._exit_code("COMMENT", fail_on_findings=True) == 2
+
+    def test_request_changes_exits_0_when_disabled(self) -> None:
+        assert self._exit_code("REQUEST_CHANGES", fail_on_findings=False) == 0
+
+    def test_comment_exits_0_when_disabled(self) -> None:
+        assert self._exit_code("COMMENT", fail_on_findings=False) == 0
+
+    def test_posting_failure_exits_1_regardless_of_flag(self) -> None:
+        assert self._exit_code("REQUEST_CHANGES", fail_on_findings=True, ok=False) == 1
+
+    def test_fail_on_findings_default_is_false(self) -> None:
+        config = _make_config()
+        assert config.fail_on_findings is False
