@@ -11,6 +11,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -21,6 +22,25 @@ _CONFIDENCE = 85
 _SOURCE = "kube-linter"
 _TIMEOUT_SECS = 120
 _SNIFF_LINES = 50
+
+# Checks with direct security impact map to High; all others → Medium.
+_HIGH_SEVERITY_CHECKS = frozenset({
+    "run-as-non-root",
+    "privilege-escalation-container",
+    "writable-host-mount",
+    "no-read-only-root-fs",
+    "sensitive-host-mounts",
+    "dangerously-broad-host-path",
+    "host-network",
+    "host-pid",
+    "host-ipc",
+    "privileged-container",
+    "drop-net-raw-capability",
+    "no-seccomp-profile",
+    "unsafe-proc-mount",
+    "allow-privilege-escalation-unset",
+    "run-as-non-root-user",
+})
 
 
 def _is_k8s_manifest(path: str) -> bool:
@@ -104,10 +124,11 @@ def _run_kube_linter(changed_files: ChangedFiles, diff_file: Path) -> list[Findi
         kind = obj_type.get("Kind") or "resource"
         name = obj.get("Name") or ""
 
+        severity: Literal["High", "Medium"] = "High" if check in _HIGH_SEVERITY_CHECKS else "Medium"
         try:
             findings.append(
                 Finding(
-                    severity="Medium",
+                    severity=severity,
                     confidence=_CONFIDENCE,
                     source=_SOURCE,
                     file=metadata.get("FilePath") or "unknown",
