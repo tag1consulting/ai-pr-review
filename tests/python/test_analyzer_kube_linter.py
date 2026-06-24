@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_pr_review.analyzers.native.kube_linter import _HIGH_SEVERITY_CHECKS, _is_k8s_manifest, _run_kube_linter
+from ai_pr_review.analyzers.native.kube_linter import (
+    _HIGH_SEVERITY_CHECKS,
+    _is_k8s_manifest,
+    _run_kube_linter,
+)
 from ai_pr_review.manifest import ChangedFiles
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "kubelinter"
