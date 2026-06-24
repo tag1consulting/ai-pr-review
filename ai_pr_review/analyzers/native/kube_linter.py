@@ -11,6 +11,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -123,7 +124,7 @@ def _run_kube_linter(changed_files: ChangedFiles, diff_file: Path) -> list[Findi
         kind = obj_type.get("Kind") or "resource"
         name = obj.get("Name") or ""
 
-        severity = "High" if check in _HIGH_SEVERITY_CHECKS else "Medium"
+        severity: Literal["High", "Medium"] = "High" if check in _HIGH_SEVERITY_CHECKS else "Medium"
         try:
             findings.append(
                 Finding(

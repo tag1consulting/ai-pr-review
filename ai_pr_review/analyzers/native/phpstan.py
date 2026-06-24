@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -28,7 +29,7 @@ _VALID_LEVEL_RE = re.compile(r"^[0-9]$")
 _DEFAULT_LEVEL = "3"
 
 
-def _severity_for_level(level: str) -> str:
+def _severity_for_level(level: str) -> Literal["High", "Medium", "Low"]:
     """Map PHPSTAN_LEVEL (0-9) to a finding severity.
 
     PHPStan level controls strictness — higher levels catch subtler type errors.
