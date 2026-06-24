@@ -37,11 +37,11 @@ jobs:
           pip install --quiet ".[dev]" || pip install --quiet -e . pytest ruff mypy pydantic httpx click
 
       - name: ruff check
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.14'
         run: ruff check ai_pr_review/
 
       - name: mypy
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.14'
         run: mypy --strict ai_pr_review/
 
       - name: pytest
