@@ -305,9 +305,9 @@ def test_build_token_table_accordion_effective_max_tokens(tmp_path: object) -> N
     )
 
     # Patch load_pricing at its source module; script_dir is arbitrary (pricing file not read)
-    import ai_pr_review.cli as _cli
+    import ai_pr_review.review.reporting as _reporting
     with _patch("ai_pr_review.pricing.load_pricing", return_value=_SAMPLE_PRICING):
-        result = _cli._build_token_table_accordion(
+        result = _reporting.build_token_table_accordion(
             [ar],
             None,
             Path("."),
@@ -339,7 +339,7 @@ def test_build_token_table_accordion_falls_back_to_roster_default() -> None:
         context_tokens_used=0,
     )
 
-    import ai_pr_review.cli as _cli
+    import ai_pr_review.review.reporting as _reporting
     with _patch("ai_pr_review.pricing.load_pricing", return_value=_SAMPLE_PRICING):
-        result = _cli._build_token_table_accordion([ar], None, Path("."), effective_max_tokens=0)
+        result = _reporting.build_token_table_accordion([ar], None, Path("."), effective_max_tokens=0)
     assert f"80 / {roster_cap}" in result

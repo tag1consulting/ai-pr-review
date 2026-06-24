@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,11 +26,17 @@ from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
 from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.review.compute import run_compute
+from ai_pr_review.review.preflight import run_issue_linker as _run_issue_linker
+from ai_pr_review.review.preflight import run_summarizer as _run_summarizer
+from ai_pr_review.review.reporting import (
+    build_token_table_accordion as _build_token_table_accordion,
+)
+from ai_pr_review.review.reporting import emit_review_result as _emit_review_result
+from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
-    from ai_pr_review.review.runtime import ReviewRuntime
     from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
@@ -233,8 +238,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         click.echo(f"[dry-run] summary_text length: {len(summary_text)} chars")
         if rc.telemetry_enabled:
             try:
-                await _emit_telemetry_minimal(rc, outcome_override="dry_run",
-                                              is_incremental=runtime.is_incremental)
+                await _emit_telemetry(None, rc, outcome_override="dry_run",
+                                      is_incremental=runtime.is_incremental)
             except Exception as _tel_exc:
                 logger.warning("[ai-pr-review] dry-run telemetry failed: %s", _tel_exc)
         return 0
@@ -276,15 +281,19 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
 
 async def _emit_telemetry(
-    result: ReviewResult,
+    result: ReviewResult | None,
     config: ReviewConfig,
-    feedback_entries_count: int,
+    feedback_entries_count: int = 0,
     sarif_elapsed_s: float | None = None,
     *,
     is_incremental: bool = False,
     outcome_override: str = "",
 ) -> None:
-    """Assemble and emit a telemetry event (fail-soft on any error)."""
+    """Assemble and emit a telemetry event (fail-soft on any error).
+
+    When ``result`` is None (skip or dry-run paths), all agent-dependent fields
+    default to zero/empty so a single call site covers all three paths.
+    """
     import datetime
     from collections import Counter
 
@@ -294,7 +303,11 @@ async def _emit_telemetry(
 
     try:
         token_usage_by_agent: dict[str, dict[str, object]] = {}
-        for ar in result.agent_results:
+        agent_results = result.agent_results if result is not None else []
+        failed_agents = result.failed_agents if result is not None else []
+        findings = result.findings if result is not None else []
+
+        for ar in agent_results:
             if isinstance(ar, _AgentResult) and ar.token_log is not None:
                 tl = ar.token_log
                 token_usage_by_agent[ar.name] = {
@@ -305,19 +318,20 @@ async def _emit_telemetry(
                     "model": tl.model,
                 }
 
-        findings_by_severity: dict[str, int] = dict(Counter(f.severity for f in result.findings))
+        findings_by_severity: dict[str, int] = dict(Counter(f.severity for f in findings))
+        outcome = outcome_override or (result.outcome.event if result is not None else "")
 
         telemetry_event = TelemetryEvent(
             correlation_id=os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""),
             timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
             repository=config.github_repository,
             pr_number=str(config.pr_number),
-            outcome=outcome_override or result.outcome.event,
-            findings_count=len(result.findings),
+            outcome=outcome,
+            findings_count=len(findings),
             findings_by_severity=findings_by_severity,
-            failed_agents=[f.name for f in result.failed_agents],
+            failed_agents=[f.name for f in failed_agents],
             token_usage_by_agent=token_usage_by_agent,
-            agent_latency_ms={ar.name: ar.elapsed_ms for ar in result.agent_results},
+            agent_latency_ms={ar.name: ar.elapsed_ms for ar in agent_results},
             sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
             telemetry_schema_version="2",
@@ -328,52 +342,9 @@ async def _emit_telemetry(
             is_incremental=is_incremental,
             failed_agent_latency_ms={
                 f.name: f.elapsed_ms
-                for f in result.failed_agents
+                for f in failed_agents
                 if isinstance(f, _FailedAgent)
             },
-        )
-    except Exception as exc:
-        logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
-        return
-    try:
-        await anyio.to_thread.run_sync(
-            lambda: emit_telemetry(telemetry_event, sink=config.telemetry_sink)
-        )
-    except Exception as exc:
-        logger.warning("[ai-pr-review] telemetry emission failed: %s", exc, exc_info=True)
-
-
-async def _emit_telemetry_minimal(
-    config: ReviewConfig,
-    *,
-    outcome_override: str,
-    is_incremental: bool = False,
-) -> None:
-    """Emit a minimal telemetry event when there are no agent results (skip/dry-run)."""
-    import datetime
-
-    from ai_pr_review.telemetry import TelemetryEvent, emit_telemetry
-    try:
-        telemetry_event = TelemetryEvent(
-            correlation_id=os.environ.get("AI_PR_REVIEW_CORRELATION_ID", ""),
-            timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
-            repository=config.github_repository,
-            pr_number=str(config.pr_number),
-            outcome=outcome_override,
-            findings_count=0,
-            findings_by_severity={},
-            failed_agents=[],
-            token_usage_by_agent={},
-            agent_latency_ms={},
-            sarif_elapsed_s=None,
-            learning_store_entries_loaded=0,
-            telemetry_schema_version="2",
-            provider=config.provider,
-            model_standard=config.model_standard,
-            model_premium=config.model_premium,
-            review_mode=config.review_mode,
-            is_incremental=is_incremental,
-            failed_agent_latency_ms={},
         )
     except Exception as exc:
         logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
@@ -418,459 +389,6 @@ async def _orchestrate_skip(
         skip_reason=reason,
     )
 
-
-_SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"
-
-
-async def _run_summarizer(
-    *,
-    diff_text: str,
-    manifest_text: str,
-    base_ref: str,
-    script_dir: Path,
-    model: str,
-    temperature: float = 0.3,
-    llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
-) -> str:
-    """Run the pr-summarizer agent and return its formatted markdown output.
-
-    Returns response.text (the full LLM markdown including summary and
-    walkthrough table) rather than SummarizerOutput.summary_md, because
-    summary_md contains only the text before the **Type:** line — returning it
-    alone would drop the walkthrough table.
-    parse_summarizer_output() is called for validation only (not to reformat).
-
-    Fail-soft: on any error logs a WARNING and returns _SUMMARIZER_FAILURE_NOTICE
-    so the PR comment communicates the partial failure rather than silently
-    omitting the summary.  except Exception is intentional: the fail-soft contract
-    requires that any unexpected error (KeyError, TypeError, etc.) in the prompt
-    assembly or parse path skips the summary rather than aborting the whole review.
-    """
-    from ai_pr_review.agents.summarizer import (
-        build_summarizer_system_prompt,
-        build_summarizer_user_message,
-        parse_summarizer_output,
-    )
-    from ai_pr_review.llm.base import LLMRequest
-
-    try:
-        prompt_path = script_dir / "prompts" / "pr-summarizer.md"
-        system_prompt = build_summarizer_system_prompt(prompt_path)
-
-        commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
-        proc: subprocess.CompletedProcess[str] | None = None
-        try:
-            # Run in a thread to avoid blocking the anyio event loop.
-            proc = await anyio.to_thread.run_sync(
-                lambda: subprocess.run(
-                    _git_cmd, capture_output=True, text=True, timeout=15,
-                )
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("pr-summarizer: git log timed out; proceeding without commit log")
-        except Exception as exc:
-            logger.warning("pr-summarizer: could not get commit log: %s", exc)
-        else:
-            if proc.returncode != 0:
-                logger.warning(
-                    "pr-summarizer: git log exited %d; stderr=%r stdout=%r",
-                    proc.returncode, proc.stderr.strip()[:500], proc.stdout.strip()[:500],
-                )
-                # Use a prompt-safe marker so the LLM knows context is absent.
-                commit_log = "_Note: commit log unavailable (git log failed)._"
-            else:
-                commit_log = proc.stdout.strip()
-
-        user_message = build_summarizer_user_message(manifest_text, commit_log, diff_text)
-        request = LLMRequest(
-            model_id=model,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=4096,
-            temperature=temperature,
-        )
-        response: LLMResponse = await llm_call(request)
-        # parse_summarizer_output returns a SummarizerOutput dataclass (not a
-        # cleaned string). We call it here only to validate the response is
-        # parseable before returning the raw markdown to the caller.
-        logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
-        parse_summarizer_output(response.text)
-        return response.text
-    except Exception as exc:
-        logger.warning(
-            "pr-summarizer: failed (review will continue without summary): %s: %s",
-            type(exc).__name__, exc, exc_info=True,
-        )
-        return _SUMMARIZER_FAILURE_NOTICE
-
-
-def _fetch_open_issues(github_repository: str) -> str:
-    """Fetch open issues via gh CLI and return a compact text block, or "(unavailable)".
-
-    Runs ``gh issue list`` synchronously (call via anyio.to_thread.run_sync from async
-    context).  Always returns a string; never raises.  Returns "(unavailable)" on any
-    error so that the caller can still pass a user message to the LLM.
-
-    Each line in the returned block has the format::
-
-        #<number> <title> [label1, label2]
-    """
-    import json as _json
-
-    cmd = [
-        "gh", "issue", "list",
-        "--repo", github_repository,
-        "--state", "open",
-        "--limit", "50",
-        "--json", "number,title,labels",
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-    except FileNotFoundError:
-        logger.warning("issue-linker: gh CLI not found; open-issue list unavailable")
-        return "(unavailable)"
-    except subprocess.TimeoutExpired:
-        logger.warning("issue-linker: gh issue list timed out; open-issue list unavailable")
-        return "(unavailable)"
-    except Exception as exc:
-        logger.warning("issue-linker: gh issue list failed: %s", exc, exc_info=True)
-        return "(unavailable)"
-
-    if proc.returncode != 0:
-        stderr_snippet = proc.stderr.strip()[:500]
-        truncated = "…" if len(proc.stderr.strip()) > 500 else ""
-        logger.warning(
-            "issue-linker: gh issue list exited %d; open-issue list unavailable: %s%s",
-            proc.returncode, stderr_snippet, truncated,
-        )
-        return "(unavailable)"
-
-    try:
-        issues = _json.loads(proc.stdout)
-    except _json.JSONDecodeError as exc:
-        logger.warning("issue-linker: could not parse gh issue list output: %s", exc)
-        return "(unavailable)"
-
-    if not issues:
-        return "(no open issues)"
-
-    lines: list[str] = []
-    for item in issues:
-        number = item.get("number", "?")
-        title = item.get("title", "(no title)")
-        label_names = [lb.get("name", "") for lb in item.get("labels", []) if lb.get("name")]
-        label_str = f" [{', '.join(label_names)}]" if label_names else ""
-        lines.append(f"#{number} {title}{label_str}")
-    return "\n".join(lines)
-
-
-async def _run_issue_linker(
-    *,
-    manifest_text: str,
-    base_ref: str,
-    script_dir: Path,
-    provider: str,
-    github_repository: str,
-    model: str,
-    temperature: float = 0.3,
-    llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
-) -> str:
-    """Run the issue-linker agent and return its markdown output, or "" to suppress.
-
-    ``provider`` is the VCS provider (github/bitbucket/gitlab), NOT the AI provider.
-    The issue-linker is GitHub-only. When the provider is not github or the agent
-    returns the sentinel NONE, this function returns "" so the caller skips
-    appending to summary_text. Any error is logged as WARNING and "" is returned
-    (fail-soft).
-
-    The user message provides the context the agent needs: commit log, branch name,
-    open issues (pre-fetched deterministically via ``gh issue list``), file manifest,
-    repository slug, and PROVIDER. The agent itself executes no shell commands or tools;
-    the open-issue list is injected as plain text so the model can match and cite real
-    issue numbers without any tool-calling loop.
-    """
-    from ai_pr_review.llm.base import LLMRequest
-
-    try:
-        prompt_path = script_dir / "prompts" / "issue-linker.md"
-        if not prompt_path.exists():
-            logger.warning("issue-linker: prompt not found at %s; skipping", prompt_path)
-            return ""
-        system_prompt = prompt_path.read_text()
-
-        commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
-
-        def _run_git_log() -> subprocess.CompletedProcess[str] | None:
-            try:
-                return subprocess.run(_git_cmd, capture_output=True, text=True, timeout=15)
-            except subprocess.TimeoutExpired:
-                return None
-
-        try:
-            proc = await anyio.to_thread.run_sync(_run_git_log)
-        except Exception as exc:
-            logger.warning("issue-linker: could not get commit log: %s", exc, exc_info=True)
-        else:
-            if proc is None:
-                logger.warning("issue-linker: git log timed out; proceeding without commit log")
-            elif proc.returncode == 0:
-                commit_log = proc.stdout.strip()
-            else:
-                commit_log = "_Note: commit log unavailable (git log failed)._"
-
-        branch_name = ""
-
-        def _run_git_branch() -> subprocess.CompletedProcess[str] | None:
-            try:
-                return subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    capture_output=True, text=True, timeout=10,
-                )
-            except subprocess.TimeoutExpired:
-                return None
-
-        try:
-            branch_proc = await anyio.to_thread.run_sync(_run_git_branch)
-        except Exception as exc:
-            logger.warning("issue-linker: could not get branch name: %s", exc, exc_info=True)
-        else:
-            if branch_proc is None:
-                logger.warning("issue-linker: git rev-parse timed out; proceeding without branch name")
-            elif branch_proc.returncode == 0:
-                branch_name = branch_proc.stdout.strip()
-
-        if not commit_log and not branch_name:
-            logger.warning(
-                "issue-linker: both commit log and branch name unavailable "
-                "(not a git repo, or git is absent); skipping"
-            )
-            return ""
-
-        # Pre-fetch open issues deterministically so the model receives real titles and
-        # numbers without needing any tool-calling loop.  Fail-soft: on any error the
-        # fetch helper returns "(unavailable)" and the agent falls back to text-only
-        # analysis of the commit log and manifest.
-        open_issues_text = await anyio.to_thread.run_sync(
-            lambda: _fetch_open_issues(github_repository)
-        )
-
-        user_message = (
-            f"PROVIDER: {provider}\n\n"
-            f"REPOSITORY: {github_repository}\n\n"
-            f"## Branch Name\n\n{branch_name or '(unavailable)'}\n\n"
-            f"## Commit Log\n\n{commit_log or '(unavailable)'}\n\n"
-            f"## Open Issues\n\n{open_issues_text}\n\n"
-            f"## File Manifest\n\n{manifest_text}\n"
-        )
-
-        request = LLMRequest(
-            model_id=model,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=4096,
-            temperature=temperature,
-        )
-        response: LLMResponse = await llm_call(request)
-        text = response.text.strip()
-        if text == "NONE" or not text:
-            logger.debug("issue-linker: returned NONE or empty; skipping")
-            return ""
-        return text
-    except Exception as exc:
-        logger.warning(
-            "issue-linker: failed (review will continue without issue links): %s: %s",
-            type(exc).__name__, exc, exc_info=True,
-        )
-        return ""
-
-
-def _build_token_table_accordion(
-    successes: Sequence[object],
-    sarif_elapsed_s: float | None,
-    script_dir: Path,
-    *,
-    effective_max_tokens: int = 0,
-    judge_input_tokens: int = 0,
-    judge_output_tokens: int = 0,
-    judge_cache_creation_tokens: int = 0,
-    judge_cache_read_tokens: int = 0,
-    judge_model: str = "",
-) -> str:
-    """Return a <details>-wrapped token cost table string, or "" on no-data/error.
-
-    Designed to be used as the ``token_table_renderer`` callback passed to
-    ``run_review()``.  All exceptions are caught and logged as WARNING so token
-    table failure never aborts a review.
-
-    ``effective_max_tokens`` is the user-configured cap from
-    ``DispatchContext.max_tokens_per_agent`` (i.e. ``AI_MAX_TOKENS_PER_AGENT``).
-    When > 0 it overrides the per-agent roster default so the table reflects
-    the actual cap sent to the LLM rather than the hard-coded roster value.
-    """
-    from ai_pr_review.agents.dispatch import AgentResult
-    from ai_pr_review.agents.roster import AGENTS
-    from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
-
-    _roster_max_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
-    token_log: list[TokenEntry] = []
-    for ar in successes:
-        if isinstance(ar, AgentResult) and ar.token_log is not None:
-            tl = ar.token_log
-            # Use the effective user-configured cap when set; fall back to the
-            # per-agent roster default so the table matches what was actually sent.
-            cap = effective_max_tokens if effective_max_tokens > 0 else _roster_max_by_name.get(ar.name, 0)
-            token_log.append(TokenEntry(
-                agent=ar.name,
-                model=tl.model,
-                input_tokens=tl.input,
-                output_tokens=tl.output,
-                cache_creation_tokens=tl.cache_creation,
-                cache_read_tokens=tl.cache_read,
-                max_output_tokens=cap,
-            ))
-
-    # Add the judge pass as a real token-log entry so its cost is included in
-    # the Total row. Only emit when the judge actually ran (model is non-empty
-    # and at least one token was consumed). The judge uses model_standard.
-    if judge_model and (judge_input_tokens > 0 or judge_output_tokens > 0):
-        token_log.append(TokenEntry(
-            agent="judge-pass",
-            model=judge_model,
-            input_tokens=judge_input_tokens,
-            output_tokens=judge_output_tokens,
-            cache_creation_tokens=judge_cache_creation_tokens,
-            cache_read_tokens=judge_cache_read_tokens,
-        ))
-
-    if not token_log:
-        return ""
-
-    # All enriched agents receive the same context block; take the max (which
-    # equals the single non-zero value) rather than summing to avoid double-counting.
-    context_tokens = max(
-        (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
-        default=0,
-    )
-    # Profile routing gives each agent a different section subset; take the max
-    # as a representative figure (the largest profile slice sent to any agent).
-    profile_tokens = max(
-        (ar.profile_tokens_used for ar in successes if isinstance(ar, AgentResult)),
-        default=0,
-    )
-
-    pricing_file = str(script_dir / "config" / "model-pricing.json")
-    try:
-        pricing_data = load_pricing(pricing_file)
-    except Exception as exc:
-        logger.warning(
-            "token table: could not load pricing file %r: %s", pricing_file, exc, exc_info=True,
-        )
-        return ""
-
-    try:
-        table = emit_token_table(
-            token_log,
-            pricing_data,
-            context_tokens=context_tokens,
-            profile_tokens=profile_tokens,
-            sarif_elapsed_s=sarif_elapsed_s,
-        )
-    except Exception as exc:
-        logger.warning(
-            "token table: could not render table (pricing_file=%r): %s",
-            pricing_file, exc, exc_info=True,
-        )
-        return ""
-
-    return (
-        "<details>\n<summary>Token usage by agent</summary>\n\n"
-        + table
-        + "\n</details>"
-    )
-
-
-def _write_step_summary(
-    result: ReviewResult,
-    runtime: ReviewRuntime,
-    summary_text: str,
-    token_table_md: str = "",
-) -> None:
-    """Write a concise run summary to GITHUB_STEP_SUMMARY when available.
-
-    Mirrors the bash engine's Phase 4 step-summary block. Fail-soft: any
-    error is logged as WARNING and the review result is unaffected.
-
-    ``token_table_md`` should be the pre-built accordion string from
-    ``_build_token_table_accordion()`` so the step summary matches the PR
-    comment exactly and avoids a second pricing-file read.
-    """
-    step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
-    if not step_summary_path:
-        return
-    try:
-        cf = runtime.changed_files
-        rc = runtime.config
-        languages = ", ".join(cf.languages) if cf.languages else "none detected"
-        file_count = len(cf.all_files)
-        n_findings = len(result.findings)
-        n_failed = len(result.failed_agents)
-        failed_line = (
-            f"\n**Failed agents:** {', '.join(f.name for f in result.failed_agents)}"
-            if result.failed_agents else ""
-        )
-
-        token_section = (
-            f"\n### Token Usage\n\n{token_table_md}\n\n"
-            "_Prices are public list rates and do not reflect discounts, "
-            "commitments, or proxy markups._\n"
-            if token_table_md else ""
-        )
-
-        lines = [
-            "## AI PR Review Results",
-            "",
-            f"**Mode:** {rc.review_mode} | **Files:** {file_count}",
-            f"**Languages:** {languages}",
-            f"**Agents:** {len(runtime.agents)} finding agents",
-        ]
-        if failed_line:
-            lines.append(failed_line.lstrip())
-        lines += [
-            "",
-            f"**Findings:** {n_findings}"
-            + (f" ({n_failed} agent(s) failed)" if n_failed else ""),
-            "",
-        ]
-        if token_section:
-            lines.append(token_section)
-        if summary_text.strip():
-            lines += ["### Summary", "", summary_text.strip(), ""]
-
-        content = "\n".join(lines)
-        with open(step_summary_path, "a", encoding="utf-8") as fh:
-            fh.write(content + "\n")
-    except Exception as exc:
-        logger.warning(
-            "step summary: unexpected error building/writing step summary: %s", exc, exc_info=True
-        )
-
-
-def _emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
-    """Emit a one-line summary to stderr."""
-    if result.skipped:
-        click.echo(f"Review skipped: {result.skip_reason}", err=True)
-        return
-    n_findings = len(result.findings)
-    n_failed = len(result.failed_agents)
-    click.echo(
-        f"Review complete: {n_findings} findings, "
-        f"{n_failed} failed agents, "
-        f"event={result.outcome.event}, "
-        f"base={base_ref[:7] if base_ref else '?'}..{head[:7] if head else '?'}",
-        err=True,
-    )
 
 
 @cli.command()

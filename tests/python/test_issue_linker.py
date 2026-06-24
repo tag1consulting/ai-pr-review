@@ -15,8 +15,9 @@ from unittest.mock import MagicMock, patch
 import anyio
 import pytest
 
-from ai_pr_review.cli import _fetch_open_issues, _run_issue_linker
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
+from ai_pr_review.review.preflight import fetch_open_issues as _fetch_open_issues
+from ai_pr_review.review.preflight import run_issue_linker as _run_issue_linker
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -141,7 +142,7 @@ class TestRunIssueLinkerUserMessage:
 
         with (
             patch("subprocess.run") as mock_run,
-            patch("ai_pr_review.cli._fetch_open_issues", return_value=open_issues_text),
+            patch("ai_pr_review.review.preflight.fetch_open_issues", return_value=open_issues_text),
         ):
             # Only git log and git rev-parse remain; order is stable and documented.
             mock_run.side_effect = [
@@ -192,7 +193,7 @@ class TestRunIssueLinkerUserMessage:
 
         with (
             patch("subprocess.run") as mock_run,
-            patch("ai_pr_review.cli._fetch_open_issues", return_value="(no open issues)"),
+            patch("ai_pr_review.review.preflight.fetch_open_issues", return_value="(no open issues)"),
         ):
             mock_run.side_effect = [
                 _completed(stdout="abc1234 fix: something\n"),

@@ -388,7 +388,7 @@ class TestWriteStepSummary:
 
     def test_writes_to_step_summary_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """When GITHUB_STEP_SUMMARY is set, a summary file is written."""
-        from ai_pr_review.cli import _write_step_summary
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 
         summary_path = tmp_path / "step_summary.md"
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
@@ -403,7 +403,7 @@ class TestWriteStepSummary:
 
     def test_no_op_when_env_unset(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """When GITHUB_STEP_SUMMARY is not set, no file is created."""
-        from ai_pr_review.cli import _write_step_summary
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 
         monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
         # Should not raise and should not create any file
@@ -412,7 +412,7 @@ class TestWriteStepSummary:
 
     def test_non_runtime_object_is_noop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A non-ReviewRuntime runtime arg is silently skipped."""
-        from ai_pr_review.cli import _write_step_summary
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 
         summary_path = tmp_path / "step_summary.md"
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
@@ -423,7 +423,7 @@ class TestWriteStepSummary:
         """Failed agent names appear in the step summary."""
         from unittest.mock import MagicMock
 
-        from ai_pr_review.cli import _write_step_summary
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 
         summary_path = tmp_path / "step_summary.md"
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
@@ -442,7 +442,7 @@ class TestWriteStepSummary:
         """An OSError writing the file logs a warning and does not propagate."""
         import logging
 
-        from ai_pr_review.cli import _write_step_summary
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", "/nonexistent/dir/step_summary.md")
         with caplog.at_level(logging.WARNING):
