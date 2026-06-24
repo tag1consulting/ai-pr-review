@@ -62,6 +62,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
 | `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
+| `AI_REVIEW_FAIL_ON_FINDINGS` | `false` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. |
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -136,6 +137,7 @@ These variables enable optional capabilities that are off by default.
 | `AI_CONTEXT_ENRICHMENT` | `true` (container), `false` (direct action) | Enable tree-sitter + ripgrep symbol-context injection. Extracts symbol references from the diff and appends relevant definitions to each agent's prompt in a `<symbol-context>` block. Requires `tree-sitter-language-pack` (included in the container image) and `ripgrep`. Silently no-ops if either dependency is absent. |
 | `AI_CONTEXT_MAX_TOKENS` | `8192` | Maximum token budget for the injected `<symbol-context>` block per agent call. |
 | `AI_CONTEXT_LOOKUP_LINES` | `8` | Number of source lines to capture per symbol definition (snippet window). |
+| `AI_CONTEXT_MAX_QUERIES` | `200` | Maximum number of ripgrep symbol-lookup queries across all agents in a run. The cap is global (shared across Tier 1 and Tier 2 via the module-level cache), so a multi-agent run consumes queries faster than a single-agent one. Increase if you see `context enrichment: max_queries=N reached; remaining symbols skipped` in the logs. |
 
 #### SARIF ingestion
 
@@ -175,6 +177,12 @@ These variables enable optional capabilities that are off by default.
 | `AI_FEEDBACK_MAX_TOKENS` | `2048` | Maximum token budget for the injected `<repo-feedback>` block. |
 | `AI_FEEDBACK_RETENTION_COUNT` | `500` | Maximum number of feedback entries to keep (rolling window; oldest dropped first). |
 | `AI_FEEDBACK_RETENTION_AGE_DAYS` | `365` | Drop entries older than this many days. Set to `0` to disable age-based pruning. |
+
+#### CI gate (fail on findings)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_FAIL_ON_FINDINGS` | `false` | When `true`, exit with code 2 if the review outcome is `REQUEST_CHANGES` or `COMMENT` (incomplete or unknown risk). Exit code 1 still signals a posting or config error. Exit code 0 means the bot approved. Use this to block auto-merge or required CI checks until the bot approves. Pair with branch protection requiring the `review` status check and set `fail-on-findings: true` in your workflow. |
 
 #### Judge pass
 
