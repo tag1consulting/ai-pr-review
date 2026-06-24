@@ -9,6 +9,7 @@ from ai_pr_review.vcs._inline import (
     is_suggestion_range_valid,
     is_suggestion_safe,
     partition_findings,
+    split_body_findings,
 )
 
 
@@ -104,3 +105,37 @@ def test_partition_findings_respects_cap() -> None:
     inline, body = partition_findings(findings, eligible_new=eligible, max_inline=2)
     assert len(inline) == 2
     assert len(body) == 3
+
+
+def test_split_body_findings_separates_ood() -> None:
+    findings = [
+        _f(file="a.py", line=1, out_of_diff=False),
+        _f(file="a.py", line=2, out_of_diff=True),
+        _f(file="a.py", line=3, out_of_diff=False),
+        _f(file="a.py", line=4, out_of_diff=True),
+    ]
+    in_diff, ood = split_body_findings(findings)
+    assert len(in_diff) == 2
+    assert len(ood) == 2
+    assert all(not f.out_of_diff for f in in_diff)
+    assert all(f.out_of_diff for f in ood)
+
+
+def test_split_body_findings_all_in_diff() -> None:
+    findings = [_f(file="a.py", line=i, out_of_diff=False) for i in range(1, 4)]
+    in_diff, ood = split_body_findings(findings)
+    assert len(in_diff) == 3
+    assert ood == []
+
+
+def test_split_body_findings_all_ood() -> None:
+    findings = [_f(file="a.py", line=i, out_of_diff=True) for i in range(1, 4)]
+    in_diff, ood = split_body_findings(findings)
+    assert in_diff == []
+    assert len(ood) == 3
+
+
+def test_split_body_findings_empty() -> None:
+    in_diff, ood = split_body_findings([])
+    assert in_diff == []
+    assert ood == []
