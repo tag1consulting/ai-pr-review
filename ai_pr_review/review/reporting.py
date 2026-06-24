@@ -1,0 +1,200 @@
+"""Post-review reporting: token table accordion, step summary, and result echo."""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import click
+
+if TYPE_CHECKING:
+    from ai_pr_review.orchestrate import ReviewResult
+    from ai_pr_review.review.runtime import ReviewRuntime
+
+logger = logging.getLogger(__name__)
+
+
+def build_token_table_accordion(
+    successes: Sequence[object],
+    sarif_elapsed_s: float | None,
+    script_dir: Path,
+    *,
+    effective_max_tokens: int = 0,
+    judge_input_tokens: int = 0,
+    judge_output_tokens: int = 0,
+    judge_cache_creation_tokens: int = 0,
+    judge_cache_read_tokens: int = 0,
+    judge_model: str = "",
+) -> str:
+    """Return a <details>-wrapped token cost table string, or "" on no-data/error.
+
+    Designed to be used as the ``token_table_renderer`` callback passed to
+    ``run_review()``.  All exceptions are caught and logged as WARNING so token
+    table failure never aborts a review.
+
+    ``effective_max_tokens`` is the user-configured cap from
+    ``DispatchContext.max_tokens_per_agent`` (i.e. ``AI_MAX_TOKENS_PER_AGENT``).
+    When > 0 it overrides the per-agent roster default so the table reflects
+    the actual cap sent to the LLM rather than the hard-coded roster value.
+    """
+    from ai_pr_review.agents.dispatch import AgentResult
+    from ai_pr_review.agents.roster import AGENTS
+    from ai_pr_review.pricing import TokenEntry, emit_token_table, load_pricing
+
+    _roster_max_by_name = {spec.name: spec.max_output_tokens for spec in AGENTS}
+    token_log: list[TokenEntry] = []
+    for ar in successes:
+        if isinstance(ar, AgentResult) and ar.token_log is not None:
+            tl = ar.token_log
+            cap = effective_max_tokens if effective_max_tokens > 0 else _roster_max_by_name.get(ar.name, 0)
+            token_log.append(TokenEntry(
+                agent=ar.name,
+                model=tl.model,
+                input_tokens=tl.input,
+                output_tokens=tl.output,
+                cache_creation_tokens=tl.cache_creation,
+                cache_read_tokens=tl.cache_read,
+                max_output_tokens=cap,
+            ))
+
+    if judge_model and (judge_input_tokens > 0 or judge_output_tokens > 0):
+        token_log.append(TokenEntry(
+            agent="judge-pass",
+            model=judge_model,
+            input_tokens=judge_input_tokens,
+            output_tokens=judge_output_tokens,
+            cache_creation_tokens=judge_cache_creation_tokens,
+            cache_read_tokens=judge_cache_read_tokens,
+        ))
+
+    if not token_log:
+        return ""
+
+    # All enriched agents receive the same context block; take the max (which
+    # equals the single non-zero value) rather than summing to avoid double-counting.
+    context_tokens = max(
+        (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+        default=0,
+    )
+    # Profile routing gives each agent a different section subset; take the max
+    # as a representative figure (the largest profile slice sent to any agent).
+    profile_tokens = max(
+        (ar.profile_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+        default=0,
+    )
+
+    pricing_file = str(script_dir / "config" / "model-pricing.json")
+    try:
+        pricing_data = load_pricing(pricing_file)
+    except Exception as exc:
+        logger.warning(
+            "token table: could not load pricing file %r: %s", pricing_file, exc, exc_info=True,
+        )
+        return ""
+
+    try:
+        table = emit_token_table(
+            token_log,
+            pricing_data,
+            context_tokens=context_tokens,
+            profile_tokens=profile_tokens,
+            sarif_elapsed_s=sarif_elapsed_s,
+        )
+    except Exception as exc:
+        logger.warning(
+            "token table: could not render table (pricing_file=%r): %s",
+            pricing_file, exc, exc_info=True,
+        )
+        return ""
+
+    return (
+        "<details>\n<summary>Token usage by agent</summary>\n\n"
+        + table
+        + "\n</details>"
+    )
+
+
+def write_step_summary(
+    result: ReviewResult,
+    runtime: ReviewRuntime,
+    summary_text: str,
+    token_table_md: str = "",
+) -> None:
+    """Write a concise run summary to GITHUB_STEP_SUMMARY when available.
+
+    Mirrors the bash engine's Phase 4 step-summary block. Fail-soft: any
+    error is logged as WARNING and the review result is unaffected.
+
+    ``token_table_md`` should be the pre-built accordion string from
+    ``build_token_table_accordion()`` so the step summary matches the PR
+    comment exactly and avoids a second pricing-file read.
+    """
+    step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+    if not step_summary_path:
+        return
+    try:
+        cf = runtime.changed_files
+        rc = runtime.config
+        languages = ", ".join(cf.languages) if cf.languages else "none detected"
+        file_count = len(cf.all_files)
+        n_findings = len(result.findings)
+        n_failed = len(result.failed_agents)
+        failed_line = (
+            f"\n**Failed agents:** {', '.join(f.name for f in result.failed_agents)}"
+            if result.failed_agents else ""
+        )
+
+        token_section = (
+            f"\n### Token Usage\n\n{token_table_md}\n\n"
+            "_Prices are public list rates and do not reflect discounts, "
+            "commitments, or proxy markups._\n"
+            if token_table_md else ""
+        )
+
+        lines = [
+            "## AI PR Review Results",
+            "",
+            f"**Mode:** {rc.review_mode} | **Files:** {file_count}",
+            f"**Languages:** {languages}",
+            f"**Agents:** {len(runtime.agents)} finding agents",
+        ]
+        if failed_line:
+            lines.append(failed_line.lstrip())
+        lines += [
+            "",
+            f"**Findings:** {n_findings}"
+            + (f" ({n_failed} agent(s) failed)" if n_failed else ""),
+            "",
+        ]
+        if token_section:
+            lines.append(token_section)
+        if summary_text.strip():
+            lines += ["### Summary", "", summary_text.strip(), ""]
+
+        content = "\n".join(lines)
+        with open(step_summary_path, "a", encoding="utf-8") as fh:
+            fh.write(content + "\n")
+    except Exception as exc:
+        logger.warning(
+            "step summary: unexpected error building/writing step summary: %s", exc, exc_info=True
+        )
+
+
+def emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
+    """Emit a one-line summary to stderr."""
+    if result.skipped:
+        click.echo(f"Review skipped: {result.skip_reason}", err=True)
+        return
+    n_findings = len(result.findings)
+    n_failed = len(result.failed_agents)
+    click.echo(
+        f"Review complete: {n_findings} findings, "
+        f"{n_failed} failed agents, "
+        f"event={result.outcome.event}, "
+        f"base={base_ref[:7] if base_ref else '?'}..{head[:7] if head else '?'}",
+        err=True,
+    )
+

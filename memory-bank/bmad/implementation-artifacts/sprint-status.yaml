@@ -139,8 +139,8 @@ development_status:
   # #360 (partial): provenance weighting — deterministic confidence boost when
   # static analyzer + LLM agent agree on the same file+line region.
   # Branch: feat/epic6-provenance-weighting
-  epic-6: in-progress
-  6-1-provenance-weighting: review          # #360 partial; story file: stories/6-1-provenance-weighting.md
+  epic-6: done
+  6-1-provenance-weighting: done            # #360 — merged PR #528 at 2026-06-22
   epic-6-retrospective: optional
 
   # ── Epic 8 — Port Analyzer Wrappers to Native Python ────────────────────────
@@ -174,3 +174,24 @@ development_status:
   7-2-profile-routing: done                     # #355
   7-3-judge-pass: done                          # #360 remainder — depends on corroborated flag (already on main via PR #528)
   epic-7-retrospective: optional
+
+  # ── Epic 9 — Security Hardening ─────────────────────────────────────────────
+  # Standalone security issues not covered by earlier epics.
+  # Issue #494: CI canary test enforcing never-execute-checked-out-code invariant.
+  epic-9: in-progress
+  9-1-canary-security-test: done                # #494 — merged PR #533 at 923c3bd
+  epic-9-retrospective: optional
+
+  # ── Epic 10 — VCS Refactor ───────────────────────────────────────────────────
+  # GitHub issue #498: extract shared partition/ood-split logic from per-provider
+  # post_findings implementations so bug fixes only need to be applied once.
+  epic-10: done
+  10-1-vcs-partition-dedup: done                  # #498 — PR #542 merged at 7c3d33f
+  epic-10-retrospective: optional
+
+  # ── Epic 11 — CLI Decomposition ──────────────────────────────────────────────
+  # GitHub issue #497: _run_review_async does too much; _emit_telemetry duplicated
+  # at three call sites. Extract preflight + reporting modules; collapse telemetry.
+  epic-11: in-progress
+  11-1-cli-refactor: ready-for-dev                # #497 — story at memory-bank/bmad/stories/11-1-cli-refactor.md
+  epic-11-retrospective: optional

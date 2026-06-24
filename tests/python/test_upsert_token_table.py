@@ -28,7 +28,9 @@ def _make_agent_result(name: str = "code-reviewer") -> object:
 # ---------------------------------------------------------------------------
 
 def test_returns_accordion_on_valid_data() -> None:
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     ar = _make_agent_result()
     result = _build_token_table_accordion([ar], None, _REPO_ROOT)
@@ -38,7 +40,9 @@ def test_returns_accordion_on_valid_data() -> None:
 
 
 def test_returns_empty_string_when_no_agent_results() -> None:
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     result = _build_token_table_accordion([], None, _REPO_ROOT)
     assert result == ""
@@ -46,7 +50,9 @@ def test_returns_empty_string_when_no_agent_results() -> None:
 
 def test_returns_empty_string_when_token_log_is_none() -> None:
     from ai_pr_review.agents.dispatch import AgentResult
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     ar = AgentResult(name="code-reviewer", output="", token_log=None,
                      truncated=False, context_tokens_used=0)
@@ -55,7 +61,9 @@ def test_returns_empty_string_when_token_log_is_none() -> None:
 
 
 def test_fail_soft_on_missing_pricing_file(tmp_path: Path) -> None:
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     ar = _make_agent_result()
     # Pass a script_dir whose config/model-pricing.json doesn't exist.
@@ -66,7 +74,9 @@ def test_fail_soft_on_missing_pricing_file(tmp_path: Path) -> None:
 
 
 def test_includes_agent_name_in_output() -> None:
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     ar = _make_agent_result("security-reviewer")
     result = _build_token_table_accordion([ar], None, _REPO_ROOT)
@@ -74,7 +84,9 @@ def test_includes_agent_name_in_output() -> None:
 
 
 def test_sarif_elapsed_forwarded() -> None:
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     ar = _make_agent_result()
     result = _build_token_table_accordion([ar], 0.42, _REPO_ROOT)
@@ -85,7 +97,9 @@ def test_sarif_elapsed_forwarded() -> None:
 
 def test_context_tokens_forwarded() -> None:
     from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     tl = TokenUsage(model="claude-haiku-4-5", input=200, output=80,
                     cache_creation=0, cache_read=0)
@@ -97,7 +111,9 @@ def test_context_tokens_forwarded() -> None:
 
 
 def test_multiple_agents_both_appear() -> None:
-    from ai_pr_review.cli import _build_token_table_accordion
+    from ai_pr_review.review.reporting import (
+        build_token_table_accordion as _build_token_table_accordion,
+    )
 
     ar1 = _make_agent_result("code-reviewer")
     ar2 = _make_agent_result("security-reviewer")

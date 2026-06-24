@@ -12,9 +12,11 @@ The action uses the Python engine in `ai_pr_review/`.
 
 | Module | Role |
 |--------|------|
-| `ai_pr_review/cli.py` | Click CLI entry point; assembles `Config`, builds runtime, runs preflight (summarizer + issue-linker), invokes `run_review`, emits telemetry and step-summary |
+| `ai_pr_review/cli.py` | Click CLI entry point; assembles `Config`, builds runtime, orchestrates preflight via `preflight.py`, invokes `run_review`, delegates telemetry and step-summary to `reporting.py` |
 | `ai_pr_review/orchestrate.py` | `run_review`: phase sequencing — dispatch agents, extract/merge/suppress/scope findings, decide outcome, post summary then findings, advance watermark only after `findings_result.ok` (#493), resolve stale |
 | `ai_pr_review/review/runtime.py` | `build_review_runtime`: assembles `ReviewRuntime` (diff context, manifest, language profiles, agent roster, dispatch context, SARIF extras) consumed by `cli` |
+| `ai_pr_review/review/preflight.py` | Pre-review LLM agents: `run_summarizer` (pr-summarizer) and `run_issue_linker` (issue-linker); `fetch_open_issues` gh-CLI helper; all fail-soft |
+| `ai_pr_review/review/reporting.py` | Post-review output: `build_token_table_accordion` (cost table), `write_step_summary` (GITHUB_STEP_SUMMARY), `emit_review_result` (stderr echo) |
 | `ai_pr_review/review/{compute,outcome,watermark}.py` | Pre-flight diff compute / `APPROVE`/`REQUEST_CHANGES`/`COMMENT` decision / SHA-marker rewrite |
 | `ai_pr_review/agents/dispatch.py` | Agent dispatch: `dispatch_tier` runs eligible agents concurrently via `LLMClient`, builds system + user prompts, applies per-agent token budgets |
 | `ai_pr_review/agents/{roster,gates,summarizer}.py` | Agent specs and tier mapping / conditional eligibility / pr-summarizer wrapper |
