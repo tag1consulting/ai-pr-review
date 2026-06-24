@@ -63,7 +63,6 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
 | `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
 | `AI_REVIEW_FAIL_ON_FINDINGS` | `false` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. |
-| `AI_REVIEW_CONTEXT_MAX_QUERIES` | `200` | `context-max-queries` | Maximum ripgrep queries across all agents per run. Raise if logs show `max_queries=N reached; remaining symbols skipped`. |
 
 To set a variable via the GitHub CLI:
 ```bash
