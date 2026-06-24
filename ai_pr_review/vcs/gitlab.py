@@ -31,9 +31,9 @@ from ai_pr_review.vcs._body import (
     truncate_body,
 )
 from ai_pr_review.vcs._inline import (
-    is_inline_eligible,
     is_suggestion_range_valid,
     is_suggestion_safe,
+    partition_findings,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryExhaustedError, RetryPolicy, TapeRecorder
@@ -438,16 +438,12 @@ class GitLabProvider:
         eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
 
         errors_before = len(self._errors)
+        inline_candidates, body_findings = partition_findings(
+            list(findings), eligible_new=eligible_new, max_inline=max_inline
+        )
         inline_posted = 0
-        body_findings: list[Finding] = []
 
-        for f in findings:
-            if inline_posted >= max_inline:
-                body_findings.append(f)
-                continue
-            if not is_inline_eligible(f, eligible_new):
-                body_findings.append(f)
-                continue
+        for f in inline_candidates:
             payload = self._build_discussion_payload(
                 f,
                 eligible_context=eligible_ctx,

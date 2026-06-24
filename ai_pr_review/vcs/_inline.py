@@ -82,5 +82,18 @@ def partition_findings(
     return inline, body
 
 
+def split_body_findings(
+    body: list[Finding],
+) -> tuple[list[Finding], list[Finding]]:
+    """Split body findings into (in_diff, out_of_diff).
+
+    A finding is out-of-diff when the model flagged a location that exists in
+    the repository but is not part of the current PR's changed lines.
+    """
+    in_diff = [f for f in body if not f.out_of_diff]
+    ood = [f for f in body if f.out_of_diff]
+    return in_diff, ood
+
+
 # Type alias for a provider-supplied inline body renderer.
 InlineBodyRenderer = Callable[[Finding], str]
