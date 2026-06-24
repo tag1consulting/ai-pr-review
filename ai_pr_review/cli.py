@@ -106,6 +106,7 @@ def review() -> None:
     Exit codes:
       0 — review posted successfully (or skipped cleanly)
       1 — configuration / posting error
+      2 — review posted but outcome is REQUEST_CHANGES or COMMENT (when AI_FAIL_ON_FINDINGS=true)
     """
     try:
         config = ReviewConfig.from_env()
@@ -267,7 +268,11 @@ async def _run_review_async(config: ReviewConfig) -> int:
         await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,
                               is_incremental=runtime.is_incremental)
 
-    return 0 if result.ok else 1
+    if not result.ok:
+        return 1
+    if rc.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
+        return 2
+    return 0
 
 
 async def _emit_telemetry(
