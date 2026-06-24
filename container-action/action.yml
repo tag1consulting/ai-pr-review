@@ -163,6 +163,17 @@ inputs:
     required: false
     default: 'true'
 
+  context-max-queries:
+    description: >
+      Maximum number of ripgrep symbol-lookup queries across all agents in a
+      run. The cap is global (shared across Tier 1 and Tier 2 agents via a
+      module-level cache), so a multi-agent run consumes queries faster than
+      a single-agent one. Increase if you see
+      "context enrichment: max_queries=N reached; remaining symbols skipped"
+      in the logs. Default: 200.
+    required: false
+    default: '200'
+
   feedback-loop:
     description: >
       When true, load recent feedback entries from the GitBranchStore and
@@ -314,6 +325,7 @@ runs:
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
+        AI_CONTEXT_MAX_QUERIES: ${{ inputs.context-max-queries != '200' && inputs.context-max-queries || '' }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
         AI_JUDGE_PASS: ${{ inputs.judge-pass }}
         AI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings == 'true' && 'true' || '' }}
@@ -360,6 +372,7 @@ runs:
           -e AI_IGNORE_MERGE_COMMITS \
           -e AI_SARIF_PATHS \
           -e AI_CONTEXT_ENRICHMENT \
+          ${AI_CONTEXT_MAX_QUERIES:+-e AI_CONTEXT_MAX_QUERIES} \
           -e AI_FEEDBACK_LOOP \
           -e AI_JUDGE_PASS \
           ${AI_FAIL_ON_FINDINGS:+-e AI_FAIL_ON_FINDINGS} \
