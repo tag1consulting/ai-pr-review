@@ -202,6 +202,7 @@ async def build_review_runtime(
         enable_context_enrichment=config.enable_context_enrichment,
         context_max_tokens=config.context_max_tokens,
         context_lookup_lines=config.context_lookup_lines,
+        context_max_queries=config.context_max_queries,
         repo_root=Path("."),
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,

@@ -141,6 +141,7 @@ class DispatchContext:
     enable_context_enrichment: bool = False
     context_max_tokens: int = 8192
     context_lookup_lines: int = 8
+    context_max_queries: int = 200
     repo_root: Path = field(default_factory=Path.cwd)
     changed_files: list[str] = field(default_factory=list)
     # --- Feedback loop ---
@@ -429,6 +430,7 @@ def _compute_context_enrichment_block(
             context.changed_files,
             language=language,
             lookup_lines=context.context_lookup_lines,
+            max_queries=context.context_max_queries,
         )
         ctx_text = build_context_block(defs, max_tokens=context.context_max_tokens)
         if not ctx_text:

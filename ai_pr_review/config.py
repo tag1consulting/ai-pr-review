@@ -47,6 +47,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_CONTEXT_ENRICHMENT",
         "AI_CONTEXT_MAX_TOKENS",
         "AI_CONTEXT_LOOKUP_LINES",
+        "AI_CONTEXT_MAX_QUERIES",
         # --- SARIF ingestion ---
         "AI_SARIF_PATHS",
         # --- Diff exclude patterns ---
@@ -199,6 +200,7 @@ class ReviewConfig(BaseModel):
     enable_context_enrichment: bool = True
     context_max_tokens: int = 8192
     context_lookup_lines: int = 8
+    context_max_queries: int = 200
 
     # --- SARIF ingestion ---
     sarif_paths: tuple[str, ...] = ()
@@ -459,6 +461,7 @@ class ReviewConfig(BaseModel):
             enable_context_enrichment=_bool("AI_CONTEXT_ENRICHMENT", True),
             context_max_tokens=_int("AI_CONTEXT_MAX_TOKENS", 8192),
             context_lookup_lines=_int("AI_CONTEXT_LOOKUP_LINES", 8),
+            context_max_queries=_int("AI_CONTEXT_MAX_QUERIES", 200),
             sarif_paths=tuple(
                 p.strip()
                 for p in os.environ.get("AI_SARIF_PATHS", "").split(",")
