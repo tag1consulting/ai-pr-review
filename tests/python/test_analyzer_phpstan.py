@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_pr_review.analyzers.native.phpstan import _run_phpstan
+from ai_pr_review.analyzers.native.phpstan import _run_phpstan, _severity_for_level
 from ai_pr_review.manifest import ChangedFiles
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "phpstan"
@@ -21,6 +21,20 @@ def _load_fixture(name: str) -> str:
 
 def _make_cf(php_files: list[str]) -> ChangedFiles:
     return ChangedFiles(all_files=php_files, php=php_files)
+
+
+class TestSeverityForLevel:
+    def test_level_0_to_4_maps_to_low(self) -> None:
+        for level in ("0", "1", "2", "3", "4"):
+            assert _severity_for_level(level) == "Low", f"level {level} should be Low"
+
+    def test_level_5_to_7_maps_to_medium(self) -> None:
+        for level in ("5", "6", "7"):
+            assert _severity_for_level(level) == "Medium", f"level {level} should be Medium"
+
+    def test_level_8_to_9_maps_to_high(self) -> None:
+        for level in ("8", "9"):
+            assert _severity_for_level(level) == "High", f"level {level} should be High"
 
 
 class TestRunPhpstanGuards:
@@ -106,15 +120,31 @@ class TestRunPhpstanFindings:
             mock_run.return_value = MagicMock(returncode=1, stdout=fixture, stderr="")
             return _run_phpstan(cf, Path("/dev/null"))
 
-    def test_error_finding_maps_to_high(self, tmp_path: Path) -> None:
+    def test_error_finding_at_default_level(self, tmp_path: Path) -> None:
+        # Default level is 3, which maps to Low.
         findings = self._run_with_fixture("phpstan-error.json", tmp_path)
         assert len(findings) == 1
         f = findings[0]
-        assert f.severity == "High"
+        assert f.severity == "Low"
         assert f.confidence == 85
         assert f.source == "phpstan"
         assert "getTitle" in f.finding
         assert f.line == 55
+
+    def test_severity_follows_phpstan_level(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        fixture = _load_fixture("phpstan-error.json")
+        f = tmp_path / "MyService.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        for level, expected in (("3", "Low"), ("6", "Medium"), ("9", "High")):
+            monkeypatch.setenv("PHPSTAN_LEVEL", level)
+            with (
+                patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+                patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
+            ):
+                mock_run.return_value = MagicMock(returncode=1, stdout=fixture, stderr="")
+                findings = _run_phpstan(cf, Path("/dev/null"))
+            assert findings[0].severity == expected, f"level {level} should yield {expected}"
 
     def test_empty_files_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("phpstan-empty.json", tmp_path)

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_pr_review.analyzers.native.kube_linter import _is_k8s_manifest, _run_kube_linter
+from ai_pr_review.analyzers.native.kube_linter import _HIGH_SEVERITY_CHECKS, _is_k8s_manifest, _run_kube_linter
 from ai_pr_review.manifest import ChangedFiles
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "kubelinter"
@@ -102,7 +102,8 @@ class TestRunKubeLinterFindings:
         findings = self._run_with_fixture("kubelinter-violations.json", tmp_path)
         assert len(findings) == 1
         f = findings[0]
-        assert f.severity == "Medium"
+        # no-read-only-root-fs is a security check → High
+        assert f.severity == "High"
         assert f.confidence == 85
         assert f.source == "kube-linter"
         assert "no-read-only-root-fs" in f.finding
@@ -138,10 +139,32 @@ class TestRunKubeLinterFindings:
         findings = self._run_with_fixture("kubelinter-violations.json", tmp_path)
         assert "readOnlyRootFilesystem" in findings[0].remediation
 
-    def test_all_findings_medium_severity(self, tmp_path: Path) -> None:
+    def test_high_severity_check_maps_to_high(self, tmp_path: Path) -> None:
+        assert "no-read-only-root-fs" in _HIGH_SEVERITY_CHECKS
         findings = self._run_with_fixture("kubelinter-violations.json", tmp_path)
-        for f in findings:
-            assert f.severity == "Medium"
+        assert findings[0].severity == "High"
+
+    def test_non_security_check_maps_to_medium(self, tmp_path: Path) -> None:
+        payload = json.dumps({
+            "Reports": [{
+                "Diagnostic": {"Message": "no liveness probe"},
+                "Check": "liveness-probe",
+                "Remediation": "Add livenessProbe.",
+                "Object": {"Metadata": {"FilePath": "a.yaml", "LineNumber": 5},
+                           "Type": {"Kind": "Deployment"}, "Name": "app"},
+            }],
+            "Summary": {"ChecksStatus": "FAILED"},
+        })
+        f = tmp_path / "deploy.yaml"
+        f.write_text("apiVersion: apps/v1\nkind: Deployment\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.kube_linter.shutil.which", return_value="/usr/bin/kube-linter"),
+            patch("ai_pr_review.analyzers.native.kube_linter.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_kube_linter(cf, Path("/dev/null"))
+        assert findings[0].severity == "Medium"
 
     def test_timeout_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp
@@ -242,6 +265,9 @@ class TestRunKubeLinterFindings:
             mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
             findings = _run_kube_linter(cf, Path("/dev/null"))
         assert len(findings) == 2
+        severities = {f.file: f.severity for f in findings}
+        assert severities["a.yaml"] == "High"   # no-read-only-root-fs is a security check
+        assert severities["b.yaml"] == "Medium"  # liveness-probe is not
 
 
 class TestBridgeIntegration:

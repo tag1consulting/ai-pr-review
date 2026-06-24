@@ -28,6 +28,22 @@ _VALID_LEVEL_RE = re.compile(r"^[0-9]$")
 _DEFAULT_LEVEL = "3"
 
 
+def _severity_for_level(level: str) -> str:
+    """Map PHPSTAN_LEVEL (0-9) to a finding severity.
+
+    PHPStan level controls strictness — higher levels catch subtler type errors.
+    Level 8-9 (max): enforce return types, mixed-type propagation → High.
+    Level 5-7 (strict): template types, union narrowing → Medium.
+    Level 0-4 (basic): obvious errors and undefined symbols → Low.
+    """
+    n = int(level)
+    if n >= 8:
+        return "High"
+    if n >= 5:
+        return "Medium"
+    return "Low"
+
+
 def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     """Run phpstan on changed PHP files and return Finding instances."""
     target_files = [
@@ -109,6 +125,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         return []
 
     cwd_prefix = str(Path.cwd()) + "/"
+    severity = _severity_for_level(level)
     findings: list[Finding] = []
 
     for file_path, file_data in files_block.items():
@@ -131,7 +148,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             try:
                 findings.append(
                     Finding(
-                        severity="High",
+                        severity=severity,
                         confidence=_CONFIDENCE,
                         source=_SOURCE,
                         file=rel_path,
