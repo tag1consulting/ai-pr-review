@@ -152,7 +152,8 @@ class TestComputeCommand:
             "PR_NUMBER": "42",
         }
 
-    def test_config_error_exits_1(self) -> None:
+    def test_unknown_ai_var_warns_not_errors(self) -> None:
+        """An unrecognized AI_* variable emits a warning but does not abort."""
         runner = CliRunner()
         with runner.isolated_filesystem():
             result = runner.invoke(
@@ -161,8 +162,10 @@ class TestComputeCommand:
                 env={"AI_UNKNOWN_BLAH": "1", "BASE_REF": "main", "HEAD_SHA": "x"},
                 catch_exceptions=False,
             )
-        assert result.exit_code == 1
-        assert "Configuration error" in result.output
+        # Must NOT exit 1 from a ConfigError; exit code may still be non-zero
+        # if the underlying compute step fails (e.g. no git repo), but the
+        # unknown-var check itself no longer aborts.
+        assert result.exit_code != 1 or "Configuration error" not in result.output
 
     def test_writes_to_output_file(self) -> None:
         runner = CliRunner()

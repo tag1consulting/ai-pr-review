@@ -98,7 +98,13 @@ _DEPRECATED_AI_VAR_ALIASES: dict[str, str] = {
 
 
 def _check_unknown_ai_vars() -> None:
-    """Raise ConfigError for any AI_* env var not in the documented set."""
+    """Warn (not raise) for any AI_* env var not in the documented set.
+
+    Emitting a warning rather than a ConfigError lets consumers that pin older
+    container images continue to work when the action forwards a variable that
+    was introduced after the image was built.  The warning still catches typos
+    without hard-breaking forward-compatibility.
+    """
     for key in os.environ:
         if not key.startswith("AI_"):
             continue
@@ -118,10 +124,13 @@ def _check_unknown_ai_vars() -> None:
                     file=sys.stderr,
                 )
             continue
-        # Find closest documented match for a helpful error.
+        # Find closest documented match for a helpful hint.
         matches = difflib.get_close_matches(key, _KNOWN_AI_VARS, n=1, cutoff=0.6)
         suggestion = f" Did you mean {matches[0]!r}?" if matches else ""
-        raise ConfigError(f"Unknown AI_* variable {key!r}.{suggestion}")
+        print(
+            f"WARNING: Unknown AI_* variable {key!r} will be ignored.{suggestion}",
+            file=sys.stderr,
+        )
 
 
 def _validate_names_tuple(
