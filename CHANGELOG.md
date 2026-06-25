@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-06-25
+
+### Refactored
+
+- **CLI decomposition**: extracted preflight LLM agents (`run_summarizer`, `run_issue_linker`) into `ai_pr_review/review/preflight.py` and post-review output (`build_token_table_accordion`, `write_step_summary`, `emit_review_result`) into `ai_pr_review/review/reporting.py`, shrinking `cli.py` by ~480 lines. Collapsed `_emit_telemetry_minimal` into `_emit_telemetry`. No behavior change. (#543)
+
+- **VCS partition dedup**: GitHub and GitLab `post_findings` now delegate inline/body partitioning to the shared `partition_findings()` helper and a new `split_body_findings()` utility in `_inline.py`, eliminating duplicated iteration logic across providers. No behavior change. (#542)
+
+### Fixed
+
+- **kube-linter severity mapping**: 15 security-sensitive check names (e.g. `run-as-non-root`, `no-read-only-root-fs`, `privilege-escalation-container`) now map to `High` instead of a flat `Medium`. (#541)
+
+- **phpstan severity mapping**: findings now map to `High` (levels 8-9), `Medium` (levels 5-7), or `Low` (levels 0-4) via `_severity_for_level()` instead of a flat `Medium`. (#541)
+
+### Dependencies
+
+- Bump `ghcr.io/astral-sh/ruff` from `0.15.19` to `0.15.20` in `Dockerfile`. (#545)
+
 ## [2.2.0] - 2026-06-24
 
 ### Added
