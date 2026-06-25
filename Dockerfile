@@ -38,14 +38,14 @@ FROM ghcr.io/astral-sh/ruff:0.15.20@sha256:03cc33c3f7f31ba53040fb1f1b8744a03a777
 # ==============================================================================
 # Builder stage — pip packages, composer packages, gh CLI, semgrep rulesets
 # ==============================================================================
-FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54 AS builder
+FROM ubuntu:26.04@sha256:53958ec7b67c2c9355df922dd08dbf0360611f8c3cdb656875e81873db9ffdba AS builder
 
 ARG TARGETARCH
 
 # Python minor version shipped by the base image. Declared once and propagated
 # to dist-packages COPY paths below so a future base-image bump is a one-line
-# change. Ubuntu 24.04 ships Python 3.12.
-ARG PYTHON_VERSION=3.12
+# change. Ubuntu 26.04 ships Python 3.14.
+ARG PYTHON_VERSION=3.14
 
 ARG GH_VERSION=2.91.0
 ARG GH_SHA256_AMD64=304a0d2460f4a8847d2f192bad4e2a32cd9420d28716e7ae32198181b65b5f9c
@@ -69,9 +69,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# build-essential and python3-dev are required so pip can fall back to building
+# C extensions from sdist when a transitive dep ships no wheel for the running
+# Python (e.g. ruamel.yaml.clib<0.2.15 has no cp314 wheel; checkov's resolver
+# may pin one of those older versions). These tools live only in the builder
+# stage; the final stage is unaffected since it COPYs only dist-packages.
 # hadolint ignore=DL3008
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
+      build-essential \
       ca-certificates \
       curl \
       git \
@@ -80,6 +86,7 @@ RUN apt-get update -qq && \
       php-mbstring \
       php-zip \
       python3 \
+      python3-dev \
       python3-pip \
       ripgrep \
       unzip \
@@ -100,12 +107,16 @@ RUN case "${TARGETARCH}" in \
     rm /tmp/gh.tar.gz
 
 # semgrep, checkov, and the ai_pr_review Python engine via pip.
-# --break-system-packages required on Ubuntu 24.04 (PEP 668). Installs land in
+# --break-system-packages required on Ubuntu 26.04 (PEP 668). Installs land in
 # /usr/local/lib/python${PYTHON_VERSION}/dist-packages plus /usr/local/bin entry
 # points; both are COPYied into the final stage below alongside semgrep/checkov.
+# --ignore-installed avoids "Cannot uninstall packaging" when checkov's
+# transitive deps overlap with apt-installed Debian packages that have no pip
+# RECORD file (a 26.04 / pip 25.1 quirk; harmless because the user-site install
+# under /usr/local takes precedence over /usr/lib at runtime).
 COPY ai_pr_review/ /opt/ai-pr-review/ai_pr_review/
 COPY pyproject.toml /opt/ai-pr-review/pyproject.toml
-RUN pip3 install --no-cache-dir --break-system-packages \
+RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed \
       "semgrep==${SEMGREP_VERSION}" \
       "checkov==${CHECKOV_VERSION}" \
       "/opt/ai-pr-review[context]"
@@ -139,11 +150,11 @@ RUN curl -fsSL -o /usr/local/bin/composer \
 # ==============================================================================
 # Final stage
 # ==============================================================================
-FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
+FROM ubuntu:26.04@sha256:53958ec7b67c2c9355df922dd08dbf0360611f8c3cdb656875e81873db9ffdba
 
 # ARG must be re-declared in this stage; multi-stage Dockerfiles do not share
 # ARG scope. Default must match the builder stage above.
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.14
 
 ENV DEBIAN_FRONTEND=noninteractive
 
