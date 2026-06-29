@@ -246,7 +246,7 @@ class BitbucketProvider:
     # ------------------------------------------------------------------
     # resolve_stale — marker-gated comment cleanup (no separate threads)
     # ------------------------------------------------------------------
-    def resolve_stale(self) -> StaleResult:
+    def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
         """Bitbucket has no review-thread concept; "stale" cleanup means
         deleting OLD summary-marker comments that aren't the current one
         (already handled by post_summary's duplicate cleanup).
