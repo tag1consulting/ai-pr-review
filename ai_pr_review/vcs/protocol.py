@@ -124,8 +124,14 @@ class VcsProvider(Protocol):
         """Post findings as a PR review with inline comments where possible."""
         ...
 
-    def resolve_stale(self) -> StaleResult:
-        """Resolve/dismiss stale threads or reviews — marker-gated."""
+    def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
+        """Resolve/dismiss stale threads or reviews — marker-gated.
+
+        current_review_id: the review ID posted by the current run, or None if the
+        current run posted no review (e.g. degraded path). When provided and the
+        review is a CHANGES_REQUESTED review, it is protected from dismissal. When
+        None, all CHANGES_REQUESTED reviews are left intact as a safety guard.
+        """
         ...
 
     def advance_sha_watermark(self, new_sha: str) -> bool:

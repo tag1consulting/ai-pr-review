@@ -601,7 +601,7 @@ class GitLabProvider:
     # ------------------------------------------------------------------
     # resolve_stale — marker-gated discussion resolution
     # ------------------------------------------------------------------
-    def resolve_stale(self) -> StaleResult:
+    def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
         bot_username = self._get_bot_username()
         if bot_username == _BOT_IDENTITY_AUTH_FAILED:
             # 4xx on GET /user means the token is invalid. The error is already

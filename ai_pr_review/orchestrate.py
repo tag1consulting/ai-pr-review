@@ -358,7 +358,8 @@ async def run_review(
     findings_failed = findings_result is not None and not findings_result.ok
     if summary_result.ok and not findings_failed:
         try:
-            stale_result = provider.resolve_stale()
+            posted_review_id = findings_result.review_id if findings_result is not None else None
+            stale_result = provider.resolve_stale(current_review_id=posted_review_id)
         except RetryExhaustedError as exc:
             # Partial progress (threads resolved before the error) is lost here
             # because providers raise before returning a partial StaleResult.

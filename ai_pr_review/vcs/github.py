@@ -602,7 +602,7 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     # resolve_stale — marker-gated stale-thread resolution + review dismissal
     # ------------------------------------------------------------------
-    def resolve_stale(self) -> StaleResult:
+    def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
         # Single snapshot before any sub-calls write to self._errors; all new
         # entries from _fetch_review_threads and _dismiss_stale_reviews are
         # collected via self._errors[errors_before:] at the end.
@@ -630,7 +630,7 @@ class GitHubProvider:
                 continue
             resolved += 1
 
-        dismissed = self._dismiss_stale_reviews(threads)
+        dismissed = self._dismiss_stale_reviews(threads, current_review_id)
 
         return StaleResult(
             threads_resolved=resolved,
@@ -702,16 +702,29 @@ class GitHubProvider:
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]
 
-    def _dismiss_stale_reviews(self, threads: Sequence[dict[str, Any]]) -> int:
+    def _dismiss_stale_reviews(
+        self,
+        threads: Sequence[dict[str, Any]],
+        current_review_id: int | None,
+    ) -> int:
         """Dismiss CHANGES_REQUESTED reviews from our bot whose threads are all
         resolved, but only when at least one such thread was authored by us
         (marker gate via thread-body check already applied above).
 
-        The newest bot CHANGES_REQUESTED review (highest ID) is never dismissed
-        — it represents the current run and must remain until superseded by a
-        future run.  Only older reviews with zero unresolved markered threads
-        are eligible.
+        current_review_id: the review ID the current run posted (may be an APPROVE
+        or COMMENT review, not necessarily CHANGES_REQUESTED). Only this exact review
+        is protected from dismissal. When None, we have no knowledge of what the
+        current run posted, so we leave all CR reviews intact as a safety guard.
+
+        This correctly handles the case where the current run posts APPROVE (0
+        findings): the sole remaining CHANGES_REQUESTED review is the stale one from
+        the prior run and must be dismissed.
         """
+        if current_review_id is None:
+            # Cannot determine which CR review the current run posted (degraded path).
+            # Leave all CR reviews intact rather than risk dismissing an active one.
+            return 0
+
         c = self.config
         reviews: list[dict[str, Any]] = []
         url: str | None = f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews"
@@ -726,21 +739,6 @@ class GitHubProvider:
             reviews.extend(resp.json() or [])
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None
-
-        # Identify all bot CHANGES_REQUESTED reviews so we can protect the newest.
-        bot_cr_ids: list[int] = [
-            rid
-            for r in reviews
-            if r.get("state") == "CHANGES_REQUESTED"
-            and (r.get("user") or {}).get("login") == c.bot_login
-            for rid in (_safe_int(r.get("id")),)
-            if rid > 0
-        ]
-        if len(bot_cr_ids) < 2:
-            # Zero reviews: nothing to dismiss.
-            # Exactly one review: it is the current run — never dismiss it.
-            return 0
-        newest_id = max(bot_cr_ids)
 
         # Map review id -> unresolved thread count, only counting threads
         # where the comment body carries OUR inline marker.
@@ -766,8 +764,8 @@ class GitHubProvider:
             rid = _safe_int(review.get("id"))
             if rid <= 0:
                 continue
-            if rid == newest_id:
-                continue  # never dismiss the current run
+            if rid == current_review_id:
+                continue  # never dismiss the review the current run posted
             if unresolved_by_review.get(rid, 0) > 0:
                 continue
             _log.debug("github: dismissing stale review %d", rid)

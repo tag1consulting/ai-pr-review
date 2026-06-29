@@ -223,12 +223,89 @@ def test_resolve_stale_dismisses_older_review_when_newer_exists() -> None:
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    result = prov.resolve_stale()
+    # current_review_id=42 tells the dismissal logic that review #42 is the current run.
+    result = prov.resolve_stale(current_review_id=42)
     assert result.reviews_dismissed == 1
     assert len(dismissed) == 1
     assert "/reviews/41/dismissals" in dismissed[0]
-    # The newest review (#42) must never be dismissed.
+    # The current-run review (#42) must never be dismissed.
     assert not any("/reviews/42/dismissals" in d for d in dismissed)
+
+
+def test_resolve_stale_dismisses_stale_cr_when_current_run_posted_approve() -> None:
+    """Feedback-loop regression: when the current run posts APPROVE (0 findings),
+    the old CHANGES_REQUESTED review must be dismissed if its threads are resolved.
+
+    Bug: the < 2 guard treated the sole CR review as "current run" even when the
+    current run posted APPROVE and therefore contributed no CR review of its own.
+    Fix: caller passes current_review_id; None means current run posted no CR review,
+    so all stale CR reviews with resolved threads are eligible for dismissal.
+    """
+    nodes = [
+        _thread(
+            "T41",
+            resolved=True,
+            body=f"old finding\n{INLINE_MARKER}",
+            author="github-actions[bot]",
+            review_db_id=41,
+        ),
+    ]
+    # Only one bot CR review (the old one). Current run posted APPROVE, so
+    # current_review_id is the APPROVE review id (100) -- not a CR review.
+    reviews = [
+        {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
+        {"id": 100, "state": "APPROVED", "user": {"login": "github-actions[bot]"}},
+    ]
+    dismissed: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=reviews)
+        if req.method == "PUT" and "/dismissals" in str(req.url):
+            dismissed.append(str(req.url))
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    # current_review_id=100 (the APPROVE review) means no CR review from current run.
+    result = prov.resolve_stale(current_review_id=100)
+    assert result.reviews_dismissed == 1
+    assert any("/reviews/41/dismissals" in d for d in dismissed)
+
+
+def test_resolve_stale_dismisses_stale_cr_when_current_run_had_no_review_id() -> None:
+    """When current_review_id is None (post failed/degraded), do not dismiss any CR.
+
+    Safety guard: if we don't know what we posted, we can't determine which CR
+    review is stale. Leave all CR reviews intact.
+    """
+    nodes = [
+        _thread(
+            "T41",
+            resolved=True,
+            body=f"old finding\n{INLINE_MARKER}",
+            author="github-actions[bot]",
+            review_db_id=41,
+        ),
+    ]
+    reviews = [
+        {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}},
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=reviews)
+        if req.method == "PUT":
+            raise AssertionError("PUT dismiss must not be called when current_review_id is None")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.resolve_stale(current_review_id=None)
+    assert result.reviews_dismissed == 0
 
 
 def test_resolve_stale_never_dismisses_sole_bot_review() -> None:
@@ -261,7 +338,8 @@ def test_resolve_stale_never_dismisses_sole_bot_review() -> None:
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    result = prov.resolve_stale()
+    # current_review_id=42: this run posted a CR review, so it must be protected.
+    result = prov.resolve_stale(current_review_id=42)
     assert result.reviews_dismissed == 0
 
 
@@ -297,7 +375,7 @@ def test_resolve_stale_wont_dismiss_when_unresolved_markered_thread_exists() -> 
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    result = prov.resolve_stale()
+    result = prov.resolve_stale(current_review_id=42)
     # Thread was resolved in THIS call; but the dismiss path looks at the
     # pre-fetched thread list and sees the thread was unresolved at fetch time.
     # So we still hold off on dismissing this run — the NEXT run will dismiss it.
@@ -383,7 +461,7 @@ def test_dismiss_stale_reviews_paginates_reviews_list() -> None:
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    result = prov.resolve_stale()
+    result = prov.resolve_stale(current_review_id=42)
     assert result.reviews_dismissed == 1
     assert any("/reviews/41/dismissals" in d for d in dismissed)
     assert not any("/reviews/42/dismissals" in d for d in dismissed)

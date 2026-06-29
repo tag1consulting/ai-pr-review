@@ -86,7 +86,7 @@ class _FakeProvider:
             event=event,  # type: ignore[arg-type]
         )
 
-    def resolve_stale(self) -> StaleResult:
+    def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
         self.last_call_order.append("resolve_stale")
         self.stale_calls += 1
         return StaleResult()
@@ -357,7 +357,7 @@ def test_retry_exhausted_in_stale_is_captured_not_propagated(tmp_path: Path) -> 
 
     @dataclass
     class _RaisingProvider(_FakeProvider):
-        def resolve_stale(self) -> StaleResult:
+        def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
             self.stale_calls += 1
             raise RetryExhaustedError("network down after 3 attempts")
 
