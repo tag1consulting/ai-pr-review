@@ -33,7 +33,7 @@ update this manifest. See `memory-bank/license-audit-2026-06-01.md` for the full
 | shellcheck | v0.11.0 | GPL-3.0 | Vidar Holen & contributors | https://github.com/koalaman/shellcheck/releases/tag/v0.11.0 | `shellcheck.LICENSE.txt` |
 | hadolint | v2.14.0 | GPL-3.0 | Lukas Martinelli, Jakub Kozłowski & contributors | https://github.com/hadolint/hadolint/releases/tag/v2.14.0 | `hadolint.LICENSE.txt` |
 | golangci-lint | v2.12.2 | GPL-3.0 | golangci & contributors | https://github.com/golangci/golangci-lint/releases/tag/v2.12.2 | `golangci-lint.LICENSE.txt` |
-| trufflehog | 3.95.3 | AGPL-3.0 | Truffle Security Co. & contributors | https://github.com/trufflesecurity/trufflehog/releases/tag/v3.95.3 | `trufflehog.LICENSE.txt` |
+| trufflehog | 3.95.7 | AGPL-3.0 | Truffle Security Co. & contributors | https://github.com/trufflesecurity/trufflehog/releases/tag/v3.95.7 | `trufflehog.LICENSE.txt` |
 | tflint | v0.62.1 | MPL-2.0 (+ BUSL-1.1 on some `terraform/` files) | Kazuki Higashiguchi & contributors; HashiCorp (BUSL files) | https://github.com/terraform-linters/tflint/releases/tag/v0.62.1 | `tflint.LICENSE.txt`, `tflint.LICENSE-BUSL.txt` |
 | semgrep (engine / CE) | 1.161.0 | LGPL-2.1 | Semgrep, Inc. & contributors | https://github.com/semgrep/semgrep/releases/tag/v1.161.0 | `semgrep.LICENSE.txt` |
 | ruff | 0.15.15 | MIT | Astral Software Inc. & contributors | https://github.com/astral-sh/ruff/releases/tag/0.15.15 | `ruff.LICENSE.txt` |
