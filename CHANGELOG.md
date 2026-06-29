@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-06-29
+
+### Fixed
+
+- **`jq` missing from container image**: the `feedback-command` job in `slash-commands.yml` runs inside the `ghcr.io/tag1consulting/ai-pr-review` container and calls `jq` directly in its shell steps (extracting parent-comment author, body, and path context for `wont-fix` / `false-positive` processing). `jq` was absent from the final stage's `apt-get install` list, causing those steps to exit 127 and the job to fail silently with a confused-reaction emoji on the PR comment. (#548)
+
+### Dependencies
+
+- Bump base image from `ubuntu:24.04` (Python 3.12) to `ubuntu:26.04` (Python 3.14) in builder and final stages. Updates the Python runtime shipped inside the container and pins the builder stage to `python3-dev` for source builds. (#544)
+
+- Bump `trufflesecurity/trufflehog` from `3.95.6` to `3.95.7` in `Dockerfile`. (#547)
+
 ## [2.2.1] - 2026-06-25
 
 ### Refactored
