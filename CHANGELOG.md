@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stale `CHANGES_REQUESTED` review persists after zero-finding rescan**: when a re-review (e.g. after feedback-loop suppression) produced no findings, the bot posted an `APPROVE` review but the prior `CHANGES_REQUESTED` review was never dismissed, leaving the PR permanently blocked. `resolve_stale` now accepts the current run's review ID and dismisses only CR reviews that are not the current one. When the current run posted no review (error path), all CR reviews are left intact as before. (#551)
+
 - **`jq` missing from container image**: the `feedback-command` job in `slash-commands.yml` runs inside the `ghcr.io/tag1consulting/ai-pr-review` container and calls `jq` directly in its shell steps (extracting parent-comment author, body, and path context for `wont-fix` / `false-positive` processing). `jq` was absent from the final stage's `apt-get install` list, causing those steps to exit 127 and the job to fail silently with a confused-reaction emoji on the PR comment. (#548)
 
 ### Dependencies
