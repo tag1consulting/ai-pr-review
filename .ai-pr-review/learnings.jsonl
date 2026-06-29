@@ -75,3 +75,4 @@
 {"ts": "2026-06-25T21:59:46Z", "command": "wont-fix", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 2}
 {"ts": "2026-06-29T19:34:10Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 2}
 {"ts": "2026-06-29T19:35:13Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 1}
+{"ts": "2026-06-29T19:36:11Z", "command": "false-positive", "reason": "", "source": "adversarial-general", "file": "THIRD-PARTY-LICENSES/NOTICE.md", "rule_id": ""}
