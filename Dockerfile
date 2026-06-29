@@ -163,6 +163,7 @@ RUN apt-get update -qq && \
       ca-certificates \
       curl \
       git \
+      jq \
       php-cli \
       php-xml \
       php-mbstring \
