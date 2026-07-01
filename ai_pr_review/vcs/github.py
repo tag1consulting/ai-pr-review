@@ -26,6 +26,7 @@ from ai_pr_review.vcs._inline import (
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
+    ID_MAP_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
     append_skip_marker,
@@ -165,12 +166,21 @@ class GitHubProvider:
     # Prior bot review bodies — used for body-finding ID reconstruction
     # ------------------------------------------------------------------
     def _list_prior_bot_review_bodies(self) -> list[str]:
-        """Return the body text of all prior bot CHANGES_REQUESTED reviews.
+        """Return the body text of all prior bot reviews that carry F-IDs.
 
         Used by the body-finding ID-map assembler to reconstruct which
         ``[F<n>]`` IDs have already been assigned on this PR.  On error,
         returns an empty list so rendering degrades gracefully (IDs restart
         at 1 rather than failing).
+
+        A body is included if it carries the machine-readable id-map marker
+        (``ID_MAP_MARKER_PREFIX``, covers every finding bucket: inline,
+        in-diff body, and out-of-diff) or, for pre-marker reviews, a rendered
+        ``**[F<n>]**`` token. Filtering on the ``### Findings not attached to
+        specific lines`` heading alone (as this used to) drops out-of-diff-only
+        review bodies — they carry F-IDs but never render that heading — which
+        starves ID reconstruction and can churn F-IDs across review cycles
+        (issue #550).
         """
         c = self.config
         bodies: list[str] = []
@@ -192,7 +202,7 @@ class GitHubProvider:
                 ):
                     continue
                 body = review.get("body") or ""
-                if "### Findings not attached to specific lines" in body:
+                if ID_MAP_MARKER_PREFIX in body or "**[F" in body:
                     bodies.append(body)
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None

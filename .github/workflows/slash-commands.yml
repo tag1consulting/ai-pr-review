@@ -441,11 +441,15 @@ jobs:
           FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
           COMMAND: ${{ needs.handle-command.outputs.command || 'dismiss' }}
         run: |
-          # Fetch all bot review bodies to search for the finding ID.
+          # Fetch all bot review bodies to search for the finding ID. No
+          # content gate here beyond "has a body" — an out-of-diff-only
+          # review never renders the "### Findings not attached to specific
+          # lines" heading (issue #550), so gating on that string drops such
+          # reviews entirely before the per-body F-ID search below ever runs.
           all_bodies=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq '[.[] | select(.user.login == "github-actions[bot]") |
-                   select(.body != null and (.body | contains("### Findings not attached to specific lines"))) |
+                   select(.body != null and .body != "") |
                    .body]' 2>/dev/null || echo "[]")
 
           if [[ -z "$FINDING_ID" ]]; then
@@ -457,7 +461,7 @@ jobs:
               "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
               --jq '[.[] | select(.user.login == "github-actions[bot]") |
                      select(.state == "CHANGES_REQUESTED") |
-                     select(.body != null and (.body | contains("### Findings not attached to specific lines")))] |
+                     select(.body != null and .body != "")] |
                      sort_by(.id) | last | .body // ""' 2>"$nb_err") || {
               echo "::warning::Could not fetch bot reviews to list active finding IDs: $(cat "$nb_err")" >&2
               newest_body=""
@@ -465,9 +469,18 @@ jobs:
             rm -f "$nb_err"
             reply_body=""
             if [[ -n "$newest_body" ]]; then
-              # Extract IDs only from the body-findings section (exact section, not full body).
+              # Extract IDs from both body-finding buckets: the in-diff
+              # "### Findings not attached to specific lines" section, and the
+              # out-of-diff "<details>...Out-of-diff analyzer findings...</details>"
+              # block (issue #550 — the latter has no ### heading, so it needs
+              # its own start/end markers).
               id_list=$(printf '%s\n' "$newest_body" \
-                | awk '/### Findings not attached to specific lines/{p=1;next} /^###/{p=0} p' \
+                | awk '
+                    /### Findings not attached to specific lines/{p=1;next}
+                    /Out-of-diff analyzer findings/{p=1;next}
+                    /^###/{p=0}
+                    /<\/details>/{p=0}
+                    p' \
                 | grep -oE '\*\*\[F[0-9]+\]\*\*' | grep -oE '[0-9]+' \
                 | sort -n | uniq | sed 's/^/F/' | tr '\n' ' ' | sed 's/ $//' || true)
               if [[ -n "$id_list" ]]; then
@@ -490,31 +503,59 @@ jobs:
             exit 0
           fi
 
-          # Search all bot review body-sections for **[F{FINDING_ID}]**.
-          # We only look within "### Findings not attached to specific lines"
-          # sections — inline finding IDs live in thread comments, not review
-          # bodies. If the ID is not found in a body section we fall through to
-          # the inline-marker check below; when it matches an inline finding the
-          # "Resolve inline finding by F-ID" step resolves that thread (and
-          # dismisses the review if it was the last open one).
-          pattern="\*\*\[F${FINDING_ID}\]\*\*"
+          # Search all bot review body-sections for **[F{FINDING_ID}]**. We
+          # look within both body-level buckets: the in-diff "### Findings not
+          # attached to specific lines" section, and the out-of-diff
+          # "<details>...Out-of-diff analyzer findings...</details>" block
+          # (issue #550 — out-of-diff findings have valid, stable F-IDs but no
+          # ### heading, so they need their own start/end markers). Inline
+          # finding IDs live in thread comments, not review bodies, and are
+          # not scanned here. If the ID is not found in either body bucket we
+          # fall through to the inline-marker check below; when it matches an
+          # inline finding the "Resolve inline finding by F-ID" step resolves
+          # that thread (and dismisses the review if it was the last open one).
+          #
+          # Implemented in Python, not bash: a nested `while read` state
+          # machine (one loop tracking section membership, fed by another
+          # loop over `jq -r '.[]'`) cannot carry `in_section` across lines —
+          # `jq -r` expands each array element's embedded newlines into real
+          # newlines in the output stream, so the OUTER `while read` already
+          # consumes the body one line at a time, and each inner loop only
+          # ever sees that single line before hitting EOF. `in_section` is
+          # therefore reset before every line and never stays true across a
+          # multi-bullet section. This affected the in-diff bucket too, not
+          # just out-of-diff — it was previously undetected because the
+          # inline-marker fallback (id-map driven) is what actually made
+          # `/ai-pr-review dismiss F<n>` appear to work for inline findings;
+          # pure body-finding dismiss depending on this scan had no coverage.
+          # re.findall on the full body string has no such per-line reset.
           matching_line=""
-          while IFS= read -r body_text; do
-            in_section=false
-            while IFS= read -r line; do
-              if [[ "$line" == *"### Findings not attached to specific lines"* ]]; then
-                in_section=true; continue
-              fi
-              if $in_section && [[ "$line" =~ ^"###" ]]; then
-                in_section=false; continue
-              fi
-              $in_section || continue
-              if echo "$line" | grep -qE "$pattern"; then
-                matching_line="$line"
-                break 2
-              fi
-            done <<< "$body_text"
-          done < <(printf '%s\n' "$all_bodies" | jq -r '.[]')
+          search_script=$(mktemp --suffix=.py) || { echo "::error::mktemp failed for body-finding search script" >&2; exit 1; }
+          search_err=$(mktemp)
+          # Write the script using printf to avoid YAML-hostile heredoc syntax
+          # (same convention as the id-map check script below).
+          printf '%s\n' \
+            "import json, os, re, sys" \
+            "" \
+            "fid = os.environ['FINDING_ID']" \
+            "bodies = json.load(sys.stdin)" \
+            "section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)" \
+            "ood_pat = re.compile(r'Out-of-diff analyzer findings.*?</summary>(.*?)</details>', re.DOTALL)" \
+            "f_token = f'**[F{fid}]**'" \
+            "" \
+            "for body in bodies:" \
+            "    for section in section_pat.findall(body) + ood_pat.findall(body):" \
+            "        for line in section.splitlines():" \
+            "            if f_token in line:" \
+            "                print(line)" \
+            "                sys.exit(0)" \
+            > "$search_script"
+          matching_line=$(printf '%s' "$all_bodies" | FINDING_ID="$FINDING_ID" python3 "$search_script" 2>"$search_err") || true
+          if [[ -s "$search_err" ]]; then
+            echo "::warning::body-finding search failed: $(cat "$search_err")" >&2
+            matching_line=""
+          fi
+          rm -f "$search_script" "$search_err"
 
           if [[ -z "$matching_line" ]]; then
             # Check if the ID exists in the full marker (i.e. it's an inline finding).
@@ -570,9 +611,17 @@ jobs:
           fi
 
           # Extract source, file, line, and finding text for the feedback store.
-          # Remove the F-token, then grab the first [...] group for the source.
+          # Remove ALL bold-bracket tokens (severity **[High]** and F-id
+          # **[F1]**), then grab the first remaining single-bracket [...]
+          # group for the source. Stripping only the F-token (as this used to)
+          # leaves **[severity]** in place, so the "first bracket group" was
+          # actually the severity, not the source tag — this bug pre-dates
+          # #550 but the search loop it depended on never matched, so it was
+          # never observed to run; fixing it alongside the search-loop fix
+          # since that fix is what makes this path reachable for the first
+          # time on out-of-diff and multi-bullet in-diff bodies.
           source=$(printf '%s' "$matching_line" \
-            | sed 's/\*\*\[F[0-9]*\]\*\* //' \
+            | sed 's/\*\*\[[^]]*\]\*\* //g' \
             | grep -oE '\[[^]]+\]' | head -1 | tr -d '[]' \
             | sed 's/,.*//' | tr -d ' ' || true)
           # Extract the backtick-quoted location from *(at `file:line`...)* annotation.
@@ -1457,15 +1506,26 @@ jobs:
 
             fid = int(os.environ['FINDING_NUM'])
             bodies = json.load(sys.stdin)
+            # In-diff body findings render under the "### Findings not
+            # attached to specific lines" heading; out-of-diff findings
+            # render inside a "<details>...Out-of-diff analyzer
+            # findings...</details>" block instead (no ### heading at all).
+            # Both buckets carry valid, stable **[F<n>]** tokens (issue #550).
             section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)
+            ood_pat = re.compile(r'Out-of-diff analyzer findings.*?</summary>(.*?)</details>', re.DOTALL)
             id_map_pat = re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->', re.DOTALL)
             f_token = f'**[F{fid}]**'
 
             for body in bodies:
-                for section in section_pat.findall(body):
+                for section in section_pat.findall(body) + ood_pat.findall(body):
                     for line in section.splitlines():
                         if f_token in line:
-                            stripped = re.sub(r'\*\*\[F[0-9]+\]\*\* *', '', line)
+                            # Strip ALL bold-bracket tokens (severity **[High]**
+                            # and F-id **[F1]**), not just the F-token — else
+                            # the first remaining [...] group is the severity,
+                            # not the source tag (pre-existing bug, same as the
+                            # dismiss-body-finding job's bash extraction).
+                            stripped = re.sub(r'\*\*\[[^\]]+\]\*\* *', '', line)
                             brackets = re.findall(r'\[([^\]]+)\]', stripped)
                             source = brackets[0].split(',')[0].strip() if brackets else ''
                             m = re.search(r'\(at `([^`]+)`', line) or re.search(r'— `([^`]+)', line)
