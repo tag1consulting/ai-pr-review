@@ -614,10 +614,10 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
         # Single snapshot before any sub-calls write to self._errors; all new
-        # entries from _fetch_review_threads and _dismiss_stale_reviews are
+        # entries from fetch_review_threads and _dismiss_stale_reviews are
         # collected via self._errors[errors_before:] at the end.
         errors_before = len(self._errors)
-        threads = self._fetch_review_threads()
+        threads = self.fetch_review_threads()
         resolved = 0
         skipped_no_marker = 0
         thread_errors: list[str] = []
@@ -632,7 +632,7 @@ class GitHubProvider:
             thread_id = thread.get("id")
             if not isinstance(thread_id, str):
                 continue
-            ok, status, body_snippet = self._resolve_thread(thread_id)
+            ok, status, body_snippet = self.resolve_thread(thread_id)
             if not ok:
                 thread_errors.append(
                     f"resolve thread {thread_id}: HTTP {status}: {body_snippet}"
@@ -649,14 +649,14 @@ class GitHubProvider:
             errors=tuple(thread_errors) + tuple(self._errors[errors_before:]),
         )
 
-    def _fetch_review_threads(self) -> list[dict[str, Any]]:
+    def fetch_review_threads(self) -> list[dict[str, Any]]:
         query = (
             "query($owner:String!,$repo:String!,$pr:Int!,$after:String){"
             "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
             "reviewThreads(first:100,after:$after){"
             "pageInfo{hasNextPage endCursor}"
             "nodes{id isResolved "
-            "comments(first:1){nodes{body author{login} "
+            "comments(first:100){nodes{databaseId body author{login} "
             "pullRequestReview{databaseId}}}}}}}}"
         )
         threads: list[dict[str, Any]] = []
@@ -700,7 +700,7 @@ class GitHubProvider:
                 break
         return threads
 
-    def _resolve_thread(self, thread_id: str) -> tuple[bool, int, str]:
+    def resolve_thread(self, thread_id: str) -> tuple[bool, int, str]:
         mutation = (
             "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
@@ -711,6 +711,51 @@ class GitHubProvider:
             json_body={"query": mutation, "variables": {"id": thread_id}},
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def dismiss_review(self, review_id: int, message: str) -> tuple[bool, int, str]:
+        """PUT a dismissal for a single review. Returns (ok, status, body_snippet).
+
+        Thin primitive with no policy about *which* review to dismiss or
+        *when* — that decision belongs to the caller (e.g. `_dismiss_stale_reviews`
+        for the review-posting path, or `ai_pr_review.slash.dismiss` for the
+        slash-command path, which has different semantics: it dismisses the
+        review whose thread was just resolved, not "all but the current run's
+        review").
+        """
+        resp = self.client.request(
+            "PUT",
+            self._dismiss_url(review_id),
+            json_body={"message": message},
+        )
+        return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def list_bot_reviews(self) -> list[dict[str, Any]]:
+        """Return all reviews authored by our bot login, paginated.
+
+        Factored out of `_dismiss_stale_reviews`, which used to inline this
+        same paginated `/pulls/{n}/reviews` walk. `_list_prior_bot_review_bodies`
+        is intentionally left as its own walk (not rebased on this method): it
+        returns `[]` on a mid-pagination HTTP error rather than partial results,
+        a #550/#553 guarantee this method does not preserve (it appends to
+        `self._errors` and returns whatever it collected so far instead).
+        """
+        c = self.config
+        reviews: list[dict[str, Any]] = []
+        url: str | None = self._reviews_url()
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                self._errors.append(
+                    f"list reviews: HTTP {resp.status_code}: {resp.text[:200]}"
+                )
+                return reviews
+            for review in resp.json() or []:
+                if (review.get("user") or {}).get("login") == c.bot_login:
+                    reviews.append(review)
+            url = _parse_next_link(resp.headers.get("link", ""))
+            params = None
+        return reviews
 
     def _dismiss_stale_reviews(
         self,
@@ -735,20 +780,7 @@ class GitHubProvider:
             # Leave all CR reviews intact rather than risk dismissing an active one.
             return 0
 
-        c = self.config
-        reviews: list[dict[str, Any]] = []
-        url: str | None = f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews"
-        params: dict[str, Any] | None = {"per_page": 100}
-        while url:
-            resp = self.client.request("GET", url, params=params)
-            if resp.status_code >= 400:
-                self._errors.append(
-                    f"list reviews: HTTP {resp.status_code}: {resp.text[:200]}"
-                )
-                return 0
-            reviews.extend(resp.json() or [])
-            url = _parse_next_link(resp.headers.get("link", ""))
-            params = None
+        reviews = self.list_bot_reviews()
 
         # Map review id -> unresolved thread count, only counting threads
         # where the comment body carries OUR inline marker.
@@ -769,8 +801,6 @@ class GitHubProvider:
         for review in reviews:
             if review.get("state") != "CHANGES_REQUESTED":
                 continue
-            if (review.get("user") or {}).get("login") != c.bot_login:
-                continue
             rid = _safe_int(review.get("id"))
             if rid <= 0:
                 continue
@@ -779,20 +809,17 @@ class GitHubProvider:
             if unresolved_by_review.get(rid, 0) > 0:
                 continue
             _log.debug("github: dismissing stale review %d", rid)
-            resp = self.client.request(
-                "PUT",
-                self._dismiss_url(rid),
-                json_body={"message": "Superseded by a subsequent review run."},
+            ok, status, body_snippet = self.dismiss_review(
+                rid, "Superseded by a subsequent review run."
             )
-            if resp.status_code < 400:
+            if ok:
                 dismissed += 1
             else:
                 _log.warning(
-                    "github: failed to dismiss review %d: HTTP %d",
-                    rid, resp.status_code,
+                    "github: failed to dismiss review %d: HTTP %d", rid, status
                 )
                 self._errors.append(
-                    f"dismiss review {rid}: HTTP {resp.status_code}: {resp.text[:200]}"
+                    f"dismiss review {rid}: HTTP {status}: {body_snippet}"
                 )
         return dismissed
 
