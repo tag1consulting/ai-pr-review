@@ -102,14 +102,26 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
 
         # Fallback: parse **[F<n>]** tokens from body-findings bullets.
         # Only covers body-level findings (inline finding IDs are not in
-        # bullet form); use this path only for pre-marker reviews.
+        # bullet form); use this path only for pre-marker reviews. Both
+        # body-level buckets are scanned: the in-diff "### Findings not
+        # attached to specific lines" section, and the out-of-diff
+        # "<details>...Out-of-diff analyzer findings...</details>" block —
+        # the latter has no ### heading, so it needs its own start/end
+        # markers (issue #550; same fix already applied to the workflow's
+        # bash/Python body scanners and to _list_prior_bot_review_bodies).
         in_body_section = False
         for line in body.splitlines():
             stripped = line.strip()
             if "### Findings not attached to specific lines" in stripped:
                 in_body_section = True
                 continue
+            if "Out-of-diff analyzer findings" in stripped:
+                in_body_section = True
+                continue
             if in_body_section and stripped.startswith("###"):
+                in_body_section = False
+                continue
+            if in_body_section and "</details>" in stripped:
                 in_body_section = False
                 continue
             if not in_body_section:

@@ -446,11 +446,22 @@ jobs:
           # review never renders the "### Findings not attached to specific
           # lines" heading (issue #550), so gating on that string drops such
           # reviews entirely before the per-body F-ID search below ever runs.
+          #
+          # Capture stderr so a gh api failure (auth, rate limit, 5xx,
+          # network) is distinguishable in the logs from the legitimate case
+          # of a PR with no bot reviews — both used to collapse to the same
+          # "[]" with no signal, which then surfaced to the user as a
+          # misleading "F<n> was not found" rather than a transient API error.
+          ab_err=$(mktemp)
           all_bodies=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq '[.[] | select(.user.login == "github-actions[bot]") |
                    select(.body != null and .body != "") |
-                   .body]' 2>/dev/null || echo "[]")
+                   .body]' 2>"$ab_err") || {
+            echo "::warning::Could not fetch bot reviews for body-finding search: $(cat "$ab_err")" >&2
+            all_bodies="[]"
+          }
+          rm -f "$ab_err"
 
           if [[ -z "$FINDING_ID" ]]; then
             # No ID supplied — list active body-level IDs and show correct syntax

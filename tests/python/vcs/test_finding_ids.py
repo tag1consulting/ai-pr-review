@@ -167,6 +167,38 @@ def test_unparseable_lines_skipped() -> None:
     assert id_map[fingerprint(fa)] == 6
 
 
+def test_marker_less_out_of_diff_ids_preserved_across_reviews() -> None:
+    """Issue #550 regression: the marker-less fallback bullet scan must also
+    recognize the out-of-diff <details> bucket, not just the in-diff heading
+    section — else a legacy/marker-stripped body with only out-of-diff
+    findings loses F-ID stability across review cycles."""
+    fa = _finding("pre-existing style issue A", source="phpcs", file="app.py", line=99)
+    fb = _finding("pre-existing style issue B", source="phpcs", file="app.py", line=101)
+
+    # First review: both out-of-diff findings, rendered WITHOUT the id-map
+    # marker (simulates a pre-marker-era review, or a marker dropped by the
+    # renderer's truncation path) inside the <details> block only — no
+    # "### Findings not attached to specific lines" heading at all.
+    id_map1 = assemble_id_map([], [fa, fb])
+    bullets = "\n".join(
+        format_body_finding(f, finding_id=id_map1[fingerprint(f)]) for f in [fa, fb]
+    )
+    body_a = (
+        "<details>\n"
+        "<summary>Out-of-diff analyzer findings (2) — pre-existing issues on unchanged lines, capped to Low</summary>\n\n"
+        f"{bullets}\n"
+        "</details>"
+    )
+    assert id_map1[fingerprint(fa)] == 1
+    assert id_map1[fingerprint(fb)] == 2
+
+    # Second review: finding A is resolved; only B is re-detected. Without
+    # the fix, the fallback scan never enters the <details> block (no ###
+    # heading), so it finds nothing and B is renumbered from F2 to F1.
+    id_map2 = assemble_id_map([body_a], [fb])
+    assert id_map2[fingerprint(fb)] == 2
+
+
 # ---------------------------------------------------------------------------
 # format_body_finding() with finding_id
 # ---------------------------------------------------------------------------
