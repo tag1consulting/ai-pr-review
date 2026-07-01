@@ -921,10 +921,19 @@ jobs:
           ACTOR: ${{ inputs.actor-login }}
         run: |
           # Find the newest bot CHANGES_REQUESTED review.
+          # TEMPORARY DIAGNOSTIC for #555 — remove before merge.
+          gh --version >&2
+          rest_err=$(mktemp)
           newest=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq '[.[] | select(.user.login == "github-actions[bot]") |
-                   select(.state == "CHANGES_REQUESTED")] | sort_by(.id) | last' 2>/dev/null || echo "null")
+                   select(.state == "CHANGES_REQUESTED")] | sort_by(.id) | last' 2>"$rest_err")
+          rest_exit=$?
+          echo "::notice::[555-diag] rest_exit=${rest_exit} newest_len=${#newest} newest=[${newest}] rest_err=[$(cat "$rest_err")]" >&2
+          rm -f "$rest_err"
+          if [[ $rest_exit -ne 0 ]]; then
+            newest="null"
+          fi
           if [[ "$newest" == "null" || -z "$newest" ]]; then
             echo "No bot CHANGES_REQUESTED review found; nothing to dismiss." >&2
             exit 0
