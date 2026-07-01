@@ -1,5 +1,5 @@
 # generated: 2026-05-18T11:48:00-07:00
-# last_updated: 2026-06-22T14:00:00-07:00
+# last_updated: 2026-07-01T15:22:00-07:00
 # project: ai-pr-review
 # project_key: NOKEY
 # tracking_system: file-system
@@ -199,6 +199,21 @@ development_status:
   # ── Epic 12 — Container Maintenance ──────────────────────────────────────────
   # GitHub issue #349: bump container base from ubuntu:24.04 (Python 3.12) to
   # ubuntu:26.04 (Python 3.14) now that soak has long since ended.
-  epic-12: in-progress
-  12-1-ubuntu26-python314-bump: ready-for-dev     # #349 — story at memory-bank/bmad/stories/12-1-ubuntu26-python314-bump.md
+  epic-12: done
+  12-1-ubuntu26-python314-bump: done              # #349 — PR #544 merged 2026-06-25
   epic-12-retrospective: optional
+
+  # ── Epic 13 — Port Slash-Command Dismiss Orchestration to Python ────────────
+  # GitHub issue #554: slash-commands.yml implements dismiss/false-positive/
+  # wont-fix entirely in untested inline bash. Four independent bugs found in
+  # this code during #550's fix (PR #553) and its live-e2e verification (#555)
+  # motivate porting the orchestration into ai_pr_review/, testable via pytest.
+  # Plan: memory-bank/bmad/planning-artifacts/ (see approved plan referenced
+  # in story 13-1). Phased, one PR per story; story 13-1 ships zero workflow
+  # change (module + primitives + tests only).
+  epic-13: in-progress
+  13-1-dismiss-module-and-primitives: review     # #554 phase 1 — PR #556; all 11 ACs met, 1706 tests pass, mypy/ruff clean; story at memory-bank/bmad/implementation-artifacts/13-1-dismiss-module-and-primitives.md
+  13-2-wire-dismiss-body-finding: backlog         # #554 phase 2 — new `ai-pr-review dismiss` CLI subcommand; convert dismiss-body-finding job to container: + CLI call
+  13-3-wire-dismiss-finding: backlog              # #554 phase 3 — convert dismiss-finding job (inline-reply path) to container: + CLI call
+  13-4-wire-feedback-command: backlog             # #554 phase 4 — convert feedback-command's body-scan + resolve-on-success steps to container: + CLI call
+  epic-13-retrospective: optional
