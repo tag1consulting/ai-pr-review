@@ -129,6 +129,101 @@ def test_post_findings_out_of_diff_goes_to_details_section() -> None:
     assert "**Findings:** 2" not in body, "ood finding must not inflate the headline count"
 
 
+def test_ood_only_prior_review_preserves_finding_id() -> None:
+    """Issue #550 regression: an out-of-diff-only prior review body (no
+    "### Findings not attached to specific lines" heading) must still be
+    picked up by _list_prior_bot_review_bodies() so F-IDs are reconstructed
+    on the next cycle instead of churning to new numbers.
+
+    Uses two out-of-diff findings so churn is observable: if reconstruction
+    is starved (the pre-#550-fix behavior), assemble_id_map() sees an empty
+    prior_bodies list and restarts numbering at 1 for whichever finding is
+    still present, silently reassigning its ID.
+    """
+    ood_a = Finding(
+        severity="Low",
+        confidence=80,
+        finding="pre-existing style issue A",
+        source="phpcs",
+        file="app.py",
+        line=99,
+        out_of_diff=True,
+    )
+    ood_b = Finding(
+        severity="Low",
+        confidence=80,
+        finding="pre-existing style issue B",
+        source="phpcs",
+        file="app.py",
+        line=101,
+        out_of_diff=True,
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    # First cycle: post both out-of-diff findings, capture the body (F1, F2).
+    bodies: list[str] = []
+
+    def handler1(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=[])  # no prior reviews yet
+        if req.method == "POST" and "/reviews" in str(req.url):
+            import json as _json
+
+            body = _json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 1, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov1, _ = _make_provider(handler1)
+    result1 = prov1.post_findings([ood_a, ood_b], diff, event="COMMENT")
+    assert result1.ok
+    assert bodies, "no review body posted on first cycle"
+    first_body = bodies[0]
+
+    # The out-of-diff-only body must NOT contain the in-diff heading — this is
+    # exactly the shape that used to be dropped by the old heading filter.
+    assert "### Findings not attached to specific lines" not in first_body
+    assert "**[F1]**" in first_body
+    assert "**[F2]**" in first_body
+
+    # Second cycle: finding A is resolved/dismissed; only B is re-detected.
+    # The GET /reviews call returns the first review (author
+    # github-actions[bot], state COMMENTED) so _list_prior_bot_review_bodies()
+    # must surface first_body for ID reconstruction. If it does, B keeps its
+    # original ID (F2). If reconstruction is starved, B is renumbered to F1.
+    def handler2(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 1,
+                        "state": "COMMENTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": first_body,
+                    }
+                ],
+            )
+        if req.method == "POST" and "/reviews" in str(req.url):
+            import json as _json
+
+            body = _json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 2, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov2, _rec2 = _make_provider(handler2)
+    result2 = prov2.post_findings([ood_b], diff, event="COMMENT")
+    assert result2.ok
+    second_body = bodies[-1]
+
+    # B's F-ID must be preserved as F2, not churned down to F1.
+    assert "**[F2]**" in second_body, (
+        f"out-of-diff F-ID churned across review cycles; got: {second_body[:400]!r}"
+    )
+    assert "**[F1]**" not in second_body
+
+
 def test_post_findings_inline_for_eligible_line() -> None:
     findings = [
         Finding(
