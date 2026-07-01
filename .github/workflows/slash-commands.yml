@@ -927,7 +927,7 @@ jobs:
           newest=$(gh api \
             "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq '[.[] | select(.user.login == "github-actions[bot]") |
-                   select(.state == "CHANGES_REQUESTED")] | sort_by(.id) | last' 2>"$rest_err")
+                   select(.state == "CHANGES_REQUESTED")] | sort_by(.id) | last' 2>"$rest_err") || true
           rest_exit=$?
           echo "::notice::[555-diag] rest_exit=${rest_exit} newest_len=${#newest} newest=[${newest}] rest_err=[$(cat "$rest_err")]" >&2
           rm -f "$rest_err"
