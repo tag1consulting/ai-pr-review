@@ -1,8 +1,8 @@
 # Story 13.2: `ai-pr-review dismiss` CLI subcommand + wire `dismiss-body-finding`
 
-Status: in-progress
+Status: done
 
-PR: https://github.com/tag1consulting/ai-pr-review/pull/558
+PR: https://github.com/tag1consulting/ai-pr-review/pull/558 (merged at f3fbabf, 2026-07-02)
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -118,6 +118,13 @@ claude-sonnet-5
   - **Decision (confirmed with the user):** rather than force the registry push, defer the full comment-flow smoke (including the `explain`/`revise` case and the YAML wrapper) to the standard post-merge `:dev` soak / pre-tag e2e gate already documented in this repo's release process (CLAUDE.md: `Workflow({name: 'ai-pr-review-e2e'})` before tagging). Merging main rebuilds `:dev` automatically (`publish-image.yml`), at which point the real comment flow against `tag1consulting/ai-pr-review-test` can be exercised with zero registry-permission friction. This is a narrowing of *when* AC15's remaining scope is verified, not a skip of it — flagging explicitly per this repo's outcome-verification discipline rather than silently marking AC15 fully done.
 
 ### Completion Notes List
+
+- **Post-approval review-finding fixes (commit `03cb092`, before merge):** the bot's automated review on PR #558 flagged three issues, all fixed:
+  1. **High (code-reviewer):** test assertions checked `result.output` (Click's mixed stdout+stderr view) instead of `result.stdout`/`result.stderr` independently, so a regression leaking the `::notice::reaction=` marker onto stdout (which would corrupt the base64-encoded reply the workflow posts) would not have been caught. Fixed by asserting against the correct stream, plus new explicit `not in result.stdout` checks on both reaction-marker tests, verified against a standalone repro that the new assertion actually catches the leak.
+  2. **Medium (silent-failure-hunter):** feedback-store `append()` failure had no structured log line, only the PR-comment reply. Added `logger.warning(...)` including the finding ID.
+  3. **Low (silent-failure-hunter):** the workflow's reaction-selection bash defaulted `reaction="done"` and only flipped to `"confused"` on a marker match — a handler crash that skipped the marker entirely would silently report success. Inverted the default. Deliberately did **not** use the bot's own suggested remediation (`grep -q ... && reaction="done"`), which would propagate `grep`'s non-zero exit under `set -e`; kept the safe `if/then/fi` form instead and hand-verified all three cases (marker=done, marker=confused, marker absent) leave the block's own exit code at 0.
+  - Re-review after the fix commit: `APPROVED`, no new findings. Full suite still green (1718 tests, mypy/ruff/actionlint clean).
+- Merged via `--merge` (no squash, no branch deletion) per standing preference. Worktree and local branch removed post-merge.
 
 ### File List
 
