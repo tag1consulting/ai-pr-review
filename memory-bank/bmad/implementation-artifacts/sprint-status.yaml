@@ -213,7 +213,7 @@ development_status:
   # change (module + primitives + tests only).
   epic-13: in-progress
   13-1-dismiss-module-and-primitives: review     # #554 phase 1 — PR #556; all 11 ACs met, 1706 tests pass, mypy/ruff clean; story at memory-bank/bmad/implementation-artifacts/13-1-dismiss-module-and-primitives.md
-  13-2-wire-dismiss-body-finding: backlog         # #554 phase 2 — new `ai-pr-review dismiss` CLI subcommand; convert dismiss-body-finding job to container: + CLI call
+  13-2-wire-dismiss-body-finding: review          # #554 phase 2 — PR #558; new `ai-pr-review dismiss` CLI subcommand; dismiss-body-finding job converted to container: + CLI call; live-e2e smoke partial (CLI substance verified via docker run against real GitHub API; full comment-flow + explain/revise deferred to :dev pre-tag); story at memory-bank/bmad/implementation-artifacts/13-2-wire-dismiss-body-finding.md
   13-3-wire-dismiss-finding: backlog              # #554 phase 3 — convert dismiss-finding job (inline-reply path) to container: + CLI call
   13-4-wire-feedback-command: backlog             # #554 phase 4 — convert feedback-command's body-scan + resolve-on-success steps to container: + CLI call
   epic-13-retrospective: optional
