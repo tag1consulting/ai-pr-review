@@ -496,3 +496,162 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
     reply = handle_command(result, entry, store)
     if reply:
         click.echo(reply)
+
+
+@cli.command()
+@click.option(
+    "--finding-id",
+    envvar="SLASH_FINDING_ID",
+    default=None,
+    type=int,
+    help="F<n> finding ID (defaults to SLASH_FINDING_ID env var). "
+    "Omit to list active body-finding IDs instead of dismissing one.",
+)
+@click.option(
+    "--actor",
+    envvar="SLASH_ACTOR",
+    required=True,
+    help="GitHub login of the commenter (defaults to SLASH_ACTOR env var).",
+)
+@click.option(
+    "--command",
+    "command_name",
+    envvar="SLASH_COMMAND",
+    required=True,
+    type=click.Choice(["dismiss", "false-positive", "wont-fix"]),
+    help="Slash command name (defaults to SLASH_COMMAND env var).",
+)
+@click.option(
+    "--pr-number",
+    envvar="SLASH_PR_NUMBER",
+    required=True,
+    type=int,
+    help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
+)
+@click.option(
+    "--comment-body",
+    envvar="SLASH_COMMENT_BODY",
+    default="",
+    help="Raw top-level comment body, used to extract the feedback reason "
+    "(defaults to SLASH_COMMENT_BODY env var).",
+)
+@click.option(
+    "--enable-feedback-loop",
+    envvar="AI_FEEDBACK_LOOP",
+    default=False,
+    type=bool,
+    help="Whether to persist BODY-finding dismissals to the feedback store "
+    "(defaults to AI_FEEDBACK_LOOP env var). When false, the finding is "
+    "acknowledged but not recorded for future suppression.",
+)
+def dismiss(
+    finding_id: int | None,
+    actor: str,
+    command_name: str,
+    pr_number: int,
+    comment_body: str,
+    enable_feedback_loop: bool,
+) -> None:
+    """Handle `/ai-pr-review dismiss|false-positive|wont-fix [F<n>]` posted as
+    a top-level PR comment.
+
+    Classifies F<n> as a BODY or INLINE finding, resolves/dismisses the
+    backing review thread when applicable, records a feedback-store entry
+    for BODY findings (when the feedback loop is enabled), and prints the
+    reply to stdout. GitHub-only: F-IDs and the id-map only exist on the
+    GitHub provider.
+
+    Also emits a `::notice::reaction=done|confused` line to stderr so the
+    calling workflow step can react to the triggering comment without
+    re-deriving "was this a genuine miss" from reply text.
+
+    Exit codes:
+      0 — handled (including "not found" — not a command failure)
+      1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
+    """
+    from ai_pr_review.slash.dismiss import dismiss_by_finding_id, list_active_body_ids
+    from ai_pr_review.slash.parser import ParseError, SlashCommand, parse_command
+    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
+
+    os.environ["PR_NUMBER"] = str(pr_number)
+
+    vcs = (os.environ.get("VCS_PROVIDER") or "github").strip().lower()
+    if vcs != "github":
+        click.echo(f"dismiss: ai-pr-review dismiss is GitHub-only (VCS_PROVIDER={vcs!r})", err=True)
+        sys.exit(1)
+
+    try:
+        provider = provider_from_env()
+    except ProviderConfigError as exc:
+        click.echo(f"dismiss: {exc}", err=True)
+        sys.exit(1)
+
+    if not isinstance(provider, GitHubProvider):
+        # Unreachable given the vcs-name gate above; narrows the type for mypy
+        # and guards against provider_from_env's dispatch logic changing.
+        click.echo("dismiss: expected a GitHub provider", err=True)
+        sys.exit(1)
+
+    if finding_id is None:
+        active_ids = list_active_body_ids([r.get("body") or "" for r in provider.list_bot_reviews()])
+        if active_ids:
+            ids_text = ", ".join(f"F{n}" for n in active_ids)
+            click.echo(
+                f"@{actor} please specify a finding ID, e.g. `/ai-pr-review {command_name} F{active_ids[0]}`. "
+                f"Active findings: {ids_text}."
+            )
+        else:
+            click.echo(f"@{actor} there are no active body-level findings to {command_name}.")
+        click.echo("::notice::reaction=done", err=True)
+        return
+
+    result = dismiss_by_finding_id(provider, finding_id, actor=actor, command=command_name)
+
+    # A genuine miss (UNKNOWN classification, or an INLINE token that could
+    # not be matched to a thread) gets a "confused" reaction. This is a
+    # deliberate divergence from the bash job's prior behavior: the old
+    # inline_fid-gated logic suppressed the confused reaction for an
+    # unmatched inline token (it set inline_fid before attempting thread
+    # resolution, so React-not-applicable never fired for that case) even
+    # though no action was taken. The new behavior reacts confused whenever
+    # nothing was actually resolved/dismissed/recorded, regardless of why.
+    acted = bool(result.feedback_source or result.feedback_file or result.thread_resolved or result.review_dismissed)
+    click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+
+    is_body_finding = bool(result.feedback_source or result.feedback_file)
+    if not is_body_finding:
+        click.echo(result.reply)
+        return
+
+    if not enable_feedback_loop:
+        click.echo(f"{result.reply} (feedback loop disabled — not persisted to learning store)")
+        return
+
+    from ai_pr_review.feedback.store import make_store
+    from ai_pr_review.slash.handlers import build_entry
+
+    parsed = parse_command(comment_body) if comment_body else None
+    command_for_entry = (
+        parsed
+        if parsed is not None and not isinstance(parsed, ParseError)
+        else SlashCommand(name=command_name, reason="", raw_body=comment_body, finding_id=finding_id)
+    )
+
+    class _DismissConfig:
+        vcs_provider = "github"
+
+    entry = build_entry(
+        command_for_entry,
+        source=result.feedback_source,
+        file=result.feedback_file,
+        rule_id=result.feedback_rule_id,
+    )
+    stored = make_store(_DismissConfig()).append(entry)
+    if stored:
+        click.echo(result.reply)
+    else:
+        click.echo(
+            f"@{actor} marked **F{finding_id}** as `{command_name}`, but the feedback store "
+            "could not persist it (network error or unsupported VCS). "
+            "Please retry later or check the workflow logs for details."
+        )
