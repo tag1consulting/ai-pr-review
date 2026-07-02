@@ -37,6 +37,7 @@ from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
+    from ai_pr_review.vcs import GitHubProvider
     from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
@@ -498,6 +499,38 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
         click.echo(reply)
 
 
+def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
+    """Build a `GitHubProvider` from env, or exit(1) with a `<label>: ...` message.
+
+    Shared by the `dismiss` and `dismiss-inline` subcommands: both are
+    GitHub-only (F-IDs and inline id-maps only exist on that provider), and
+    both need `VCS_PROVIDER` checked *before* calling `provider_from_env()` —
+    that dispatcher eagerly reads provider-specific env vars and raises its
+    own errors first, so an `isinstance` check after the call would fire too
+    late under a non-GitHub `VCS_PROVIDER`.
+    """
+    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
+
+    vcs = (os.environ.get("VCS_PROVIDER") or "github").strip().lower()
+    if vcs != "github":
+        click.echo(f"{command_label}: ai-pr-review {command_label} is GitHub-only (VCS_PROVIDER={vcs!r})", err=True)
+        sys.exit(1)
+
+    try:
+        provider = provider_from_env()
+    except ProviderConfigError as exc:
+        click.echo(f"{command_label}: {exc}", err=True)
+        sys.exit(1)
+
+    if not isinstance(provider, GitHubProvider):
+        # Unreachable given the vcs-name gate above; narrows the type for mypy
+        # and guards against provider_from_env's dispatch logic changing.
+        click.echo(f"{command_label}: expected a GitHub provider", err=True)
+        sys.exit(1)
+
+    return provider
+
+
 @cli.command()
 @click.option(
     "--finding-id",
@@ -571,26 +604,10 @@ def dismiss(
     """
     from ai_pr_review.slash.dismiss import dismiss_by_finding_id, list_active_body_ids
     from ai_pr_review.slash.parser import ParseError, SlashCommand, parse_command
-    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
 
     os.environ["PR_NUMBER"] = str(pr_number)
 
-    vcs = (os.environ.get("VCS_PROVIDER") or "github").strip().lower()
-    if vcs != "github":
-        click.echo(f"dismiss: ai-pr-review dismiss is GitHub-only (VCS_PROVIDER={vcs!r})", err=True)
-        sys.exit(1)
-
-    try:
-        provider = provider_from_env()
-    except ProviderConfigError as exc:
-        click.echo(f"dismiss: {exc}", err=True)
-        sys.exit(1)
-
-    if not isinstance(provider, GitHubProvider):
-        # Unreachable given the vcs-name gate above; narrows the type for mypy
-        # and guards against provider_from_env's dispatch logic changing.
-        click.echo("dismiss: expected a GitHub provider", err=True)
-        sys.exit(1)
+    provider = _build_github_provider_or_exit("dismiss")
 
     if finding_id is None:
         active_ids = list_active_body_ids([r.get("body") or "" for r in provider.list_bot_reviews()])
@@ -617,6 +634,9 @@ def dismiss(
     # nothing was actually resolved/dismissed/recorded, regardless of why.
     acted = bool(result.feedback_source or result.feedback_file or result.thread_resolved or result.review_dismissed)
     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+    for error in result.errors:
+        logger.warning("dismiss: %s", error)
+        click.echo(f"::warning::dismiss: {error}", err=True)
 
     is_body_finding = bool(result.feedback_source or result.feedback_file)
     if not is_body_finding:
@@ -660,3 +680,86 @@ def dismiss(
             "could not persist it (network error or unsupported VCS). "
             "Please retry later or check the workflow logs for details."
         )
+
+
+@cli.command("dismiss-inline")
+@click.option(
+    "--parent-comment-id",
+    envvar="SLASH_IN_REPLY_TO_ID",
+    required=True,
+    type=int,
+    help="REST databaseId of the bot's inline review comment being replied to "
+    "(defaults to SLASH_IN_REPLY_TO_ID env var).",
+)
+@click.option(
+    "--review-id",
+    envvar="SLASH_REVIEW_ID",
+    default=None,
+    type=int,
+    help="databaseId of the review owning the parent comment (defaults to "
+    "SLASH_REVIEW_ID env var), matching the bash job's REVIEW_ID (the "
+    "parent comment's pull_request_review_id). If omitted, "
+    "dismiss_inline_reply falls back to the review id recorded on the "
+    "resolved thread itself.",
+)
+@click.option(
+    "--actor",
+    envvar="SLASH_ACTOR",
+    required=True,
+    help="GitHub login of the commenter (defaults to SLASH_ACTOR env var).",
+)
+@click.option(
+    "--command",
+    "command_name",
+    envvar="SLASH_COMMAND",
+    required=True,
+    type=click.Choice(["dismiss", "false-positive", "wont-fix"]),
+    help="Slash command name (defaults to SLASH_COMMAND env var).",
+)
+@click.option(
+    "--pr-number",
+    envvar="SLASH_PR_NUMBER",
+    required=True,
+    type=int,
+    help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
+)
+def dismiss_inline(
+    parent_comment_id: int,
+    review_id: int | None,
+    actor: str,
+    command_name: str,
+    pr_number: int,
+) -> None:
+    """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a reply
+    to an inline review comment (`pull_request_review_comment` event).
+
+    Resolves the review thread owning the parent comment and, if `review_id`
+    is given and its own threads are now all resolved, dismisses that review.
+    Prints the reply to stdout and emits a `::notice::reaction=` line to
+    stderr so the calling workflow step can react to the triggering comment.
+    GitHub-only: inline review threads only exist on the GitHub provider.
+
+    Exit codes:
+      0 — handled (including "could not find thread" — not a command failure)
+      1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
+    """
+    from ai_pr_review.slash.dismiss import dismiss_inline_reply
+
+    os.environ["PR_NUMBER"] = str(pr_number)
+
+    provider = _build_github_provider_or_exit("dismiss-inline")
+
+    result = dismiss_inline_reply(
+        provider,
+        parent_comment_id,
+        review_id,
+        actor=actor,
+        command=command_name,
+    )
+
+    acted = bool(result.thread_resolved or result.review_dismissed)
+    click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+    for error in result.errors:
+        logger.warning("dismiss-inline: %s", error)
+        click.echo(f"::warning::dismiss-inline: {error}", err=True)
+    click.echo(result.reply)

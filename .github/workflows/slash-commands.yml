@@ -700,6 +700,11 @@ jobs:
       startsWith(inputs.comment-body, '/ai-pr-review dismiss') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: React — seen
         env:
@@ -746,200 +751,74 @@ jobs:
           echo "review_id=${review_id}" >> "$GITHUB_OUTPUT"
           echo "valid=true" >> "$GITHUB_OUTPUT"
 
-      - name: Find and resolve the review thread
+      - name: Invoke Python dismiss-inline handler
+        id: dismiss
         if: steps.validate.outputs.valid == 'true'
-        id: resolve
         env:
+          SLASH_IN_REPLY_TO_ID: ${{ steps.validate.outputs.parent_id }}
+          SLASH_REVIEW_ID: ${{ steps.validate.outputs.review_id }}
+          SLASH_ACTOR: ${{ inputs.actor-login }}
+          SLASH_COMMAND: dismiss
+          SLASH_PR_NUMBER: ${{ inputs.pr-number }}
+          GITHUB_REPOSITORY: ${{ inputs.repository }}
           GH_TOKEN: ${{ secrets.github-token }}
-          OWNER: ${{ inputs.repository-owner }}
-          REPO: ${{ inputs.repository-name }}
-          PR_NUMBER: ${{ inputs.pr-number }}
-          PARENT_COMMENT_ID: ${{ steps.validate.outputs.parent_id }}
+          VCS_PROVIDER: 'github'
         run: |
-          cursor=""
-          has_next=true
-          thread_id=""
-
-          while [[ "$has_next" == "true" && -z "$thread_id" ]]; do
-            api_err=$(mktemp)
-            result=$(gh api graphql -f query='
-              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $pr) {
-                    reviewThreads(first: 100, after: $after) {
-                      pageInfo { hasNextPage endCursor }
-                      nodes {
-                        id
-                        isResolved
-                        comments(first: 100) {
-                          nodes { databaseId }
-                        }
-                      }
-                    }
-                  }
-                }
-              }' \
-              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
-              echo "::error::Could not fetch review threads: $(cat "$api_err")"
-              rm -f "$api_err"
-              exit 1
-            }
-            rm -f "$api_err"
-
-            if echo "$result" | jq -e '.errors' >/dev/null 2>&1; then
-              echo "::error::GraphQL returned errors: $(echo "$result" | jq -c '.errors')"
-              exit 1
-            fi
-
-            thread_id=$(echo "$result" | jq -r \
-              --argjson cid "$PARENT_COMMENT_ID" \
-              '.data.repository.pullRequest.reviewThreads.nodes[]
-               | select(.comments.nodes | map(.databaseId) | index($cid))
-               | .id' | head -1)
-
-            has_next=$(echo "$result" | jq -r \
-              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-            cursor=$(echo "$result" | jq -r \
-              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
-          done
-
-          if [[ -z "$thread_id" ]]; then
-            echo "::error::Could not locate the review thread for this comment."
-            exit 1
+          set +e
+          reply=$(ai-pr-review dismiss-inline 2>/tmp/dismiss-inline-stderr)
+          exit_code=$?
+          stderr_content=$(cat /tmp/dismiss-inline-stderr)
+          if [[ -n "$stderr_content" ]]; then
+            echo "$stderr_content" >&2
           fi
-
-          echo "thread_id=${thread_id}" >> "$GITHUB_OUTPUT"
-
-          mut_err=$(mktemp)
-          mut_result=$(gh api graphql -f query='
-            mutation($threadId: ID!) {
-              resolveReviewThread(input: {threadId: $threadId}) {
-                thread { id isResolved }
-              }
-            }' \
-            -f threadId="$thread_id" 2>"$mut_err") || {
-            echo "::error::Failed to resolve review thread: $(cat "$mut_err")"
-            rm -f "$mut_err"
-            exit 1
-          }
-          rm -f "$mut_err"
-
-          if echo "$mut_result" | jq -e '.errors' >/dev/null 2>&1; then
-            echo "::error::GraphQL errors resolving thread: $(echo "$mut_result" | jq -c '.errors')"
-            exit 1
+          if [[ $exit_code -ne 0 ]]; then
+            echo "::error::dismiss-inline handler exited $exit_code"
+            exit $exit_code
           fi
+          # Default to confused: if the handler exits 0 without ever emitting
+          # the marker (e.g. a code path added later that forgets to), this
+          # fails visibly as a wrong reaction rather than silently reporting
+          # success.
+          reaction="confused"
+          if grep -q '^::notice::reaction=done$' /tmp/dismiss-inline-stderr; then
+            reaction="done"
+          fi
+          echo "reaction=${reaction}" >> "$GITHUB_OUTPUT"
+          encoded=$(printf '%s' "$reply" | base64 -w0)
+          echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
 
-          echo "Thread ${thread_id} resolved." >&2
-
-      - name: Dismiss review if all threads resolved
-        if: steps.validate.outputs.valid == 'true' && steps.resolve.outcome == 'success'
+      - name: Post dismiss reply
+        if: steps.dismiss.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.github-token }}
-          OWNER: ${{ inputs.repository-owner }}
-          REPO: ${{ inputs.repository-name }}
+          GH_TOKEN: ${{ secrets.actions-token }}
+          REPOSITORY: ${{ inputs.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
-          REVIEW_ID: ${{ steps.validate.outputs.review_id }}
-          ACTOR: ${{ inputs.actor-login }}
+          REPLY_B64: ${{ steps.dismiss.outputs.reply_b64 }}
         run: |
-          review_state=$(gh api \
-            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}" \
-            --jq '.state' 2>/dev/null) || {
-            echo "Review ${REVIEW_ID} not found or not accessible; skipping dismissal." >&2
-            exit 0
-          }
-
-          if [[ "$review_state" != "CHANGES_REQUESTED" ]]; then
-            echo "Review state is ${review_state}, not CHANGES_REQUESTED; no dismissal needed." >&2
-            exit 0
-          fi
-
-          all_threads="[]"
-          cursor=""
-          has_next=true
-
-          while [[ "$has_next" == "true" ]]; do
-            api_err=$(mktemp)
-            page=$(gh api graphql -f query='
-              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $pr) {
-                    reviewThreads(first: 100, after: $after) {
-                      pageInfo { hasNextPage endCursor }
-                      nodes {
-                        isResolved
-                        comments(first: 1) {
-                          nodes { pullRequestReview { databaseId } }
-                        }
-                      }
-                    }
-                  }
-                }
-              }' \
-              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-              ${cursor:+-f after="$cursor"} 2>"$api_err") || {
-              echo "::error::Could not fetch threads for dismissal check: $(cat "$api_err")"
-              rm -f "$api_err"
-              exit 1
-            }
-            rm -f "$api_err"
-
-            if echo "$page" | jq -e '.errors' >/dev/null 2>&1; then
-              echo "::error::GraphQL returned errors while fetching threads: $(echo "$page" | jq -c '.errors')"
-              exit 1
-            fi
-
-            page_nodes=$(echo "$page" | jq '.data.repository.pullRequest.reviewThreads.nodes')
-            if [[ "$page_nodes" == "null" || -z "$page_nodes" ]]; then
-              echo "::error::Malformed threads response (no nodes field)."
-              exit 1
-            fi
-            all_threads=$(echo "$all_threads" "$page_nodes" | jq -s '.[0] + .[1]')
-            has_next=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-            cursor=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
-          done
-
-          unresolved=$(echo "$all_threads" | jq \
-            --argjson rid "$REVIEW_ID" \
-            '[.[] | select(
-              .comments.nodes[0].pullRequestReview.databaseId == $rid and
-              .isResolved == false
-            )] | length')
-
-          if [[ "$unresolved" -gt 0 ]]; then
-            echo "${unresolved} unresolved thread(s) remain on review #${REVIEW_ID}; keeping CHANGES_REQUESTED." >&2
-            exit 0
-          fi
-
-          if ! [[ "$ACTOR" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}(\[bot\])?$ ]]; then
-            echo "::error::Refusing to dismiss: unexpected actor login '${ACTOR}'."
+          set -e
+          reply_file=$(mktemp)
+          trap 'rm -f "$reply_file"' EXIT
+          if ! echo "$REPLY_B64" | base64 -d > "$reply_file"; then
+            echo "::error::Failed to decode reply body from the dismiss-inline handler."
             exit 1
           fi
-          dismiss_msg="All findings resolved as false positives — dismissed by @${ACTOR}."
-          dismiss_err=$(mktemp)
-          if gh api \
-            "repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}/dismissals" \
-            --method PUT \
-            --field "message=${dismiss_msg}" \
-            >/dev/null 2>"$dismiss_err"; then
-            echo "Dismissed review #${REVIEW_ID}." >&2
-          else
-            echo "::error::Failed to dismiss review #${REVIEW_ID}: $(cat "$dismiss_err")"
-            rm -f "$dismiss_err"
+          if [[ ! -s "$reply_file" ]]; then
+            echo "::error::Decoded reply body is empty; refusing to post a blank reply."
             exit 1
           fi
-          rm -f "$dismiss_err"
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file "$reply_file"
 
-      - name: React — done
-        if: steps.validate.outputs.valid == 'true' && success()
+      - name: React — dismiss outcome
+        if: steps.dismiss.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.actions-token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
+          REACTION: ${{ steps.dismiss.outputs.reaction == 'confused' && 'confused' || '+1' }}
         run: |
           gh api \
             "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}/reactions" \
-            -f content="+1"
+            -f content="$REACTION"
 
       - name: React — not applicable
         if: steps.validate.outputs.valid == 'false'
