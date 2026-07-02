@@ -634,6 +634,9 @@ def dismiss(
     # nothing was actually resolved/dismissed/recorded, regardless of why.
     acted = bool(result.feedback_source or result.feedback_file or result.thread_resolved or result.review_dismissed)
     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+    for error in result.errors:
+        logger.warning("dismiss: %s", error)
+        click.echo(f"::warning::dismiss: {error}", err=True)
 
     is_body_finding = bool(result.feedback_source or result.feedback_file)
     if not is_body_finding:
@@ -756,4 +759,7 @@ def dismiss_inline(
 
     acted = bool(result.thread_resolved or result.review_dismissed)
     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+    for error in result.errors:
+        logger.warning("dismiss-inline: %s", error)
+        click.echo(f"::warning::dismiss-inline: {error}", err=True)
     click.echo(result.reply)

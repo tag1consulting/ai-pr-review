@@ -131,6 +131,40 @@ def test_resolves_thread_and_dismisses_review_when_review_id_given(monkeypatch) 
     assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
 
 
+def test_dismiss_put_failure_surfaces_as_warning_not_silent(monkeypatch) -> None:
+    # A resolve that succeeds but a dismiss PUT that fails (e.g. the review
+    # is no longer CHANGES_REQUESTED) must not be reported to the user as a
+    # clean "resolved the thread" with the failure swallowed -- the CLI must
+    # surface DismissResult.errors on stderr so it lands in the workflow log,
+    # rather than repeating the #555 class of error this epic exists to kill.
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in str(req.url):
+            return httpx.Response(422, json={"message": "Review is not in a dismissable state"})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41))
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "dismiss review 41" in result.stderr
+    assert "422" in result.stderr
+
+
 def test_missing_review_id_falls_back_to_thread_review_and_still_resolves(monkeypatch) -> None:
     # Note: a parent comment with no resolvable pull_request_review_id implies
     # the thread it belongs to also carries no review (the comment's review
