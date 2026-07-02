@@ -1,8 +1,8 @@
 # Story 13.3: `ai-pr-review dismiss-inline` CLI subcommand + wire `dismiss-finding`
 
-Status: review
+Status: done
 
-PR: TBD
+PR: https://github.com/tag1consulting/ai-pr-review/pull/563 (merged at 963a84c, 2026-07-02)
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -100,6 +100,8 @@ claude-sonnet-5
 - No deviations from the approved epic plan's story-13-3 scope. The one open design question (whether to change `dismiss_inline_reply`'s `review_id` fallback) was resolved in favor of leaving story 13-1's merged code untouched, per the verification above — documented here rather than silently discovered by a future reader diffing test expectations against source behavior.
 - **Error-surfacing gap found and fixed, affecting both `dismiss` (13-2, already merged) and this story's `dismiss-inline`:** neither CLI command echoed `DismissResult.errors` — a resolve that succeeds but a subsequent dismiss PUT that fails (e.g. HTTP 422 because the review is no longer in a dismissable state) was reported to the user as a clean "resolved the thread" with the failure silently swallowed, recreating the exact #555 failure class (an API error proceeding as if it were success) this epic exists to eliminate. Fixed by echoing each `result.errors` entry as both a `logger.warning` and an `::warning::` workflow-log line in both commands. Covered by the new `test_dismiss_put_failure_surfaces_as_warning_not_silent` test.
 - **Known, not-yet-fixed gap flagged for the epic's `:dev` pre-tag pass, not fixed in this story:** `_dismiss_if_all_resolved` (the shared helper in `ai_pr_review/slash/dismiss.py` used by both `dismiss_by_finding_id` (13-2) and `dismiss_inline_reply` (this story)) does not check the target review's `state == CHANGES_REQUESTED` before issuing the dismiss PUT — the old bash job did (`if review_state != CHANGES_REQUESTED: skip`). Reachable case, confirmed against live data: `tag1consulting/ai-pr-review-test#1`'s review `4284199739` is already `DISMISSED` with 25 unresolved threads; resolving its last unresolved thread today would attempt a doomed dismiss PUT against an already-dismissed review. The PUT failure itself is no longer silent (per the fix above, it now surfaces as a warning), so this is a wasted-API-call correctness issue, not a silent-failure issue — but it should be fixed at the shared-helper level (affecting both stories at once) rather than patched twice at the CLI layer. Filed as [#562](https://github.com/tag1consulting/ai-pr-review/issues/562), tracked alongside the deferred comment-flow smoke tests from stories 13-2 and 13-3.
+- **Pre-merge review (local, parallel code-reviewer + security-reviewer agents against the full diff):** both came back clean. Security review verified all five focus areas (untrusted-input handling, trust-gate preservation, secret scoping between `actions-token`/`github-token`, the GitHub-only provider gate, and the base64 reply round-trip) with zero findings. Code review found no findings at or above the 80-confidence bar; two sub-threshold notes were recorded for awareness only, not fixed: (1) the new job now posts a text reply via `gh pr comment` where the old bash posted none — intended, matches AC6/AC8; (2) only the `dismiss` command value is exercised in tests, since `false-positive`/`wont-fix` are not reachable through this specific job (the job hardcodes `SLASH_COMMAND: dismiss`) — those values belong to story 13-4's scope.
+- **Merged via `--merge` (no squash, no branch deletion)** per standing preference, after CI green (3/3 checks), the bot's own automated PR review returning `APPROVED` with zero findings and zero unresolved threads, and explicit user confirmation at the merge checkpoint. Worktree and local branch removed post-merge.
 
 ### File List
 
