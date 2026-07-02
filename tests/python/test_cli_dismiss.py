@@ -85,8 +85,8 @@ def test_body_finding_writes_feedback_and_echoes_reply(monkeypatch) -> None:
     result = runner.invoke(cli, _base_args(3))
 
     assert result.exit_code == 0, result.output
-    assert "F3" in result.output
-    assert "suppressed on future review runs" in result.output
+    assert "F3" in result.stdout
+    assert "suppressed on future review runs" in result.stdout
     assert len(appended) == 1
     assert appended[0].source == "phpcs"
     assert appended[0].file == "legacy.py"
@@ -117,8 +117,8 @@ def test_body_finding_feedback_store_failure_is_reported_honestly(monkeypatch) -
     result = runner.invoke(cli, _base_args(3))
 
     assert result.exit_code == 0, result.output
-    assert "could not persist" in result.output
-    assert "suppressed on future review runs" not in result.output
+    assert "could not persist" in result.stdout
+    assert "suppressed on future review runs" not in result.stdout
 
 
 def test_body_finding_feedback_loop_disabled_skips_store(monkeypatch) -> None:
@@ -146,8 +146,8 @@ def test_body_finding_feedback_loop_disabled_skips_store(monkeypatch) -> None:
     result = runner.invoke(cli, _base_args(3, feedback_loop=False))
 
     assert result.exit_code == 0, result.output
-    assert "feedback loop disabled" in result.output
-    assert "not persisted to learning store" in result.output
+    assert "feedback loop disabled" in result.stdout
+    assert "not persisted to learning store" in result.stdout
 
 
 def test_reaction_marker_done_for_body_finding(monkeypatch) -> None:
@@ -169,7 +169,13 @@ def test_reaction_marker_done_for_body_finding(monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, _base_args(3, feedback_loop=False))
 
-    assert "::notice::reaction=done" in result.output
+    # The reaction marker must be on stderr only: the workflow wrapper base64s
+    # `reply` from stdout (`reply=$(ai-pr-review dismiss 2>/tmp/dismiss-stderr)`)
+    # and reads the marker from the redirected stderr file separately. A marker
+    # that leaks onto stdout would corrupt the posted reply comment.
+    assert "::notice::reaction=done" in result.stderr
+    assert "::notice::reaction=done" not in result.stdout
+    assert "F3" in result.stdout
 
 
 def test_reaction_marker_confused_for_genuine_miss(monkeypatch) -> None:
@@ -184,7 +190,9 @@ def test_reaction_marker_confused_for_genuine_miss(monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, _base_args(999))
 
-    assert "::notice::reaction=confused" in result.output
+    assert "::notice::reaction=confused" in result.stderr
+    assert "::notice::reaction=confused" not in result.stdout
+    assert "could not find" in result.stdout
 
 
 def test_inline_finding_does_not_touch_feedback_store(monkeypatch) -> None:
@@ -205,7 +213,7 @@ def test_inline_finding_does_not_touch_feedback_store(monkeypatch) -> None:
     result = runner.invoke(cli, _base_args(999))
 
     assert result.exit_code == 0, result.output
-    assert "could not find" in result.output
+    assert "could not find" in result.stdout
 
 
 def test_missing_finding_id_lists_active_ids(monkeypatch) -> None:
@@ -228,7 +236,7 @@ def test_missing_finding_id_lists_active_ids(monkeypatch) -> None:
     result = runner.invoke(cli, _base_args(None))
 
     assert result.exit_code == 0, result.output
-    assert "F3" in result.output
+    assert "F3" in result.stdout
 
 
 def test_missing_finding_id_no_active_ids(monkeypatch) -> None:
@@ -244,7 +252,7 @@ def test_missing_finding_id_no_active_ids(monkeypatch) -> None:
     result = runner.invoke(cli, _base_args(None))
 
     assert result.exit_code == 0, result.output
-    assert "no active body-level findings" in result.output
+    assert "no active body-level findings" in result.stdout
 
 
 def test_non_github_provider_fails_closed_with_clear_message() -> None:
@@ -252,8 +260,8 @@ def test_non_github_provider_fails_closed_with_clear_message() -> None:
     result = runner.invoke(cli, _base_args(1), env={"VCS_PROVIDER": "gitlab"})
 
     assert result.exit_code != 0
-    assert "GitHub-only" in result.output
-    assert "gitlab" in result.output
+    assert "GitHub-only" in result.stderr
+    assert "gitlab" in result.stderr
 
 
 def test_missing_required_option_fails() -> None:

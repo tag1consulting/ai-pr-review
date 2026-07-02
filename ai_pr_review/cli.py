@@ -650,6 +650,11 @@ def dismiss(
     if stored:
         click.echo(result.reply)
     else:
+        logger.warning(
+            "dismiss: feedback store failed to persist entry for F%s (command=%r)",
+            finding_id,
+            command_name,
+        )
         click.echo(
             f"@{actor} marked **F{finding_id}** as `{command_name}`, but the feedback store "
             "could not persist it (network error or unsupported VCS). "

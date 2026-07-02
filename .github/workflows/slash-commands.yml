@@ -599,9 +599,13 @@ jobs:
             echo "::error::dismiss handler exited $exit_code"
             exit $exit_code
           fi
-          reaction="done"
-          if grep -q '^::notice::reaction=confused$' /tmp/dismiss-stderr; then
-            reaction="confused"
+          # Default to confused: if the handler exits 0 without ever emitting
+          # the marker (e.g. a code path added later that forgets to), this
+          # fails visibly as a wrong reaction rather than silently reporting
+          # success.
+          reaction="confused"
+          if grep -q '^::notice::reaction=done$' /tmp/dismiss-stderr; then
+            reaction="done"
           fi
           echo "reaction=${reaction}" >> "$GITHUB_OUTPUT"
           encoded=$(printf '%s' "$reply" | base64 -w0)
