@@ -242,6 +242,56 @@ def test_dismiss_inline_reply_http_error_status_surfaces_in_result() -> None:
     assert result.thread_resolved is False
     assert len(result.errors) == 1
     assert "403" in result.errors[0]
+    # Regression for review findings F1/F2: the reply must never claim
+    # success ("resolved the thread") when resolve_thread actually failed.
+    assert "resolved the thread" not in result.reply
+    assert "could not resolve the thread" in result.reply
+
+
+def test_dismiss_by_finding_id_inline_resolve_failure_reply_is_honest() -> None:
+    """Symmetric F1 regression: dismiss_by_finding_id must not claim the
+    thread was resolved when resolve_thread failed."""
+    id_map = {"x|y.py|1|aaaaaaaaaaaa": 4}
+    our_body = f"finding\n**[F4]**\n{INLINE_MARKER}\n" + build_id_map_marker(id_map)
+    reviews = [{"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": our_body}]
+    nodes = [_inline_thread("T9", resolved=False, body=our_body, comment_db_id=99, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=reviews)
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(403, json={"message": "forbidden"})
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 4, actor="alice", command="dismiss")
+
+    assert result.thread_resolved is False
+    assert len(result.errors) == 1
+    assert "resolved the thread" not in result.reply
+    assert "could not resolve the thread" in result.reply
+
+
+def test_dismiss_by_finding_id_unknown_reply_names_lookup_failure_not_absence() -> None:
+    """Regression for F3: when list_bot_reviews's HTTP call fails, the reply
+    must not claim the finding doesn't exist (UNKNOWN from an errored,
+    possibly-partial lookup is not the same as a genuine miss)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(500, text="internal error")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 4, actor="alice", command="dismiss")
+
+    assert len(result.errors) == 1
+    assert "500" in result.errors[0]
+    assert "could not find finding" not in result.reply
+    assert "could not complete the lookup" in result.reply
 
 
 def test_dismiss_inline_reply_thread_not_found() -> None:

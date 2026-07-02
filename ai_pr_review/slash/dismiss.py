@@ -194,6 +194,18 @@ def _thread_by_comment_id(
     return None
 
 
+def _not_found_reply(actor: str, finding_id: int, had_errors: bool) -> str:
+    """Reply text for 'could not locate F<n>' — distinguishes a genuine miss
+    from a failed lookup (partial/empty data from an errored sub-call), so the
+    reply never asserts "not found" when the truth is "couldn't check"."""
+    if had_errors:
+        return (
+            f"@{actor} could not complete the lookup for **F{finding_id}** "
+            "due to an API error; see errors."
+        )
+    return f"@{actor} could not find finding **F{finding_id}** on this pull request."
+
+
 def _dismiss_if_all_resolved(
     provider: GitHubProvider,
     threads: Sequence[dict[str, Any]],
@@ -281,7 +293,7 @@ def dismiss_by_finding_id(
     if classified.location is FindingLocation.UNKNOWN:
         errors.extend(provider._errors[errors_before:])
         return DismissResult(
-            reply=f"@{actor} could not find finding **F{finding_id}** on this pull request.",
+            reply=_not_found_reply(actor, finding_id, had_errors=bool(errors)),
             errors=tuple(errors),
         )
 
@@ -316,7 +328,7 @@ def dismiss_by_finding_id(
     if target_thread is None:
         errors.extend(provider._errors[errors_before:])
         return DismissResult(
-            reply=f"@{actor} could not find finding **F{finding_id}** on this pull request.",
+            reply=_not_found_reply(actor, finding_id, had_errors=bool(errors)),
             errors=tuple(errors),
         )
 
@@ -349,8 +361,12 @@ def dismiss_by_finding_id(
         errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
+    if resolved:
+        reply = f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread."
+    else:
+        reply = f"@{actor} marked **F{finding_id}** as `{command}`, but could not resolve the thread; see errors."
     return DismissResult(
-        reply=f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread.",
+        reply=reply,
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         errors=tuple(errors),
@@ -380,10 +396,14 @@ def dismiss_inline_reply(
 
     if target_thread is None:
         errors.extend(provider._errors[errors_before:])
-        return DismissResult(
-            reply=f"@{actor} could not find the review thread for this comment.",
-            errors=tuple(errors),
-        )
+        if errors:
+            reply = (
+                f"@{actor} could not complete the lookup for this comment's "
+                "review thread due to an API error; see errors."
+            )
+        else:
+            reply = f"@{actor} could not find the review thread for this comment."
+        return DismissResult(reply=reply, errors=tuple(errors))
 
     body = _first_comment_body(target_thread)
     author = _first_comment_author_login(target_thread) or None
@@ -419,8 +439,12 @@ def dismiss_inline_reply(
         errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
+    if resolved:
+        reply = f"@{actor} marked as `{command}` and resolved the thread."
+    else:
+        reply = f"@{actor} marked as `{command}`, but could not resolve the thread; see errors."
     return DismissResult(
-        reply=f"@{actor} marked as `{command}` and resolved the thread.",
+        reply=reply,
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         errors=tuple(errors),
