@@ -107,7 +107,10 @@ def test_resolves_thread_and_dismisses_review_when_review_id_given(monkeypatch) 
     dismissed: list[str] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "POST" and str(req.url).endswith("/graphql"):
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
             body = _json.loads(req.content)
             q = body.get("query", "")
             if "resolveReviewThread" in q:
@@ -115,8 +118,8 @@ def test_resolves_thread_and_dismisses_review_when_review_id_given(monkeypatch) 
                     200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
                 )
             return httpx.Response(200, json=_threads_response(nodes))
-        if req.method == "PUT" and "/dismissals" in str(req.url):
-            dismissed.append(str(req.url))
+        if req.method == "PUT" and "/dismissals" in url:
+            dismissed.append(url)
             return httpx.Response(200, json={})
         return httpx.Response(404)
 
@@ -141,7 +144,13 @@ def test_dismiss_put_failure_surfaces_as_warning_not_silent(monkeypatch) -> None
     nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "POST" and str(req.url).endswith("/graphql"):
+        url = str(req.url)
+        # State check reports CHANGES_REQUESTED so the dismiss PUT is still
+        # attempted (and fails) -- this test covers the PUT-failure surfacing
+        # path specifically, not the story-13-5 skip-on-wrong-state path.
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
             body = _json.loads(req.content)
             q = body.get("query", "")
             if "resolveReviewThread" in q:
@@ -149,7 +158,7 @@ def test_dismiss_put_failure_surfaces_as_warning_not_silent(monkeypatch) -> None
                     200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
                 )
             return httpx.Response(200, json=_threads_response(nodes))
-        if req.method == "PUT" and "/dismissals" in str(req.url):
+        if req.method == "PUT" and "/dismissals" in url:
             return httpx.Response(422, json={"message": "Review is not in a dismissable state"})
         return httpx.Response(404)
 
@@ -180,7 +189,10 @@ def test_missing_review_id_falls_back_to_thread_review_and_still_resolves(monkey
     dismissed: list[str] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "POST" and str(req.url).endswith("/graphql"):
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
             body = _json.loads(req.content)
             q = body.get("query", "")
             if "resolveReviewThread" in q:
@@ -188,8 +200,8 @@ def test_missing_review_id_falls_back_to_thread_review_and_still_resolves(monkey
                     200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
                 )
             return httpx.Response(200, json=_threads_response(nodes))
-        if req.method == "PUT" and "/dismissals" in str(req.url):
-            dismissed.append(str(req.url))
+        if req.method == "PUT" and "/dismissals" in url:
+            dismissed.append(url)
             return httpx.Response(200, json={})
         return httpx.Response(404)
 

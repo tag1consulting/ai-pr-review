@@ -144,6 +144,8 @@ def test_dismiss_by_finding_id_unknown_id() -> None:
 
 
 def test_dismiss_by_finding_id_inline_resolves_and_dismisses_review() -> None:
+    """Regression guard for issue #562's fix: a CHANGES_REQUESTED review must
+    still dismiss correctly once the review-state check is in place."""
     id_map = {"security-reviewer|api.py|10|abc123456789": 4}
     our_body = f"[High] leak\n**[F4]**\n{INLINE_MARKER}\n" + build_id_map_marker(id_map)
     nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
@@ -160,16 +162,19 @@ def test_dismiss_by_finding_id_inline_resolves_and_dismisses_review() -> None:
     ]
 
     def handler2(req: httpx.Request) -> httpx.Response:
-        if req.method == "GET" and "/reviews" in str(req.url):
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
             return httpx.Response(200, json=reviews_for_classification)
-        if req.method == "POST" and str(req.url).endswith("/graphql"):
+        if req.method == "POST" and url.endswith("/graphql"):
             body = _json.loads(req.content)
             q = body.get("query", "")
             if "resolveReviewThread" in q:
                 return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
             return httpx.Response(200, json=_threads_response(nodes))
-        if req.method == "PUT" and "/dismissals" in str(req.url):
-            dismissed.append(str(req.url))
+        if req.method == "PUT" and "/dismissals" in url:
+            dismissed.append(url)
             return httpx.Response(200, json={})
         return httpx.Response(404)
 
@@ -180,6 +185,101 @@ def test_dismiss_by_finding_id_inline_resolves_and_dismisses_review() -> None:
     assert result.review_dismissed is True
     assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
     assert result.errors == ()
+
+
+# ---------------------------------------------------------------------------
+# Issue #562: verify review state before a dismiss PUT (shared helper)
+# ---------------------------------------------------------------------------
+
+
+def test_dismiss_by_finding_id_skips_dismiss_when_review_already_dismissed() -> None:
+    """The defining fix for #562: a review that is already DISMISSED (or
+    APPROVED/COMMENTED) with zero remaining unresolved threads must NOT
+    trigger a dismiss PUT at all -- a clean, silent no-op, not a wasted API
+    call GitHub would reject."""
+    id_map = {"security-reviewer|api.py|10|abc123456789": 4}
+    our_body = f"[High] leak\n**[F4]**\n{INLINE_MARKER}\n" + build_id_map_marker(id_map)
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+    reviews_for_classification = [
+        {"id": 41, "state": "DISMISSED", "user": {"login": "github-actions[bot]"}, "body": our_body}
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "DISMISSED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=reviews_for_classification)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            raise AssertionError("must not issue a dismiss PUT against a non-CHANGES_REQUESTED review")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 4, actor="alice", command="dismiss")
+
+    assert result.thread_resolved is True
+    assert result.review_dismissed is False
+    assert result.errors == ()
+
+
+def test_dismiss_by_finding_id_state_fetch_failure_fails_closed() -> None:
+    """A state-fetch HTTP error must skip the dismiss (fail closed) and
+    surface an error -- never proceed to dismiss on unverifiable state."""
+    id_map = {"security-reviewer|api.py|10|abc123456789": 4}
+    our_body = f"[High] leak\n**[F4]**\n{INLINE_MARKER}\n" + build_id_map_marker(id_map)
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+    reviews_for_classification = [
+        {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": our_body}
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(404, text="Not Found")
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=reviews_for_classification)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            raise AssertionError("must not issue a dismiss PUT when review state could not be verified")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 4, actor="alice", command="dismiss")
+
+    assert result.thread_resolved is True
+    assert result.review_dismissed is False
+    assert any("get_review_state" in e for e in result.errors)
+
+
+def test_get_review_state_happy_path() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and str(req.url).endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_review_state(41) == "CHANGES_REQUESTED"
+    assert prov._errors == []
+
+
+def test_get_review_state_http_error_returns_none() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="Not Found")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_review_state(41) is None
+    assert any("get_review_state 41" in e for e in prov._errors)
 
 
 # ---------------------------------------------------------------------------

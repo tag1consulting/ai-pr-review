@@ -136,6 +136,10 @@ class GitHubProvider:
         c = self.config
         return f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews/{review_id}/dismissals"
 
+    def _review_url(self, review_id: int) -> str:
+        c = self.config
+        return f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews/{review_id}"
+
     def _review_comment_url(self, comment_id: int) -> str:
         c = self.config
         return f"/repos/{c.owner}/{c.repo}/pulls/comments/{comment_id}"
@@ -732,6 +736,29 @@ class GitHubProvider:
             json_body={"message": message},
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def get_review_state(self, review_id: int) -> str | None:
+        """Fetch a single review's current `state` (e.g. `CHANGES_REQUESTED`,
+        `DISMISSED`, `APPROVED`, `COMMENTED`).
+
+        Returns `None` on any HTTP error (appended to `self._errors`). A
+        dedicated single-review GET rather than a re-list via
+        `list_bot_reviews()` — that method paginates the full review list and
+        filters to bot-authored reviews, which is unnecessary work when the
+        caller already has a specific `review_id` in hand (e.g.
+        `ai_pr_review.slash.dismiss._dismiss_if_all_resolved`, which needs
+        this immediately before a dismiss PUT to avoid attempting one against
+        a review no longer in a dismissable state — issue #562).
+        """
+        resp = self.client.request("GET", self._review_url(review_id))
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"get_review_state {review_id}: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return None
+        data = resp.json() or {}
+        state = data.get("state")
+        return state if isinstance(state, str) else None
 
     def fetch_review_comment(self, comment_id: int) -> dict[str, Any] | None:
         """Fetch a single PR review (inline) comment by its REST databaseId.
