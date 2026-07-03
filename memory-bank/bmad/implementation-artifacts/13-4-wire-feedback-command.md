@@ -1,8 +1,8 @@
 # Story 13.4: `ai-pr-review feedback-context` / `resolve-thread` CLI subcommands + wire `feedback-command`
 
-Status: review
+Status: done
 
-PR: TBD
+PR: [#566](https://github.com/tag1consulting/ai-pr-review/pull/566) — merged at `485c4cb`
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -108,6 +108,7 @@ claude-sonnet-5
 - **Two real bugs caught and fixed pre-PR by dispatched code-review and security-review agents, not discovered post-merge:** the `SLASH_PR_NUMBER` fallback gap (would have broken every top-level feedback/false-positive/wont-fix comment) and the `github-token` over-privilege (deviated from documented least-privilege), plus the `$GITHUB_OUTPUT` newline-injection defense-in-depth fix. All three are reflected in the diff being submitted, with regression tests where applicable.
 - **Live-e2e smoke deferred to the epic's combined `:dev` pre-tag pass**, consistent with stories 13-2 and 13-3's own deferrals — `feedback-command` requires OWNER/MEMBER authorship and `enable-feedback-loop: true`, making an isolated live smoke test harder to arrange safely than the dismiss-path jobs; the pytest coverage (pure-logic + HTTP-mocked + CLI-integration, 1758 tests total passing) is the primary safety net for this story, matching the epic's established "no dual-run/shadow-comparison harness" testing strategy.
 - Epic 13's core porting scope is now fully implemented across all 4 stories. Two items remain open for the epic's closeout, tracked separately rather than folded into this story: issue #562 (the shared `_dismiss_if_all_resolved` review-state-check gap, out of scope here since `resolve_only` never reaches it) and the combined `:dev` pre-tag live-e2e pass spanning stories 13-2, 13-3, and this one.
+- **Merged 2026-07-03** at `485c4cb` (PR #566, merge commit, not squashed). CI green (3/3 checks), `ai-pr-review` bot APPROVE with no findings. Epic tracking issue #554 did not auto-close on merge (GitHub's closing-keyword linking did not fire against the merge commit for reasons not investigated further); closed manually with a summary comment cross-linking all 4 phase PRs (#556, #558, #563, #566).
 
 ### File List
 
