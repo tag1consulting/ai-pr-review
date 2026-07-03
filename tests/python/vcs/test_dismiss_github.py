@@ -16,9 +16,14 @@ from dataclasses import dataclass, field
 import httpx
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.slash.dismiss import dismiss_by_finding_id, dismiss_inline_reply
+from ai_pr_review.slash.dismiss import (
+    context_from_parent_comment,
+    dismiss_by_finding_id,
+    dismiss_inline_reply,
+    resolve_only,
+)
 from ai_pr_review.vcs._body import format_body_finding
-from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
+from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import INLINE_MARKER, build_id_map_marker
 
@@ -373,3 +378,197 @@ def test_dismiss_inline_reply_graphql_style_author_still_owned() -> None:
     result = dismiss_inline_reply(prov, 66, None, actor="alice", command="dismiss")
 
     assert result.thread_resolved is True
+
+
+# ---------------------------------------------------------------------------
+# resolve_only — feedback-command's "resolve on success" step (story 13-4)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_only_resolves_without_dismissing() -> None:
+    """The defining contract: resolve_only must NEVER issue a dismiss PUT,
+    even though the thread's owning review has a databaseId — unlike
+    dismiss_inline_reply, this path has no dismissal semantics at all."""
+    nodes = [_inline_thread("T1", resolved=False, body="our finding", comment_db_id=77, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT":
+            raise AssertionError("resolve_only must never issue a dismiss PUT")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    resolved, errors = resolve_only(prov, 77)
+
+    assert resolved is True
+    assert errors == ()
+
+
+def test_resolve_only_already_resolved_is_a_noop_success() -> None:
+    nodes = [_inline_thread("T1", resolved=True, body="our finding", comment_db_id=77, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT":
+            raise AssertionError("resolve_only must never issue a dismiss PUT")
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    resolved, errors = resolve_only(prov, 77)
+
+    assert resolved is True
+    assert errors == ()
+    # Only the thread-fetch call — no resolveReviewThread mutation needed.
+    graphql_calls = [c for c in rec.calls if c[1].endswith("/graphql")]
+    assert len(graphql_calls) == 1
+
+
+def test_resolve_only_thread_not_found() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json=_threads_response([]))
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    resolved, errors = resolve_only(prov, 999)
+
+    assert resolved is False
+    assert any("could not locate" in e for e in errors)
+
+
+def test_resolve_only_ignores_ownership_matches_bash_behavior() -> None:
+    """Bash's resolve-on-success step resolves the thread containing
+    PARENT_COMMENT_ID unconditionally — no marker/author gate — because the
+    slash command was already validated upstream as a reply to one of our
+    comments. resolve_only must not silently add an ownership check bash
+    never had."""
+    nodes = [_inline_thread("T1", resolved=False, body="not our marker at all", comment_db_id=77, review_db_id=None)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    resolved, errors = resolve_only(prov, 77)
+
+    assert resolved is True
+    assert errors == ()
+
+
+def test_resolve_only_graphql_200_with_errors_surfaces_not_silent() -> None:
+    """The #555 failure class: a GraphQL 200-with-errors body must not read
+    as an empty thread list (which would look identical to 'not found')."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            return httpx.Response(200, json={"errors": [{"message": "Could not resolve to a Repository"}]})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    resolved, errors = resolve_only(prov, 77)
+
+    assert resolved is False
+    assert any("Could not resolve to a Repository" in e for e in errors)
+
+
+def test_resolve_only_resolve_mutation_failure_surfaces() -> None:
+    nodes = [_inline_thread("T1", resolved=False, body="our finding", comment_db_id=77, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(403, text="Resource not accessible")
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    resolved, errors = resolve_only(prov, 77)
+
+    assert resolved is False
+    assert any("resolve thread" in e and "403" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# fetch_review_comment / context_from_parent_comment (story 13-4)
+# ---------------------------------------------------------------------------
+
+
+def test_context_from_parent_comment_happy_path() -> None:
+    f = _finding("SQL injection", source="security-reviewer", file="db.py", line=42)
+    body = _build_inline_comment_body(f, finding_id=3)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/pulls/comments/123" in str(req.url):
+            return httpx.Response(200, json={"user": {"login": "github-actions[bot]"}, "path": "db.py", "body": body})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    context = context_from_parent_comment(prov, 123)
+
+    assert context.source == "security-reviewer"
+    assert context.file == "db.py"
+    assert context.missing_reason == ""
+
+
+def test_context_from_parent_comment_wrong_author_rejected() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/pulls/comments/123" in str(req.url):
+            return httpx.Response(200, json={"user": {"login": "some-human"}, "path": "db.py", "body": "hi"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    context = context_from_parent_comment(prov, 123)
+
+    assert context.source == ""
+    assert "not from the AI reviewer" in context.missing_reason
+    assert "some-human" in context.missing_reason
+
+
+def test_context_from_parent_comment_fetch_failure_surfaces() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="Not Found")
+
+    prov, _ = _make_provider(handler)
+    context = context_from_parent_comment(prov, 123)
+
+    assert context.source == ""
+    assert "could not fetch parent comment" in context.missing_reason
+
+
+def test_context_from_parent_comment_no_parent_id_short_circuits() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not call the API with no parent comment id")
+
+    prov, _ = _make_provider(handler)
+    context = context_from_parent_comment(prov, 0)
+
+    assert "no parent comment" in context.missing_reason
+
+
+def test_context_from_parent_comment_unparseable_header_still_sets_file() -> None:
+    """Bot-authored comment fetched fine, but the header doesn't match the
+    rendered format (e.g. a manually-edited comment) — matches bash's
+    behavior of still exporting file= before giving up on source/rule_id."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/pulls/comments/123" in str(req.url):
+            return httpx.Response(
+                200, json={"user": {"login": "github-actions[bot]"}, "path": "db.py", "body": "not a rendered finding"}
+            )
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    context = context_from_parent_comment(prov, 123)
+
+    assert context.source == ""
+    assert context.file == "db.py"
+    assert "could not parse source tag" in context.missing_reason

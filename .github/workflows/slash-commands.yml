@@ -915,228 +915,48 @@ jobs:
             "repos/${REPOSITORY}/${REACTIONS_PATH}/${COMMENT_ID}/reactions" \
             -f content=eyes
 
-      - name: Extract finding context from parent comment
-        # When the slash command is a reply on a review-thread comment, the
-        # parent comment IS the AI finding. Fetch it, validate the author is
-        # github-actions[bot], and parse source / file / rule_id from the
-        # rendered body so the FeedbackEntry has proper context.
+      - name: Extract finding context
+        # Look up source/file/rule_id for the FeedbackEntry: from the parent
+        # inline comment (review-thread reply — the parent comment IS the AI
+        # finding) or from an F<n> token in the comment body (top-level
+        # comment). Ported from two bash steps (issue #554 phase 4) into
+        # `ai-pr-review feedback-context`, unit-tested in
+        # tests/python/slash/test_dismiss.py.
         #
-        # All failure modes (missing in_reply_to_id, parent fetch error,
-        # parent author isn't the bot, header parse failure) are best-effort:
-        # the FeedbackEntry is still persisted (the reviewer's intent is
-        # captured) but with empty context fields, AND a context_missing_reason
-        # is exported.  The reply step prepends an explicit "(no finding
-        # context auto-extracted)" note so the reviewer is not misled.
-        if: steps.endpoints.outputs.is_review_comment == 'true'
+        # All failure modes are best-effort: the FeedbackEntry is still
+        # persisted (the reviewer's intent is captured) but with empty
+        # context fields. For the review-thread-reply path, a
+        # context_missing_reason is also exported so the reply step can
+        # prepend a transparency note.
         id: context
         env:
+          # actions-token, not github-token: this step only performs plain
+          # REST GETs (fetch_review_comment, list_bot_reviews) — no
+          # resolveReviewThread mutation or dismissal PUT, so it doesn't need
+          # the elevated PAT (see the github-token input's description above).
           GH_TOKEN: ${{ secrets.actions-token }}
-          REPOSITORY: ${{ inputs.repository }}
-          IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
-        run: |
-          export_missing() {
-            local reason="$1"
-            echo "::warning::${reason}"
-            echo "context_missing_reason=${reason}" >> "$GITHUB_OUTPUT"
-          }
-
-          parent_id="${IN_REPLY_TO_ID}"
-          if [[ -z "$parent_id" || "$parent_id" == "0" ]]; then
-            export_missing "review-thread reply has no parent comment (in_reply_to_id is empty)"
-            exit 0
-          fi
-          parent_json=$(gh api \
-            "repos/${REPOSITORY}/pulls/comments/${parent_id}" \
-            --jq '{login: .user.login, path: .path, body: .body}' 2>/dev/null) || {
-            export_missing "could not fetch parent comment ${parent_id} from GitHub API"
-            exit 0
-          }
-          parent_author=$(echo "$parent_json" | jq -r '.login')
-          if [[ "$parent_author" != "github-actions[bot]" ]]; then
-            export_missing "parent comment is not from the AI reviewer (author: ${parent_author})"
-            exit 0
-          fi
-          parent_path=$(echo "$parent_json" | jq -r '.path // ""')
-          parent_body=$(echo "$parent_json" | jq -r '.body // ""')
-          # Inline-comment body header format (see ai_pr_review/vcs/github.py
-          # _build_inline_comment_body):
-          #   {icon} **[{severity}]** **[F{n}]** {source_tag} {finding text}
-          #
-          # The **[F{n}]** finding-ID token is present whenever a stable per-PR
-          # ID was assigned (which is the default for all findings). Strip it
-          # before extracting bracketed tokens so source lands at position 1
-          # regardless of whether a finding ID is present. This mirrors the
-          # body-level lookup step which already applies the same strip.
-          #
-          # After stripping, token positions are:
-          #   token[1] = severity  (always present, e.g. [HIGH])
-          #   token[2] = source    (e.g. [code-reviewer] or [sarif:bandit])
-          #   token[3] = SARIF ruleId, only present when source starts with sarif:
-          #
-          # For multi-source findings (e.g. [code-reviewer, security-reviewer]),
-          # keep only the first source tag to match the body-level convention.
-          first_line=$(echo "$parent_body" | head -1 \
-            | sed 's/\*\*\[F[0-9]\+\]\*\* *//')
-          source=$(echo "$first_line" \
-            | grep -oE '\[[^]]+\]' | sed -n '2p' | tr -d '[]' \
-            | sed 's/,.*//' | tr -d ' ')
-          rule_id=""
-          if [[ "$source" == sarif:* ]]; then
-            rule_id=$(echo "$first_line" \
-              | grep -oE '\[[^]]+\]' | sed -n '3p' | tr -d '[]')
-          fi
-          if [[ -z "$source" ]]; then
-            export_missing "could not parse source tag from parent comment header"
-            # Still export path so file= is populated even on parse failure.
-            echo "file=${parent_path}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "source=${source}"    >> "$GITHUB_OUTPUT"
-          echo "file=${parent_path}" >> "$GITHUB_OUTPUT"
-          echo "rule_id=${rule_id}"  >> "$GITHUB_OUTPUT"
-
-      - name: Extract finding context from review body (issue_comment with F-ID)
-        # When the slash command is a top-level PR comment (issue_comment event)
-        # that includes a body-level finding ID — e.g.
-        #   /ai-pr-review false-positive F3 this is a false alarm
-        # — look up the finding in the review body so source/file/rule_id can
-        # be populated in the FeedbackEntry.
-        #
-        # This mirrors the extraction in dismiss-body-finding's "Lookup body
-        # finding" step.  Failure modes are best-effort: the entry is still
-        # persisted with whatever context was found.
-        if: steps.endpoints.outputs.is_review_comment == 'false'
-        id: body_context
-        env:
-          GH_TOKEN: ${{ secrets.actions-token }}
-          OWNER: ${{ inputs.repository-owner }}
-          REPO: ${{ inputs.repository-name }}
-          ISSUE_NUMBER: ${{ inputs.issue-number }}
-          COMMENT_BODY: ${{ inputs.comment-body }}
-          PY_SCRIPT: |
-            import json, os, re, sys
-
-            fid = int(os.environ['FINDING_NUM'])
-            bodies = json.load(sys.stdin)
-            # In-diff body findings render under the "### Findings not
-            # attached to specific lines" heading; out-of-diff findings
-            # render inside a "<details>...Out-of-diff analyzer
-            # findings...</details>" block instead (no ### heading at all).
-            # Both buckets carry valid, stable **[F<n>]** tokens (issue #550).
-            section_pat = re.compile(r'### Findings not attached to specific lines(.*?)(?=\n###|\Z)', re.DOTALL)
-            ood_pat = re.compile(r'Out-of-diff analyzer findings.*?</summary>(.*?)</details>', re.DOTALL)
-            id_map_pat = re.compile(r'<!-- ai-pr-review-id-map: ({.*?}) -->', re.DOTALL)
-            f_token = f'**[F{fid}]**'
-
-            for body in bodies:
-                for section in section_pat.findall(body) + ood_pat.findall(body):
-                    for line in section.splitlines():
-                        if f_token in line:
-                            # Strip ALL bold-bracket tokens (severity **[High]**
-                            # and F-id **[F1]**), not just the F-token — else
-                            # the first remaining [...] group is the severity,
-                            # not the source tag (pre-existing bug, same as the
-                            # dismiss-body-finding job's bash extraction).
-                            stripped = re.sub(r'\*\*\[[^\]]+\]\*\* *', '', line)
-                            brackets = re.findall(r'\[([^\]]+)\]', stripped)
-                            source = brackets[0].split(',')[0].strip() if brackets else ''
-                            m = re.search(r'\(at `([^`]+)`', line) or re.search(r'— `([^`]+)', line)
-                            file_line = m.group(1) if m else ''
-                            file_part = file_line.rsplit(':', 1)[0] if ':' in file_line else file_line
-                            rule_id = ''
-                            if source.startswith('sarif:') and len(brackets) > 1:
-                                rule_id = brackets[1]
-                            print(f'body|{source}|{file_part}|{rule_id}')
-                            sys.exit(0)
-
-            for body in bodies:
-                m = id_map_pat.search(body)
-                if not m:
-                    continue
-                try:
-                    d = json.loads(m.group(1))
-                    if any(int(v) == fid for v in d.values()):
-                        print('inline')
-                        sys.exit(0)
-                except Exception:
-                    pass
-
-            print('not_found')
-        run: |
-          # Extract the finding ID from the comment body (e.g. "F3" → "3").
-          # The parser accepts F<n> as the second token after the command.
-          second_token=$(echo "$COMMENT_BODY" | head -1 | tr -d '\r' | awk '{print $3}')
-          if ! echo "$second_token" | grep -qiE '^F[0-9]{1,6}$'; then
-            # No F-ID in this comment — nothing to look up.
-            exit 0
-          fi
-          finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
-
-          # Allocate all temp files upfront and set a single EXIT trap so any
-          # early exit (including mktemp failures below) cleans up correctly.
-          api_err=$(mktemp) || { echo "::error::mktemp failed (api_err)"; exit 1; }
-          py_script=$(mktemp --suffix=.py) || { echo "::error::mktemp failed (py_script)"; rm -f "$api_err"; exit 1; }
-          py_err=$(mktemp) || { echo "::error::mktemp failed (py_err)"; rm -f "$api_err" "$py_script"; exit 1; }
-          trap 'rm -f "$api_err" "$py_script" "$py_err"' EXIT
-
-          api_failed=false
-          all_bodies=$(gh api \
-            "repos/${OWNER}/${REPO}/pulls/${ISSUE_NUMBER}/reviews?per_page=100" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body // ""]' \
-            2>"$api_err") || {
-            echo "::warning::gh api failed fetching reviews for F${finding_num} context lookup: $(cat "$api_err")" >&2
-            api_failed=true
-          }
-          if [[ -s "$api_err" ]]; then
-            echo "::warning::gh api stderr: $(cat "$api_err")" >&2
-          fi
-          # Skip the lookup entirely if the API call failed — an empty body list
-          # would silently produce 'not_found', indistinguishable from a genuine miss.
-          if [[ "$api_failed" == "true" ]]; then
-            exit 0
-          fi
-
-          # Use Python (available in the feedback-command container) to search
-          # review bodies robustly. Bash line-by-line reads split multi-line
-          # bodies across iterations, making section boundary detection unreliable.
-          # Write the script to a temp file; pipe bodies via stdin to avoid quoting issues.
-          # Use '|' as the field separator — safe because source tags and file paths
-          # never contain '|', unlike ':' which appears in file:line annotations.
-          # PY_SCRIPT is defined in this step's env block as a YAML literal block scalar
-          # to avoid embedding unindented Python inside the YAML document body.
-          printf '%s' "$PY_SCRIPT" > "$py_script"
-          result=$(printf '%s' "$all_bodies" | FINDING_NUM="$finding_num" python3 "$py_script" 2>"$py_err") || {
-            echo "::warning::Python context-lookup script failed for F${finding_num}: $(cat "$py_err"); feedback entry will lack source/file context" >&2
-            exit 0
-          }
-          if [[ -s "$py_err" ]]; then
-            echo "::warning::Python context-lookup stderr for F${finding_num}: $(cat "$py_err")" >&2
-          fi
-
-          case "$result" in
-            body\|*)
-              IFS='|' read -r _ source finding_file rule_id <<< "$result"
-              echo "source=${source}"       >> "$GITHUB_OUTPUT"
-              echo "file=${finding_file}"   >> "$GITHUB_OUTPUT"
-              echo "rule_id=${rule_id}"     >> "$GITHUB_OUTPUT"
-              ;;
-            inline)
-              echo "::notice::F${finding_num} is an inline finding; for full context in the feedback entry, reply directly to the finding thread instead of using a top-level comment"
-              ;;
-            not_found)
-              ;;
-          esac
+          GITHUB_REPOSITORY: ${{ inputs.repository }}
+          VCS_PROVIDER: 'github'
+          # This step runs on both event types (no is_review_comment gate);
+          # pr-number is only populated for pull_request_review_comment
+          # events, issue-number for issue_comment events — matching
+          # dismiss-body-finding's identical fallback (see lines 584/619/656).
+          SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          SLASH_IS_REVIEW_COMMENT: ${{ steps.endpoints.outputs.is_review_comment }}
+          SLASH_IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+        run: ai-pr-review feedback-context >> "$GITHUB_OUTPUT"
 
       - name: Invoke Python slash handler
         id: handler
         env:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
-          # Prefer wrapper-supplied context (legacy), then context auto-extracted
-          # from the parent inline comment (review_comment path), then context
-          # looked up from the review body (issue_comment + F-ID path).
-          SLASH_SOURCE: ${{ inputs.finding-source || steps.context.outputs.source || steps.body_context.outputs.source }}
-          SLASH_FILE: ${{ inputs.finding-file || steps.context.outputs.file || steps.body_context.outputs.file }}
-          SLASH_RULE_ID: ${{ inputs.finding-rule-id || steps.context.outputs.rule_id || steps.body_context.outputs.rule_id }}
+          # Prefer wrapper-supplied context (legacy), else the context
+          # auto-extracted above (covers both the review_comment and
+          # issue_comment + F-ID paths — `feedback-context` unifies them).
+          SLASH_SOURCE: ${{ inputs.finding-source || steps.context.outputs.source }}
+          SLASH_FILE: ${{ inputs.finding-file || steps.context.outputs.file }}
+          SLASH_RULE_ID: ${{ inputs.finding-rule-id || steps.context.outputs.rule_id }}
           # Forward extraction failure reason so the Python handler can flag
           # context_missing in extras without re-diagnosing the cause.
           SLASH_CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
@@ -1253,6 +1073,12 @@ jobs:
         # 'feedback' (free-form, not tied to a single finding) and 'explain'/
         # 'revise' (informational, finding stays active).  Identified via
         # the comment body prefix to keep the workflow free of Python deps.
+        #
+        # Resolve-only, by design: unlike `ai-pr-review dismiss`/`dismiss-inline`,
+        # this never dismisses the owning review, even if this is its last
+        # unresolved thread — the FeedbackEntry is already persisted by the
+        # slash handler above, and dismissal here would be a silent behavior
+        # change from what this job has always done. See ai_pr_review.slash.dismiss.resolve_only.
         if: |
           steps.handler.outputs.is_command == 'true' &&
           steps.endpoints.outputs.is_review_comment == 'true' &&
@@ -1260,74 +1086,11 @@ jobs:
            startsWith(inputs.comment-body, '/ai-pr-review wont-fix'))
         env:
           GH_TOKEN: ${{ secrets.github-token }}
-          OWNER: ${{ inputs.repository-owner }}
-          REPO: ${{ inputs.repository-name }}
-          PR_NUMBER: ${{ inputs.pr-number }}
-          PARENT_COMMENT_ID: ${{ inputs.in-reply-to-id }}
-        run: |
-          # Find the review thread containing the parent comment (the AI
-          # finding) and resolve it.  Lifted from dismiss-finding above.
-          cursor=""
-          has_next=true
-          thread_id=""
-          while [[ "$has_next" == "true" && -z "$thread_id" ]]; do
-            result=$(gh api graphql -f query='
-              query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $pr) {
-                    reviewThreads(first: 100, after: $after) {
-                      pageInfo { hasNextPage endCursor }
-                      nodes {
-                        id
-                        comments(first: 100) { nodes { databaseId } }
-                      }
-                    }
-                  }
-                }
-              }' \
-              -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-              ${cursor:+-f after="$cursor"}) || {
-              echo "::warning::Could not fetch review threads to resolve (transport error); feedback persisted but thread left open."
-              exit 0
-            }
-            # GraphQL returns HTTP 200 even on schema/permission errors; the
-            # errors land in .errors[]. Treat them as fatal-for-this-step but
-            # still best-effort overall (feedback already persisted).
-            # Use `length // 0 > 0` so we correctly skip on missing-key,
-            # .errors:null, and empty array — not just on a present .errors.
-            if echo "$result" | jq -e '(.errors | length // 0) > 0' >/dev/null 2>&1; then
-              echo "::warning::GraphQL error fetching review threads: $(echo "$result" | jq -c '.errors'); feedback persisted but thread left open."
-              exit 0
-            fi
-            thread_id=$(echo "$result" | jq -r \
-              --argjson cid "$PARENT_COMMENT_ID" \
-              '.data.repository.pullRequest.reviewThreads.nodes[]
-               | select(.comments.nodes | map(.databaseId) | index($cid))
-               | .id' | head -1)
-            has_next=$(echo "$result" | jq -r \
-              '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-            cursor=$(echo "$result" | jq -r \
-              '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')
-          done
-          if [[ -z "$thread_id" ]]; then
-            echo "::warning::Could not locate review thread for parent comment ${PARENT_COMMENT_ID}; feedback persisted but thread left open."
-            exit 0
-          fi
-          mut_result=$(gh api graphql -f query='
-            mutation($threadId: ID!) {
-              resolveReviewThread(input: {threadId: $threadId}) {
-                thread { id isResolved }
-              }
-            }' \
-            -f threadId="$thread_id" 2>&1) || {
-              echo "::warning::Failed to resolve review thread ${thread_id} (transport error): ${mut_result}; feedback persisted."
-              exit 0
-            }
-          if echo "$mut_result" | jq -e '(.errors | length // 0) > 0' >/dev/null 2>&1; then
-            echo "::warning::GraphQL error resolving review thread ${thread_id}: $(echo "$mut_result" | jq -c '.errors'); feedback persisted."
-            exit 0
-          fi
-          echo "Thread ${thread_id} resolved." >&2
+          GITHUB_REPOSITORY: ${{ inputs.repository }}
+          VCS_PROVIDER: 'github'
+          SLASH_PR_NUMBER: ${{ inputs.pr-number }}
+          SLASH_IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
+        run: ai-pr-review resolve-thread
 
       - name: React — done
         if: steps.handler.outputs.is_command == 'true' && success()
