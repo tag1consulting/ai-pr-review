@@ -211,15 +211,15 @@ development_status:
   # Plan: memory-bank/bmad/planning-artifacts/ (see approved plan referenced
   # in story 13-1). Phased, one PR per story; story 13-1 ships zero workflow
   # change (module + primitives + tests only).
-  # Core 4-phase porting scope merged 2026-07-03; issue #554 closed manually
-  # (auto-close did not fire on PR #566's merge). Reopened for story 13-5,
-  # a follow-up fixing issue #562 (shared dismiss-PUT review-state gap)
-  # found during 13-3. A combined :dev pre-tag live-e2e pass spanning
-  # 13-2/13-3/13-4/13-5's deferred smoke scope remains tracked separately.
-  epic-13: in-progress
+  # All 5 stories merged 2026-07-03. Issue #554 (core porting) closed
+  # manually (auto-close didn't fire on PR #566); issue #562 (13-5 fix)
+  # auto-closed correctly on PR #568's merge. Epic complete. A combined
+  # :dev pre-tag live-e2e pass spanning 13-2/13-3/13-4/13-5's deferred
+  # smoke scope remains tracked separately, not blocking this epic.
+  epic-13: done
   13-1-dismiss-module-and-primitives: done        # #554 phase 1 — PR #556 merged at 7adb075; all 11 ACs met, 1706 tests pass, mypy/ruff clean; story at memory-bank/bmad/implementation-artifacts/13-1-dismiss-module-and-primitives.md
   13-2-wire-dismiss-body-finding: done             # #554 phase 2 — PR #558 merged at f3fbabf; new `ai-pr-review dismiss` CLI subcommand; dismiss-body-finding job converted to container: + CLI call; live-e2e smoke partial (CLI substance verified via docker run against real GitHub API; full comment-flow + explain/revise deferred to :dev pre-tag); story at memory-bank/bmad/implementation-artifacts/13-2-wire-dismiss-body-finding.md
   13-3-wire-dismiss-finding: done                  # #554 phase 3 — PR #563 merged at 963a84c; new `ai-pr-review dismiss-inline` CLI subcommand; dismiss-finding job converted to container: + CLI call; also fixed a silent-failure gap shared with 13-2 (DismissResult.errors now surfaced); issue #562 filed for a related shared-helper gap (review-state check before dismiss PUT); live-e2e smoke partial, full comment-flow deferred to :dev pre-tag; story at memory-bank/bmad/implementation-artifacts/13-3-wire-dismiss-finding.md
   13-4-wire-feedback-command: done                 # #554 phase 4 (final) — PR #566 merged at 485c4cb; new `ai-pr-review feedback-context`/`resolve-thread` CLI subcommands; feedback-command's context-extraction + resolve-only steps converted to container: + CLI calls; resolve-thread deliberately never dismisses (matches bash exactly); fixed a $GITHUB_OUTPUT newline-injection risk and two workflow-wiring bugs (pr-number fallback, token privilege) via pre-merge review passes; story at memory-bank/bmad/implementation-artifacts/13-4-wire-feedback-command.md
-  13-5-verify-review-state-before-dismiss: review  # #562 follow-up — GitHubProvider.get_review_state() + a state check in _dismiss_if_all_resolved(), fail-closed on fetch error, silent skip on non-CHANGES_REQUESTED; live verification (AC10) deferred to the combined :dev pre-tag pass; story at memory-bank/bmad/implementation-artifacts/13-5-verify-review-state-before-dismiss.md
+  13-5-verify-review-state-before-dismiss: done    # #562 follow-up — PR #568 merged at baf78cc; GitHubProvider.get_review_state() + a state check in _dismiss_if_all_resolved(), fail-closed on fetch error, silent skip on non-CHANGES_REQUESTED; live verification (AC10) deferred to the combined :dev pre-tag pass; story at memory-bank/bmad/implementation-artifacts/13-5-verify-review-state-before-dismiss.md
   epic-13-retrospective: optional

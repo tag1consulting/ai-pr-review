@@ -1,8 +1,8 @@
 # Story 13.5: verify review state before dismiss PUT (shared helper)
 
-Status: review
+Status: done
 
-PR: TBD
+PR: [#568](https://github.com/tag1consulting/ai-pr-review/pull/568) — merged at `baf78cc`
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -84,6 +84,7 @@ claude-sonnet-5
 - **Fail-closed on state-fetch failure, silent-skip on known-wrong state — verified as two genuinely distinct code paths**, not conflated, by both self-review and the background code-review agent: a `None` return from `get_review_state()` (any HTTP error) appends an error and skips; a successfully-fetched non-`CHANGES_REQUESTED` state skips with no error (this is the correct, expected, silent behavior the original bash job also had).
 - Background code-review pass (dispatched before opening the PR) reported no findings at its reporting threshold. It independently verified: the fail-closed/silent-skip distinction, the check ordering (state fetch only happens after the unresolved-count check passes, so PR runs with unresolved threads never pay for the extra API call), no single-review-vs-list-endpoint confusion in production code, and that all 4 modified pre-existing tests' original assertions remain intact.
 - Task 4 (live verification) deferred — see Debug Log Reference above.
+- **Merged 2026-07-03** at `baf78cc` (PR #568, merge commit, not squashed). CI green (3/3 checks), `ai-pr-review` bot APPROVE with no findings. Issue #562 auto-closed correctly on merge this time (unlike #554's merge, where the same "Closes #N" pattern didn't fire).
 
 ### File List
 
