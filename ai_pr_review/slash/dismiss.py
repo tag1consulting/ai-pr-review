@@ -19,7 +19,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from ai_pr_review.vcs._finding_ids import _ID_RE, _LOCATION_RE, _SOURCE_RE
 from ai_pr_review.vcs._stale import is_owned_by_us
@@ -46,6 +46,32 @@ class ClassifiedFinding:
     file: str = ""
     line: str = ""
     rule_id: str = ""
+
+
+@dataclass(frozen=True)
+class FeedbackContext:
+    """Source/file/rule_id context for a `feedback-command` FeedbackEntry.
+
+    Mirrors the two bash extraction steps' combined output contract
+    (`source`/`file`/`rule_id`/`context_missing_reason` GITHUB_OUTPUT keys)
+    plus their differing severities for a lookup miss:
+
+    - `missing_reason`: a genuine extraction failure (bad/missing parent
+      comment, wrong author, unparseable header) — surfaced as a
+      `::warning::`, and (parent-comment path only) as `context_missing_reason`
+      so the reply step can prepend a transparency note.
+    - `notice`: the informational "this is an inline finding, reply to the
+      thread instead" hint — surfaced as `::notice::`, never as a warning.
+    - Neither set: a plain "not found" (no F<n> token in the comment, or the
+      token doesn't match any known finding) — silent, matching bash's
+      `not_found)` branch, which emits nothing at all.
+    """
+
+    source: str = ""
+    file: str = ""
+    rule_id: str = ""
+    missing_reason: str = ""
+    notice: str = ""
 
 
 @dataclass(frozen=True)
@@ -371,6 +397,150 @@ def dismiss_by_finding_id(
         review_dismissed=review_dismissed,
         errors=tuple(errors),
     )
+
+
+def parse_inline_comment_header(body: str) -> ClassifiedFinding:
+    """Parse the rendered header of a single inline review comment.
+
+    Mirrors `_build_inline_comment_body`'s render:
+    ``{icon} **[{severity}]**{id_token} {tag} {text}``. After stripping the
+    optional ``**[F<n>]**`` id token, the first bracket group is severity and
+    the second is the source tag — unlike a body bullet (``- {icon} **[F{n}]**
+    [{source}] {text}``, no leading severity bracket), so `_SOURCE_RE`'s
+    first-match behavior used by `_scan_body_bullets` does not apply here.
+    For multi-source findings (e.g. ``[code-reviewer, security-reviewer]``),
+    only the first source tag is kept, matching the body-level convention.
+    Matches `_scan_body_bullets`'s existing rule_id convention: for a SARIF
+    source (e.g. ``sarif:bandit``), `rule_id` is the full source string, not
+    a separately-rendered bracket — no render path emits a distinct third
+    bracket group for the rule ID.
+
+    Returns `ClassifiedFinding(location=UNKNOWN)` (empty source) if no
+    source tag could be parsed, so callers can distinguish a parse failure
+    from a genuine empty source.
+    """
+    first_line = body.splitlines()[0] if body else ""
+    stripped = _ID_RE.sub("", first_line, count=1).strip()
+    brackets = _SOURCE_RE.findall(stripped)
+    if len(brackets) < 2:
+        return ClassifiedFinding(location=FindingLocation.UNKNOWN)
+
+    source = brackets[1].split(",")[0].strip()
+    rule_id = source if source.startswith("sarif:") else ""
+    return ClassifiedFinding(location=FindingLocation.INLINE, source=source, rule_id=rule_id)
+
+
+_BOT_LOGIN: Final[str] = "github-actions[bot]"
+
+
+def context_from_parent_comment(provider: GitHubProvider, parent_comment_id: int) -> FeedbackContext:
+    """Look up FeedbackEntry context from the parent comment of a
+    `pull_request_review_comment`-event slash command (the AI finding being
+    replied to).
+
+    Mirrors `feedback-command`'s "Extract finding context from parent
+    comment" bash step: fetch the comment, validate its author is our bot,
+    then parse `source`/`rule_id` from the rendered header via
+    `parse_inline_comment_header`. `file` comes from the comment's own
+    `path` field (not header parsing) — the header carries no file/line
+    location for the inline case (only the body-bullet render does).
+    """
+    if not parent_comment_id:
+        return FeedbackContext(
+            missing_reason="review-thread reply has no parent comment (in_reply_to_id is empty)"
+        )
+
+    comment = provider.fetch_review_comment(parent_comment_id)
+    if comment is None:
+        return FeedbackContext(
+            missing_reason=f"could not fetch parent comment {parent_comment_id} from GitHub API"
+        )
+
+    if comment["login"] != _BOT_LOGIN:
+        return FeedbackContext(
+            missing_reason=f"parent comment is not from the AI reviewer (author: {comment['login']})"
+        )
+
+    parsed = parse_inline_comment_header(comment["body"])
+    if not parsed.source:
+        # Path is still useful even when the header didn't parse — matches
+        # the bash step, which exports file= before exiting on this path.
+        return FeedbackContext(
+            file=comment["path"],
+            missing_reason="could not parse source tag from parent comment header",
+        )
+
+    return FeedbackContext(source=parsed.source, file=comment["path"], rule_id=parsed.rule_id)
+
+
+def context_from_body_finding_id(bodies: Sequence[str], finding_id: int) -> FeedbackContext:
+    """Look up FeedbackEntry context from an F<n> token in an `issue_comment`
+    (top-level PR comment) slash command.
+
+    Mirrors `feedback-command`'s "Extract finding context from review body"
+    bash+Python-heredoc step, built on the same `classify_finding` used by
+    `dismiss_by_finding_id`. Matches bash's three-way severity split: BODY
+    populates context, INLINE sets `notice` only (bash's `inline)` branch
+    emits an advisory `::notice::`, never a warning), and UNKNOWN
+    (bash's `not_found)` branch) returns an all-empty context — silent,
+    not even a notice.
+    """
+    classified = classify_finding(bodies, finding_id)
+    if classified.location is FindingLocation.BODY:
+        return FeedbackContext(source=classified.source, file=classified.file, rule_id=classified.rule_id)
+    if classified.location is FindingLocation.INLINE:
+        return FeedbackContext(
+            notice=(
+                f"F{finding_id} is an inline finding; for full context in the feedback "
+                "entry, reply directly to the finding thread instead of using a top-level comment"
+            )
+        )
+    return FeedbackContext()
+
+
+def resolve_only(
+    provider: GitHubProvider,
+    parent_comment_id: int,
+) -> tuple[bool, tuple[str, ...]]:
+    """Resolve the review thread owning `parent_comment_id`, without dismissing
+    the owning review under any circumstances.
+
+    Used by `feedback-command`'s "resolve on success" step: `ai-pr-review
+    slash` has already persisted the FeedbackEntry and posted a reply by the
+    time this runs, so this is a pure best-effort side effect — no reply text,
+    no ownership gate (the bash step it replaces resolves the thread
+    containing `parent_comment_id` unconditionally, since the slash command
+    itself was already validated as posted in reply to one of our comments
+    upstream in the workflow's "Validate parent comment is from the bot" gate).
+
+    Returns `(resolved, errors)`. Never raises; every failure mode (transport,
+    GraphQL-200-with-errors, thread not found, resolve failure) surfaces as an
+    error string for the caller to log, with `resolved=False`.
+    """
+    errors_before = len(provider._errors)
+    threads = provider.fetch_review_threads()
+    target_thread = _thread_by_comment_id(threads, parent_comment_id)
+
+    if target_thread is None:
+        errors = list(provider._errors[errors_before:])
+        errors.append(f"could not locate review thread for parent comment {parent_comment_id}")
+        return False, tuple(errors)
+
+    if target_thread.get("isResolved"):
+        return True, tuple(provider._errors[errors_before:])
+
+    thread_id = target_thread.get("id")
+    if not isinstance(thread_id, str):
+        errors = list(provider._errors[errors_before:])
+        errors.append(f"review thread for parent comment {parent_comment_id} has no thread id")
+        return False, tuple(errors)
+
+    ok, status, body_snippet = provider.resolve_thread(thread_id)
+    errors = list(provider._errors[errors_before:])
+    if not ok:
+        errors.append(f"resolve thread {thread_id}: HTTP {status}: {body_snippet}")
+        return False, tuple(errors)
+    return True, tuple(errors)
 
 
 def dismiss_inline_reply(

@@ -6,9 +6,12 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.slash.dismiss import (
     FindingLocation,
     classify_finding,
+    context_from_body_finding_id,
     list_active_body_ids,
+    parse_inline_comment_header,
 )
 from ai_pr_review.vcs._body import format_body_finding
+from ai_pr_review.vcs.github import _build_inline_comment_body
 from ai_pr_review.vcs.marker import build_id_map_marker
 
 
@@ -153,4 +156,105 @@ def test_classify_finding_scans_all_bodies_not_just_first() -> None:
     result = classify_finding([body1, body2], 2)
 
     assert result.location is FindingLocation.BODY
-    assert result.file == "z.py"
+
+
+def test_parse_inline_comment_header_extracts_source_after_severity() -> None:
+    """The rendered inline-comment header is `{icon} **[{severity}]**{id}
+    {tag} {text}` — severity comes BEFORE the source tag (unlike a body
+    bullet, which has no leading severity bracket), so the parser must skip
+    the first bracket group, not take it."""
+    f = _finding("XSS in template", source="security-reviewer", file="views.py", line=5, severity="high")
+    body = _build_inline_comment_body(f, finding_id=3)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.location is FindingLocation.INLINE
+    assert result.source == "security-reviewer"
+    assert result.rule_id == ""
+
+
+def test_parse_inline_comment_header_extracts_sarif_rule_id() -> None:
+    """Matches `_scan_body_bullets`'s existing convention: rule_id is the
+    full source string for a sarif: source, not a separate bracket."""
+    f = _finding("insecure hash", source="sarif:bandit", file="crypto.py", line=8)
+    body = _build_inline_comment_body(f, finding_id=9)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "sarif:bandit"
+    assert result.rule_id == "sarif:bandit"
+
+
+def test_parse_inline_comment_header_multi_source_keeps_first_only() -> None:
+    f = Finding(
+        severity="medium",
+        confidence=80,
+        finding="dup finding",
+        sources=["code-reviewer", "security-reviewer"],
+        file="app.py",
+        line=1,
+    )
+    body = _build_inline_comment_body(f, finding_id=1)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "code-reviewer"
+
+
+def test_parse_inline_comment_header_no_id_token_still_parses() -> None:
+    """finding_id is optional on the render; the id-strip regex must be a
+    no-op (not consume anything) when there's no **[F<n>]** token."""
+    f = _finding("plain finding", source="code-reviewer", file="app.py", line=1)
+    body = _build_inline_comment_body(f, finding_id=None)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "code-reviewer"
+
+
+def test_parse_inline_comment_header_unparseable_returns_unknown() -> None:
+    result = parse_inline_comment_header("not a rendered finding at all")
+    assert result.location is FindingLocation.UNKNOWN
+    assert result.source == ""
+
+
+def test_parse_inline_comment_header_empty_body_returns_unknown() -> None:
+    result = parse_inline_comment_header("")
+    assert result.location is FindingLocation.UNKNOWN
+
+
+def test_context_from_body_finding_id_body_bucket() -> None:
+    f = _finding("SQL injection", source="security-reviewer", file="db.py", line=42)
+    bullet = format_body_finding(f, finding_id=3)
+    body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    context = context_from_body_finding_id([body], 3)
+
+    assert context.source == "security-reviewer"
+    assert context.file == "db.py"
+    assert context.missing_reason == ""
+    assert context.notice == ""
+
+
+def test_context_from_body_finding_id_inline_sets_notice_not_missing_reason() -> None:
+    """Matches bash's `inline)` branch: an advisory notice, never a warning —
+    the finding IS found, it's just in the wrong bucket for this lookup."""
+    id_map = {"security-reviewer|api.py|10|abc123456789": 4}
+    body = "Some review body.\n" + build_id_map_marker(id_map)
+
+    context = context_from_body_finding_id([body], 4)
+
+    assert context.source == ""
+    assert context.missing_reason == ""
+    assert "inline finding" in context.notice
+    assert "F4" in context.notice
+
+
+def test_context_from_body_finding_id_not_found_is_silent() -> None:
+    """Matches bash's `not_found)` branch: completely empty, no notice or
+    warning — a plain miss is not noteworthy."""
+    context = context_from_body_finding_id(["no findings here"], 999)
+
+    assert context.source == ""
+    assert context.missing_reason == ""
+    assert context.notice == ""

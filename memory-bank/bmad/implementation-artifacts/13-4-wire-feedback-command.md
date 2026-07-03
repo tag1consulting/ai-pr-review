@@ -1,0 +1,120 @@
+# Story 13.4: `ai-pr-review feedback-context` / `resolve-thread` CLI subcommands + wire `feedback-command`
+
+Status: review
+
+PR: TBD
+
+<!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
+
+## Story
+
+As a **maintainer of ai-pr-review**,
+I want the `feedback-command` job's two remaining bash pieces (FeedbackEntry context extraction and the "resolve review thread on success" GraphQL step) handled by new `ai-pr-review feedback-context` and `ai-pr-review resolve-thread` CLI subcommands instead of untested inline bash/GraphQL,
+so that the bash orchestration this epic exists to retire stops running in the last of its three remaining jobs, and Epic 13's core porting scope closes.
+
+This is phase 4 (the final phase) of a 4-phase epic (Epic 13, GitHub issue #554). Stories 13-1 through 13-3 ported the dismiss/false-positive/wont-fix orchestration for the top-level-comment and inline-reply paths. `feedback-command` is structurally different from those two jobs: its core FeedbackEntry-writing call (`ai-pr-review slash`) was already Python from before this epic started, and the job was already a `container:` job. This story ports only the two bash pieces that bracket that existing call — it does not touch `ai-pr-review slash` itself.
+
+## Acceptance Criteria
+
+1. A new `@cli.command("feedback-context")` is added to `ai_pr_review/cli.py`. It reads `--pr-number` (`envvar=SLASH_PR_NUMBER`, required int), `--is-review-comment` (`envvar=SLASH_IS_REVIEW_COMMENT`, required bool), `--parent-comment-id` (`envvar=SLASH_IN_REPLY_TO_ID`, optional int, default 0), `--comment-body` (`envvar=SLASH_COMMENT_BODY`, optional string). It unifies the two bash steps it replaces: "Extract finding context from parent comment" (`pull_request_review_comment` events — the parent comment IS the AI finding) and "Extract finding context from review body" (`issue_comment` events with an `F<n>` token). Prints `source=`/`file=`/`rule_id=` `key=value` lines to stdout only (safe for `>> $GITHUB_OUTPUT`); all diagnostics go to stderr. **Never exits non-zero** — context extraction is always best-effort, matching both bash steps' contract.
+2. A new `@cli.command("resolve-thread")` is added, reading `--parent-comment-id` (`envvar=SLASH_IN_REPLY_TO_ID`, required int) and `--pr-number` (`envvar=SLASH_PR_NUMBER`, required int). It resolves the review thread owning `parent_comment_id` **without ever dismissing the owning review**, matching the exact behavior of the bash "Resolve review thread on success" step it replaces (that step calls only `resolveReviewThread`, never a dismiss PUT — verified by reading the pre-change step in full). This is a deliberate divergence from `dismiss`/`dismiss-inline` (13-2/13-3), which do resolve-and-dismiss; `resolve-thread` must not be built by copying `dismiss_inline_reply` and deleting the dismiss call, since that risks silently inheriting its ownership/marker gate and reply-text generation, neither of which the bash step it replaces has. **Never exits non-zero.**
+3. Two new pure functions in `ai_pr_review/slash/dismiss.py` back `feedback-context`: `context_from_parent_comment(provider, parent_comment_id) -> FeedbackContext` (fetches the parent comment via a new `GitHubProvider.fetch_review_comment`, validates the author is the bot, parses `source`/`rule_id` via a new `parse_inline_comment_header` parser, and takes `file` from the comment's own `path` field — not from header parsing, since the inline header carries no file/line location) and `context_from_body_finding_id(bodies, finding_id) -> FeedbackContext` (built on the already-existing `classify_finding` from story 13-1). A new `FeedbackContext` dataclass (`source`, `file`, `rule_id`, `missing_reason`, `notice`) carries the three-way severity split both bash steps have: `missing_reason` (genuine failure, surfaced as `::warning::`), `notice` (informational "this is an inline finding, reply to the thread instead" hint, surfaced as `::notice::`, never a warning), and both-empty (silent "not found" — no F-id token, or a genuine miss).
+4. `context_missing_reason` is exported from `feedback-context` **only** for the review-comment (`pull_request_review_comment`) path, never the issue-comment path — verified against the pre-change bash: only `steps.context.outputs.context_missing_reason` is ever referenced downstream (by the "Post reply (review-thread)" step's transparency-note prepend); the old `steps.body_context` step had no equivalent output at all.
+5. A new `resolve_only(provider, parent_comment_id) -> tuple[bool, tuple[str, ...]]` function in `ai_pr_review/slash/dismiss.py` backs `resolve-thread`. It has **no ownership/marker gate** — deliberately, matching the bash step it replaces (which resolves whatever thread contains `parent_comment_id` unconditionally, because the workflow's upstream "validate parent comment is from the bot" gate already covers this before the step runs). It returns no reply text (the `slash` handler has already posted a reply by the time this runs); every failure mode (transport error, GraphQL-200-with-errors, thread not found, resolve-mutation failure) surfaces as an error string with `resolved=False`, never raises.
+6. `.github/workflows/slash-commands.yml`'s `feedback-command` job's "Extract finding context from parent comment" and "Extract finding context from review body (issue_comment with F-ID)" steps (two bash blocks, ~210 lines combined) collapse into a single "Extract finding context" step calling `ai-pr-review feedback-context`. The "Invoke Python slash handler" step's `SLASH_SOURCE`/`SLASH_FILE`/`SLASH_RULE_ID` env now source from the single unified `steps.context.outputs.*` instead of the old `steps.context.outputs.* || steps.body_context.outputs.*` two-step fallback chain.
+7. The "Resolve review thread on success" step (~65 lines of GraphQL bash) collapses into a single call to `ai-pr-review resolve-thread`. Its `if:` gate (command name is `false-positive` or `wont-fix`, review-comment path only) is preserved unchanged.
+8. `feedback-context`'s workflow step runs unconditionally for both event types (unlike the two bash steps it replaces, which were each gated to one event type) — its `--pr-number` env must therefore fall back correctly: `SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}`, matching `dismiss-body-finding`'s identical existing fallback, since `inputs.pr-number` is only populated for `pull_request_review_comment` events and would otherwise be empty (and fail Click's `type=int` parsing) on the `issue_comment` path.
+9. `feedback-context`'s workflow step uses `secrets.actions-token`, not `secrets.github-token` — it performs only plain REST GETs (no `resolveReviewThread` mutation, no dismissal PUT), so it doesn't need the elevated PAT the `github-token` input's own description reserves for those two specific operations.
+10. Any value that could reach `$GITHUB_OUTPUT` via `feedback-context`'s stdout is defensively stripped of embedded newlines/carriage-returns before being echoed — `context.file` (sourced from the GitHub REST comment's `path` field via `context_from_parent_comment`) is the one field not already bounded to a single line by regex extraction, so a newline there could otherwise forge an additional `key=value` line in `$GITHUB_OUTPUT` that a later step would trust.
+11. `ai-pr-review slash` (the existing, pre-epic command that actually persists the `FeedbackEntry`) is unchanged by this story.
+12. New test coverage: pure-logic tests for `parse_inline_comment_header`, `context_from_body_finding_id`, and the `FeedbackContext` severity split in `tests/python/slash/test_dismiss.py`; HTTP-mocked tests for `resolve_only`, `fetch_review_comment`, and `context_from_parent_comment` in `tests/python/vcs/test_dismiss_github.py`; CLI-integration tests for both new subcommands (including the never-exits-non-zero contract and the newline-injection defense) in a new `tests/python/test_cli_feedback_context.py`.
+13. `actionlint .github/workflows/slash-commands.yml` passes clean (no new shellcheck findings beyond the one pre-existing style-only notice already present on `main`, in the unrelated `dismiss-body-finding` job).
+14. `pytest tests/python -q`, `mypy ai_pr_review/`, and `ruff check ai_pr_review/ tests/python/` all pass clean. No regression in any existing dismiss/feedback test file.
+
+## Tasks / Subtasks
+
+- [x] Task 1 — `ai_pr_review/slash/dismiss.py` additions (AC: 3, 4, 5)
+  - [x] `FeedbackContext` dataclass with the three-way severity split
+  - [x] `parse_inline_comment_header(body) -> ClassifiedFinding` — mirrors `_build_inline_comment_body`'s render (`{icon} **[{severity}]**{id_token} {tag} {text}`); after stripping the id token, the source tag is the *second* bracket group (severity is first) — unlike a body bullet, where `_scan_body_bullets`'s `after_id` slice already excludes the severity bracket, so its first bracket group is source
+  - [x] `context_from_parent_comment(provider, parent_comment_id) -> FeedbackContext`
+  - [x] `context_from_body_finding_id(bodies, finding_id) -> FeedbackContext`
+  - [x] `resolve_only(provider, parent_comment_id) -> tuple[bool, tuple[str, ...]]` — resolve-only, no ownership gate, no reply text
+- [x] Task 2 — `ai_pr_review/vcs/github.py` additions (AC: 3)
+  - [x] `_review_comment_url(comment_id)` path helper
+  - [x] `fetch_review_comment(comment_id) -> dict | None` — GET, returns `{login, path, body}` or `None` on any HTTP error (appended to `self._errors`)
+- [x] Task 3 — CLI subcommands (AC: 1, 2, 9, 10)
+  - [x] `_build_github_provider_or_none(command_label)` — best-effort sibling of story 13-2/13-3's `_build_github_provider_or_exit`; returns `None` instead of `sys.exit(1)`, since both new commands back best-effort workflow steps
+  - [x] `feedback-context` subcommand, including the F-id-token extraction (`tokens[2]` + `re.fullmatch(r"[Ff](\d{1,6})")`, matching the old bash `awk '{print $3}'` + `grep -iE`) for the issue-comment path
+  - [x] `resolve-thread` subcommand
+  - [x] `_single_line()` newline-stripping helper applied to every field before `click.echo`, defense-in-depth against the one unbounded field (`context.file`)
+- [x] Task 4 — Workflow wiring (AC: 6, 7, 8, 9, 13)
+  - [x] Collapse the two context-extraction steps into one "Extract finding context" step
+  - [x] Fix the `SLASH_PR_NUMBER` fallback for the now-unconditional context step (`inputs.pr-number || inputs.issue-number`) — caught by code review, not present in the first draft
+  - [x] Switch the context step to `secrets.actions-token` — caught by code review, not present in the first draft
+  - [x] Update "Invoke Python slash handler"'s env to source from the single unified `steps.context.outputs.*`
+  - [x] Collapse "Resolve review thread on success" into a call to `ai-pr-review resolve-thread`, preserving its `if:` gate unchanged
+  - [x] `actionlint .github/workflows/slash-commands.yml` — clean (one pre-existing, unrelated style notice)
+- [x] Task 5 — Tests (AC: 12, 14)
+  - [x] Pure-logic tests appended to `tests/python/slash/test_dismiss.py`
+  - [x] HTTP-mocked tests appended to `tests/python/vcs/test_dismiss_github.py`, including the deliberate "resolve_only must never issue a dismiss PUT" assertion and a #555-class GraphQL-200-with-errors test
+  - [x] New `tests/python/test_cli_feedback_context.py`, including a regression test proving a newline in `context.file` cannot forge a `$GITHUB_OUTPUT` line
+  - [x] Full-suite regression pass: `pytest tests/python -q` (1758 passed), `mypy ai_pr_review/` (clean), `ruff check ai_pr_review/ tests/python/` (clean)
+- [ ] Task 6 — Live-e2e smoke (AC: none blocking — deferred, see Debug Log)
+
+## Dev Notes
+
+- This story continues Epic 13 (GitHub issue #554); stories 13-1 (PR #556), 13-2 (PR #558), and 13-3 (PR #563) are the immediate prior art. Unlike those two, `feedback-command` was already a `container:` job before this epic, and its core FeedbackEntry-writing logic (`ai-pr-review slash`) was already Python — this story is narrower in scope than 13-2/13-3, porting only the two bash pieces that bracket that pre-existing call, not the call itself.
+- **The resolve-only vs. resolve-and-dismiss distinction is the load-bearing design decision in this story.** Verified by reading the pre-change "Resolve review thread on success" bash step in full: it walks `reviewThreads` and calls `resolveReviewThread`, with no review-state fetch and no `/dismissals` PUT anywhere in the step. This is a real behavioral difference from `dismiss_inline_reply` (13-3), which resolves AND dismisses-if-all-resolved. `resolve_only` was written as its own function rather than by copying `dismiss_inline_reply` and deleting its dismiss call, specifically to avoid silently inheriting two things the bash step doesn't have: an ownership/marker gate, and reply-text generation.
+- **Two bugs were caught by the code-review pass and fixed before opening the PR, not discovered later:**
+  1. The new unified "Extract finding context" step runs unconditionally for both `issue_comment` and `pull_request_review_comment` events (the two old steps it replaces were each individually gated to one event type via `if:`). The first draft wired `SLASH_PR_NUMBER: ${{ inputs.pr-number }}` unconditionally, but `inputs.pr-number` is only populated for `pull_request_review_comment` events (`default: ''` otherwise) — on the `issue_comment` path this would have made Click's `type=int` parsing fail, exiting non-zero and failing the entire job for every top-level `/ai-pr-review feedback|false-positive|wont-fix` comment. This would have violated this story's own core "never exit non-zero" contract (AC 1) and reintroduced exactly the class of silent-breakage bug the epic exists to eliminate — silent in the sense that CI wouldn't catch it (no e2e test exercises the issue_comment path end-to-end), only a live top-level slash command would. Fixed per AC 8, matching `dismiss-body-finding`'s existing identical fallback pattern.
+  2. The context step used `secrets.github-token` (the elevated PAT), copied from the adjacent `resolve-thread` step which legitimately needs it for GraphQL mutations. `feedback-context` performs only plain REST GETs and doesn't need the PAT — the `github-token` input's own docstring reserves it for "the dismiss command's resolveReviewThread GraphQL mutation and review-dismissal REST calls" specifically. Fixed per AC 9.
+- **A third finding from the security review pass was fixed the same way:** `context.file` (sourced from the GitHub REST comment's `path` field, not regex-extracted from a single line the way `source`/`rule_id` are) was the one context field that could theoretically carry a newline through to `$GITHUB_OUTPUT` unbounded, which would forge an additional `key=value` output line a later step trusts. This mirrors the exact reasoning behind the existing `reply_b64` base64-encoding pattern used elsewhere in this same workflow for attacker-reachable text — but `file` is a repo path from GitHub's own API, not raw comment text, so the actual exploitability is low; the fix (strip `\n`/`\r` before every `click.echo` in `feedback-context`, defensively applied to all fields, not just `file`) was applied as defense-in-depth regardless, since this port is the right moment to close the class rather than carry forward the identical gap the deleted bash step also had.
+- **`rule_id` for a SARIF source is the full source string** (e.g. `"sarif:bandit"`), not a separately-parsed bracket segment — this matches the already-shipped (story 13-1) `_scan_body_bullets` convention exactly (`rule_id=source`). An earlier draft of `parse_inline_comment_header` invented a different convention (a distinct third bracket group for the rule ID) that no render path actually emits; corrected after the pure-logic test failed and prompted a re-check against the real body-bullet code.
+- **Known, deliberately out-of-scope: issue #562** (the shared `_dismiss_if_all_resolved` helper doesn't check review state before a dismiss PUT) does not apply to this story — `resolve_only` never reaches that helper at all, since it never dismisses. Folding a fix for #562 into this story would have been scope creep into the two already-merged stories (13-2, 13-3) that do use that helper.
+
+### Project Structure Notes
+
+- Modified: `ai_pr_review/slash/dismiss.py` (new `FeedbackContext`, `parse_inline_comment_header`, `context_from_parent_comment`, `context_from_body_finding_id`, `resolve_only`).
+- Modified: `ai_pr_review/vcs/github.py` (new `_review_comment_url`, `fetch_review_comment`).
+- Modified: `ai_pr_review/cli.py` (new `feedback-context`, `resolve-thread` subcommands; new `_build_github_provider_or_none` helper).
+- Modified: `.github/workflows/slash-commands.yml` (`feedback-command` job only — `dismiss-body-finding` (13-2) and `dismiss-finding` (13-3) are untouched and already done).
+- Modified: `tests/python/slash/test_dismiss.py`, `tests/python/vcs/test_dismiss_github.py`.
+- New test file: `tests/python/test_cli_feedback_context.py`.
+- `ai_pr_review/slash/handlers.py` and the existing `ai-pr-review slash` CLI command are unchanged — this story only ports the two bash pieces bracketing that call.
+
+### References
+
+- [Source: memory-bank/bmad/implementation-artifacts/13-3-wire-dismiss-finding.md] — prior story; established the `_build_github_provider_or_exit` pattern this story's best-effort sibling (`_build_github_provider_or_none`) is modeled on
+- [Source: ai_pr_review/slash/dismiss.py] — `classify_finding`, `_thread_by_comment_id`, `_ID_RE`/`_SOURCE_RE` (story 13-1) reused by this story's new functions
+- [Source: .github/workflows/slash-commands.yml, `feedback-command` job pre-change] — bash implementation being replaced: "Extract finding context from parent comment", "Extract finding context from review body (issue_comment with F-ID)", "Resolve review thread on success" (all three replaced); "Resolve event-type endpoints", "React — seen", "Invoke Python slash handler" (calls the pre-existing `ai-pr-review slash`, unchanged), "Post reply (review-thread)"/"Post reply (top-level)", "React — done"/"React — failed" (all preserved, the first two with updated env references)
+- [Source: ai_pr_review/vcs/github.py, `_build_inline_comment_body`] — the render format `parse_inline_comment_header` parses
+
+## Dev Agent Record
+
+### Agent Model Used
+
+claude-sonnet-5
+
+### Debug Log References
+
+- **Design scoping via advisor consultation before implementation:** the approved epic plan described this phase as "two bash pieces" (context extraction, resolve-on-success), but a fresh read of the actual current `feedback-command` job (post 13-2/13-3 merges) showed three distinct bash pieces in play: the parent-comment context extraction and the review-body context extraction were two separately-gated steps, not one. Confirmed with a stronger-reviewer consultation before writing code: keep `ai-pr-review slash` untouched (it's already Python, not in scope), build one unified `feedback-context` command covering both extraction branches (since both emit the same `source`/`file`/`rule_id` env vars downstream and porting one while leaving the other in bash would be an awkward permanent split), and keep `resolve_only` as its own function rather than reusing `dismiss_inline_reply` — precisely because the latter's resolve-and-dismiss behavior would silently change `feedback-command`'s existing resolve-only contract.
+- **Verified the resolve-only contract by reading the bash step in full, not inferring it from the plan.** The approved epic plan's own text described this step as "a 4th copy of the GraphQL resolve+dismiss" — that description turned out to be inaccurate; the actual bash step calls only `resolveReviewThread`, with no dismiss PUT anywhere. Caught before writing `resolve_only`, avoiding a design built on a wrong premise.
+- **Two workflow-wiring bugs found by a background code-review pass, both fixed before opening the PR:** the `SLASH_PR_NUMBER` fallback gap (the unconditional context step needs `inputs.pr-number || inputs.issue-number`, not bare `inputs.pr-number`) and the `github-token`-vs-`actions-token` privilege mismatch. See Dev Notes for full detail on both; both were genuine regressions in the first draft, not pre-existing issues, and both are fixed in the version being submitted for review.
+- **One security finding from a background security-review pass, fixed before opening the PR:** the `$GITHUB_OUTPUT` newline-injection risk via `context.file`. See Dev Notes for detail. A regression test (`test_feedback_context_file_newline_cannot_forge_github_output_line`) proves the fix.
+
+### Completion Notes List
+
+- No deviations from the approved epic plan's story-13-4 scope beyond the plan's own inaccurate description of the resolve step as "resolve+dismiss" (corrected per the Debug Log above) and the plan naming only two bash pieces where three actually exist (resolved by unifying both context-extraction branches under one CLI command rather than porting one and leaving the other in bash).
+- **Two real bugs caught and fixed pre-PR by dispatched code-review and security-review agents, not discovered post-merge:** the `SLASH_PR_NUMBER` fallback gap (would have broken every top-level feedback/false-positive/wont-fix comment) and the `github-token` over-privilege (deviated from documented least-privilege), plus the `$GITHUB_OUTPUT` newline-injection defense-in-depth fix. All three are reflected in the diff being submitted, with regression tests where applicable.
+- **Live-e2e smoke deferred to the epic's combined `:dev` pre-tag pass**, consistent with stories 13-2 and 13-3's own deferrals — `feedback-command` requires OWNER/MEMBER authorship and `enable-feedback-loop: true`, making an isolated live smoke test harder to arrange safely than the dismiss-path jobs; the pytest coverage (pure-logic + HTTP-mocked + CLI-integration, 1758 tests total passing) is the primary safety net for this story, matching the epic's established "no dual-run/shadow-comparison harness" testing strategy.
+- Epic 13's core porting scope is now fully implemented across all 4 stories. Two items remain open for the epic's closeout, tracked separately rather than folded into this story: issue #562 (the shared `_dismiss_if_all_resolved` review-state-check gap, out of scope here since `resolve_only` never reaches it) and the combined `:dev` pre-tag live-e2e pass spanning stories 13-2, 13-3, and this one.
+
+### File List
+
+- `ai_pr_review/slash/dismiss.py` — new `FeedbackContext`, `parse_inline_comment_header`, `context_from_parent_comment`, `context_from_body_finding_id`, `resolve_only`
+- `ai_pr_review/vcs/github.py` — new `_review_comment_url`, `fetch_review_comment`
+- `ai_pr_review/cli.py` — new `feedback-context`, `resolve-thread` subcommands; new `_build_github_provider_or_none` helper; `_single_line()` newline-stripping applied in `feedback-context`
+- `.github/workflows/slash-commands.yml` — `feedback-command` job's two context-extraction steps collapsed into one "Extract finding context" step calling `ai-pr-review feedback-context`; "Resolve review thread on success" collapsed into a call to `ai-pr-review resolve-thread`; "Invoke Python slash handler"'s env updated to the unified `steps.context.outputs.*`
+- `tests/python/slash/test_dismiss.py` — new pure-logic tests for `parse_inline_comment_header` and `context_from_body_finding_id`
+- `tests/python/vcs/test_dismiss_github.py` — new HTTP-mocked tests for `resolve_only`, `fetch_review_comment`, `context_from_parent_comment`
+- `tests/python/test_cli_feedback_context.py` — new test file (11 tests)

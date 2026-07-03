@@ -136,6 +136,10 @@ class GitHubProvider:
         c = self.config
         return f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}/reviews/{review_id}/dismissals"
 
+    def _review_comment_url(self, comment_id: int) -> str:
+        c = self.config
+        return f"/repos/{c.owner}/{c.repo}/pulls/comments/{comment_id}"
+
     # ------------------------------------------------------------------
     # Summary comment find helpers
     # ------------------------------------------------------------------
@@ -728,6 +732,28 @@ class GitHubProvider:
             json_body={"message": message},
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def fetch_review_comment(self, comment_id: int) -> dict[str, Any] | None:
+        """Fetch a single PR review (inline) comment by its REST databaseId.
+
+        Returns `{"login": ..., "path": ..., "body": ...}` or `None` on any
+        HTTP error (appended to `self._errors`) or non-2xx response. Used by
+        `feedback-command`'s context-extraction step, which needs the parent
+        comment's author, file path, and rendered body to derive
+        source/file/rule_id for the FeedbackEntry.
+        """
+        resp = self.client.request("GET", self._review_comment_url(comment_id))
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"fetch_review_comment {comment_id}: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return None
+        data = resp.json() or {}
+        return {
+            "login": (data.get("user") or {}).get("login") or "",
+            "path": data.get("path") or "",
+            "body": data.get("body") or "",
+        }
 
     def list_bot_reviews(self) -> list[dict[str, Any]]:
         """Return all reviews authored by our bot login, paginated.

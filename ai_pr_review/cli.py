@@ -763,3 +763,175 @@ def dismiss_inline(
         logger.warning("dismiss-inline: %s", error)
         click.echo(f"::warning::dismiss-inline: {error}", err=True)
     click.echo(result.reply)
+
+
+def _build_github_provider_or_none(command_label: str) -> GitHubProvider | None:
+    """Best-effort variant of `_build_github_provider_or_exit`.
+
+    Used by `feedback-context` and `resolve-thread`: both back best-effort
+    workflow steps in `feedback-command` where a FeedbackEntry has already
+    (or will separately) be persisted regardless of whether context
+    extraction or thread resolution succeeds, so provider construction
+    failure must degrade gracefully (log + return) rather than exit(1) and
+    fail the whole job.
+    """
+    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
+
+    vcs = (os.environ.get("VCS_PROVIDER") or "github").strip().lower()
+    if vcs != "github":
+        click.echo(f"{command_label}: ai-pr-review {command_label} is GitHub-only (VCS_PROVIDER={vcs!r})", err=True)
+        return None
+
+    try:
+        provider = provider_from_env()
+    except ProviderConfigError as exc:
+        click.echo(f"{command_label}: {exc}", err=True)
+        return None
+
+    if not isinstance(provider, GitHubProvider):
+        click.echo(f"{command_label}: expected a GitHub provider", err=True)
+        return None
+
+    return provider
+
+
+@cli.command("feedback-context")
+@click.option(
+    "--pr-number",
+    envvar="SLASH_PR_NUMBER",
+    required=True,
+    type=int,
+    help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
+)
+@click.option(
+    "--is-review-comment",
+    envvar="SLASH_IS_REVIEW_COMMENT",
+    required=True,
+    type=bool,
+    help="'true' for a pull_request_review_comment event (look up context from "
+    "the parent comment), 'false' for an issue_comment event (look up context "
+    "from an F<n> token in the comment body).",
+)
+@click.option(
+    "--parent-comment-id",
+    envvar="SLASH_IN_REPLY_TO_ID",
+    default=0,
+    type=int,
+    help="REST databaseId of the parent comment, when --is-review-comment "
+    "(defaults to SLASH_IN_REPLY_TO_ID env var).",
+)
+@click.option(
+    "--comment-body",
+    envvar="SLASH_COMMENT_BODY",
+    default="",
+    help="Raw comment body, used to extract an F<n> token when not "
+    "--is-review-comment (defaults to SLASH_COMMENT_BODY env var).",
+)
+def feedback_context(
+    pr_number: int,
+    is_review_comment: bool,
+    parent_comment_id: int,
+    comment_body: str,
+) -> None:
+    """Look up source/file/rule_id context for a `feedback-command`
+    FeedbackEntry, from either the parent inline comment (review-thread
+    reply) or an F<n> token in the comment body (top-level comment).
+
+    Prints `key=value` lines to stdout only (safe for `>> $GITHUB_OUTPUT`);
+    all diagnostics go to stderr. Never exits non-zero — context extraction
+    is always best-effort, mirroring the two bash steps it replaces.
+    """
+    import re
+
+    from ai_pr_review.slash.dismiss import (
+        FeedbackContext,
+        context_from_body_finding_id,
+        context_from_parent_comment,
+    )
+
+    os.environ["PR_NUMBER"] = str(pr_number)
+
+    context = FeedbackContext()
+    provider = _build_github_provider_or_none("feedback-context")
+    if provider is not None:
+        if is_review_comment:
+            context = context_from_parent_comment(provider, parent_comment_id)
+        else:
+            first_line = comment_body.splitlines()[0] if comment_body else ""
+            tokens = first_line.split()
+            fid_token = tokens[2] if len(tokens) > 2 else ""
+            match = re.fullmatch(r"[Ff](\d{1,6})", fid_token)
+            if match:
+                bodies = [r.get("body") or "" for r in provider.list_bot_reviews()]
+                context = context_from_body_finding_id(bodies, int(match.group(1)))
+
+    def _single_line(value: str) -> str:
+        # This step's stdout is appended verbatim to $GITHUB_OUTPUT
+        # (`>> "$GITHUB_OUTPUT"`), one `key=value` line per echo. `source`
+        # and `rule_id` are always regex-extracted from a single line, but
+        # `context.file` can come straight from the GitHub REST comment's
+        # `path` field (context_from_parent_comment) with no such bound. A
+        # newline there would inject a forged key=value line into
+        # $GITHUB_OUTPUT that a later step would trust — strip embedded
+        # newlines/carriage returns from every emitted field defensively,
+        # regardless of which field could theoretically carry one today.
+        return value.replace("\n", "").replace("\r", "")
+
+    if context.missing_reason:
+        click.echo(f"::warning::{_single_line(context.missing_reason)}", err=True)
+    if context.notice:
+        click.echo(f"::notice::{_single_line(context.notice)}", err=True)
+    if context.source:
+        click.echo(f"source={_single_line(context.source)}")
+    if context.file:
+        click.echo(f"file={_single_line(context.file)}")
+    if context.rule_id:
+        click.echo(f"rule_id={_single_line(context.rule_id)}")
+    # context_missing_reason is only consumed downstream for the
+    # review-comment path (prepending a transparency note to the in-thread
+    # reply); the body-context path has no equivalent consumer in bash.
+    if is_review_comment and context.missing_reason:
+        click.echo(f"context_missing_reason={_single_line(context.missing_reason)}")
+
+
+@cli.command("resolve-thread")
+@click.option(
+    "--parent-comment-id",
+    envvar="SLASH_IN_REPLY_TO_ID",
+    required=True,
+    type=int,
+    help="REST databaseId of the parent comment whose owning thread should "
+    "be resolved (defaults to SLASH_IN_REPLY_TO_ID env var).",
+)
+@click.option(
+    "--pr-number",
+    envvar="SLASH_PR_NUMBER",
+    required=True,
+    type=int,
+    help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
+)
+def resolve_thread_command(parent_comment_id: int, pr_number: int) -> None:
+    """Resolve the review thread owning `parent_comment_id`, without
+    dismissing the owning review.
+
+    Used by `feedback-command`'s "resolve on success" step, run after
+    `ai-pr-review slash` has already persisted the FeedbackEntry and posted a
+    reply — this is a pure best-effort side effect. Always exits 0; every
+    failure mode is logged as a `::warning::` rather than failing the step,
+    matching the bash job's "feedback already persisted, thread resolution
+    is best-effort" contract.
+    """
+    from ai_pr_review.slash.dismiss import resolve_only
+
+    os.environ["PR_NUMBER"] = str(pr_number)
+
+    provider = _build_github_provider_or_none("resolve-thread")
+    if provider is None:
+        return
+
+    resolved, errors = resolve_only(provider, parent_comment_id)
+    for error in errors:
+        logger.warning("resolve-thread: %s", error)
+        click.echo(f"::warning::resolve-thread: {error}", err=True)
+    if resolved:
+        logger.info("resolve-thread: resolved thread for parent comment %s", parent_comment_id)
