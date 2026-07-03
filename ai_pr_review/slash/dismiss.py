@@ -239,7 +239,20 @@ def _dismiss_if_all_resolved(
     *,
     dismiss_message: str,
 ) -> tuple[bool, list[str]]:
-    """Dismiss target_review_id iff none of its own threads remain unresolved.
+    """Dismiss target_review_id iff none of its own threads remain unresolved
+    AND the review is currently `CHANGES_REQUESTED`.
+
+    The state check (issue #562) matches the original bash job's
+    `if review_state != CHANGES_REQUESTED: skip` guard, ported here rather
+    than at either call site so both `dismiss_by_finding_id` (story 13-2) and
+    `dismiss_inline_reply` (story 13-3) get the fix from one place. Without
+    it, resolving the last unresolved thread on an already-`DISMISSED` (or
+    `APPROVED`/`COMMENTED`) review attempts a dismiss PUT GitHub correctly
+    rejects — not silently swallowed since story 13-3 (`DismissResult.errors`
+    surfaces it), but still a wasted API call for a case that should be a
+    clean no-op. A state-fetch failure fails closed: skip the dismiss and
+    surface an error, rather than guessing and risking a wrongful dismiss
+    attempt on unverifiable state.
 
     Count scope is always per-review (databaseId == target_review_id), never
     PR-wide, per the canonical semantics chosen in Epic 13's design (the 4
@@ -274,6 +287,16 @@ def _dismiss_if_all_resolved(
             continue
         unresolved += 1
     if unresolved > 0:
+        return False, errors
+
+    state = provider.get_review_state(target_review_id)
+    if state is None:
+        errors.append(f"get_review_state {target_review_id}: could not verify review state, skipping dismiss")
+        return False, errors
+    if state != "CHANGES_REQUESTED":
+        # Not an error: the review is already dismissed/approved/commented,
+        # so there is nothing to do. Silent, matching the bash guard this
+        # ports — a skip here is the correct, expected outcome.
         return False, errors
 
     ok, status, body_snippet = provider.dismiss_review(target_review_id, dismiss_message)
