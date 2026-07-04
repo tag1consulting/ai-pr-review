@@ -54,8 +54,6 @@ The starter template uses **two tokens**:
 
 Then add it as a repository secret named `GH_TOKEN` (Settings → Secrets and variables → Actions → New repository secret).
 
-> **Known edge:** A few confirmation messages inside the `dismiss` command's resolve/dismiss steps still post under the PAT rather than `GITHUB_TOKEN`, because those messages are interleaved with the GraphQL mutation in the same shell step. This affects only the dismiss-outcome confirmation comment, not the lookup/list/learning-loop replies. A future refactor will move those to `GITHUB_TOKEN` as well.
-
 ### 3. Verify your API key secret
 
 The template accepts `secrets.AI_REVIEW_API_KEY` or `secrets.ANTHROPIC_API_KEY` — either works without renaming. If you use a different provider, update the `provider` input accordingly.

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-07-03
+
+### Added
+
+- **`ai-pr-review dismiss` / `dismiss-inline` / `feedback-context` / `resolve-thread` CLI subcommands**: new `ai_pr_review/slash/dismiss.py` module and CLI entry points backing `/ai-pr-review dismiss`, `false-positive`, and `wont-fix`. Finding classification (body vs. inline) is now a pytest-covered bullet-scan/id-map lookup rather than a bash string match. (#554)
+
+### Changed
+
+- **Slash-command dismiss orchestration ported from workflow-embedded bash to the Python engine**: `.github/workflows/slash-commands.yml`'s `dismiss-body-finding`, `dismiss-finding`, and `feedback-command` jobs now call the new CLI subcommands instead of running ~1,100 lines of inline bash and GraphQL calls. User-facing command syntax is unchanged; this is an internal reliability change with no behavioral difference for PR authors. `explain` and `revise` are unaffected and continue to use the existing lookup step. (#554)
+
+### Fixed
+
+- **`/ai-pr-review dismiss` failed to locate out-of-diff findings**: the `dismiss-body-finding` job and the Python engine's ID-map reconstruction both filtered bot review bodies by a heading that out-of-diff-only reviews never render, silently dropping such reviews before the F-ID search ran. Also fixed in the same pass: a bash section-scanner that could not track multi-line state, and source-tag extraction that mistook the severity token for the source tag. (#550)
+
+- **Dismiss PUT issued against an already-dismissed or approved review**: the shared dismiss helper resolved a thread and then issued a dismiss PUT once all threads were resolved, without checking the review's current state first. A review already `DISMISSED`/`APPROVED`/`COMMENTED` could still have unresolved threads recorded against it, causing a rejected PUT that surfaced as a confusing warning instead of a clean no-op. (#562)
+
 ## [2.2.2] - 2026-06-29
 
 ### Fixed
