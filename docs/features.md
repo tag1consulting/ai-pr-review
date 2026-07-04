@@ -7,6 +7,30 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.3.0
+
+**Slash-command dismiss orchestration ported from workflow-embedded bash to the Python engine.** `/ai-pr-review dismiss`, `false-positive`, and `wont-fix` now run through a new `ai_pr_review/slash/dismiss.py` module and CLI subcommands (`dismiss`, `dismiss-inline`, `feedback-context`, `resolve-thread`), replacing ~1,100 lines of inline bash and GraphQL calls in `slash-commands.yml`. Finding classification (body vs. inline) is pytest-covered rather than a bash string match. User-facing command syntax is unchanged.
+
+**Two dismiss bugs fixed as part of the port.** `/ai-pr-review dismiss` previously failed to locate out-of-diff findings because a body-scan filter dropped reviews that render findings in a different heading structure. Separately, the dismiss helper could attempt a dismiss PUT against a review that was already dismissed, approved, or commented, surfacing a confusing warning instead of a clean no-op; it now checks the review's current state first.
+
+## What's new in v2.2.2
+
+**Stale `CHANGES_REQUESTED` review no longer persists after a zero-finding rescan.** When a re-review produced no findings, the bot posted an `APPROVE` review but the prior `CHANGES_REQUESTED` review was never dismissed, permanently blocking the PR. `resolve_stale` now dismisses only CR reviews that are not the current run's.
+
+**`jq` restored to the container image**, fixing silent failures in `feedback-command`'s `wont-fix`/`false-positive` steps. Base image bumped to `ubuntu:26.04` (Python 3.14).
+
+## What's new in v2.2.1
+
+**CLI decomposition and VCS dedup (no behavior change).** Preflight LLM agent code and post-review output formatting were extracted out of `cli.py` into dedicated modules; GitHub and GitLab inline/body finding partitioning now shares a single helper. **kube-linter and phpstan severity mapping fixed**: 15 security-sensitive kube-linter checks and phpstan finding levels now map to accurate severities instead of a flat `Medium`.
+
+## What's new in v2.2.0
+
+**`AI_FAIL_ON_FINDINGS` CI gate** (`fail-on-findings` action input): exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`, so branch protection can block merge until the bot approves.
+
+**`AI_CONTEXT_MAX_QUERIES` raised from 50 to 200** — the previous hardcoded cap on ripgrep symbol-lookup queries was shared across all agents in a run and was often exhausted before every agent got context enrichment.
+
+**Unknown `AI_*` variables now warn instead of aborting the review**, so pinning an older container image against a newer action no longer breaks on a variable the image doesn't recognize.
+
 ## What's new in v2.1.1
 
 **Judge `max_tokens` raised from 1024 to 4096 (silent regression fix).** The judge's JSON response was being truncated on PRs with more than approximately 20 findings, causing parse failure and fail-soft fallback. The result: every moderate-to-large review since v2.1.0 was running with the judge effectively disabled, silently. No configuration change is needed; the fix is automatic.

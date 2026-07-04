@@ -27,13 +27,11 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
-## What's new in v2.1.1
+## What's new in v2.3.0
 
-**Two judge-pass bugs fixed (silent regression since v2.1.0).** The judge's `max_tokens` was 1024 — too small for PRs with 20+ findings, causing JSON truncation and fail-soft fallback that silently disabled the judge on most real reviews. A second bug crashed the review with "model_standard is empty" on any skip-eligible PR (empty diff or draft mode). Both are fixed; no configuration change needed.
+**Slash-command dismiss orchestration ported from workflow-embedded bash to the Python engine.** `/ai-pr-review dismiss`, `false-positive`, and `wont-fix` now run through a tested Python module and CLI subcommands instead of ~1,100 lines of inline bash and GraphQL calls. User-facing command syntax is unchanged. Also fixes two dismiss bugs: out-of-diff findings that couldn't be located, and a dismiss PUT attempted against an already-resolved review.
 
-**Judge-pass token cost now visible in the token table.** The judge LLM call now appears as a `judge-pass` row in the token usage table so you can see its contribution to the review cost.
-
-See [Features → v2.1.1](features#whats-new-in-v211) for details.
+See [Features → v2.3.0](features#whats-new-in-v230) for details.
 
 ## What it does
 
