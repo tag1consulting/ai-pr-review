@@ -119,6 +119,40 @@ def test_extract_findings_normalise_severity() -> None:
     assert findings[0].severity == "High"
 
 
+def test_extract_findings_category_defaults_to_other() -> None:
+    """A finding with no category field at all defaults to 'other'."""
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 80, "finding": "test"}]
+```
+"""
+    findings = extract_findings(output, "agent")
+    assert findings[0].category == "other"
+
+
+def test_extract_findings_unknown_category_normalises_to_other() -> None:
+    """An unrecognized category value must not raise or drop the finding."""
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 80, "finding": "test", "category": "totally-made-up"}]
+```
+"""
+    findings = extract_findings(output, "agent")
+    assert len(findings) == 1
+    assert findings[0].category == "other"
+
+
+def test_extract_findings_valid_category_round_trips() -> None:
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 80, "finding": "test", "category": "secret"}]
+```
+"""
+    findings = extract_findings(output, "agent")
+    assert findings[0].category == "secret"
+    assert findings[0].to_dict()["category"] == "secret"
+
+
 def test_extract_findings_strips_out_of_diff_injection() -> None:
     """out_of_diff: true in agent JSON must be stripped to prevent suppression bypass."""
     output = """
@@ -434,3 +468,4 @@ def test_finding_to_dict() -> None:
     assert d["severity"] == "High"
     assert d["file"] == "f.py"
     assert d["line"] == 5
+    assert d["category"] == "other"

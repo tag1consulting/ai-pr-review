@@ -11,6 +11,36 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["Critical", "High", "Medium", "Low"]
 
+# Shared taxonomy ported from claude-comprehensive-review#76. Kept as a plain
+# tuple (not a Literal[...] on the field itself) so an unrecognized value can
+# be normalised to "other" rather than rejected — see _normalise_category.
+CATEGORIES: tuple[str, ...] = (
+    "authz",
+    "injection",
+    "dependency-cve",
+    "secret",
+    "architecture-coupling",
+    "test-gap",
+    "edge-case",
+    "observability",
+    "docs",
+    "lint",
+    "other",
+)
+Category = Literal[
+    "authz",
+    "injection",
+    "dependency-cve",
+    "secret",
+    "architecture-coupling",
+    "test-gap",
+    "edge-case",
+    "observability",
+    "docs",
+    "lint",
+    "other",
+]
+
 
 class Finding(BaseModel):
     """A single finding from an agent or static analyzer."""
@@ -19,6 +49,7 @@ class Finding(BaseModel):
     confidence: int = Field(ge=0, le=100)
     finding: str = Field(min_length=1)
     source: str = ""
+    category: Category = "other"
     file: str = ""
     line: int | None = Field(default=None, ge=1)
     start_line: int | None = Field(default=None, ge=1)
@@ -47,6 +78,19 @@ class Finding(BaseModel):
                 raise ValueError(f"Invalid severity {v!r}")
         return v
 
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalise_category(cls, v: object) -> object:
+        # Permissive by design, unlike _normalise_severity: an LLM emitting an
+        # unrecognized or missing category must never cause the finding to be
+        # dropped. Falls back to "other" instead of raising.
+        if isinstance(v, str):
+            v = v.strip().lower()
+            if v not in CATEGORIES:
+                return "other"
+            return v
+        return "other"
+
     @model_validator(mode="after")
     def _populate_sources(self) -> Finding:
         if self.source and not self.sources:
@@ -60,6 +104,7 @@ class Finding(BaseModel):
             "confidence": self.confidence,
             "finding": self.finding,
             "source": self.source,
+            "category": self.category,
         }
         if self.file:
             d["file"] = self.file
