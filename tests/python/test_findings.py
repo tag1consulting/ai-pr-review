@@ -153,6 +153,20 @@ def test_extract_findings_valid_category_round_trips() -> None:
     assert findings[0].to_dict()["category"] == "secret"
 
 
+@pytest.mark.parametrize("raw_category", [42, None, True, ["secret"], {"a": 1}])
+def test_finding_non_string_category_normalises_to_other(raw_category: object) -> None:
+    """A non-string category (number, null, bool, list, dict) must fall back to
+    'other' rather than raise. This is the same contract as an unrecognized
+    *string* value (see test_extract_findings_unknown_category_normalises_to_other),
+    but exercised via direct model construction: extract_findings's json.loads()
+    parses valid JSON before Finding.model_validate() ever sees it, so an LLM
+    emitting a non-string category value is a realistic input this validator
+    must handle without raising, else extract.py's broad except-Exception guard
+    would silently drop the whole finding (see extract.py's _parse_and_validate)."""
+    finding = _make_finding(category=raw_category)
+    assert finding.category == "other"
+
+
 def test_extract_findings_strips_out_of_diff_injection() -> None:
     """out_of_diff: true in agent JSON must be stripped to prevent suppression bypass."""
     output = """
