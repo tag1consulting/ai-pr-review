@@ -5,28 +5,18 @@ Closes #190 (schema validation) and #126 (to_finding() framework).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["Critical", "High", "Medium", "Low"]
 
-# Shared taxonomy ported from claude-comprehensive-review#76. Kept as a plain
-# tuple (not a Literal[...] on the field itself) so an unrecognized value can
-# be normalised to "other" rather than rejected — see _normalise_category.
-CATEGORIES: tuple[str, ...] = (
-    "authz",
-    "injection",
-    "dependency-cve",
-    "secret",
-    "architecture-coupling",
-    "test-gap",
-    "edge-case",
-    "observability",
-    "docs",
-    "lint",
-    "other",
-)
+# Shared taxonomy ported from claude-comprehensive-review#76. The field itself
+# is typed `str` rather than `Category` (see Finding.category below) so an
+# unrecognized value can be normalised to "other" rather than rejected by
+# pydantic — see _normalise_category. CATEGORIES is derived from Category so
+# there is exactly one place that lists the 11 values; the tuple form is what
+# _normalise_category checks membership against.
 Category = Literal[
     "authz",
     "injection",
@@ -40,6 +30,7 @@ Category = Literal[
     "lint",
     "other",
 ]
+CATEGORIES: tuple[str, ...] = get_args(Category)
 
 
 class Finding(BaseModel):

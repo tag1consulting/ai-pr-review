@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`category` field on the shared `json-findings` schema**: findings now carry an 11-value taxonomy (`authz`, `injection`, `dependency-cve`, `secret`, `architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`), ported from `claude-comprehensive-review#76`. An unrecognized or missing value normalises to `"other"` rather than dropping the finding. This PR only adds the field to the schema, the `Finding` model, and the 5 agent prompts that emit inline findings (capture-and-carry); it does not yet change dedup/clustering behavior in `findings/merge.py`, and static-analyzer findings (semgrep, trufflehog, etc.) still report `"other"` since only LLM-agent prompts were updated. (#575)
+- **`GOVERNANCE:`-block and `EXTENDED_THINKING` prompt text added to `security-reviewer.md`**, and a `GOVERNANCE:`-block cross-reference added to `architecture-reviewer.md`, matching the phrasing already present (but dormant) in `adversarial-general.md`. This is prompt text only — there is no dispatch-time mechanism yet that actually prepends a `GOVERNANCE:` block or sets `EXTENDED_THINKING`, so the new sections are inert until a future issue wires that up, same as the pre-existing sections they match. (#576)
+
 ### Fixed
 
 - **`slash-commands.yml`'s `actions-token` secret is now optional**: a missing required secret on a reusable-workflow call fails at run-graph setup before any job-level `if:` gate evaluates, so a consumer without `actions-token` in its `secrets:` block got a `startup_failure` on *every* issue comment, not just `/ai-pr-review` commands. The callee now falls back to its own `github.token` when the caller omits `actions-token`. Passing it explicitly is still recommended. (#571, #572)
