@@ -11,11 +11,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["Critical", "High", "Medium", "Low"]
 
-# Shared taxonomy ported from claude-comprehensive-review#76. The field itself
-# is typed `str` rather than `Category` (see Finding.category below) so an
-# unrecognized value can be normalised to "other" rather than rejected by
-# pydantic — see _normalise_category. CATEGORIES is derived from Category so
-# there is exactly one place that lists the 11 values; the tuple form is what
+# Shared taxonomy ported from claude-comprehensive-review#76. Finding.category
+# is typed `Category` below, but what actually prevents an unrecognized value
+# from being rejected is the `mode="before"` validator (_normalise_category):
+# it runs before pydantic's type check and coerces any unknown/missing input
+# to "other" ahead of time, so the Literal type never sees an invalid value to
+# reject. CATEGORIES is derived from Category via get_args() so there is
+# exactly one place that lists the 11 values; the tuple form is what
 # _normalise_category checks membership against.
 Category = Literal[
     "authz",
