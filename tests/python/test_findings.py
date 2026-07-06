@@ -119,6 +119,54 @@ def test_extract_findings_normalise_severity() -> None:
     assert findings[0].severity == "High"
 
 
+def test_extract_findings_category_defaults_to_other() -> None:
+    """A finding with no category field at all defaults to 'other'."""
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 80, "finding": "test"}]
+```
+"""
+    findings = extract_findings(output, "agent")
+    assert findings[0].category == "other"
+
+
+def test_extract_findings_unknown_category_normalises_to_other() -> None:
+    """An unrecognized category value must not raise or drop the finding."""
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 80, "finding": "test", "category": "totally-made-up"}]
+```
+"""
+    findings = extract_findings(output, "agent")
+    assert len(findings) == 1
+    assert findings[0].category == "other"
+
+
+def test_extract_findings_valid_category_round_trips() -> None:
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 80, "finding": "test", "category": "secret"}]
+```
+"""
+    findings = extract_findings(output, "agent")
+    assert findings[0].category == "secret"
+    assert findings[0].to_dict()["category"] == "secret"
+
+
+@pytest.mark.parametrize("raw_category", [42, None, True, ["secret"], {"a": 1}])
+def test_finding_non_string_category_normalises_to_other(raw_category: object) -> None:
+    """A non-string category (number, null, bool, list, dict) must fall back to
+    'other' rather than raise. This is the same contract as an unrecognized
+    *string* value (see test_extract_findings_unknown_category_normalises_to_other),
+    but exercised via direct model construction: extract_findings's json.loads()
+    parses valid JSON before Finding.model_validate() ever sees it, so an LLM
+    emitting a non-string category value is a realistic input this validator
+    must handle without raising, else extract.py's broad except-Exception guard
+    would silently drop the whole finding (see extract.py's _parse_and_validate)."""
+    finding = _make_finding(category=raw_category)
+    assert finding.category == "other"
+
+
 def test_extract_findings_strips_out_of_diff_injection() -> None:
     """out_of_diff: true in agent JSON must be stripped to prevent suppression bypass."""
     output = """
@@ -434,3 +482,4 @@ def test_finding_to_dict() -> None:
     assert d["severity"] == "High"
     assert d["file"] == "f.py"
     assert d["line"] == 5
+    assert d["category"] == "other"

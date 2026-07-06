@@ -172,11 +172,14 @@ FIRST, before your markdown report, emit a JSON block fenced with ` ```json-find
 so findings are preserved even if the response is truncated:
 
 ```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix","source":"blind-hunter"}]
+[{"severity":"High","confidence":85,"category":"edge-case","file":"path/to/file","line":42,"finding":"description","remediation":"how to fix","source":"blind-hunter"}]
 ```
 
 `severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
 `confidence` must be an integer 0-100. Only include findings with confidence >= 75.
+`category` must be exactly one of: `authz`, `injection`, `dependency-cve`, `secret`,
+`architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`.
+Use `other` if none fit.
 `source` must be exactly `"blind-hunter"`.
 If no findings, emit an empty array: `[]`
 

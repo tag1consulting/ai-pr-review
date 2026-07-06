@@ -15,6 +15,13 @@ If the file manifest is missing or empty, fall back to
 to discover changed files. If that also fails, output EXACTLY the word `NONE` -- do not
 fabricate findings.
 
+**Governance block:** The orchestrator may prepend a `GOVERNANCE:` block to your task
+description. Your architectural assessment here is fully compatible with it: GOVERNANCE
+permits surfacing adjacent harms outside your strict scope, requires you to mark
+uncertainty rather than hide it, and tells you to name a rejected alternative for
+non-trivial recommendations. When in doubt about a directive, the GOVERNANCE block
+wins over this prompt.
+
 ## Extended Thinking
 
 When `EXTENDED_THINKING=true` is set in the task description, reason step-by-step through
@@ -186,9 +193,12 @@ Omit any severity section that has no findings.
 FIRST, before your markdown report, emit a JSON block fenced with ` ```json-findings `
 so findings are preserved even if the response is truncated:
 ```json-findings
-[{"severity":"High","confidence":85,"file":"path/to/file","line":42,"finding":"description","remediation":"how to fix","source":"architecture-reviewer"}]
+[{"severity":"High","confidence":85,"category":"architecture-coupling","file":"path/to/file","line":42,"finding":"description","remediation":"how to fix","source":"architecture-reviewer"}]
 ```
 `severity` must be exactly one of: `Critical`, `High`, `Medium`, `Low`.
 `confidence` must be an integer 0-100. Only include findings with confidence >= 75.
+`category` must be exactly one of: `authz`, `injection`, `dependency-cve`, `secret`,
+`architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`.
+Use `other` if none fit.
 `source` must be exactly `"architecture-reviewer"`.
 If no findings, emit an empty array: `[]`
