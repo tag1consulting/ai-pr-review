@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`slash-commands.yml`'s `actions-token` secret is now optional**: a missing required secret on a reusable-workflow call fails at run-graph setup before any job-level `if:` gate evaluates, so a consumer without `actions-token` in its `secrets:` block got a `startup_failure` on *every* issue comment, not just `/ai-pr-review` commands. The callee now falls back to its own `github.token` when the caller omits `actions-token`. Passing it explicitly is still recommended. (#571, #572)
+- **Removed a redundant `event_name` check** in the `slash-commands` job's `if:` condition in `examples/workflows/pr-review.yml` and `.github/workflows/ai-review.yml`. No behavior change. (#573)
+
 ## [2.3.0] - 2026-07-03
 
 ### Added

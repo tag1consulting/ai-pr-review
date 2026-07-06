@@ -202,7 +202,6 @@ jobs:
   #   /ai-pr-review feedback <text>                 — store free-form feedback
   slash-commands:
     if: >-
-      (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
       startsWith(github.event.comment.body, '/ai-pr-review') &&
       contains(
         fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
@@ -250,5 +249,7 @@ jobs:
       # See: docs/slash-commands.md#pat-requirement
       github-token: ${{ secrets.GH_TOKEN }}
       # Built-in GITHUB_TOKEN: used for plain comment posts, reactions, reads,
-      # and label changes so those operations post as github-actions[bot].
+      # and label changes so those operations post as github-actions[bot]. Optional
+      # (the callee falls back to its own github.token if omitted) but recommended,
+      # since the fallback still works but is a weaker guarantee of bot identity.
       actions-token: ${{ secrets.GITHUB_TOKEN }}

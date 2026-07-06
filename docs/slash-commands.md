@@ -48,6 +48,8 @@ The starter template uses **two tokens**:
 
 **You do not need to add a `GH_TOKEN` secret** if you only use `rescan`, `review-full`, `skip`, `help`, or the learning-loop commands (`false-positive`, `wont-fix`, `feedback`, `explain`, `revise`). Those all run under `GITHUB_TOKEN`. The `dismiss` command will fail without `GH_TOKEN`.
 
+If your `secrets:` block omits `actions-token` entirely (an older two-file setup that hasn't picked up the current templates), the reusable workflow falls back to its own `github.token`, so commands still work. Passing `actions-token: ${{ secrets.GITHUB_TOKEN }}` explicitly is still recommended — it's a clearer statement of intent and matches the current templates.
+
 **Create a PAT for `dismiss` support:**
 - Classic PAT: go to Settings → Developer settings → Personal access tokens → Tokens (classic). Grant the `repo` scope.
 - Fine-grained PAT: grant **Read and write** access to **Pull requests** and **Read** access to **Metadata** on the target repository.

@@ -181,8 +181,13 @@ on:
         description: >
           Built-in GITHUB_TOKEN (pass secrets.GITHUB_TOKEN / github.token from your
           caller). Used for all plain comment posting, reactions, reads, label changes,
-          and checkout so those operations post as github-actions[bot].
-        required: true
+          and checkout so those operations post as github-actions[bot]. Optional: falls
+          back to this workflow's own github.token when the caller omits it, so a stale
+          consumer missing this secret degrades gracefully instead of failing at
+          run-graph setup (see #571). Passing it explicitly is still recommended so
+          comments post as github-actions[bot] rather than under the caller's own
+          workflow identity.
+        required: false
 
 permissions:
   contents: read
@@ -235,7 +240,7 @@ jobs:
       - name: React — seen
         if: steps.cmd.outputs.valid == 'true'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -246,7 +251,7 @@ jobs:
       - name: Reply with help text
         if: steps.cmd.outputs.command == 'help'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
@@ -271,7 +276,7 @@ jobs:
       - name: Add skip label
         if: steps.cmd.outputs.command == 'skip'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
@@ -288,7 +293,7 @@ jobs:
           repository: ${{ inputs.repository }}
           ref: refs/pull/${{ inputs.issue-number }}/head
           fetch-depth: 0
-          token: ${{ secrets.actions-token }}
+          token: ${{ secrets.actions-token || github.token }}
 
       - name: Get PR metadata
         if: |
@@ -296,7 +301,7 @@ jobs:
           steps.cmd.outputs.command == 'review-full'
         id: pr
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
         run: |
@@ -311,7 +316,7 @@ jobs:
           steps.cmd.outputs.command == 'rescan' ||
           steps.cmd.outputs.command == 'review-full'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -366,7 +371,7 @@ jobs:
             steps.cmd.outputs.command == 'review-full'
           )
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -381,7 +386,7 @@ jobs:
             steps.cmd.outputs.command == 'review-full'
           )
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -425,7 +430,7 @@ jobs:
     steps:
       - name: React — seen
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -443,7 +448,7 @@ jobs:
         id: lookup
         if: contains(fromJSON('["explain","revise"]'), needs.handle-command.outputs.command)
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           OWNER: ${{ inputs.repository-owner }}
           REPO: ${{ inputs.repository-name }}
           PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
@@ -614,7 +619,7 @@ jobs:
       - name: Post dismiss reply
         if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
           REPLY_B64: ${{ steps.dismiss.outputs.reply_b64 }}
@@ -635,7 +640,7 @@ jobs:
       - name: React — dismiss outcome
         if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REACTION: ${{ steps.dismiss.outputs.reaction == 'confused' && 'confused' || '+1' }}
@@ -650,7 +655,7 @@ jobs:
         # steps.lookup.outputs.valid is only ever set for explain/revise now.
         if: steps.lookup.outputs.valid == 'true' && success()
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
           ISSUE_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
@@ -678,7 +683,7 @@ jobs:
         # genuine no-op — i.e. when inline_fid was NOT set.
         if: steps.lookup.outputs.valid == 'false' && steps.lookup.outputs.inline_fid == ''
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -708,7 +713,7 @@ jobs:
     steps:
       - name: React — seen
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -719,7 +724,7 @@ jobs:
       - name: Validate parent comment is from the bot
         id: validate
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
         run: |
@@ -790,7 +795,7 @@ jobs:
       - name: Post dismiss reply
         if: steps.dismiss.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
           REPLY_B64: ${{ steps.dismiss.outputs.reply_b64 }}
@@ -811,7 +816,7 @@ jobs:
       - name: React — dismiss outcome
         if: steps.dismiss.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REACTION: ${{ steps.dismiss.outputs.reaction == 'confused' && 'confused' || '+1' }}
@@ -823,7 +828,7 @@ jobs:
       - name: React — not applicable
         if: steps.validate.outputs.valid == 'false'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -834,7 +839,7 @@ jobs:
       - name: React — failed
         if: steps.validate.outputs.valid == 'true' && failure()
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
         run: |
@@ -906,7 +911,7 @@ jobs:
 
       - name: React — seen
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REACTIONS_PATH: ${{ steps.endpoints.outputs.reactions_path }}
@@ -934,7 +939,7 @@ jobs:
           # REST GETs (fetch_review_comment, list_bot_reviews) — no
           # resolveReviewThread mutation or dismissal PUT, so it doesn't need
           # the elevated PAT (see the github-token input's description above).
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           VCS_PROVIDER: 'github'
           # This step runs on both event types (no is_review_comment gate);
@@ -999,7 +1004,7 @@ jobs:
           steps.handler.outputs.is_command == 'true' &&
           steps.endpoints.outputs.is_review_comment == 'true'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENT_ID: ${{ inputs.comment-id }}
@@ -1043,7 +1048,7 @@ jobs:
           steps.handler.outputs.is_command == 'true' &&
           steps.endpoints.outputs.is_review_comment == 'false'
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
           REPLY_B64: ${{ steps.handler.outputs.reply_b64 }}
@@ -1095,7 +1100,7 @@ jobs:
       - name: React — done
         if: steps.handler.outputs.is_command == 'true' && success()
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REACTIONS_PATH: ${{ steps.endpoints.outputs.reactions_path }}
@@ -1107,7 +1112,7 @@ jobs:
       - name: React — failed
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.actions-token }}
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REACTIONS_PATH: ${{ steps.endpoints.outputs.reactions_path }}
