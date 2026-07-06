@@ -1,0 +1,25 @@
+name: _test-callee-token (throwaway)
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report github.token presence
+        run: |
+          if [[ -n "${{ github.token }}" ]]; then
+            echo "github_token_present=true"
+          else
+            echo "github_token_present=false"
+          fi
+      - name: Report secrets.GITHUB_TOKEN presence via env
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            echo "secrets_github_token_present=true"
+          else
+            echo "secrets_github_token_present=false"
+          fi
