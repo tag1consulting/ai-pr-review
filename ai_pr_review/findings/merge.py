@@ -71,6 +71,20 @@ def _deduplicate(findings: list[Finding]) -> list[Finding]:
     return result
 
 
+def _category_compatible(a: Finding, b: Finding) -> bool:
+    """Two findings can share a cluster unless both have differing, non-'other' categories.
+
+    "other" is a wildcard, not a real category: it's the default for findings
+    with no categorization signal at all (every native-analyzer finding today,
+    per #579's pre-state), not a deliberate "this is genuinely different"
+    signal. Treating it as blocking would cause false-negative dedup and break
+    analyzer+agent corroboration in _collapse_cluster.
+    """
+    if a.category == "other" or b.category == "other":
+        return True
+    return a.category == b.category
+
+
 def _dedup_file(findings: list[Finding]) -> list[Finding]:
     """Deduplicate findings within a single file using proximity clustering."""
     # Sort by line number (None → 0)
@@ -86,7 +100,7 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
             tail = cluster[-1]
             tail_line = tail.line or 0
             f_line = f.line or 0
-            if abs(tail_line - f_line) <= PROXIMITY_LINES:
+            if abs(tail_line - f_line) <= PROXIMITY_LINES and _category_compatible(tail, f):
                 cluster.append(f)
                 placed = True
                 break
@@ -108,6 +122,12 @@ def _collapse_cluster(cluster: list[Finding]) -> Finding:
                 all_sources.append(s)
 
     update: dict[str, object] = {"sources": sorted(all_sources)}
+    # _category_compatible guarantees a surviving cluster has at most one
+    # distinct non-"other" category. Preserve it even if `best` (chosen by
+    # severity alone) happens to be the "other"-tagged member.
+    non_other_categories = {f.category for f in cluster if f.category != "other"}
+    if len(non_other_categories) == 1:
+        update["category"] = non_other_categories.pop()
     if is_corroborated(all_sources):
         update["corroborated"] = True
         update["confidence"] = boosted_confidence(best.confidence)

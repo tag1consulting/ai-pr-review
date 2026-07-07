@@ -223,3 +223,18 @@ development_status:
   13-4-wire-feedback-command: done                 # #554 phase 4 (final) — PR #566 merged at 485c4cb; new `ai-pr-review feedback-context`/`resolve-thread` CLI subcommands; feedback-command's context-extraction + resolve-only steps converted to container: + CLI calls; resolve-thread deliberately never dismisses (matches bash exactly); fixed a $GITHUB_OUTPUT newline-injection risk and two workflow-wiring bugs (pr-number fallback, token privilege) via pre-merge review passes; story at memory-bank/bmad/implementation-artifacts/13-4-wire-feedback-command.md
   13-5-verify-review-state-before-dismiss: done    # #562 follow-up — PR #568 merged at baf78cc; GitHubProvider.get_review_state() + a state check in _dismiss_if_all_resolved(), fail-closed on fetch error, silent skip on non-CHANGES_REQUESTED; live verification (AC10) deferred to the combined :dev pre-tag pass; story at memory-bank/bmad/implementation-artifacts/13-5-verify-review-state-before-dismiss.md
   epic-13-retrospective: optional
+
+  # ── Epic 15 — Category-field follow-ups ─────────────────────────────────────
+  # GitHub issues #578 (wire category into merge/dedup) and #579 (category
+  # coverage for the 13 native static analyzers), both flagged as explicit
+  # follow-up scope in #575/#577's PR body when the category field first
+  # shipped. Sequenced 15-1 before 15-2: the "other" wildcard dedup rule in
+  # 15-1 must exist before 15-2 gives analyzers real categories, or
+  # analyzer+agent corroboration can silently break. #579's enum gap (3 of 13
+  # analyzers don't cleanly fit the existing 11-value taxonomy) resolved by
+  # approximating onto authz/lint rather than adding a 12th enum value, to
+  # avoid cross-repo drift with claude-comprehensive-review#76.
+  epic-15: in-progress
+  15-1-category-dedup: in-progress                 # #578 — category as a merge/dedup clustering signal; story at memory-bank/bmad/stories/15-1-category-dedup.md
+  15-2-analyzer-category-coverage: in-progress     # #579 — category assignment across all 13 native analyzers; story at memory-bank/bmad/stories/15-2-analyzer-category-coverage.md
+  epic-15-retrospective: optional

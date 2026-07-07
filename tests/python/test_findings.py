@@ -346,6 +346,67 @@ def test_merge_proximity_chaining() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Category-aware dedup (#578)
+# ---------------------------------------------------------------------------
+
+
+def test_merge_dedup_same_line_different_category_not_merged() -> None:
+    """Two real, differing categories on nearby lines must not collapse."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="s1", category="secret"),
+        _make_finding(file="a.py", line=11, source="s2", category="injection"),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 2
+
+
+def test_merge_dedup_same_line_one_other_category_still_merges() -> None:
+    """'other' is a wildcard — it must not block a merge with a real category."""
+    findings = [
+        _make_finding(file="a.py", line=10, source="s1", category="secret"),
+        _make_finding(file="a.py", line=11, source="s2", category="other"),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].category == "secret"
+
+
+def test_merge_dedup_category_chaining_breaks_on_mismatch() -> None:
+    """A real-category mismatch mid-chain splits the cluster there."""
+    findings = [
+        _make_finding(file="a.py", line=1, source="s1", category="lint"),
+        _make_finding(file="a.py", line=3, source="s2", category="secret"),
+        _make_finding(file="a.py", line=6, source="s3", category="secret"),
+    ]
+    result = merge_findings(findings)
+    # line 1 (lint) vs line 3 (secret): incompatible, stays separate.
+    # line 3 (secret) vs line 6 (secret): compatible, merges.
+    assert len(result) == 2
+    categories = sorted(f.category for f in result)
+    assert categories == ["lint", "secret"]
+
+
+def test_merge_corroboration_preserved_with_matching_real_categories() -> None:
+    """Corroboration survives when both sides self-report the SAME real category."""
+    findings = [
+        _make_finding(
+            file="a.py", line=10, source="semgrep", confidence=90, category="injection"
+        ),
+        _make_finding(
+            file="a.py",
+            line=12,
+            source="security-reviewer",
+            confidence=90,
+            category="injection",
+        ),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is True
+    assert result[0].category == "injection"
+
+
+# ---------------------------------------------------------------------------
 # Finding model validation
 # ---------------------------------------------------------------------------
 
