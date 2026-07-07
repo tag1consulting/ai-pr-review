@@ -19,7 +19,7 @@ so that `category` reflects real signal across the whole findings surface, not j
 ## Acceptance Criteria
 
 1. Every analyzer with a clean, unconditional category mapping sets `category` explicitly at its `Finding(...)` construction site: `trufflehog` → `secret`, `cve_check` → `dependency-cve`, `phpcs`/`ruff`/`eslint`/`hadolint`/`shellcheck`/`golangci_lint` → `lint`.
-2. `checkov` sets `category="secret"` for `CKV_SECRET_*` check IDs, `category="lint"` for everything else.
+2. `checkov` sets `category="secret"` for `CKV_SECRET_*` check IDs, `category="authz"` for `CKV2_*` check IDs (cross-resource access/exposure policy violations, already treated as High severity — post-review refinement, recorded 2026-07-07: the original plan of `lint` for all non-secret checks would have demoted these security-relevant findings out of the corroboration path), `category="lint"` for everything else.
 3. `kube-linter` sets `category="authz"` for checks in its existing `_HIGH_SEVERITY_CHECKS` set (privilege/access-boundary checks), `category="lint"` for everything else. `tflint` sets `category="lint"` unconditionally.
 4. `phpstan` sets `category="lint"` (type errors treated as lint-class findings for this pass — see Dev Notes for the rejected alternative).
 5. `semgrep` sets `category` from a per-rule mapping using `extra.metadata.category`/`cwe`/`check_id` substring heuristics already available in the tool's JSON output, falling back to `"other"` when no metadata is present (e.g. community rules under `--config=auto`).
@@ -51,7 +51,7 @@ All 13 non-empty files in `ai_pr_review/analyzers/native/`, confirmed via full-f
 | `hadolint.py` | Dockerfile lint | `lint` | High |
 | `shellcheck.py` | Shell script lint | `lint` | High |
 | `golangci_lint.py` | Go meta-linter (errcheck/govet/staticcheck flagged High, rest Medium) | `lint` | Medium — `errcheck`/`govet`/`staticcheck` are arguably correctness-risk, not style, but treated as lint-class per this repo's existing naming/severity convention |
-| `checkov.py` | IaC policy violations; `CKV_SECRET_*` prefix = hardcoded secrets in IaC | `secret` (CKV_SECRET_* prefix) / `lint` (everything else) | High for the secret sub-case; Medium/approximated for the rest (see enum-gap decision above) |
+| `checkov.py` | IaC policy violations; `CKV_SECRET_*` prefix = hardcoded secrets in IaC; `CKV2_*` prefix = cross-resource "graph checks" (exposed security groups, publicly-readable storage, etc. — access/exposure policy, not style) | `secret` (`CKV_SECRET_*`) / `authz` (`CKV2_*`) / `lint` (everything else, e.g. `CKV_AWS_*` style checks) | High for secret and CKV2/authz sub-cases (post-review refinement, recorded 2026-07-07 — see below); Medium/approximated for the `lint` remainder (see enum-gap decision above) |
 | `kube-linter.py` | K8s manifest checks; `_HIGH_SEVERITY_CHECKS` = privilege-escalation/host-network/privileged-container/sensitive-host-mounts etc. | `authz` (in `_HIGH_SEVERITY_CHECKS`) / `lint` (everything else) | Medium — approximated per enum-gap decision |
 | `tflint.py` | Terraform lint (aws ruleset) | `lint` | Medium — approximated per enum-gap decision |
 | `phpstan.py` | PHP static type errors, severity by `PHPSTAN_LEVEL` | `lint` | Low-Medium — genuinely closer to `edge-case` (null-safety/type-narrowing) than `lint`, but `lint` chosen for consistency with the other static-analysis tools in this pass; revisit if this reads wrong in practice |
@@ -75,6 +75,7 @@ Considered: a single static category for semgrep (like every other analyzer in t
 
 - [x] `trufflehog.py`, `cve_check.py`, `phpcs.py`, `ruff.py`, `eslint.py`, `hadolint.py`, `shellcheck.py`, `golangci_lint.py`, `tflint.py` — set the single static `category` value at each `Finding(...)` construction site (see mapping table).
 - [x] `checkov.py` — branch `category` on `CKV_SECRET_*` prefix vs. everything else.
+- [x] Post-review refinement: `checkov.py` also branches `CKV2_*` (cross-resource graph checks, already High severity) to `category="authz"` instead of falling into the `lint` bucket, so these security-relevant findings stay eligible for analyzer+agent corroboration. Added `test_ckv2_maps_to_authz_category`.
 - [x] `kube_linter.py` — branch `category` on membership in the existing `_HIGH_SEVERITY_CHECKS` set.
 - [x] `phpstan.py` — set `category="lint"`.
 - [x] `semgrep.py` — extend the existing `metadata = extra.get("metadata") or {}` read to also pull `category`/`cwe`, plus a `check_id` substring fallback (e.g. `sql-injection`/`xss` → `injection`, `secrets` → `secret`), defaulting to `"other"` when no signal is present.

@@ -193,6 +193,30 @@ class TestRunCheckovFindings:
             findings = _run_checkov(cf, Path("/dev/null"))
         assert findings[0].severity == "High"
 
+    def test_ckv2_maps_to_authz_category(self, tmp_path: Path) -> None:
+        """CKV2_* graph checks are cross-resource access/exposure policy
+        violations (e.g. an open security group), not style lint."""
+        payload = json.dumps({
+            "results": {
+                "failed_checks": [{
+                    "check_id": "CKV2_AWS_1",
+                    "check_id_name": "Some v2 rule",
+                    "repo_file_path": "main.tf",
+                    "file_line_range": [1, 5],
+                }],
+            }
+        })
+        tf = tmp_path / "main.tf"
+        tf.write_text("resource \"x\" \"y\" {}\n")
+        cf = _make_cf([str(tf)], terraform=[str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
+            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_checkov(cf, Path("/dev/null"))
+        assert findings[0].category == "authz"
+
     def test_ckv_secret_maps_to_high(self, tmp_path: Path) -> None:
         payload = json.dumps({
             "results": {
