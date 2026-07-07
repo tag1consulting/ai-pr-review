@@ -444,6 +444,25 @@ def test_merge_corroboration_preserved_with_matching_real_categories() -> None:
     assert result[0].category == "injection"
 
 
+def test_merge_corroboration_preserved_when_agent_omits_category() -> None:
+    """Corroboration survives when one side has a real category and the other
+    defaults to 'other' -- the common post-#579 case of an analyzer finding
+    (now real-categorized) paired with an LLM agent finding that didn't set
+    category at all."""
+    findings = [
+        _make_finding(
+            file="a.py", line=10, source="semgrep", confidence=90, category="injection"
+        ),
+        _make_finding(
+            file="a.py", line=12, source="security-reviewer", confidence=90
+        ),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].corroborated is True
+    assert result[0].category == "injection"
+
+
 # ---------------------------------------------------------------------------
 # Finding model validation
 # ---------------------------------------------------------------------------
