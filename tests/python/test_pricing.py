@@ -291,6 +291,18 @@ def test_anthropic_premium_default_has_pricing_entry() -> None:
     assert rates.output_rate > 0
 
 
+def test_bedrock_proxy_standard_default_has_pricing_entry() -> None:
+    """Regression lock: the bedrock-proxy standard default must also resolve to a real rate."""
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    cfg = ReviewConfig(provider="bedrock-proxy").resolve_models()
+    rates = model_pricing(cfg.model_standard, pricing_data)
+    assert rates.input_rate > 0, (
+        f"No pricing entry matches the resolved bedrock-proxy standard default "
+        f"{cfg.model_standard!r}; the token-cost table would show 'n/a'."
+    )
+    assert rates.output_rate > 0
+
+
 def test_emit_token_table_sarif_inf_omitted() -> None:
     """sarif_elapsed_s=float('inf') must not produce a row (non-finite guard)."""
     log = [

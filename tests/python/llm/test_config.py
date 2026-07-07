@@ -16,6 +16,11 @@ def test_resolve_temperature_rejected_for_sonnet_5() -> None:
     assert resolve_temperature(0.3, "claude-sonnet-5") is None
 
 
+def test_resolve_temperature_rejected_for_bedrock_sonnet_5() -> None:
+    """Regression lock: the bedrock-proxy standard default must also be rejected."""
+    assert resolve_temperature(0.3, "us.anthropic.claude-sonnet-5") is None
+
+
 def test_resolve_temperature_rejected_for_opus_4_8() -> None:
     """Regression lock: Opus 4.8 already rejects temperature."""
     assert resolve_temperature(0.3, "claude-opus-4-8") is None
