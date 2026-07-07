@@ -10,8 +10,12 @@ cross-source duplicates).
 
 from __future__ import annotations
 
+import logging
+
 from ai_pr_review.findings.models import Finding, Severity
 from ai_pr_review.findings.provenance import boosted_confidence, is_corroborated
+
+logger = logging.getLogger(__name__)
 
 _SEVERITY_ORDER: dict[Severity, int] = {
     "Critical": 0,
@@ -138,6 +142,18 @@ def _collapse_cluster(cluster: list[Finding]) -> Finding:
     non_other_categories = {f.category for f in cluster if f.category != "other"}
     if len(non_other_categories) == 1:
         update["category"] = non_other_categories.pop()
+    elif len(non_other_categories) > 1:
+        # Should be unreachable: _cluster_category_compatible() gates cluster
+        # membership so a surviving cluster never has more than one distinct
+        # non-"other" category. Log loudly rather than silently discarding the
+        # conflict if that invariant is ever broken by a future change.
+        logger.warning(
+            "merge: cluster invariant violated — %d distinct non-'other' "
+            "categories in one cluster (%s); keeping best.category=%r",
+            len(non_other_categories),
+            sorted(non_other_categories),
+            best.category,
+        )
     if is_corroborated(all_sources):
         update["corroborated"] = True
         update["confidence"] = boosted_confidence(best.confidence)
