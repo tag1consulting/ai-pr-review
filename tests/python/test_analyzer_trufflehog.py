@@ -155,6 +155,10 @@ class TestRunTrufflehogFindings:
         findings = self._run_with_fixture_simple("trufflehog-verified.json", tmp_path)
         assert "AWS" in findings[0].finding
 
+    def test_finding_category_is_secret(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture_simple("trufflehog-verified.json", tmp_path)
+        assert findings[0].category == "secret"
+
     def test_verified_remediation_mentions_rotate(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture_simple("trufflehog-verified.json", tmp_path)
         assert "rotate" in findings[0].remediation.lower() or "Rotate" in findings[0].remediation

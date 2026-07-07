@@ -146,6 +146,7 @@ def _run_golangci_lint(changed_files: ChangedFiles, diff_file: Path) -> list[Fin
                     line=line,
                     finding=f"{linter}: {text}",
                     remediation=f"Review the {linter} linter documentation for this issue.",
+                    category="lint",
                 )
             )
         except (ValueError, TypeError) as exc:

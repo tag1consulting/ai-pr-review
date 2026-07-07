@@ -241,6 +241,11 @@ class TestRunCveCheck:
         findings = self._run_with_batch("go.mod.sample", results, tmp_path)
         assert all(f.agent == "dependency-check" for f in findings)
 
+    def test_category_is_dependency_cve(self, tmp_path: Path) -> None:
+        results = [{"vulns": [_CRITICAL_VULN]}, {}, {}]
+        findings = self._run_with_batch("go.mod.sample", results, tmp_path)
+        assert all(f.category == "dependency-cve" for f in findings)
+
     def test_cve_id_in_finding_text(self, tmp_path: Path) -> None:
         results = [{"vulns": [_CRITICAL_VULN]}, {}, {}]
         findings = self._run_with_batch("go.mod.sample", results, tmp_path)

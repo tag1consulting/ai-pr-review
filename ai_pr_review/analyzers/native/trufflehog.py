@@ -208,6 +208,7 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
                     line=line_no,
                     finding=finding_text,
                     remediation=remediation,
+                    category="secret",
                 )
             )
         except (ValueError, TypeError) as exc:

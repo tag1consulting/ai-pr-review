@@ -125,6 +125,7 @@ def _run_kube_linter(changed_files: ChangedFiles, diff_file: Path) -> list[Findi
         name = obj.get("Name") or ""
 
         severity: Literal["High", "Medium"] = "High" if check in _HIGH_SEVERITY_CHECKS else "Medium"
+        category = "authz" if check in _HIGH_SEVERITY_CHECKS else "lint"
         try:
             findings.append(
                 Finding(
@@ -135,6 +136,7 @@ def _run_kube_linter(changed_files: ChangedFiles, diff_file: Path) -> list[Findi
                     line=metadata.get("LineNumber") or None,
                     finding=f"{check}: {message} [{kind} {name}]",
                     remediation=report.get("Remediation") or "See https://docs.kubelinter.io/#/generated/checks",
+                    category=category,  # type: ignore[arg-type]
                 )
             )
         except (ValueError, TypeError) as exc:

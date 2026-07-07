@@ -158,6 +158,15 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             guideline = item.get("guideline") or ""
             remediation = guideline if guideline else _DEFAULT_REMEDIATION
             severity = "High" if _HIGH_PREFIX_RE.match(check_id) else "Medium"
+            if check_id.startswith("CKV_SECRET_"):
+                category = "secret"
+            elif check_id.startswith("CKV2_"):
+                # CKV2_* are checkov's cross-resource "graph checks" (e.g. an
+                # exposed security group, a publicly-readable storage bucket)
+                # -- access/exposure policy violations, not style lint.
+                category = "authz"
+            else:
+                category = "lint"
 
             try:
                 findings.append(
@@ -169,6 +178,7 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         line=line,
                         finding=f"{check_id}: {check_name}",
                         remediation=remediation,
+                        category=category,  # type: ignore[arg-type]
                     )
                 )
             except (ValueError, TypeError) as exc:

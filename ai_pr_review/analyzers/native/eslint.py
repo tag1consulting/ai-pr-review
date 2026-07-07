@@ -173,6 +173,7 @@ def _run_eslint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         line=line,
                         finding=f"{rule_id}: {message}",
                         remediation=remediation,
+                        category="lint",
                     )
                 )
             except (ValueError, TypeError) as exc:

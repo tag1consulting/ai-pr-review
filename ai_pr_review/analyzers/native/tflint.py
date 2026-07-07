@@ -123,6 +123,7 @@ def _run_tflint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         line=line,
                         finding=f"{rule_name}: {message}",
                         remediation=remediation,
+                        category="lint",
                     )
                 )
             except (ValueError, TypeError) as exc:

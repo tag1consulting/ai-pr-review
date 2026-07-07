@@ -97,6 +97,10 @@ class TestRunRuffFindings:
         assert findings[0].severity == "High"
         assert "F401" in findings[0].finding
 
+    def test_category_is_lint(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("ruff-warning.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_empty_output_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("ruff-empty.json", tmp_path)
         assert findings == []

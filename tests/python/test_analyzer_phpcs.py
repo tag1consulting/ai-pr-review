@@ -99,6 +99,10 @@ class TestRunPhpcsFindings:
         assert findings[0].severity == "High"
         assert "Generic.PHP.UpperCaseConstant" in findings[0].finding
 
+    def test_category_is_lint(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("phpcs-warning.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_empty_files_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("phpcs-empty.json", tmp_path)
         assert findings == []

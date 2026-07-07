@@ -236,3 +236,19 @@ development_status:
   # table. Both fixed; regression tests added for both failure modes.
   epic-14: done
   14-1-sonnet-5-default: done                      # config.py standard-model default, resolve_temperature() reject-list, model-pricing.json entry, docs, new regression tests; story at memory-bank/bmad/stories/14-1-sonnet-5-default.md
+  epic-14-retrospective: optional
+
+  # ── Epic 15 — Category-field follow-ups ─────────────────────────────────────
+  # GitHub issues #578 (wire category into merge/dedup) and #579 (category
+  # coverage for the 13 native static analyzers), both flagged as explicit
+  # follow-up scope in #575/#577's PR body when the category field first
+  # shipped. Sequenced 15-1 before 15-2: the "other" wildcard dedup rule in
+  # 15-1 must exist before 15-2 gives analyzers real categories, or
+  # analyzer+agent corroboration can silently break. #579's enum gap (3 of 13
+  # analyzers don't cleanly fit the existing 11-value taxonomy) resolved by
+  # approximating onto authz/lint rather than adding a 12th enum value, to
+  # avoid cross-repo drift with claude-comprehensive-review#76.
+  epic-15: done
+  15-1-category-dedup: done                        # #578 — category as a merge/dedup clustering signal; story at memory-bank/bmad/stories/15-1-category-dedup.md
+  15-2-analyzer-category-coverage: done            # #579 — category assignment across all 13 native analyzers; story at memory-bank/bmad/stories/15-2-analyzer-category-coverage.md
+  epic-15-retrospective: optional

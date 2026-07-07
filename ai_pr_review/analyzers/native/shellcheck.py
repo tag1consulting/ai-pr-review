@@ -92,6 +92,7 @@ def _scan_file(file_path: str) -> list[Finding]:
                     line=item.get("line") or None,
                     finding=f"SC{code}: {message}",
                     remediation=f"See https://www.shellcheck.net/wiki/SC{code}",
+                    category="lint",
                 )
             )
         except (ValueError, TypeError) as exc:

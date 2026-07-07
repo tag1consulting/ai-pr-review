@@ -91,6 +91,10 @@ class TestRunGolangciLintFindings:
         assert findings[0].severity == "High"
         assert "errcheck" in findings[0].finding
 
+    def test_category_is_lint(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("golangci-medium.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_empty_issues_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("golangci-empty.json", tmp_path)
         assert findings == []

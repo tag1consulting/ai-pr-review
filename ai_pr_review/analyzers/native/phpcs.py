@@ -129,6 +129,7 @@ def _run_phpcs(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         line=msg.get("line") or None,
                         finding=f"{source_rule}: {msg.get('message', '')}",
                         remediation=f"See https://www.drupal.org/docs/develop/standards or fix with: phpcs --standard={standard} {normalized_path}",
+                        category="lint",
                     )
                 )
             except (ValueError, TypeError) as exc:
