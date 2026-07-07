@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.3.1
+
+**`category` field added to the shared findings schema.** Findings now carry an 11-value taxonomy (`authz`, `injection`, `secret`, etc.) instead of being untagged; unrecognized values normalise to `"other"` rather than dropping the finding.
+
+See [Features → v2.3.1](features#whats-new-in-v231) for details.
+
 ## What's new in v2.3.0
 
 **Slash-command dismiss orchestration ported from workflow-embedded bash to the Python engine.** `/ai-pr-review dismiss`, `false-positive`, and `wont-fix` now run through a tested Python module and CLI subcommands instead of ~1,100 lines of inline bash and GraphQL calls. User-facing command syntax is unchanged. Also fixes two dismiss bugs: out-of-diff findings that couldn't be located, and a dismiss PUT attempted against an already-resolved review.

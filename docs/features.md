@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.3.1
+
+**`category` field added to the shared `json-findings` schema.** Findings now carry an 11-value taxonomy (`authz`, `injection`, `dependency-cve`, `secret`, `architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`), ported from `claude-comprehensive-review#76`. An unrecognized or missing value normalises to `"other"` rather than dropping the finding. This release only adds the field to the schema, the `Finding` model, and the 5 agent prompts that emit inline findings; it does not yet change dedup/clustering behavior, and static-analyzer findings (semgrep, trufflehog, etc.) still report `"other"` since only LLM-agent prompts were updated.
+
+**`actions-token` secret in `slash-commands.yml` is now optional.** A missing required secret on a reusable-workflow call previously failed at run-graph setup before any job-level `if:` gate could evaluate, so a consumer without `actions-token` in its `secrets:` block got a `startup_failure` on every issue comment, not just `/ai-pr-review` commands. The callee now falls back to its own `github.token` when the caller omits `actions-token`; passing it explicitly is still recommended.
+
 ## What's new in v2.3.0
 
 **Slash-command dismiss orchestration ported from workflow-embedded bash to the Python engine.** `/ai-pr-review dismiss`, `false-positive`, and `wont-fix` now run through a new `ai_pr_review/slash/dismiss.py` module and CLI subcommands (`dismiss`, `dismiss-inline`, `feedback-context`, `resolve-thread`), replacing ~1,100 lines of inline bash and GraphQL calls in `slash-commands.yml`. Finding classification (body vs. inline) is pytest-covered rather than a bash string match. User-facing command syntax is unchanged.
