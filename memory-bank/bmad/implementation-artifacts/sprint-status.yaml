@@ -223,3 +223,16 @@ development_status:
   13-4-wire-feedback-command: done                 # #554 phase 4 (final) — PR #566 merged at 485c4cb; new `ai-pr-review feedback-context`/`resolve-thread` CLI subcommands; feedback-command's context-extraction + resolve-only steps converted to container: + CLI calls; resolve-thread deliberately never dismisses (matches bash exactly); fixed a $GITHUB_OUTPUT newline-injection risk and two workflow-wiring bugs (pr-number fallback, token privilege) via pre-merge review passes; story at memory-bank/bmad/implementation-artifacts/13-4-wire-feedback-command.md
   13-5-verify-review-state-before-dismiss: done    # #562 follow-up — PR #568 merged at baf78cc; GitHubProvider.get_review_state() + a state check in _dismiss_if_all_resolved(), fail-closed on fetch error, silent skip on non-CHANGES_REQUESTED; live verification (AC10) deferred to the combined :dev pre-tag pass; story at memory-bank/bmad/implementation-artifacts/13-5-verify-review-state-before-dismiss.md
   epic-13-retrospective: optional
+
+  # ── Epic 14 — Model default maintenance ─────────────────────────────────────
+  # Single-story maintenance change, tracked without a full PRD/architecture
+  # cascade per explicit scope decision: upgrade the default Anthropic
+  # "standard" model from Sonnet 4.6 to Sonnet 5. Confirmed two load-bearing
+  # fixes beyond the model-ID swap: (1) resolve_temperature()'s reject-list
+  # in ai_pr_review/llm/_config.py did not include Sonnet 5, which
+  # unconditionally rejects non-default temperature — would 400 every
+  # Anthropic call; (2) config/model-pricing.json had no pattern matching
+  # claude-sonnet-5, which would silently render "n/a" in the token-cost
+  # table. Both fixed; regression tests added for both failure modes.
+  epic-14: done
+  14-1-sonnet-5-default: done                      # config.py standard-model default, resolve_temperature() reject-list, model-pricing.json entry, docs, new regression tests; story at memory-bank/bmad/stories/14-1-sonnet-5-default.md
