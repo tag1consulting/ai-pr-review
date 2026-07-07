@@ -109,11 +109,11 @@ Findings use shape-distinct icons for accessibility:
 
 | Provider | `provider` value | Required secret | Default models (standard / premium) |
 |----------|-----------------|-----------------|--------------------------------------|
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` / `claude-opus-4-8` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` / `claude-opus-4-8` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` / `gpt-5.4` |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
-| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-4-6` / `global.anthropic.claude-opus-4-7` |
+| Bedrock proxy | `bedrock-proxy` | `BEDROCK_API_KEY` + `base-url` | `us.anthropic.claude-sonnet-5` / `global.anthropic.claude-opus-4-7` |
 
 ### Provider-specific notes
 

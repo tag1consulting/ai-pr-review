@@ -47,6 +47,7 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
         or "opus-4.8" in lower
         or "opus-4-7" in lower
         or "opus-4.7" in lower
+        or "sonnet-5" in lower
         or lower.startswith("o1")
         or lower.startswith("o3")
         or lower.startswith("o4")
