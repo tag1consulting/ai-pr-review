@@ -386,6 +386,44 @@ def test_merge_dedup_category_chaining_breaks_on_mismatch() -> None:
     assert categories == ["lint", "secret"]
 
 
+def test_merge_dedup_other_bridge_does_not_merge_incompatible_reals() -> None:
+    """An 'other'-tagged finding must not bridge two incompatible real categories.
+
+    Line 1 (secret) and line 3 (other) are proximity+category compatible with
+    each other, and line 3 (other) and line 6 (injection) are too — but line 1
+    (secret) and line 6 (injection) are genuinely different findings. Since
+    _dedup_file only compares each new finding against the cluster tail, a
+    naive implementation lets "other" act as a bridge and silently drops one
+    of the two real-category findings in _collapse_cluster.
+    """
+    findings = [
+        _make_finding(file="a.py", line=1, source="s1", category="secret"),
+        _make_finding(file="a.py", line=3, source="s2", category="other"),
+        _make_finding(file="a.py", line=6, source="s3", category="injection"),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 2
+    categories = sorted(f.category for f in result)
+    assert categories == ["injection", "secret"]
+
+
+def test_merge_collapse_preserves_real_category_from_non_best_member() -> None:
+    """The surviving category must come from the real-category member even when
+    a different (higher-severity) member is the 'other'-tagged one."""
+    findings = [
+        _make_finding(
+            file="a.py", line=10, source="s1", severity="Low", category="secret"
+        ),
+        _make_finding(
+            file="a.py", line=11, source="s2", severity="Critical", category="other"
+        ),
+    ]
+    result = merge_findings(findings)
+    assert len(result) == 1
+    assert result[0].severity == "Critical"
+    assert result[0].category == "secret"
+
+
 def test_merge_corroboration_preserved_with_matching_real_categories() -> None:
     """Corroboration survives when both sides self-report the SAME real category."""
     findings = [

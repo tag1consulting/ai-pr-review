@@ -71,18 +71,26 @@ def _deduplicate(findings: list[Finding]) -> list[Finding]:
     return result
 
 
-def _category_compatible(a: Finding, b: Finding) -> bool:
-    """Two findings can share a cluster unless both have differing, non-'other' categories.
+def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
+    """Can `f` join `cluster` without introducing a second, conflicting real category?
 
     "other" is a wildcard, not a real category: it's the default for findings
     with no categorization signal at all (every native-analyzer finding today,
     per #579's pre-state), not a deliberate "this is genuinely different"
     signal. Treating it as blocking would cause false-negative dedup and break
     analyzer+agent corroboration in _collapse_cluster.
+
+    Compatibility is checked against the cluster's established real category
+    (the first non-"other" category seen so far), not just the tail finding.
+    Comparing only against the tail would let an "other"-tagged finding bridge
+    two incompatible real categories (e.g. secret -> other -> injection all
+    within PROXIMITY_LINES of their neighbor), silently dropping one of them
+    when the cluster collapses.
     """
-    if a.category == "other" or b.category == "other":
+    if f.category == "other":
         return True
-    return a.category == b.category
+    established = next((m.category for m in cluster if m.category != "other"), None)
+    return established is None or established == f.category
 
 
 def _dedup_file(findings: list[Finding]) -> list[Finding]:
@@ -94,13 +102,15 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
     for f in sorted_fs:
         placed = False
         for cluster in clusters:
-            # Compare against the last (nearest) finding in the cluster so that
-            # a chain of findings within PROXIMITY_LINES all merge together,
-            # even if the first finding is outside the window.
+            # Compare proximity against the last (nearest) finding in the
+            # cluster so that a chain of findings within PROXIMITY_LINES all
+            # merge together, even if the first finding is outside the window.
             tail = cluster[-1]
             tail_line = tail.line or 0
             f_line = f.line or 0
-            if abs(tail_line - f_line) <= PROXIMITY_LINES and _category_compatible(tail, f):
+            if abs(tail_line - f_line) <= PROXIMITY_LINES and _cluster_category_compatible(
+                cluster, f
+            ):
                 cluster.append(f)
                 placed = True
                 break
@@ -122,8 +132,8 @@ def _collapse_cluster(cluster: list[Finding]) -> Finding:
                 all_sources.append(s)
 
     update: dict[str, object] = {"sources": sorted(all_sources)}
-    # _category_compatible guarantees a surviving cluster has at most one
-    # distinct non-"other" category. Preserve it even if `best` (chosen by
+    # _cluster_category_compatible guarantees a surviving cluster has at most
+    # one distinct non-"other" category. Preserve it even if `best` (chosen by
     # severity alone) happens to be the "other"-tagged member.
     non_other_categories = {f.category for f in cluster if f.category != "other"}
     if len(non_other_categories) == 1:

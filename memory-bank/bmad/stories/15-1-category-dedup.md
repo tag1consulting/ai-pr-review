@@ -50,23 +50,26 @@ Treating `"other"` as blocking would cause **false-negative dedup** — the oppo
 
 ### Implementation
 
-**`_dedup_file()`** (merge.py:74-96) — add a category-compatibility check alongside the proximity check:
+**`_dedup_file()`** (merge.py:88-111) — add a category-compatibility check alongside the proximity check.
+
+**Correction (found by post-implementation review, fixed before merge):** the first draft compared category compatibility against only the cluster *tail* (mirroring how proximity is checked). That is wrong for category: an `"other"`-tagged finding within `PROXIMITY_LINES` of both neighbors can bridge two genuinely different real categories (e.g. `secret` at line 1, `other` at line 3, `injection` at line 6 — tail-only comparison merges all three and `_collapse_cluster` silently drops one). Proximity stays tail-based (that's required for correct chaining); category compatibility is checked against the cluster's *established real category* (the first non-`"other"` category already in the cluster), not the tail:
 
 ```python
-def _category_compatible(a: Finding, b: Finding) -> bool:
-    """Two findings can share a cluster unless both have differing, non-'other' categories."""
-    if a.category == "other" or b.category == "other":
+def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
+    """Can `f` join `cluster` without introducing a second, conflicting real category?"""
+    if f.category == "other":
         return True
-    return a.category == b.category
+    established = next((m.category for m in cluster if m.category != "other"), None)
+    return established is None or established == f.category
 ```
 
-Change the cluster-membership condition from `abs(tail_line - f_line) <= PROXIMITY_LINES` to also require `_category_compatible(tail, f)`.
+Cluster-membership condition: `abs(tail_line - f_line) <= PROXIMITY_LINES and _cluster_category_compatible(cluster, f)`.
 
-**`_collapse_cluster()`** (merge.py:99-114) — after computing `best`, also compute:
+**`_collapse_cluster()`** (merge.py:113-134) — after computing `best`, also compute:
 ```python
 non_other_categories = {f.category for f in cluster if f.category != "other"}
 ```
-If `len(non_other_categories) == 1`, set `update["category"]` to that value (overriding whatever `best.category` happens to be). Given the wildcard rule is correctly enforced upstream, `len(non_other_categories)` can never exceed 1 within a surviving cluster.
+If `len(non_other_categories) == 1`, set `update["category"]` to that value (overriding whatever `best.category` happens to be). With category compatibility checked cluster-wide (not tail-only), `len(non_other_categories)` can never exceed 1 within a surviving cluster.
 
 ---
 
@@ -77,6 +80,7 @@ If `len(non_other_categories) == 1`, set `update["category"]` to that value (ove
 - [x] Update `_collapse_cluster()` to preserve a non-`"other"` category from any cluster member.
 - [x] Add regression tests in `tests/python/test_findings.py` (same section as existing dedup tests, lines ~271-469): different-category no-merge, one-other-wildcard merge, chaining-breaks-on-mismatch.
 - [x] Extend `test_merge_corroboration_boosts_confidence` (or add a sibling) with explicit, matching non-`"other"` categories on both sides to lock in the corroboration-preserving intent.
+- [x] Post-review fix: replace tail-only category comparison with cluster-wide established-category tracking (`_cluster_category_compatible`); add `test_merge_dedup_other_bridge_does_not_merge_incompatible_reals` and `test_merge_collapse_preserves_real_category_from_non_best_member` regression tests.
 - [x] Run `pytest tests/python -q`, `mypy ai_pr_review/`, `ruff check ai_pr_review/ tests/python/`.
 - [ ] Open PR referencing #578; disclose the corroboration-loss tradeoff in the PR body.
 
