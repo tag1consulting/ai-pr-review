@@ -105,6 +105,13 @@ class TestScanFile:
         assert findings[0].severity == "High"
         assert "SC2104" in findings[0].finding
 
+    def test_category_is_lint(self) -> None:
+        fixture = _load_fixture("shellcheck-warning.json")
+        with patch("ai_pr_review.analyzers.native.shellcheck.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout=fixture, stderr="")
+            findings = _scan_file("test.sh")
+        assert findings[0].category == "lint"
+
     def test_empty_comments_returns_empty(self) -> None:
         fixture = _load_fixture("shellcheck-empty.json")
         with patch("ai_pr_review.analyzers.native.shellcheck.subprocess.run") as mock_run:

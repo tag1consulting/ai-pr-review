@@ -156,6 +156,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         line=line,
                         finding=message,
                         remediation=_REMEDIATION,
+                        category="lint",
                     )
                 )
             except (ValueError, TypeError) as exc:

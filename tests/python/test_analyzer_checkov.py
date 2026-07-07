@@ -148,6 +148,10 @@ class TestRunCheckovFindings:
         assert "CKV_AWS_57" in f.finding
         assert f.line == 10
 
+    def test_category_is_lint_for_non_secret_check(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("checkov-failed.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_empty_failed_checks_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("checkov-empty.json", tmp_path)
         assert findings == []
@@ -210,6 +214,28 @@ class TestRunCheckovFindings:
             mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
             findings = _run_checkov(cf, Path("/dev/null"))
         assert findings[0].severity == "High"
+
+    def test_ckv_secret_maps_to_secret_category(self, tmp_path: Path) -> None:
+        payload = json.dumps({
+            "results": {
+                "failed_checks": [{
+                    "check_id": "CKV_SECRET_6",
+                    "check_id_name": "Secret found",
+                    "repo_file_path": "main.tf",
+                    "file_line_range": [3, 3],
+                }],
+            }
+        })
+        tf = tmp_path / "main.tf"
+        tf.write_text("resource \"x\" \"y\" {}\n")
+        cf = _make_cf([str(tf)], terraform=[str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
+            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_checkov(cf, Path("/dev/null"))
+        assert findings[0].category == "secret"
 
     def test_array_output_normalised(self, tmp_path: Path) -> None:
         payload = json.dumps([

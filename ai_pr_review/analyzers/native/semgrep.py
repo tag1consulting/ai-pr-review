@@ -22,6 +22,62 @@ _CONFIDENCE = 90
 _SOURCE = "semgrep"
 _TIMEOUT_SECS = 120
 
+# Substring fragments checked against check_id, in priority order, when
+# metadata.category is absent or doesn't map to a known Category value.
+# Semgrep rule IDs conventionally embed the vulnerability class (e.g.
+# "python.lang.security.audit.subprocess-shell-true"), so this is real
+# per-rule signal, not a guess.
+_CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
+    ("sql-injection", "injection"),
+    ("sqli", "injection"),
+    ("command-injection", "injection"),
+    ("path-traversal", "injection"),
+    ("xss", "injection"),
+    ("ssrf", "injection"),
+    ("deserialization", "injection"),
+    ("secret", "secret"),
+    ("hardcoded", "secret"),
+    ("credential", "secret"),
+    ("auth", "authz"),
+    ("access-control", "authz"),
+    ("privilege", "authz"),
+)
+
+# semgrep's own metadata.category values, mapped onto this repo's taxonomy.
+_METADATA_CATEGORY_MAP: dict[str, str] = {
+    "security": "other",  # too broad on its own; check_id hints refine further below
+    "correctness": "lint",
+    "best-practice": "lint",
+    "maintainability": "lint",
+    "compatibility": "lint",
+    "performance": "lint",
+}
+
+
+def _map_category(check_id: str, metadata: dict[str, object]) -> str:
+    """Map a semgrep finding to this repo's Category taxonomy.
+
+    Checks check_id substrings first (specific, high-confidence vulnerability
+    class signal embedded in semgrep's own rule naming convention), then
+    falls back to metadata.category (broader, semgrep-assigned bucket).
+    Returns "other" when neither source yields a confident mapping — this is
+    the correct default for a multi-purpose tool with rulesets whose rule IDs
+    and metadata don't always carry classifiable signal (e.g. community rules
+    under --config=auto).
+    """
+    lower_id = check_id.lower()
+    for fragment, category in _CHECK_ID_CATEGORY_HINTS:
+        if fragment in lower_id:
+            return category
+
+    raw_category = metadata.get("category")
+    if isinstance(raw_category, str):
+        mapped = _METADATA_CATEGORY_MAP.get(raw_category.lower())
+        if mapped:
+            return mapped
+
+    return "other"
+
 
 def _resolve_config() -> list[str]:
     """Return semgrep --config arguments in priority order.
@@ -130,6 +186,7 @@ def _run_semgrep(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         references = metadata.get("references") or []
         ref = references[0] if references else None
         remediation = f"See {ref}" if ref else (f"Review the semgrep rule: {check_id}" if check_id else "No remediation available")
+        category = _map_category(check_id, metadata)
 
         start = item.get("start") or {}
 
@@ -143,6 +200,7 @@ def _run_semgrep(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                     line=start.get("line") or None,
                     finding=f"{check_id}: {message}",
                     remediation=remediation,
+                    category=category,  # type: ignore[arg-type]
                 )
             )
         except (ValueError, TypeError) as exc:

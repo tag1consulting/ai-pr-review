@@ -95,6 +95,7 @@ def _run_hadolint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]
                     line=item.get("line") or None,
                     finding=f"{code}: {item.get('message', '')}",
                     remediation=f"See https://github.com/hadolint/hadolint/wiki/{code}",
+                    category="lint",
                 )
             )
         except (ValueError, TypeError) as exc:

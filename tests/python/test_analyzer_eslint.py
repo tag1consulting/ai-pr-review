@@ -128,6 +128,10 @@ class TestRunEslintFindings:
         assert "no-console" in findings[0].finding
         assert findings[0].line == 22
 
+    def test_category_is_lint(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        findings = self._run_with_fixture("eslint-error.json", tmp_path, monkeypatch)
+        assert findings[0].category == "lint"
+
     def test_empty_results_returns_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         findings = self._run_with_fixture("eslint-empty.json", tmp_path, monkeypatch)
         assert findings == []

@@ -851,6 +851,7 @@ def _vulns_to_findings(pkg: Package, vulns: list[object]) -> list[Finding]:
                     line=line,
                     finding=finding_text,
                     remediation=remediation,
+                    category="dependency-cve",
                 )
             )
         except (ValueError, TypeError) as exc:

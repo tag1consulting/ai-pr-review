@@ -4,7 +4,7 @@
 **Story ID:** 15-1
 **Story Key:** 15-1-category-dedup
 **GitHub Issue:** [#578](https://github.com/tag1consulting/ai-pr-review/issues/578)
-**Status:** in-progress
+**Status:** done
 
 ---
 
@@ -72,12 +72,12 @@ If `len(non_other_categories) == 1`, set `update["category"]` to that value (ove
 
 ## Tasks
 
-- [ ] Add `_category_compatible()` helper to `ai_pr_review/findings/merge.py`.
-- [ ] Wire the helper into `_dedup_file()`'s cluster-membership check.
-- [ ] Update `_collapse_cluster()` to preserve a non-`"other"` category from any cluster member.
-- [ ] Add regression tests in `tests/python/test_findings.py` (same section as existing dedup tests, lines ~271-469): different-category no-merge, one-other-wildcard merge, chaining-breaks-on-mismatch.
-- [ ] Extend `test_merge_corroboration_boosts_confidence` (or add a sibling) with explicit, matching non-`"other"` categories on both sides to lock in the corroboration-preserving intent.
-- [ ] Run `pytest tests/python -q`, `mypy ai_pr_review/`, `ruff check ai_pr_review/ tests/python/`.
+- [x] Add `_category_compatible()` helper to `ai_pr_review/findings/merge.py`.
+- [x] Wire the helper into `_dedup_file()`'s cluster-membership check.
+- [x] Update `_collapse_cluster()` to preserve a non-`"other"` category from any cluster member.
+- [x] Add regression tests in `tests/python/test_findings.py` (same section as existing dedup tests, lines ~271-469): different-category no-merge, one-other-wildcard merge, chaining-breaks-on-mismatch.
+- [x] Extend `test_merge_corroboration_boosts_confidence` (or add a sibling) with explicit, matching non-`"other"` categories on both sides to lock in the corroboration-preserving intent.
+- [x] Run `pytest tests/python -q`, `mypy ai_pr_review/`, `ruff check ai_pr_review/ tests/python/`.
 - [ ] Open PR referencing #578; disclose the corroboration-loss tradeoff in the PR body.
 
 ---

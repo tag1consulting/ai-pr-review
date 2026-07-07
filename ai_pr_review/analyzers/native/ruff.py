@@ -99,6 +99,7 @@ def _run_ruff(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                     line=item.get("location", {}).get("row") or None,
                     finding=f"{code}: {item.get('message', '')}",
                     remediation=remediation,
+                    category="lint",
                 )
             )
         except (ValueError, TypeError) as exc:

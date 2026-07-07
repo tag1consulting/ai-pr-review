@@ -114,6 +114,56 @@ class TestRunSemgrepFindings:
         assert findings[0].severity == "High"
         assert "subprocess-shell-true" in findings[0].finding
 
+    def test_category_falls_back_to_other_when_unclassified(self, tmp_path: Path) -> None:
+        # Neither fixture's check_id matches a _CHECK_ID_CATEGORY_HINTS fragment,
+        # and neither carries a mappable metadata.category, so both fall through
+        # to the "other" default.
+        findings = self._run_with_fixture("semgrep-error.json", tmp_path)
+        assert findings[0].category == "other"
+
+    def test_category_maps_sql_injection_check_id_to_injection(self, tmp_path: Path) -> None:
+        payload = json.dumps({
+            "results": [{
+                "check_id": "python.lang.security.audit.sql-injection",
+                "path": "app/db.py", "start": {"line": 7, "col": 1}, "end": {"line": 7, "col": 20},
+                "extra": {"severity": "ERROR", "message": "possible SQL injection", "metadata": {}},
+            }],
+            "errors": [],
+        })
+        f = tmp_path / "app.py"
+        f.write_text("x = 1\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.semgrep.shutil.which", return_value="/usr/bin/semgrep"),
+            patch("ai_pr_review.analyzers.native.semgrep._resolve_config", return_value=["--config=auto"]),
+            patch("ai_pr_review.analyzers.native.semgrep.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            findings = _run_semgrep(cf, Path("/dev/null"))
+        assert findings[0].category == "injection"
+
+    def test_category_maps_metadata_correctness_to_lint(self, tmp_path: Path) -> None:
+        payload = json.dumps({
+            "results": [{
+                "check_id": "python.lang.some-generic-rule",
+                "path": "app/utils.py", "start": {"line": 3, "col": 1}, "end": {"line": 3, "col": 10},
+                "extra": {"severity": "WARNING", "message": "generic issue",
+                          "metadata": {"category": "correctness"}},
+            }],
+            "errors": [],
+        })
+        f = tmp_path / "app.py"
+        f.write_text("x = 1\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.semgrep.shutil.which", return_value="/usr/bin/semgrep"),
+            patch("ai_pr_review.analyzers.native.semgrep._resolve_config", return_value=["--config=auto"]),
+            patch("ai_pr_review.analyzers.native.semgrep.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            findings = _run_semgrep(cf, Path("/dev/null"))
+        assert findings[0].category == "lint"
+
     def test_empty_results_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("semgrep-empty.json", tmp_path)
         assert findings == []

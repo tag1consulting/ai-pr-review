@@ -77,6 +77,10 @@ class TestRunTflintFindings:
         assert findings[0].severity == "Medium"
         assert "terraform_deprecated_interpolation" in findings[0].finding
 
+    def test_category_is_lint(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("tflint-error.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_empty_issues_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("tflint-empty.json", tmp_path)
         assert findings == []

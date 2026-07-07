@@ -150,6 +150,10 @@ class TestRunPhpstanFindings:
         findings = self._run_with_fixture("phpstan-empty.json", tmp_path)
         assert findings == []
 
+    def test_category_is_lint(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("phpstan-error.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_malformed_json_returns_empty(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         fixture = _load_fixture("phpstan-malformed.json")
         f = tmp_path / "MyService.php"

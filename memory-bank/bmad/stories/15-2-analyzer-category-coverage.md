@@ -4,7 +4,7 @@
 **Story ID:** 15-2
 **Story Key:** 15-2-analyzer-category-coverage
 **GitHub Issue:** [#579](https://github.com/tag1consulting/ai-pr-review/issues/579)
-**Status:** in-progress
+**Status:** done
 
 ---
 
@@ -73,13 +73,13 @@ Considered: a single static category for semgrep (like every other analyzer in t
 
 ## Tasks
 
-- [ ] `trufflehog.py`, `cve_check.py`, `phpcs.py`, `ruff.py`, `eslint.py`, `hadolint.py`, `shellcheck.py`, `golangci_lint.py`, `tflint.py` — set the single static `category` value at each `Finding(...)` construction site (see mapping table).
-- [ ] `checkov.py` — branch `category` on `CKV_SECRET_*` prefix vs. everything else.
-- [ ] `kube_linter.py` — branch `category` on membership in the existing `_HIGH_SEVERITY_CHECKS` set.
-- [ ] `phpstan.py` — set `category="lint"`.
-- [ ] `semgrep.py` — extend the existing `metadata = extra.get("metadata") or {}` read to also pull `category`/`cwe`, plus a `check_id` substring fallback (e.g. `sql-injection`/`xss` → `injection`, `secrets` → `secret`), defaulting to `"other"` when no signal is present.
-- [ ] Add/extend one test per analyzer (`tests/python/test_analyzer_*.py`) asserting the resulting `category`, including semgrep's metadata-present and metadata-absent cases.
-- [ ] Run `pytest tests/python -q`, `mypy ai_pr_review/`, `ruff check ai_pr_review/ tests/python/`.
+- [x] `trufflehog.py`, `cve_check.py`, `phpcs.py`, `ruff.py`, `eslint.py`, `hadolint.py`, `shellcheck.py`, `golangci_lint.py`, `tflint.py` — set the single static `category` value at each `Finding(...)` construction site (see mapping table).
+- [x] `checkov.py` — branch `category` on `CKV_SECRET_*` prefix vs. everything else.
+- [x] `kube_linter.py` — branch `category` on membership in the existing `_HIGH_SEVERITY_CHECKS` set.
+- [x] `phpstan.py` — set `category="lint"`.
+- [x] `semgrep.py` — extend the existing `metadata = extra.get("metadata") or {}` read to also pull `category`/`cwe`, plus a `check_id` substring fallback (e.g. `sql-injection`/`xss` → `injection`, `secrets` → `secret`), defaulting to `"other"` when no signal is present.
+- [x] Add/extend one test per analyzer (`tests/python/test_analyzer_*.py`) asserting the resulting `category`, including semgrep's metadata-present and metadata-absent cases.
+- [x] Run `pytest tests/python -q`, `mypy ai_pr_review/`, `ruff check ai_pr_review/ tests/python/`.
 - [ ] Open PR referencing #579; note the enum-gap approximation decision (authz/lint for infra tools) explicitly in the PR body so reviewers understand it's a deliberate tradeoff, not an oversight.
 
 ---

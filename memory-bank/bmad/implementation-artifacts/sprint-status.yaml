@@ -234,7 +234,7 @@ development_status:
   # analyzers don't cleanly fit the existing 11-value taxonomy) resolved by
   # approximating onto authz/lint rather than adding a 12th enum value, to
   # avoid cross-repo drift with claude-comprehensive-review#76.
-  epic-15: in-progress
-  15-1-category-dedup: in-progress                 # #578 — category as a merge/dedup clustering signal; story at memory-bank/bmad/stories/15-1-category-dedup.md
-  15-2-analyzer-category-coverage: in-progress     # #579 — category assignment across all 13 native analyzers; story at memory-bank/bmad/stories/15-2-analyzer-category-coverage.md
+  epic-15: done
+  15-1-category-dedup: done                        # #578 — category as a merge/dedup clustering signal; story at memory-bank/bmad/stories/15-1-category-dedup.md
+  15-2-analyzer-category-coverage: done            # #579 — category assignment across all 13 native analyzers; story at memory-bank/bmad/stories/15-2-analyzer-category-coverage.md
   epic-15-retrospective: optional

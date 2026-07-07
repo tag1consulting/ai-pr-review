@@ -115,6 +115,10 @@ class TestRunHadolintFindings:
         assert findings[0].severity == "Low"
         assert "DL3006" in findings[0].finding
 
+    def test_category_is_lint(self, tmp_path: Path) -> None:
+        findings = self._run_with_fixture("hadolint-warning.json", tmp_path)
+        assert findings[0].category == "lint"
+
     def test_empty_output_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("hadolint-empty.json", tmp_path)
         assert findings == []

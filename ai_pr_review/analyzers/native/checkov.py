@@ -158,6 +158,7 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             guideline = item.get("guideline") or ""
             remediation = guideline if guideline else _DEFAULT_REMEDIATION
             severity = "High" if _HIGH_PREFIX_RE.match(check_id) else "Medium"
+            category = "secret" if check_id.startswith("CKV_SECRET_") else "lint"
 
             try:
                 findings.append(
@@ -169,6 +170,7 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                         line=line,
                         finding=f"{check_id}: {check_name}",
                         remediation=remediation,
+                        category=category,  # type: ignore[arg-type]
                     )
                 )
             except (ValueError, TypeError) as exc:
