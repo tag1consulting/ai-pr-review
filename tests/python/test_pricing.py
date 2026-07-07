@@ -1,12 +1,19 @@
 """Tests for ai_pr_review.pricing."""
 
+from pathlib import Path
+
+from ai_pr_review.config import ReviewConfig
 from ai_pr_review.pricing import (
     TokenEntry,
     emit_token_table,
     format_cost,
+    load_pricing,
     model_pricing,
     parse_token_log_entry,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REAL_PRICING_FILE = _REPO_ROOT / "config" / "model-pricing.json"
 
 _SAMPLE_PRICING = [
     {
@@ -252,6 +259,48 @@ def test_emit_token_table_sarif_nan_omitted() -> None:
     table = emit_token_table(log, _SAMPLE_PRICING, sarif_elapsed_s=float("nan"))
     assert "SARIF ingestion" not in table
     assert "nan" not in table
+
+
+# ---------------------------------------------------------------------------
+# Default-model / pricing-table parity
+#
+# model_pricing() matches model IDs against regex patterns in
+# config/model-pricing.json. A provider default swapped in config.py without
+# a matching pricing entry silently falls through to zero rates, rendering
+# "n/a" in every token-cost table. These tests load the real pricing file and
+# cross-check it against the real resolved provider defaults so a future
+# default-model bump can't reintroduce that silent failure.
+# ---------------------------------------------------------------------------
+
+def test_anthropic_standard_default_has_pricing_entry() -> None:
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    cfg = ReviewConfig(provider="anthropic").resolve_models()
+    rates = model_pricing(cfg.model_standard, pricing_data)
+    assert rates.input_rate > 0, (
+        f"No pricing entry matches the resolved anthropic standard default "
+        f"{cfg.model_standard!r}; the token-cost table would show 'n/a'."
+    )
+    assert rates.output_rate > 0
+
+
+def test_anthropic_premium_default_has_pricing_entry() -> None:
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    cfg = ReviewConfig(provider="anthropic").resolve_models()
+    rates = model_pricing(cfg.model_premium, pricing_data)
+    assert rates.input_rate > 0
+    assert rates.output_rate > 0
+
+
+def test_bedrock_proxy_standard_default_has_pricing_entry() -> None:
+    """Regression lock: the bedrock-proxy standard default must also resolve to a real rate."""
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    cfg = ReviewConfig(provider="bedrock-proxy").resolve_models()
+    rates = model_pricing(cfg.model_standard, pricing_data)
+    assert rates.input_rate > 0, (
+        f"No pricing entry matches the resolved bedrock-proxy standard default "
+        f"{cfg.model_standard!r}; the token-cost table would show 'n/a'."
+    )
+    assert rates.output_rate > 0
 
 
 def test_emit_token_table_sarif_inf_omitted() -> None:

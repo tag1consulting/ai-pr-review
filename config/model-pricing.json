@@ -1,5 +1,13 @@
 [
   {
+    "patterns": ["claude-sonnet-5"],
+    "display_name": "Sonnet 5",
+    "input_rate": 3000000,
+    "output_rate": 15000000,
+    "cache_write_rate": 3750000,
+    "cache_read_rate": 300000
+  },
+  {
     "patterns": ["claude-sonnet-4-6", "claude-sonnet-4\\.6", "claude-sonnet-4-5", "claude-sonnet-4\\.5"],
     "display_name": "Sonnet 4.6",
     "input_rate": 3000000,
