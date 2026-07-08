@@ -28,6 +28,14 @@ _TIMEOUT_SECS = 120
 # Semgrep rule IDs conventionally embed the vulnerability class (e.g.
 # "python.lang.security.audit.subprocess-shell-true"), so this is real
 # per-rule signal, not a guess.
+#
+# Fragments are matched as delimiter-bounded whole tokens (see _DELIM below),
+# not prefixes -- a fragment like "auth" does not also match "authorization"
+# or "authentication" as a prefix, since that would reopen the same class of
+# false positive this anchoring fixes (e.g. "auth" matching inside "author").
+# Where a stem has common inflected/pluralized real-world forms (secret(s),
+# credential(s), auth(n/entication/orization/orized/unauthenticated/unauthorized),
+# privilege(s/d)), each form is listed explicitly as its own bounded token.
 _CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("sql-injection", "injection"),
     ("sqli", "injection"),
@@ -36,11 +44,21 @@ _CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("xss", "injection"),
     ("ssrf", "injection"),
     ("deserialization", "injection"),
+    ("secrets", "secret"),
     ("secret", "secret"),
     ("hardcoded", "secret"),
+    ("credentials", "secret"),
     ("credential", "secret"),
+    ("authentication", "authz"),
+    ("unauthenticated", "authz"),
+    ("authorization", "authz"),
+    ("unauthorized", "authz"),
+    ("authorized", "authz"),
+    ("authn", "authz"),
     ("auth", "authz"),
     ("access-control", "authz"),
+    ("privileges", "authz"),
+    ("privileged", "authz"),
     ("privilege", "authz"),
 )
 

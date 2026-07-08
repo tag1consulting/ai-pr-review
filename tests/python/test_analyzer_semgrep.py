@@ -157,15 +157,57 @@ class TestRunSemgrepFindings:
 
     def test_category_maps_secret_check_id_to_secret(self, tmp_path: Path) -> None:
         findings = self._run_with_check_id(
-            tmp_path, "generic.secrets.security.hardcoded-password"
+            tmp_path, "generic.secrets.security.detected-private-key"
         )
         assert findings[0].category == "secret"
 
     def test_category_maps_authz_check_id_to_authz(self, tmp_path: Path) -> None:
         findings = self._run_with_check_id(
-            tmp_path, "python.django.security.audit.privilege-escalation"
+            tmp_path, "python.lang.security.audit.unauthenticated-endpoint"
         )
         assert findings[0].category == "authz"
+
+    @pytest.mark.parametrize(
+        ("check_id", "expected_category"),
+        [
+            ("generic.secrets.gitleaks.aws-access-key", "secret"),
+            ("generic.secrets.security.hardcoded-credentials", "secret"),
+            ("python.lang.security.audit.exposed-credentials", "secret"),
+            ("python.django.security.audit.authorization-bypass", "authz"),
+            ("java.lang.security.audit.authentication-bypass", "authz"),
+            ("java.spring.security.audit.authn-bypass", "authz"),
+            ("python.flask.security.unauthenticated-access", "authz"),
+            ("python.flask.security.unauthorized-access", "authz"),
+            ("kubernetes.security.excessive-privileges", "authz"),
+            ("dockerfile.security.privileged-container", "authz"),
+        ],
+    )
+    def test_category_maps_inflected_secret_and_authz_forms(
+        self, tmp_path: Path, check_id: str, expected_category: str
+    ) -> None:
+        """Regression for #585 follow-up: the delimiter-anchored 'secret' and
+        'auth'/'privilege' fragments must still match the plural/inflected
+        forms (secrets, credentials, authorization, authentication, authn,
+        unauthenticated, unauthorized, privileges, privileged) that real
+        semgrep rule IDs conventionally use -- anchoring must not narrow
+        these stems down to only their bare, undecorated form."""
+        findings = self._run_with_check_id(tmp_path, check_id)
+        assert findings[0].category == expected_category
+
+    def test_category_author_metadata_does_not_false_positive_as_authz(
+        self, tmp_path: Path
+    ) -> None:
+        """'auth' must not match as a prefix of unrelated words like 'author'
+        -- confirms the fix doesn't reopen the substring false-positive class
+        by over-widening the auth fragment."""
+        findings = self._run_with_check_id(tmp_path, "python.lang.author-metadata-check")
+        assert findings[0].category == "other"
+
+    def test_category_secretary_does_not_false_positive_as_secret(
+        self, tmp_path: Path
+    ) -> None:
+        findings = self._run_with_check_id(tmp_path, "python.lang.secretary-service-config")
+        assert findings[0].category == "other"
 
     def test_category_maps_metadata_security_to_other(self, tmp_path: Path) -> None:
         findings = self._run_with_check_id(
