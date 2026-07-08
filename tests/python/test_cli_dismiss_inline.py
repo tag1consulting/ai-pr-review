@@ -495,3 +495,45 @@ def test_approve_allowed_defaults_false_no_approval(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "resolved the thread" in result.stdout
     assert "approved" not in result.stdout
+
+
+def test_approve_allowed_explicit_false_string_env_var_no_approval(monkeypatch) -> None:
+    """The workflow passes SLASH_APPROVE_ALLOWED as the literal string
+    "false" for a COLLABORATOR-level actor (GitHub Actions' `contains(...)`
+    boolean renders to the string "false", not an absent env var) -- this is
+    the actual trust-boundary invocation in production, distinct from
+    `test_approve_allowed_defaults_false_no_approval`'s omitted-flag case,
+    which only proves Click's own default. This pins that Click's BOOL type
+    parses that exact string to False rather than truthy-by-presence."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError('must not approve when SLASH_APPROVE_ALLOWED="false"')
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, _base_args(55, review_id=41), env={"SLASH_APPROVE_ALLOWED": "false"}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "approved" not in result.stdout
