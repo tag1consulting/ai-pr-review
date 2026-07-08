@@ -34,8 +34,13 @@ _TIMEOUT_SECS = 120
 # or "authentication" as a prefix, since that would reopen the same class of
 # false positive this anchoring fixes (e.g. "auth" matching inside "author").
 # Where a stem has common inflected/pluralized real-world forms (secret(s),
-# credential(s), auth(n/entication/orization/orized/unauthenticated/unauthorized),
-# privilege(s/d)), each form is listed explicitly as its own bounded token.
+# credential(s), auth(n/entication/orization/orized/unauthenticated/unauthorized/z),
+# oauth, privilege(s/d)), each form is listed explicitly as its own bounded
+# token. This is a best-effort enumeration of known naming conventions, not an
+# exhaustive derivation -- a new unlisted form (e.g. a rule pack that uses
+# "authenticator" or "priv-esc") will fall through to "other" rather than
+# false-positive, but won't get the more specific category either. Extend
+# this list when a new real-world gap like that is found.
 _CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("sql-injection", "injection"),
     ("sqli", "injection"),
@@ -55,6 +60,8 @@ _CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("unauthorized", "authz"),
     ("authorized", "authz"),
     ("authn", "authz"),
+    ("authz", "authz"),
+    ("oauth", "authz"),
     ("auth", "authz"),
     ("access-control", "authz"),
     ("privileges", "authz"),

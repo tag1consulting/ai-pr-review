@@ -180,6 +180,8 @@ class TestRunSemgrepFindings:
             ("python.flask.security.unauthorized-access", "authz"),
             ("kubernetes.security.excessive-privileges", "authz"),
             ("dockerfile.security.privileged-container", "authz"),
+            ("python.lang.security.audit.oauth-token-leak", "authz"),
+            ("spring.security.authz-check", "authz"),
         ],
     )
     def test_category_maps_inflected_secret_and_authz_forms(
@@ -188,9 +190,9 @@ class TestRunSemgrepFindings:
         """Regression for #585 follow-up: the delimiter-anchored 'secret' and
         'auth'/'privilege' fragments must still match the plural/inflected
         forms (secrets, credentials, authorization, authentication, authn,
-        unauthenticated, unauthorized, privileges, privileged) that real
-        semgrep rule IDs conventionally use -- anchoring must not narrow
-        these stems down to only their bare, undecorated form."""
+        authz, oauth, unauthenticated, unauthorized, privileges, privileged)
+        that real semgrep rule IDs conventionally use -- anchoring must not
+        narrow these stems down to only their bare, undecorated form."""
         findings = self._run_with_check_id(tmp_path, check_id)
         assert findings[0].category == expected_category
 
