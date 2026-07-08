@@ -166,7 +166,13 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                 # -- access/exposure policy violations, not style lint.
                 category = "authz"
             else:
-                category = "lint"
+                # The bulk of single-resource CKV_* checks (missing encryption,
+                # public buckets, open security groups, etc.) don't fit "lint" --
+                # that's a real category under category-aware clustering and
+                # would wall these off from corroborating with an agent's
+                # authz/secret finding on the same line. Default to the "other"
+                # wildcard instead, matching semgrep's own unclassified default.
+                category = "other"
 
             try:
                 findings.append(

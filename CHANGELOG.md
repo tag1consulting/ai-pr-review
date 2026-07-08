@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Category-aware dedup and clustering**: the `category` taxonomy added in v2.3.1 now drives `findings/merge.py`'s clustering logic. A finding can only join a cluster if it doesn't introduce a second, conflicting real category (`"other"` is treated as a wildcard, not a real category), and provenance-weighted corroboration between an LLM agent and a static analyzer now requires category agreement. Closes the gap called out in the v2.3.1 entry below. (#578)
+- **Category-aware dedup and clustering**: the `category` taxonomy added in v2.3.1 now drives `findings/merge.py`'s clustering logic. A finding can only join a cluster if it doesn't introduce a second, conflicting real category (`"other"` is treated as a wildcard, not a real category), so provenance-weighted corroboration between an LLM agent and a static analyzer now requires category compatibility rather than merging any two findings on proximity alone. Closes the gap called out in the v2.3.1 entry below. (#578)
 - **Category mapping for all 13 native static analyzers** (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint, cve-check): each analyzer now maps its own findings onto the same 11-value taxonomy instead of reporting `"other"` unconditionally, so analyzer findings can corroborate and dedup against LLM-agent findings in the same category. (#579, #584)
 
 ### Fixed
