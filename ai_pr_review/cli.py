@@ -577,6 +577,19 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     "(defaults to AI_FEEDBACK_LOOP env var). When false, the finding is "
     "acknowledged but not recorded for future suppression.",
 )
+@click.option(
+    "--approve-allowed",
+    envvar="SLASH_APPROVE_ALLOWED",
+    default=False,
+    type=bool,
+    help="Whether the actor is trusted to trigger the PR-wide auto-approve "
+    "escalation (issue #590) when this call clears the last active finding "
+    "(defaults to SLASH_APPROVE_ALLOWED env var). The calling workflow "
+    "decides this from author_association -- OWNER/MEMBER only, a tighter "
+    "bar than plain dismiss's OWNER/MEMBER/COLLABORATOR. When false, "
+    "dismissal still happens normally; only the extra approve step is "
+    "skipped.",
+)
 def dismiss(
     finding_id: int | None,
     actor: str,
@@ -584,6 +597,7 @@ def dismiss(
     pr_number: int,
     comment_body: str,
     enable_feedback_loop: bool,
+    approve_allowed: bool,
 ) -> None:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix [F<n>]` posted as
     a top-level PR comment.
@@ -622,7 +636,9 @@ def dismiss(
         click.echo("::notice::reaction=done", err=True)
         return
 
-    result = dismiss_by_finding_id(provider, finding_id, actor=actor, command=command_name)
+    result = dismiss_by_finding_id(
+        provider, finding_id, actor=actor, command=command_name, approve_allowed=approve_allowed
+    )
 
     # A genuine miss (UNKNOWN classification, or an INLINE token that could
     # not be matched to a thread) gets a "confused" reaction. This is a
@@ -632,7 +648,13 @@ def dismiss(
     # resolution, so React-not-applicable never fired for that case) even
     # though no action was taken. The new behavior reacts confused whenever
     # nothing was actually resolved/dismissed/recorded, regardless of why.
-    acted = bool(result.feedback_source or result.feedback_file or result.thread_resolved or result.review_dismissed)
+    acted = bool(
+        result.feedback_source
+        or result.feedback_file
+        or result.thread_resolved
+        or result.review_dismissed
+        or result.pr_approved
+    )
     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
     for error in result.errors:
         logger.warning("dismiss: %s", error)
@@ -723,12 +745,26 @@ def dismiss(
     type=int,
     help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
 )
+@click.option(
+    "--approve-allowed",
+    envvar="SLASH_APPROVE_ALLOWED",
+    default=False,
+    type=bool,
+    help="Whether the actor is trusted to trigger the PR-wide auto-approve "
+    "escalation (issue #590) when this call clears the last active finding "
+    "(defaults to SLASH_APPROVE_ALLOWED env var). The calling workflow "
+    "decides this from author_association -- OWNER/MEMBER only, a tighter "
+    "bar than plain dismiss's OWNER/MEMBER/COLLABORATOR. When false, "
+    "dismissal still happens normally; only the extra approve step is "
+    "skipped.",
+)
 def dismiss_inline(
     parent_comment_id: int,
     review_id: int | None,
     actor: str,
     command_name: str,
     pr_number: int,
+    approve_allowed: bool,
 ) -> None:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a reply
     to an inline review comment (`pull_request_review_comment` event).
@@ -755,9 +791,10 @@ def dismiss_inline(
         review_id,
         actor=actor,
         command=command_name,
+        approve_allowed=approve_allowed,
     )
 
-    acted = bool(result.thread_resolved or result.review_dismissed)
+    acted = bool(result.thread_resolved or result.review_dismissed or result.pr_approved)
     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
     for error in result.errors:
         logger.warning("dismiss-inline: %s", error)

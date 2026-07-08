@@ -81,6 +81,7 @@ class DismissResult:
     reply: str
     thread_resolved: bool = False
     review_dismissed: bool = False
+    pr_approved: bool = False
     feedback_source: str = ""
     feedback_file: str = ""
     feedback_rule_id: str = ""
@@ -306,12 +307,137 @@ def _dismiss_if_all_resolved(
     return True, errors
 
 
+def _approve_if_pr_fully_resolved(
+    provider: GitHubProvider,
+    threads: Sequence[dict[str, Any]],
+    *,
+    approve_allowed: bool,
+    dismiss_message: str,
+    approve_message: str,
+) -> tuple[bool, list[str]]:
+    """Approve the PR iff EVERY active bot-authored `CHANGES_REQUESTED` review
+    has zero unresolved findings left — not just the review whose thread the
+    caller just resolved (issue #590).
+
+    This is deliberately PR-wide, diverging from `_dismiss_if_all_resolved`'s
+    per-review scope: mirrors `resolve_stale`/`_dismiss_stale_reviews`'s
+    existing PR-wide semantics for stale-review cleanup, applied here to the
+    "should we now approve" question. A single dismiss/false-positive/wont-fix
+    call only clears one thread (and, via `_dismiss_if_all_resolved`, at most
+    one review) — this function separately re-checks the *entire* PR's bot
+    review set before deciding to approve, so a PR with several outstanding
+    CHANGES_REQUESTED reviews from successive review cycles is only approved
+    once all of them are clear, not the moment any single one empties out.
+
+    `approve_allowed` gates the entire operation: callers pass the
+    trust-boundary decision (issue #590's tighter OWNER/MEMBER bar for the
+    auto-approve escalation, stricter than plain dismiss's COLLABORATOR
+    level) in from outside, so this function stays free of any actor/
+    author-association knowledge. When False, this is a cheap no-op
+    (`(False, [])`) — no extra API calls are made for actors who cannot
+    trigger this behavior.
+
+    Race safety: re-fetches `list_bot_reviews()` immediately before deciding,
+    the same "verify state right before acting" pattern
+    `_dismiss_if_all_resolved` uses via `get_review_state` — a concurrent push
+    landing a new finding between the caller's thread-resolve and this check
+    will show up as a new CHANGES_REQUESTED review (or new unresolved threads
+    on an existing one) and abort the approve.
+
+    Returns `(approved, errors)`. Never dismisses or approves if any bot
+    review fetch/list call fails (fails closed, matching
+    `_dismiss_if_all_resolved`'s get_review_state failure handling).
+
+    Scope note: "fully resolved" is measured by unresolved *inline thread*
+    count only, same as `_dismiss_stale_reviews`'s existing PR-wide
+    stale-review cleanup (which also does not check for outstanding
+    body-level findings before dismissing). A CHANGES_REQUESTED review whose
+    only remaining findings are body-level (no backing GraphQL thread) will
+    be treated as clear once its inline threads are resolved. This matches
+    established precedent rather than introducing new behavior; body-level
+    findings require an explicit `F<n>` command to dismiss in the first
+    place, so this is a pre-existing, documented scope boundary, not a gap
+    unique to the approve path.
+    """
+    if not approve_allowed:
+        return False, []
+
+    errors: list[str] = []
+
+    # Count unresolved, marker-owned threads per owning review, PR-wide (not
+    # filtered to a single target_review_id, unlike _dismiss_if_all_resolved).
+    unresolved_by_review: dict[int, int] = {}
+    for t in threads:
+        if t.get("isResolved"):
+            continue
+        body = _first_comment_body(t)
+        author = _first_comment_author_login(t) or None
+        if not is_owned_by_us(body, author, None, kind="inline"):
+            continue
+        rid = _thread_review_id(t)
+        if rid is None:
+            continue
+        unresolved_by_review[rid] = unresolved_by_review.get(rid, 0) + 1
+
+    reviews = provider.list_bot_reviews()
+    cr_review_ids = [
+        rid
+        for r in reviews
+        if r.get("state") == "CHANGES_REQUESTED" and (rid := r.get("id")) is not None
+    ]
+    if not cr_review_ids:
+        # Nothing to approve over: either there was never a CHANGES_REQUESTED
+        # review (e.g. this call is racing a state we don't own) or it was
+        # already cleared by a prior call. Silent no-op, matching
+        # _dismiss_if_all_resolved's "already not CHANGES_REQUESTED" skip.
+        return False, errors
+
+    for rid in cr_review_ids:
+        if unresolved_by_review.get(int(rid), 0) > 0:
+            # At least one CHANGES_REQUESTED review still has our own
+            # unresolved findings -- not all-clear PR-wide yet.
+            return False, errors
+
+    dismissed_ids: list[int] = []
+    for rid in cr_review_ids:
+        # Re-verify state immediately before dismissing each review -- the
+        # same race guard _dismiss_if_all_resolved applies per-review,
+        # repeated here per-review across the whole PR-wide set so a
+        # concurrent push that flips one of several reviews out of
+        # CHANGES_REQUESTED between the list above and this loop is not
+        # dismissed a second time.
+        state = provider.get_review_state(int(rid))
+        if state is None:
+            errors.append(f"get_review_state {rid}: could not verify review state, skipping approve")
+            return False, errors
+        if state != "CHANGES_REQUESTED":
+            continue
+        ok, status, body_snippet = provider.dismiss_review(int(rid), dismiss_message)
+        if not ok:
+            errors.append(f"dismiss review {rid}: HTTP {status}: {body_snippet}")
+            return False, errors
+        dismissed_ids.append(int(rid))
+
+    if not dismissed_ids:
+        # Every CR review flipped state under us between the list and the
+        # per-review re-check (e.g. dismissed by a concurrent run) -- nothing
+        # left for us to approve over.
+        return False, errors
+
+    ok, status, body_snippet = provider.submit_approval(approve_message)
+    if not ok:
+        errors.append(f"submit_approval: HTTP {status}: {body_snippet}")
+        return False, errors
+    return True, errors
+
+
 def dismiss_by_finding_id(
     provider: GitHubProvider,
     finding_id: int,
     *,
     actor: str,
     command: str,
+    approve_allowed: bool = False,
 ) -> DismissResult:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix F<n>` from a
     top-level PR comment (no parent review comment to reply to).
@@ -324,6 +450,10 @@ def dismiss_by_finding_id(
     INLINE findings: resolve the thread carrying `**[F<n>]**` gated by our own
     inline marker (never touch another bot's or human's thread), then dismiss
     that thread's owning review if all of its own threads are now resolved.
+    When `approve_allowed` (issue #590's tighter trust gate, decided by the
+    caller from the actor's author association), also checks whether this
+    resolution cleared the *last* active finding PR-wide across all bot
+    CHANGES_REQUESTED reviews, and if so submits a fresh APPROVE review.
 
     UNKNOWN: no action, reply says so.
     """
@@ -399,18 +529,56 @@ def dismiss_by_finding_id(
         resolved = bool(target_thread.get("isResolved"))
 
     review_dismissed = False
+    pr_approved = False
     review_id = _thread_review_id(target_thread)
-    if resolved and review_id is not None:
-        review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
-            provider,
-            threads,
-            review_id,
-            dismiss_message="Superseded: all findings resolved via slash command.",
-        )
-        errors.extend(dismiss_errors)
+    if resolved:
+        # Try the PR-wide approve path FIRST: it is the sole dismisser for
+        # the reviews it clears (it dismisses each CHANGES_REQUESTED review
+        # itself before submitting the APPROVE). Running
+        # `_dismiss_if_all_resolved` beforehand would dismiss review_id ahead
+        # of the PR-wide check, so by the time `_approve_if_pr_fully_resolved`
+        # re-lists reviews via `list_bot_reviews()`, that review would already
+        # read back as DISMISSED — `cr_review_ids` would be empty and the
+        # approve would never fire even in the common single-review case. When
+        # `approve_allowed` is False, or the PR-wide check finds it isn't
+        # fully clear yet (or races and dismisses nothing), this is a cheap
+        # no-op and falls through to the existing per-review dismiss so the
+        # normal (non-approving) dismiss behavior is unaffected.
+        if approve_allowed:
+            pr_approved, approve_errors = _approve_if_pr_fully_resolved(
+                provider,
+                threads,
+                approve_allowed=approve_allowed,
+                dismiss_message="Superseded: all findings resolved via slash command.",
+                approve_message=f"@{actor} cleared the last active finding via `/ai-pr-review {command}`.",
+            )
+            errors.extend(approve_errors)
+
+        if pr_approved:
+            review_dismissed = True
+        elif review_id is not None:
+            # Not PR-wide clear (or the approve attempt raced and dismissed
+            # nothing) — fall back to dismissing just this review.
+            # `_dismiss_if_all_resolved`'s own `get_review_state` guard makes
+            # this a safe no-op if `_approve_if_pr_fully_resolved` already
+            # dismissed review_id as part of a PR-wide set that didn't end up
+            # fully clear (state will read back as something other than
+            # CHANGES_REQUESTED).
+            review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
+                provider,
+                threads,
+                review_id,
+                dismiss_message="Superseded: all findings resolved via slash command.",
+            )
+            errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
-    if resolved:
+    if resolved and pr_approved:
+        reply = (
+            f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread; "
+            "all findings are now resolved, so the PR has been approved."
+        )
+    elif resolved:
         reply = f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread."
     else:
         reply = f"@{actor} marked **F{finding_id}** as `{command}`, but could not resolve the thread; see errors."
@@ -418,6 +586,7 @@ def dismiss_by_finding_id(
         reply=reply,
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
+        pr_approved=pr_approved,
         errors=tuple(errors),
     )
 
@@ -573,6 +742,7 @@ def dismiss_inline_reply(
     *,
     actor: str,
     command: str,
+    approve_allowed: bool = False,
 ) -> DismissResult:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a
     reply to an inline review comment (`pull_request_review_comment` event).
@@ -581,6 +751,13 @@ def dismiss_inline_reply(
     (`pullRequestReview.databaseId` of that thread's first comment) — this
     matches the more precise of the two disagreeing bash copies rather than
     scoping PR-wide.
+
+    `approve_allowed` (issue #590's tighter trust gate, decided by the caller
+    from the actor's author association) separately triggers a PR-wide check:
+    if this resolution cleared the last active finding across every bot
+    CHANGES_REQUESTED review on the PR, a fresh APPROVE review is submitted
+    after dismissing the now-clear review(s). This scope is intentionally
+    wider than the per-review dismiss above — see `_approve_if_pr_fully_resolved`.
     """
     errors_before = len(provider._errors)
     errors: list[str] = []
@@ -621,18 +798,47 @@ def dismiss_inline_reply(
         resolved = bool(target_thread.get("isResolved"))
 
     review_dismissed = False
+    pr_approved = False
     target_review_id = review_id if review_id is not None else _thread_review_id(target_thread)
-    if resolved and target_review_id is not None:
-        review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
-            provider,
-            threads,
-            target_review_id,
-            dismiss_message="Superseded: all findings resolved via slash command.",
-        )
-        errors.extend(dismiss_errors)
+    if resolved:
+        # Try the PR-wide approve path FIRST — see dismiss_by_finding_id's
+        # identical ordering comment: _approve_if_pr_fully_resolved must run
+        # before _dismiss_if_all_resolved, not after, or the per-review
+        # dismiss below would already have flipped target_review_id away from
+        # CHANGES_REQUESTED by the time the PR-wide check re-lists reviews,
+        # making cr_review_ids empty and the approve never fire even in the
+        # common single-outstanding-review case.
+        if approve_allowed:
+            pr_approved, approve_errors = _approve_if_pr_fully_resolved(
+                provider,
+                threads,
+                approve_allowed=approve_allowed,
+                dismiss_message="Superseded: all findings resolved via slash command.",
+                approve_message=f"@{actor} cleared the last active finding via `/ai-pr-review {command}`.",
+            )
+            errors.extend(approve_errors)
+
+        if pr_approved:
+            review_dismissed = True
+        elif target_review_id is not None:
+            # Not PR-wide clear (or approve_allowed was False, or the approve
+            # attempt raced and dismissed nothing) — fall back to dismissing
+            # just this review, the pre-#590 behavior.
+            review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
+                provider,
+                threads,
+                target_review_id,
+                dismiss_message="Superseded: all findings resolved via slash command.",
+            )
+            errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
-    if resolved:
+    if resolved and pr_approved:
+        reply = (
+            f"@{actor} marked as `{command}` and resolved the thread; "
+            "all findings are now resolved, so the PR has been approved."
+        )
+    elif resolved:
         reply = f"@{actor} marked as `{command}` and resolved the thread."
     else:
         reply = f"@{actor} marked as `{command}`, but could not resolve the thread; see errors."
@@ -640,5 +846,6 @@ def dismiss_inline_reply(
         reply=reply,
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
+        pr_approved=pr_approved,
         errors=tuple(errors),
     )
