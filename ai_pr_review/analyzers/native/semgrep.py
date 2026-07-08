@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,6 +28,19 @@ _TIMEOUT_SECS = 120
 # Semgrep rule IDs conventionally embed the vulnerability class (e.g.
 # "python.lang.security.audit.subprocess-shell-true"), so this is real
 # per-rule signal, not a guess.
+#
+# Fragments are matched as delimiter-bounded whole tokens (see _DELIM below),
+# not prefixes -- a fragment like "auth" does not also match "authorization"
+# or "authentication" as a prefix, since that would reopen the same class of
+# false positive this anchoring fixes (e.g. "auth" matching inside "author").
+# Where a stem has common inflected/pluralized real-world forms (secret(s),
+# credential(s), auth(n/entication/orization/orized/unauthenticated/unauthorized/z),
+# oauth, privilege(s/d)), each form is listed explicitly as its own bounded
+# token. This is a best-effort enumeration of known naming conventions, not an
+# exhaustive derivation -- a new unlisted form (e.g. a rule pack that uses
+# "authenticator" or "priv-esc") will fall through to "other" rather than
+# false-positive, but won't get the more specific category either. Extend
+# this list when a new real-world gap like that is found.
 _CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("sql-injection", "injection"),
     ("sqli", "injection"),
@@ -35,11 +49,23 @@ _CHECK_ID_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("xss", "injection"),
     ("ssrf", "injection"),
     ("deserialization", "injection"),
+    ("secrets", "secret"),
     ("secret", "secret"),
     ("hardcoded", "secret"),
+    ("credentials", "secret"),
     ("credential", "secret"),
+    ("authentication", "authz"),
+    ("unauthenticated", "authz"),
+    ("authorization", "authz"),
+    ("unauthorized", "authz"),
+    ("authorized", "authz"),
+    ("authn", "authz"),
+    ("authz", "authz"),
+    ("oauth", "authz"),
     ("auth", "authz"),
     ("access-control", "authz"),
+    ("privileges", "authz"),
+    ("privileged", "authz"),
     ("privilege", "authz"),
 )
 
@@ -52,6 +78,25 @@ _METADATA_CATEGORY_MAP: dict[str, str] = {
     "compatibility": "lint",
     "performance": "lint",
 }
+
+# Semgrep rule IDs are dot/dash/underscore-delimited components (e.g.
+# "python.lang.security.audit.sql-injection"). Bare substring containment
+# lets an unrelated rule name absorb a hint fragment as a false-positive
+# substring — e.g. "sqli" (intended for sql-injection rules) matches inside
+# "python.lang.sqlite-config", mis-tagging an unrelated rule as "injection".
+# Anchor each fragment to a delimiter (or start/end of string) on both sides
+# so it must appear as a complete token, not an arbitrary substring.
+_DELIM = r"[.\-_]"
+
+
+def _compile_hint_pattern(fragment: str) -> re.Pattern[str]:
+    escaped = re.escape(fragment)
+    return re.compile(rf"(?:^|{_DELIM}){escaped}(?:{_DELIM}|$)")
+
+
+_COMPILED_HINTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (_compile_hint_pattern(fragment), category) for fragment, category in _CHECK_ID_CATEGORY_HINTS
+)
 
 
 def _map_category(check_id: str, metadata: dict[str, object]) -> str:
@@ -66,8 +111,8 @@ def _map_category(check_id: str, metadata: dict[str, object]) -> str:
     under --config=auto).
     """
     lower_id = check_id.lower()
-    for fragment, category in _CHECK_ID_CATEGORY_HINTS:
-        if fragment in lower_id:
+    for pattern, category in _COMPILED_HINTS:
+        if pattern.search(lower_id):
             return category
 
     raw_category = metadata.get("category")

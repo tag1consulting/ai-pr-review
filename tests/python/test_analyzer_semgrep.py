@@ -121,12 +121,14 @@ class TestRunSemgrepFindings:
         findings = self._run_with_fixture("semgrep-error.json", tmp_path)
         assert findings[0].category == "other"
 
-    def test_category_maps_sql_injection_check_id_to_injection(self, tmp_path: Path) -> None:
+    def _run_with_check_id(
+        self, tmp_path: Path, check_id: str, metadata: dict | None = None
+    ) -> list:
         payload = json.dumps({
             "results": [{
-                "check_id": "python.lang.security.audit.sql-injection",
+                "check_id": check_id,
                 "path": "app/db.py", "start": {"line": 7, "col": 1}, "end": {"line": 7, "col": 20},
-                "extra": {"severity": "ERROR", "message": "possible SQL injection", "metadata": {}},
+                "extra": {"severity": "ERROR", "message": "finding", "metadata": metadata or {}},
             }],
             "errors": [],
         })
@@ -139,30 +141,99 @@ class TestRunSemgrepFindings:
             patch("ai_pr_review.analyzers.native.semgrep.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
-            findings = _run_semgrep(cf, Path("/dev/null"))
+            return _run_semgrep(cf, Path("/dev/null"))
+
+    def test_category_maps_sql_injection_check_id_to_injection(self, tmp_path: Path) -> None:
+        findings = self._run_with_check_id(
+            tmp_path, "python.lang.security.audit.sql-injection"
+        )
         assert findings[0].category == "injection"
 
     def test_category_maps_metadata_correctness_to_lint(self, tmp_path: Path) -> None:
-        payload = json.dumps({
-            "results": [{
-                "check_id": "python.lang.some-generic-rule",
-                "path": "app/utils.py", "start": {"line": 3, "col": 1}, "end": {"line": 3, "col": 10},
-                "extra": {"severity": "WARNING", "message": "generic issue",
-                          "metadata": {"category": "correctness"}},
-            }],
-            "errors": [],
-        })
-        f = tmp_path / "app.py"
-        f.write_text("x = 1\n")
-        cf = _make_cf([str(f)])
-        with (
-            patch("ai_pr_review.analyzers.native.semgrep.shutil.which", return_value="/usr/bin/semgrep"),
-            patch("ai_pr_review.analyzers.native.semgrep._resolve_config", return_value=["--config=auto"]),
-            patch("ai_pr_review.analyzers.native.semgrep.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
-            findings = _run_semgrep(cf, Path("/dev/null"))
+        findings = self._run_with_check_id(
+            tmp_path, "python.lang.some-generic-rule", {"category": "correctness"}
+        )
         assert findings[0].category == "lint"
+
+    def test_category_maps_secret_check_id_to_secret(self, tmp_path: Path) -> None:
+        findings = self._run_with_check_id(
+            tmp_path, "generic.secrets.security.detected-private-key"
+        )
+        assert findings[0].category == "secret"
+
+    def test_category_maps_authz_check_id_to_authz(self, tmp_path: Path) -> None:
+        findings = self._run_with_check_id(
+            tmp_path, "python.lang.security.audit.unauthenticated-endpoint"
+        )
+        assert findings[0].category == "authz"
+
+    @pytest.mark.parametrize(
+        ("check_id", "expected_category"),
+        [
+            ("generic.secrets.gitleaks.aws-access-key", "secret"),
+            ("generic.secrets.security.hardcoded-credentials", "secret"),
+            ("python.lang.security.audit.exposed-credentials", "secret"),
+            ("python.django.security.audit.authorization-bypass", "authz"),
+            ("java.lang.security.audit.authentication-bypass", "authz"),
+            ("java.spring.security.audit.authn-bypass", "authz"),
+            ("python.flask.security.unauthenticated-access", "authz"),
+            ("python.flask.security.unauthorized-access", "authz"),
+            ("kubernetes.security.excessive-privileges", "authz"),
+            ("dockerfile.security.privileged-container", "authz"),
+            ("python.lang.security.audit.oauth-token-leak", "authz"),
+            ("spring.security.authz-check", "authz"),
+        ],
+    )
+    def test_category_maps_inflected_secret_and_authz_forms(
+        self, tmp_path: Path, check_id: str, expected_category: str
+    ) -> None:
+        """Regression for #585 follow-up: the delimiter-anchored 'secret' and
+        'auth'/'privilege' fragments must still match the plural/inflected
+        forms (secrets, credentials, authorization, authentication, authn,
+        authz, oauth, unauthenticated, unauthorized, privileges, privileged)
+        that real semgrep rule IDs conventionally use -- anchoring must not
+        narrow these stems down to only their bare, undecorated form."""
+        findings = self._run_with_check_id(tmp_path, check_id)
+        assert findings[0].category == expected_category
+
+    def test_category_author_metadata_does_not_false_positive_as_authz(
+        self, tmp_path: Path
+    ) -> None:
+        """'auth' must not match as a prefix of unrelated words like 'author'
+        -- confirms the fix doesn't reopen the substring false-positive class
+        by over-widening the auth fragment."""
+        findings = self._run_with_check_id(tmp_path, "python.lang.author-metadata-check")
+        assert findings[0].category == "other"
+
+    def test_category_secretary_does_not_false_positive_as_secret(
+        self, tmp_path: Path
+    ) -> None:
+        findings = self._run_with_check_id(tmp_path, "python.lang.secretary-service-config")
+        assert findings[0].category == "other"
+
+    def test_category_maps_metadata_security_to_other(self, tmp_path: Path) -> None:
+        findings = self._run_with_check_id(
+            tmp_path, "python.lang.some-generic-rule", {"category": "security"}
+        )
+        assert findings[0].category == "other"
+
+    def test_category_check_id_hint_wins_over_conflicting_metadata(self, tmp_path: Path) -> None:
+        """A check_id fragment match must win even when metadata.category
+        disagrees -- locks in the current lookup order (check_id first, then
+        metadata fallback) against an accidental future reordering."""
+        findings = self._run_with_check_id(
+            tmp_path,
+            "python.lang.security.audit.sql-injection",
+            {"category": "correctness"},
+        )
+        assert findings[0].category == "injection"
+
+    def test_category_sqlite_rule_does_not_false_positive_as_injection(self, tmp_path: Path) -> None:
+        """Regression for #585: 'sqli' (intended for sql-injection rules) is a
+        substring of 'sqlite', but a delimiter-bounded check_id like
+        'python.lang.sqlite-config' must not match the 'sqli' hint fragment."""
+        findings = self._run_with_check_id(tmp_path, "python.lang.sqlite-config")
+        assert findings[0].category == "other"
 
     def test_empty_results_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("semgrep-empty.json", tmp_path)
