@@ -7,6 +7,14 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.0
+
+**Default Anthropic and Bedrock-proxy standard model bumped to Sonnet 5.** `claude-sonnet-5` / `us.anthropic.claude-sonnet-5` supersedes Sonnet 4.6 as the default standard-tier model; premium (Opus) defaults are unchanged. Pricing and temperature handling were updated alongside the default.
+
+**Category-aware dedup, and category mapping for all 13 static analyzers.** The `category` taxonomy introduced in v2.3.1 now drives `findings/merge.py`'s clustering logic — a finding can't join a cluster that already has a conflicting real category, and corroboration between an LLM agent and a static analyzer now requires category agreement. All 13 native static analyzers (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint, cve-check) now map their own findings onto the same taxonomy instead of reporting `"other"` unconditionally.
+
+**Semgrep's category-mapping heuristic hardened against false positives.** Check-ID hint fragments are now matched as delimiter-bounded whole tokens instead of bare substrings, fixing mis-tagged findings like `python.lang.sqlite-config` (previously mis-tagged `injection` via the `"sqli"` fragment matching inside `"sqlite"`).
+
 ## What's new in v2.3.1
 
 **`category` field added to the shared `json-findings` schema.** Findings now carry an 11-value taxonomy (`authz`, `injection`, `dependency-cve`, `secret`, `architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`), ported from `claude-comprehensive-review#76`. An unrecognized or missing value normalises to `"other"` rather than dropping the finding. This release only adds the field to the schema, the `Finding` model, and the 5 agent prompts that emit inline findings; it does not yet change dedup/clustering behavior, and static-analyzer findings (semgrep, trufflehog, etc.) still report `"other"` since only LLM-agent prompts were updated.

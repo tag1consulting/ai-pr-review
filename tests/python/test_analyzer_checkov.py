@@ -148,9 +148,12 @@ class TestRunCheckovFindings:
         assert "CKV_AWS_57" in f.finding
         assert f.line == 10
 
-    def test_category_is_lint_for_non_secret_check(self, tmp_path: Path) -> None:
+    def test_category_is_other_for_non_secret_non_graph_check(self, tmp_path: Path) -> None:
+        """Bare CKV_* checks (not CKV_SECRET_*/CKV2_*) default to "other", not
+        "lint" -- "lint" is a real category under category-aware clustering
+        and would block corroboration with a same-line agent finding."""
         findings = self._run_with_fixture("checkov-failed.json", tmp_path)
-        assert findings[0].category == "lint"
+        assert findings[0].category == "other"
 
     def test_empty_failed_checks_returns_empty(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("checkov-empty.json", tmp_path)
