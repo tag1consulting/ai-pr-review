@@ -24,6 +24,10 @@ exclude-analyzers: 'checkov,tflint'
 
 When `analyzers` is set, `exclude-analyzers` is ignored (allowlist takes precedence). Unknown names are rejected with an error and a suggestion. See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
 
+## Category mapping
+
+In addition to severity, every analyzer maps its findings onto the same 11-value category taxonomy used by the LLM agents (`authz`, `injection`, `dependency-cve`, `secret`, `architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`). This lets an analyzer finding corroborate an LLM-agent finding on the same issue — corroborated findings are exempt from the LLM judge pass's down-ranking and get a confidence boost. Findings the analyzer can't confidently classify map to `"other"`, which never blocks corroboration with a real category but also never falsely matches one.
+
 | Analyzer | Language gate | Severity mapping | Confidence | Source tag |
 |----------|--------------|-----------------|------------|------------|
 | **shellcheck** | `.sh`, `.bash` | `error`→High, `warning`→Medium | 95 | `shellcheck` |

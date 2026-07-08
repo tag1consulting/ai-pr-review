@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.0
+
+**Default Anthropic/Bedrock-proxy model bumped to Sonnet 5**, plus category-aware dedup and category mapping across all 13 static analyzers, closing out the taxonomy work started in v2.3.1.
+
+See [Features → v2.4.0](features#whats-new-in-v240) for details.
+
 ## What's new in v2.3.1
 
 **`category` field added to the shared findings schema.** Findings now carry an 11-value taxonomy (`authz`, `injection`, `secret`, etc.) instead of being untagged; unrecognized values normalise to `"other"` rather than dropping the finding.

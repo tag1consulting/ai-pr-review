@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-07
+
+### Changed
+
+- **Default Anthropic and Bedrock-proxy standard model bumped to Sonnet 5** (`claude-sonnet-5` / `us.anthropic.claude-sonnet-5`), superseding Sonnet 4.6. Premium (Opus) defaults are unchanged. `resolve_temperature()`'s reject-temperature allowlist and `config/model-pricing.json` were updated alongside the default so Sonnet 5 calls don't 400 on the repo's non-default `temperature` and the token-cost table renders a real rate instead of `n/a`. (#583)
+
+### Added
+
+- **Category-aware dedup and clustering**: the `category` taxonomy added in v2.3.1 now drives `findings/merge.py`'s clustering logic. A finding can only join a cluster if it doesn't introduce a second, conflicting real category (`"other"` is treated as a wildcard, not a real category), and provenance-weighted corroboration between an LLM agent and a static analyzer now requires category agreement. Closes the gap called out in the v2.3.1 entry below. (#578)
+- **Category mapping for all 13 native static analyzers** (shellcheck, semgrep, trufflehog, ruff, golangci-lint, hadolint, checkov, phpcs, eslint, phpstan, kube-linter, tflint, cve-check): each analyzer now maps its own findings onto the same 11-value taxonomy instead of reporting `"other"` unconditionally, so analyzer findings can corroborate and dedup against LLM-agent findings in the same category. (#579, #584)
+
+### Fixed
+
+- **Semgrep's category-mapping heuristic hardened against false positives**: `_map_category()` previously matched `_CHECK_ID_CATEGORY_HINTS` fragments via bare substring containment, so a rule ID like `python.lang.sqlite-config` was mis-tagged `injection` (the `"sqli"` fragment matches inside `"sqlite"`). Fragments are now matched as delimiter-bounded whole tokens. The fix also widens 6 stem-shaped fragments (`secret`, `credential`, `auth`, `privilege`, plus `oauth`/`authz`) to their real-world inflected/pluralized forms (e.g. `secrets`, `credentials`, `authorization`, `authentication`, `unauthenticated`) so the stricter boundary check doesn't regress genuine matches in the two highest-value security categories. (#585, #586)
+
 ## [2.3.1] - 2026-07-06
 
 ### Added
