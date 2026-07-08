@@ -252,3 +252,15 @@ development_status:
   15-1-category-dedup: done                        # #578 — category as a merge/dedup clustering signal; story at memory-bank/bmad/stories/15-1-category-dedup.md
   15-2-analyzer-category-coverage: done            # #579 — category assignment across all 13 native analyzers; story at memory-bank/bmad/stories/15-2-analyzer-category-coverage.md
   epic-15-retrospective: optional
+
+  # ── Epic 16 — Semgrep category-mapping hardening ────────────────────────────
+  # GitHub issue #585, filed as a deliberate follow-up during #578/#579's PR
+  # #584 review: semgrep.py's _map_category() used bare substring containment
+  # against check_id, so a rule ID like "python.lang.sqlite-config" matched
+  # the "sqli" fragment (intended for sql-injection rules) and was mis-tagged
+  # "injection". Non-regressive at the time (every semgrep finding was
+  # "other" before #579 shipped _map_category), deferred out of PR #584 to
+  # avoid scope creep on that PR's actual fix.
+  epic-16: done
+  16-1-semgrep-category-hardening: done             # #585 — delimiter-aware anchoring for _CHECK_ID_CATEGORY_HINTS, secret/authz/security-to-other test coverage, check_id-vs-metadata precedence test; story at memory-bank/bmad/stories/16-1-semgrep-category-hardening.md
+  epic-16-retrospective: optional

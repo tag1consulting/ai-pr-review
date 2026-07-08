@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,6 +54,25 @@ _METADATA_CATEGORY_MAP: dict[str, str] = {
     "performance": "lint",
 }
 
+# Semgrep rule IDs are dot/dash/underscore-delimited components (e.g.
+# "python.lang.security.audit.sql-injection"). Bare substring containment
+# lets an unrelated rule name absorb a hint fragment as a false-positive
+# substring — e.g. "sqli" (intended for sql-injection rules) matches inside
+# "python.lang.sqlite-config", mis-tagging an unrelated rule as "injection".
+# Anchor each fragment to a delimiter (or start/end of string) on both sides
+# so it must appear as a complete token, not an arbitrary substring.
+_DELIM = r"[.\-_]"
+
+
+def _compile_hint_pattern(fragment: str) -> re.Pattern[str]:
+    escaped = re.escape(fragment)
+    return re.compile(rf"(?:^|{_DELIM}){escaped}(?:{_DELIM}|$)")
+
+
+_COMPILED_HINTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (_compile_hint_pattern(fragment), category) for fragment, category in _CHECK_ID_CATEGORY_HINTS
+)
+
 
 def _map_category(check_id: str, metadata: dict[str, object]) -> str:
     """Map a semgrep finding to this repo's Category taxonomy.
@@ -66,8 +86,8 @@ def _map_category(check_id: str, metadata: dict[str, object]) -> str:
     under --config=auto).
     """
     lower_id = check_id.lower()
-    for fragment, category in _CHECK_ID_CATEGORY_HINTS:
-        if fragment in lower_id:
+    for pattern, category in _COMPILED_HINTS:
+        if pattern.search(lower_id):
             return category
 
     raw_category = metadata.get("category")
