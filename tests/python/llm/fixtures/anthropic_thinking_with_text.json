@@ -1,0 +1,28 @@
+{
+  "id": "msg_011CcrnLnbZkRkCb2TzFvqWS",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "EszpAgqJAQgPGAIqQKT4Y1zZH6gcFNdNKdE8n"
+    },
+    {
+      "type": "text",
+      "text": "Here is my review of the code."
+    }
+  ],
+  "model": "claude-sonnet-5",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 26981,
+    "output_tokens": 8686,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens_details": {
+      "thinking_tokens": 512
+    }
+  }
+}

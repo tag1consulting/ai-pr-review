@@ -1,0 +1,24 @@
+{
+  "id": "msg_011CcqTSXoGyBjB27Mh7yLtz",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "EtvnAgqJAQgPGAIqQFNLcuWK0lMar52M3EDuiPHx8iMf"
+    }
+  ],
+  "model": "claude-sonnet-5",
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 26981,
+    "output_tokens": 16384,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens_details": {
+      "thinking_tokens": 16384
+    }
+  }
+}

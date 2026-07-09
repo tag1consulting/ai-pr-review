@@ -34,7 +34,7 @@ from typing import Any
 
 import httpx
 
-from ._config import get_retry_base_delay, get_retry_count, resolve_temperature
+from ._config import get_retry_base_delay, get_retry_count, resolve_effort, resolve_temperature
 from ._http import LLMContentError, LLMError, retry_post
 from .base import LLMRequest, LLMResponse
 
@@ -89,6 +89,9 @@ def _build_body(
     body["max_tokens"] = req.max_tokens
     if temperature is not None:
         body["temperature"] = temperature
+    effort = resolve_effort(req.model_id)
+    if effort is not None:
+        body["output_config"] = {"effort": effort}
     return body
 
 
@@ -131,12 +134,23 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
     if stop_reason in ("SAFETY", "RECITATION", "refusal"):
         raise LLMContentError(f"Response blocked by provider filter (stop_reason={stop_reason})")
 
+    usage = data.get("usage", {})
+    thinking_tokens = int((usage.get("output_tokens_details") or {}).get("thinking_tokens", 0))
+
     content = data.get("content", [])
     text = next((c["text"] for c in content if c.get("type") == "text"), "")
     if not text:
+        if stop_reason == "max_tokens" and thinking_tokens > 0:
+            raise LLMError(
+                f"Anthropic response exhausted max_tokens entirely on thinking "
+                f"(thinking_tokens={thinking_tokens}, max_tokens={request_body.get('max_tokens')}); "
+                "no text produced. Lower output_config.effort or raise max_tokens for this model."
+            )
         raise LLMError(f"Could not extract response text from Anthropic response: {response_text[:500]}")
 
-    usage = data.get("usage", {})
+    # output_tokens is the inclusive, authoritative total (already includes
+    # thinking_tokens) — do not add thinking_tokens again, unlike google.py
+    # where candidatesTokenCount excludes thoughts.
     return LLMResponse(
         text=text,
         input_tokens=int(usage.get("input_tokens", 0)),
@@ -144,6 +158,7 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
         cache_creation_tokens=int(usage.get("cache_creation_input_tokens", 0)),
         cache_read_tokens=int(usage.get("cache_read_input_tokens", 0)),
         stop_reason=stop_reason,
+        thinking_tokens=thinking_tokens,
         _request_body=str(request_body),
         _response_body=response_text,
         _provider="anthropic",

@@ -59,6 +59,23 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
     return min(raw, 2.0)
 
 
+def resolve_effort(model_id: str) -> str | None:
+    """Return the output_config.effort value to send for this model, or None to omit it.
+
+    Only Claude Sonnet 5 has adaptive thinking on by default (implicit effort="high"),
+    which can consume max_tokens entirely on thinking before any text is produced
+    (see issue #592). Capping effort at "low" bounds thinking without disabling it
+    outright. Other models either don't support adaptive thinking (predate it, would
+    400 on an unrecognized output_config) or have thinking off by default already
+    (Opus 4.7/4.8 require an explicit thinking:{type:adaptive} opt-in), so they don't
+    have this failure mode and must not receive the parameter.
+    """
+    lower = model_id.lower()
+    if "sonnet-5" in lower:
+        return "low"
+    return None
+
+
 def resolve_prompt_caching(provider: str) -> bool:
     """Resolve LLM_PROMPT_CACHING to a boolean for the given provider."""
     raw = os.environ.get("LLM_PROMPT_CACHING", "auto").strip().lower()
