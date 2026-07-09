@@ -1,0 +1,1224 @@
+diff --git a/.github/workflows/slash-commands.yml b/.github/workflows/slash-commands.yml
+index 3f28111f..12bc5ae2 100644
+--- a/.github/workflows/slash-commands.yml
++++ b/.github/workflows/slash-commands.yml
+@@ -262,10 +262,10 @@ jobs:
+           - `/ai-pr-review rescan` — force full diff re-review
+           - `/ai-pr-review review-full` — run all agents (full mode)
+           - `/ai-pr-review skip` — suppress the next automated review
+-          - `/ai-pr-review dismiss` — reply to an **inline** finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved)
++          - `/ai-pr-review dismiss` — reply to an **inline** finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved; approves the PR if that clears the last active finding and you are OWNER/MEMBER)
+           - `/ai-pr-review dismiss F<n>` — dismiss a **body-level** finding by its stable ID (e.g. `/ai-pr-review dismiss F1`); IDs appear in the **`### Findings not attached to specific lines`** section. IDs are stable across review cycles — `F1` always refers to the same finding on this PR.
+-          - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings
+-          - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings
++          - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings; a reply on an inline finding also resolves the thread and dismisses/approves like `dismiss`
++          - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings; a reply on an inline finding also resolves the thread and dismisses/approves like `dismiss`
+           - `/ai-pr-review feedback <text>` — store free-form feedback in the learning loop
+           - `/ai-pr-review explain [F<n>]` — request a detailed explanation from the originating agent; use `F<n>` for body-level findings
+           - `/ai-pr-review revise [F<n>] <hint>` — request the agent to revise its finding with a hint; use `F<n>` for body-level findings
+@@ -695,14 +695,21 @@ jobs:
+   # Dismiss a single false-positive finding.
+   #
+   # Triggered by replying to an inline review comment with
+-  # "/ai-pr-review dismiss". Resolves only the thread the user replied to.
+-  # If that was the last unresolved thread on the review, the
+-  # CHANGES_REQUESTED review is dismissed automatically.
++  # "/ai-pr-review dismiss", "false-positive", or "wont-fix" (issue #589 --
++  # false-positive/wont-fix previously only reached feedback-command below,
++  # whose resolve-on-success step deliberately never dismisses the owning
++  # review; this job is the one that does). Resolves only the thread the user
++  # replied to. If that was the last unresolved thread on the review, the
++  # CHANGES_REQUESTED review is dismissed automatically. If OWNER/MEMBER and
++  # this cleared the last active finding PR-wide, the PR is also approved
++  # (issue #590) -- see the "Invoke Python dismiss-inline handler" step.
+   # ---------------------------------------------------------------------------
+   dismiss-finding:
+     if: |
+       inputs.event-name == 'pull_request_review_comment' &&
+-      startsWith(inputs.comment-body, '/ai-pr-review dismiss') &&
++      (startsWith(inputs.comment-body, '/ai-pr-review dismiss') ||
++       startsWith(inputs.comment-body, '/ai-pr-review false-positive') ||
++       startsWith(inputs.comment-body, '/ai-pr-review wont-fix')) &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+     runs-on: ubuntu-latest
+     container:
+@@ -711,6 +718,14 @@ jobs:
+       run:
+         shell: bash
+     steps:
++      - name: Parse command
++        id: cmd
++        env:
++          COMMENT: ${{ inputs.comment-body }}
++        run: |
++          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
++          echo "command=$command" >> "$GITHUB_OUTPUT"
++
+       - name: React — seen
+         env:
+           GH_TOKEN: ${{ secrets.actions-token || github.token }}
+@@ -763,8 +778,15 @@ jobs:
+           SLASH_IN_REPLY_TO_ID: ${{ steps.validate.outputs.parent_id }}
+           SLASH_REVIEW_ID: ${{ steps.validate.outputs.review_id }}
+           SLASH_ACTOR: ${{ inputs.actor-login }}
+-          SLASH_COMMAND: dismiss
++          SLASH_COMMAND: ${{ steps.cmd.outputs.command }}
+           SLASH_PR_NUMBER: ${{ inputs.pr-number }}
++          # Auto-approve (issue #590) is a stronger side effect than a single
++          # dismiss, so it is gated at the OWNER/MEMBER bar feedback-command
++          # already uses for its persistent learning-loop writes -- tighter
++          # than this job's own OWNER/MEMBER/COLLABORATOR admission gate
++          # above. A COLLABORATOR can still dismiss/false-positive/wont-fix
++          # normally; they just never trigger the PR-wide auto-approve.
++          SLASH_APPROVE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
+           GITHUB_REPOSITORY: ${{ inputs.repository }}
+           GH_TOKEN: ${{ secrets.github-token }}
+           VCS_PROVIDER: 'github'
+@@ -1072,30 +1094,22 @@ jobs:
+             --repo "$REPOSITORY" \
+             --body-file "$reply_file"
+ 
+-      - name: Resolve review thread on success
+-        # For false-positive / wont-fix from a review-thread reply, also
+-        # resolve the thread — same UX as /ai-pr-review dismiss.  Skip for
+-        # 'feedback' (free-form, not tied to a single finding) and 'explain'/
+-        # 'revise' (informational, finding stays active).  Identified via
+-        # the comment body prefix to keep the workflow free of Python deps.
+-        #
+-        # Resolve-only, by design: unlike `ai-pr-review dismiss`/`dismiss-inline`,
+-        # this never dismisses the owning review, even if this is its last
+-        # unresolved thread — the FeedbackEntry is already persisted by the
+-        # slash handler above, and dismissal here would be a silent behavior
+-        # change from what this job has always done. See ai_pr_review.slash.dismiss.resolve_only.
+-        if: |
+-          steps.handler.outputs.is_command == 'true' &&
+-          steps.endpoints.outputs.is_review_comment == 'true' &&
+-          (startsWith(inputs.comment-body, '/ai-pr-review false-positive') ||
+-           startsWith(inputs.comment-body, '/ai-pr-review wont-fix'))
+-        env:
+-          GH_TOKEN: ${{ secrets.github-token }}
+-          GITHUB_REPOSITORY: ${{ inputs.repository }}
+-          VCS_PROVIDER: 'github'
+-          SLASH_PR_NUMBER: ${{ inputs.pr-number }}
+-          SLASH_IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
+-        run: ai-pr-review resolve-thread
++      # NOTE (issue #589): a prior "Resolve review thread on success" step
++      # lived here, calling `ai-pr-review resolve-thread` (resolve_only --
++      # never dismisses the owning review) for false-positive/wont-fix
++      # replies on an inline thread. That was the root of #589: resolve_only
++      # is explicitly documented as never touching the owning review, so a
++      # false-positive/wont-fix reply could never clear a CHANGES_REQUESTED
++      # review the way `/ai-pr-review dismiss` could. The fix routes
++      # false-positive/wont-fix review-thread replies through the
++      # `dismiss-finding` job instead (same trigger condition, now widened to
++      # match all three command names), which resolves the thread AND
++      # dismisses the review AND (issue #590) approves the PR when
++      # everything is now clear. `dismiss-finding` has no `needs:` on this
++      # job, so both still react/reply independently for a review-thread
++      # false-positive/wont-fix, but the persist-plus-resolve step below
++      # remains this job's own responsibility (learning-loop storage);
++      # dismiss-finding no longer needs duplicating here.
+ 
+       - name: React — done
+         if: steps.handler.outputs.is_command == 'true' && success()
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 8d027306..e28d2c4b 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -31,7 +31,7 @@ The action uses the Python engine in `ai_pr_review/`.
+ | `ai_pr_review/context/{treesitter,symbols,budget}.py` | Tree-sitter context-enrichment: parse changed files, extract symbol refs, budget per agent prompt |
+ | `ai_pr_review/feedback/{store,inject,models,retention}.py` | Feedback-loop store on the `ai-pr-review-bot` branch; injects recent learnings into prompts (Capability C) |
+ | `ai_pr_review/slash/{parser,handlers}.py` | `/ai-pr-review` slash-command dispatcher (rescan, dismiss, false-positive, wont-fix, feedback, explain, revise, help) |
+-| `ai_pr_review/slash/dismiss.py` | F-ID classification (body vs. inline), GraphQL thread resolution, and review-dismissal orchestration backing the `dismiss`/`dismiss-inline`/`feedback-context`/`resolve-thread` CLI subcommands (Epic 13; ported from workflow-embedded bash) |
++| `ai_pr_review/slash/dismiss.py` | F-ID classification (body vs. inline), GraphQL thread resolution, and review-dismissal orchestration backing the `dismiss`/`dismiss-inline`/`feedback-context`/`resolve-thread` CLI subcommands (Epic 13; ported from workflow-embedded bash). Also home to the PR-wide auto-approve check (`_approve_if_pr_fully_resolved`, issue #590): when a dismiss/false-positive/wont-fix clears the last active finding across every bot `CHANGES_REQUESTED` review, dismisses them and calls `GitHubProvider.submit_approval` to post a fresh `APPROVE` review; gated by an `approve_allowed` flag the caller derives from author association |
+ | `ai_pr_review/diff/{compute,eligibility,linemap}.py` | Diff acquisition, change-line eligibility, line-number maps |
+ | `ai_pr_review/manifest.py`, `languages.py`, `language_profiles.py` | Changed-files manifest, language detection (canonical `_EXT_MAP`), language-profile loader |
+ | `ai_pr_review/{config,errors,logging,telemetry,pricing}.py` | Typed `Config`, exception hierarchy, structured logging, telemetry-event emit, model pricing |
+diff --git a/README.md b/README.md
+index c24ff1c9..916f7fb3 100644
+--- a/README.md
++++ b/README.md
+@@ -218,9 +218,9 @@ Once `ai-pr-review.yml` is merged to your default branch, users with write acces
+ | `/ai-pr-review review-full` | Run all agents (full mode) |
+ | `/ai-pr-review skip` | Add `skip-ai-review` label |
+ | `/ai-pr-review help` | Post command list as reply |
+-| `/ai-pr-review dismiss [F<n>]` | Mark a finding a false positive. Reply on the inline comment thread, **or** post `dismiss F<n>` as a top-level comment using the `[F<n>]` ID shown on either an inline or body-level finding. Either way the matching inline thread is resolved, and the `CHANGES_REQUESTED` review is dismissed once every thread is resolved. |
+-| `/ai-pr-review false-positive [reason]` | Persist a false-positive verdict. Post as a reply on the AI's inline finding (recommended — also resolves the thread on success) **or** as a top-level PR comment. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
+-| `/ai-pr-review wont-fix [reason]` | Persist a "won't fix / by design" verdict. Same posting rules as `false-positive` (review-thread reply preferred). |
++| `/ai-pr-review dismiss [F<n>]` | Mark a finding a false positive. Reply on the inline comment thread, **or** post `dismiss F<n>` as a top-level comment using the `[F<n>]` ID shown on either an inline or body-level finding. Either way the matching inline thread is resolved, and the `CHANGES_REQUESTED` review is dismissed once every thread is resolved. If that clears the last active finding PR-wide and the actor is OWNER/MEMBER, the PR is also approved — see [Auto-approve on clear](docs/slash-commands.md#auto-approve-on-clear). |
++| `/ai-pr-review false-positive [reason]` | Persist a false-positive verdict. Post as a reply on the AI's inline finding (recommended — resolves the thread and dismisses the owning review on success, same mechanics as `dismiss`) **or** as a top-level PR comment. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
++| `/ai-pr-review wont-fix [reason]` | Persist a "won't fix / by design" verdict. Same posting rules and dismissal mechanics as `false-positive` (review-thread reply preferred). |
+ | `/ai-pr-review feedback <text>` | Persist free-form feedback for future review runs to consider. |
+ | `/ai-pr-review explain` | Ask the agent for a longer explanation (stub for now — replies with a canned message). |
+ | `/ai-pr-review revise <hint>` | Ask the agent to revise its verdict with a hint (stub for now). |
+diff --git a/ai_pr_review/cli.py b/ai_pr_review/cli.py
+index b8b22b27..0732ee91 100644
+--- a/ai_pr_review/cli.py
++++ b/ai_pr_review/cli.py
+@@ -577,6 +577,19 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
+     "(defaults to AI_FEEDBACK_LOOP env var). When false, the finding is "
+     "acknowledged but not recorded for future suppression.",
+ )
++@click.option(
++    "--approve-allowed",
++    envvar="SLASH_APPROVE_ALLOWED",
++    default=False,
++    type=bool,
++    help="Whether the actor is trusted to trigger the PR-wide auto-approve "
++    "escalation (issue #590) when this call clears the last active finding "
++    "(defaults to SLASH_APPROVE_ALLOWED env var). The calling workflow "
++    "decides this from author_association -- OWNER/MEMBER only, a tighter "
++    "bar than plain dismiss's OWNER/MEMBER/COLLABORATOR. When false, "
++    "dismissal still happens normally; only the extra approve step is "
++    "skipped.",
++)
+ def dismiss(
+     finding_id: int | None,
+     actor: str,
+@@ -584,6 +597,7 @@ def dismiss(
+     pr_number: int,
+     comment_body: str,
+     enable_feedback_loop: bool,
++    approve_allowed: bool,
+ ) -> None:
+     """Handle `/ai-pr-review dismiss|false-positive|wont-fix [F<n>]` posted as
+     a top-level PR comment.
+@@ -622,7 +636,9 @@ def dismiss(
+         click.echo("::notice::reaction=done", err=True)
+         return
+ 
+-    result = dismiss_by_finding_id(provider, finding_id, actor=actor, command=command_name)
++    result = dismiss_by_finding_id(
++        provider, finding_id, actor=actor, command=command_name, approve_allowed=approve_allowed
++    )
+ 
+     # A genuine miss (UNKNOWN classification, or an INLINE token that could
+     # not be matched to a thread) gets a "confused" reaction. This is a
+@@ -632,7 +648,13 @@ def dismiss(
+     # resolution, so React-not-applicable never fired for that case) even
+     # though no action was taken. The new behavior reacts confused whenever
+     # nothing was actually resolved/dismissed/recorded, regardless of why.
+-    acted = bool(result.feedback_source or result.feedback_file or result.thread_resolved or result.review_dismissed)
++    acted = bool(
++        result.feedback_source
++        or result.feedback_file
++        or result.thread_resolved
++        or result.review_dismissed
++        or result.pr_approved
++    )
+     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+     for error in result.errors:
+         logger.warning("dismiss: %s", error)
+@@ -723,12 +745,26 @@ class _DismissConfig:
+     type=int,
+     help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
+ )
++@click.option(
++    "--approve-allowed",
++    envvar="SLASH_APPROVE_ALLOWED",
++    default=False,
++    type=bool,
++    help="Whether the actor is trusted to trigger the PR-wide auto-approve "
++    "escalation (issue #590) when this call clears the last active finding "
++    "(defaults to SLASH_APPROVE_ALLOWED env var). The calling workflow "
++    "decides this from author_association -- OWNER/MEMBER only, a tighter "
++    "bar than plain dismiss's OWNER/MEMBER/COLLABORATOR. When false, "
++    "dismissal still happens normally; only the extra approve step is "
++    "skipped.",
++)
+ def dismiss_inline(
+     parent_comment_id: int,
+     review_id: int | None,
+     actor: str,
+     command_name: str,
+     pr_number: int,
++    approve_allowed: bool,
+ ) -> None:
+     """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a reply
+     to an inline review comment (`pull_request_review_comment` event).
+@@ -755,9 +791,10 @@ def dismiss_inline(
+         review_id,
+         actor=actor,
+         command=command_name,
++        approve_allowed=approve_allowed,
+     )
+ 
+-    acted = bool(result.thread_resolved or result.review_dismissed)
++    acted = bool(result.thread_resolved or result.review_dismissed or result.pr_approved)
+     click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+     for error in result.errors:
+         logger.warning("dismiss-inline: %s", error)
+diff --git a/ai_pr_review/slash/dismiss.py b/ai_pr_review/slash/dismiss.py
+index 51db7c43..d84f931b 100644
+--- a/ai_pr_review/slash/dismiss.py
++++ b/ai_pr_review/slash/dismiss.py
+@@ -81,6 +81,7 @@ class DismissResult:
+     reply: str
+     thread_resolved: bool = False
+     review_dismissed: bool = False
++    pr_approved: bool = False
+     feedback_source: str = ""
+     feedback_file: str = ""
+     feedback_rule_id: str = ""
+@@ -306,12 +307,137 @@ def _dismiss_if_all_resolved(
+     return True, errors
+ 
+ 
++def _approve_if_pr_fully_resolved(
++    provider: GitHubProvider,
++    threads: Sequence[dict[str, Any]],
++    *,
++    approve_allowed: bool,
++    dismiss_message: str,
++    approve_message: str,
++) -> tuple[bool, list[str]]:
++    """Approve the PR iff EVERY active bot-authored `CHANGES_REQUESTED` review
++    has zero unresolved findings left — not just the review whose thread the
++    caller just resolved (issue #590).
++
++    This is deliberately PR-wide, diverging from `_dismiss_if_all_resolved`'s
++    per-review scope: mirrors `resolve_stale`/`_dismiss_stale_reviews`'s
++    existing PR-wide semantics for stale-review cleanup, applied here to the
++    "should we now approve" question. A single dismiss/false-positive/wont-fix
++    call only clears one thread (and, via `_dismiss_if_all_resolved`, at most
++    one review) — this function separately re-checks the *entire* PR's bot
++    review set before deciding to approve, so a PR with several outstanding
++    CHANGES_REQUESTED reviews from successive review cycles is only approved
++    once all of them are clear, not the moment any single one empties out.
++
++    `approve_allowed` gates the entire operation: callers pass the
++    trust-boundary decision (issue #590's tighter OWNER/MEMBER bar for the
++    auto-approve escalation, stricter than plain dismiss's COLLABORATOR
++    level) in from outside, so this function stays free of any actor/
++    author-association knowledge. When False, this is a cheap no-op
++    (`(False, [])`) — no extra API calls are made for actors who cannot
++    trigger this behavior.
++
++    Race safety: re-fetches `list_bot_reviews()` immediately before deciding,
++    the same "verify state right before acting" pattern
++    `_dismiss_if_all_resolved` uses via `get_review_state` — a concurrent push
++    landing a new finding between the caller's thread-resolve and this check
++    will show up as a new CHANGES_REQUESTED review (or new unresolved threads
++    on an existing one) and abort the approve.
++
++    Returns `(approved, errors)`. Never dismisses or approves if any bot
++    review fetch/list call fails (fails closed, matching
++    `_dismiss_if_all_resolved`'s get_review_state failure handling).
++
++    Scope note: "fully resolved" is measured by unresolved *inline thread*
++    count only, same as `_dismiss_stale_reviews`'s existing PR-wide
++    stale-review cleanup (which also does not check for outstanding
++    body-level findings before dismissing). A CHANGES_REQUESTED review whose
++    only remaining findings are body-level (no backing GraphQL thread) will
++    be treated as clear once its inline threads are resolved. This matches
++    established precedent rather than introducing new behavior; body-level
++    findings require an explicit `F<n>` command to dismiss in the first
++    place, so this is a pre-existing, documented scope boundary, not a gap
++    unique to the approve path.
++    """
++    if not approve_allowed:
++        return False, []
++
++    errors: list[str] = []
++
++    # Count unresolved, marker-owned threads per owning review, PR-wide (not
++    # filtered to a single target_review_id, unlike _dismiss_if_all_resolved).
++    unresolved_by_review: dict[int, int] = {}
++    for t in threads:
++        if t.get("isResolved"):
++            continue
++        body = _first_comment_body(t)
++        author = _first_comment_author_login(t) or None
++        if not is_owned_by_us(body, author, None, kind="inline"):
++            continue
++        rid = _thread_review_id(t)
++        if rid is None:
++            continue
++        unresolved_by_review[rid] = unresolved_by_review.get(rid, 0) + 1
++
++    reviews = provider.list_bot_reviews()
++    cr_review_ids = [
++        rid
++        for r in reviews
++        if r.get("state") == "CHANGES_REQUESTED" and (rid := r.get("id")) is not None
++    ]
++    if not cr_review_ids:
++        # Nothing to approve over: either there was never a CHANGES_REQUESTED
++        # review (e.g. this call is racing a state we don't own) or it was
++        # already cleared by a prior call. Silent no-op, matching
++        # _dismiss_if_all_resolved's "already not CHANGES_REQUESTED" skip.
++        return False, errors
++
++    for rid in cr_review_ids:
++        if unresolved_by_review.get(int(rid), 0) > 0:
++            # At least one CHANGES_REQUESTED review still has our own
++            # unresolved findings -- not all-clear PR-wide yet.
++            return False, errors
++
++    dismissed_ids: list[int] = []
++    for rid in cr_review_ids:
++        # Re-verify state immediately before dismissing each review -- the
++        # same race guard _dismiss_if_all_resolved applies per-review,
++        # repeated here per-review across the whole PR-wide set so a
++        # concurrent push that flips one of several reviews out of
++        # CHANGES_REQUESTED between the list above and this loop is not
++        # dismissed a second time.
++        state = provider.get_review_state(int(rid))
++        if state is None:
++            errors.append(f"get_review_state {rid}: could not verify review state, skipping approve")
++            return False, errors
++        if state != "CHANGES_REQUESTED":
++            continue
++        ok, status, body_snippet = provider.dismiss_review(int(rid), dismiss_message)
++        if not ok:
++            errors.append(f"dismiss review {rid}: HTTP {status}: {body_snippet}")
++            return False, errors
++        dismissed_ids.append(int(rid))
++
++    if not dismissed_ids:
++        # Every CR review flipped state under us between the list and the
++        # per-review re-check (e.g. dismissed by a concurrent run) -- nothing
++        # left for us to approve over.
++        return False, errors
++
++    ok, status, body_snippet = provider.submit_approval(approve_message)
++    if not ok:
++        errors.append(f"submit_approval: HTTP {status}: {body_snippet}")
++        return False, errors
++    return True, errors
++
++
+ def dismiss_by_finding_id(
+     provider: GitHubProvider,
+     finding_id: int,
+     *,
+     actor: str,
+     command: str,
++    approve_allowed: bool = False,
+ ) -> DismissResult:
+     """Handle `/ai-pr-review dismiss|false-positive|wont-fix F<n>` from a
+     top-level PR comment (no parent review comment to reply to).
+@@ -324,6 +450,10 @@ def dismiss_by_finding_id(
+     INLINE findings: resolve the thread carrying `**[F<n>]**` gated by our own
+     inline marker (never touch another bot's or human's thread), then dismiss
+     that thread's owning review if all of its own threads are now resolved.
++    When `approve_allowed` (issue #590's tighter trust gate, decided by the
++    caller from the actor's author association), also checks whether this
++    resolution cleared the *last* active finding PR-wide across all bot
++    CHANGES_REQUESTED reviews, and if so submits a fresh APPROVE review.
+ 
+     UNKNOWN: no action, reply says so.
+     """
+@@ -399,18 +529,56 @@ def dismiss_by_finding_id(
+         resolved = bool(target_thread.get("isResolved"))
+ 
+     review_dismissed = False
++    pr_approved = False
+     review_id = _thread_review_id(target_thread)
+-    if resolved and review_id is not None:
+-        review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
+-            provider,
+-            threads,
+-            review_id,
+-            dismiss_message="Superseded: all findings resolved via slash command.",
+-        )
+-        errors.extend(dismiss_errors)
++    if resolved:
++        # Try the PR-wide approve path FIRST: it is the sole dismisser for
++        # the reviews it clears (it dismisses each CHANGES_REQUESTED review
++        # itself before submitting the APPROVE). Running
++        # `_dismiss_if_all_resolved` beforehand would dismiss review_id ahead
++        # of the PR-wide check, so by the time `_approve_if_pr_fully_resolved`
++        # re-lists reviews via `list_bot_reviews()`, that review would already
++        # read back as DISMISSED — `cr_review_ids` would be empty and the
++        # approve would never fire even in the common single-review case. When
++        # `approve_allowed` is False, or the PR-wide check finds it isn't
++        # fully clear yet (or races and dismisses nothing), this is a cheap
++        # no-op and falls through to the existing per-review dismiss so the
++        # normal (non-approving) dismiss behavior is unaffected.
++        if approve_allowed:
++            pr_approved, approve_errors = _approve_if_pr_fully_resolved(
++                provider,
++                threads,
++                approve_allowed=approve_allowed,
++                dismiss_message="Superseded: all findings resolved via slash command.",
++                approve_message=f"@{actor} cleared the last active finding via `/ai-pr-review {command}`.",
++            )
++            errors.extend(approve_errors)
++
++        if pr_approved:
++            review_dismissed = True
++        elif review_id is not None:
++            # Not PR-wide clear (or the approve attempt raced and dismissed
++            # nothing) — fall back to dismissing just this review.
++            # `_dismiss_if_all_resolved`'s own `get_review_state` guard makes
++            # this a safe no-op if `_approve_if_pr_fully_resolved` already
++            # dismissed review_id as part of a PR-wide set that didn't end up
++            # fully clear (state will read back as something other than
++            # CHANGES_REQUESTED).
++            review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
++                provider,
++                threads,
++                review_id,
++                dismiss_message="Superseded: all findings resolved via slash command.",
++            )
++            errors.extend(dismiss_errors)
+ 
+     errors.extend(provider._errors[errors_before:])
+-    if resolved:
++    if resolved and pr_approved:
++        reply = (
++            f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread; "
++            "all findings are now resolved, so the PR has been approved."
++        )
++    elif resolved:
+         reply = f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread."
+     else:
+         reply = f"@{actor} marked **F{finding_id}** as `{command}`, but could not resolve the thread; see errors."
+@@ -418,6 +586,7 @@ def dismiss_by_finding_id(
+         reply=reply,
+         thread_resolved=resolved,
+         review_dismissed=review_dismissed,
++        pr_approved=pr_approved,
+         errors=tuple(errors),
+     )
+ 
+@@ -573,6 +742,7 @@ def dismiss_inline_reply(
+     *,
+     actor: str,
+     command: str,
++    approve_allowed: bool = False,
+ ) -> DismissResult:
+     """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a
+     reply to an inline review comment (`pull_request_review_comment` event).
+@@ -581,6 +751,13 @@ def dismiss_inline_reply(
+     (`pullRequestReview.databaseId` of that thread's first comment) — this
+     matches the more precise of the two disagreeing bash copies rather than
+     scoping PR-wide.
++
++    `approve_allowed` (issue #590's tighter trust gate, decided by the caller
++    from the actor's author association) separately triggers a PR-wide check:
++    if this resolution cleared the last active finding across every bot
++    CHANGES_REQUESTED review on the PR, a fresh APPROVE review is submitted
++    after dismissing the now-clear review(s). This scope is intentionally
++    wider than the per-review dismiss above — see `_approve_if_pr_fully_resolved`.
+     """
+     errors_before = len(provider._errors)
+     errors: list[str] = []
+@@ -621,18 +798,47 @@ def dismiss_inline_reply(
+         resolved = bool(target_thread.get("isResolved"))
+ 
+     review_dismissed = False
++    pr_approved = False
+     target_review_id = review_id if review_id is not None else _thread_review_id(target_thread)
+-    if resolved and target_review_id is not None:
+-        review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
+-            provider,
+-            threads,
+-            target_review_id,
+-            dismiss_message="Superseded: all findings resolved via slash command.",
+-        )
+-        errors.extend(dismiss_errors)
++    if resolved:
++        # Try the PR-wide approve path FIRST — see dismiss_by_finding_id's
++        # identical ordering comment: _approve_if_pr_fully_resolved must run
++        # before _dismiss_if_all_resolved, not after, or the per-review
++        # dismiss below would already have flipped target_review_id away from
++        # CHANGES_REQUESTED by the time the PR-wide check re-lists reviews,
++        # making cr_review_ids empty and the approve never fire even in the
++        # common single-outstanding-review case.
++        if approve_allowed:
++            pr_approved, approve_errors = _approve_if_pr_fully_resolved(
++                provider,
++                threads,
++                approve_allowed=approve_allowed,
++                dismiss_message="Superseded: all findings resolved via slash command.",
++                approve_message=f"@{actor} cleared the last active finding via `/ai-pr-review {command}`.",
++            )
++            errors.extend(approve_errors)
++
++        if pr_approved:
++            review_dismissed = True
++        elif target_review_id is not None:
++            # Not PR-wide clear (or approve_allowed was False, or the approve
++            # attempt raced and dismissed nothing) — fall back to dismissing
++            # just this review, the pre-#590 behavior.
++            review_dismissed, dismiss_errors = _dismiss_if_all_resolved(
++                provider,
++                threads,
++                target_review_id,
++                dismiss_message="Superseded: all findings resolved via slash command.",
++            )
++            errors.extend(dismiss_errors)
+ 
+     errors.extend(provider._errors[errors_before:])
+-    if resolved:
++    if resolved and pr_approved:
++        reply = (
++            f"@{actor} marked as `{command}` and resolved the thread; "
++            "all findings are now resolved, so the PR has been approved."
++        )
++    elif resolved:
+         reply = f"@{actor} marked as `{command}` and resolved the thread."
+     else:
+         reply = f"@{actor} marked as `{command}`, but could not resolve the thread; see errors."
+@@ -640,5 +846,6 @@ def dismiss_inline_reply(
+         reply=reply,
+         thread_resolved=resolved,
+         review_dismissed=review_dismissed,
++        pr_approved=pr_approved,
+         errors=tuple(errors),
+     )
+diff --git a/ai_pr_review/vcs/github.py b/ai_pr_review/vcs/github.py
+index 40c1f665..078cad6c 100644
+--- a/ai_pr_review/vcs/github.py
++++ b/ai_pr_review/vcs/github.py
+@@ -760,6 +760,33 @@ def get_review_state(self, review_id: int) -> str | None:
+         state = data.get("state")
+         return state if isinstance(state, str) else None
+ 
++    def submit_approval(self, message: str) -> tuple[bool, int, str]:
++        """POST a standalone APPROVE review. Returns (ok, status, body_snippet).
++
++        A thin, lightweight primitive for the slash-command "approve on
++        clear" path (issue #590): GitHub's REST API has no endpoint to
++        convert an existing review's state, so the only way to reach an
++        `APPROVED` `reviewDecision` after a `dismiss`/`false-positive`/
++        `wont-fix` command clears the last active finding is to dismiss the
++        stale `CHANGES_REQUESTED` review(s) (`dismiss_review`) and then POST a
++        brand-new review with `event: "APPROVE"`.
++
++        Deliberately does not reuse `post_findings`: that method's APPROVE
++        path exists to post a whole findings summary (with an optional
++        pre-APPROVE COMMENT review to carry inline comments GitHub disallows
++        on an APPROVE payload) after a fresh analysis run. This primitive has
++        no findings to render and no inline comments to attach — it only
++        needs `commit_id` omitted (defaults to the PR's current head on
++        GitHub's side) and a short attribution body, mirroring
++        `dismiss_review`'s minimal-payload style.
++        """
++        resp = self.client.request(
++            "POST",
++            self._reviews_url(),
++            json_body={"body": message, "event": "APPROVE"},
++        )
++        return resp.status_code < 400, resp.status_code, resp.text[:200]
++
+     def fetch_review_comment(self, comment_id: int) -> dict[str, Any] | None:
+         """Fetch a single PR review (inline) comment by its REST databaseId.
+ 
+diff --git a/docs/slash-commands.md b/docs/slash-commands.md
+index 6c5d2b5c..182e1c2d 100644
+--- a/docs/slash-commands.md
++++ b/docs/slash-commands.md
+@@ -88,7 +88,7 @@ Adds the `skip-ai-review` label to the PR, suppressing the next automated review
+ 
+ ### `/ai-pr-review dismiss`
+ 
+-Marks a specific AI review finding as a false positive.
++Marks a specific AI review finding as a false positive. `false-positive` and `wont-fix` (below) follow the exact same dismissal mechanics when posted as a reply to an inline finding — `dismiss` is documented first because it needs no learning-loop setup.
+ 
+ #### For inline findings (reply on the review thread)
+ 
+@@ -97,6 +97,7 @@ Post as a **reply to the bot's inline review comment**. When invoked:
+ 2. Resolves the review thread containing that finding
+ 3. Checks whether any unresolved threads remain on the same review
+ 4. If all threads are resolved, dismisses the `CHANGES_REQUESTED` review with an attribution message
++5. If that was the **last** active finding across **every** `CHANGES_REQUESTED` review on the PR (not just the one being dismissed), and the actor is `OWNER` or `MEMBER`, the bot also submits a fresh **APPROVE** review — see [Auto-approve on clear](#auto-approve-on-clear) below
+ 
+ This allows selective dismissal — if a review has three findings and only one is a false positive, dismissing that one leaves the `CHANGES_REQUESTED` state in place until the remaining threads are also resolved.
+ 
+@@ -112,13 +113,13 @@ IDs are **PR-wide and stable across review cycles** — if `F1` was assigned to
+ 
+ If you post `/ai-pr-review dismiss` without an ID as a top-level PR comment, the bot replies with the list of active body-level finding IDs and the correct syntax.
+ 
+-When all **inline** review threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — the same behavior as the inline path. Remaining body-level findings will be suppressed on the next re-review run once they are recorded in the feedback store.
++When all **inline** review threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — the same behavior as the inline path, including the auto-approve check described below.
+ 
+ ### `/ai-pr-review false-positive [F<n>] [reason]`
+ 
+ Records the finding as a false positive in the learning loop. The `[reason]` is optional but encouraged — it helps future reviews avoid the same finding in similar contexts.
+ 
+-**For inline findings:** Post as a reply on the AI's inline review-comment thread. The workflow auto-extracts source / file / rule_id from the parent comment and resolves the thread on success.
++**For inline findings:** Post as a reply on the AI's inline review-comment thread. This resolves the thread **and** dismisses the owning `CHANGES_REQUESTED` review once all of its threads are resolved — identical mechanics to `/ai-pr-review dismiss` (see above), including the auto-approve check. The workflow also auto-extracts source / file / rule_id from the parent comment for the learning-loop entry.
+ 
+ **For body-level findings:** Post as a top-level PR comment with the finding's stable ID:
+ ```
+@@ -131,7 +132,7 @@ Requires `AI_FEEDBACK_LOOP=true` on the action input and a `GH_TOKEN` with `cont
+ 
+ Records the finding as intentional / won't-fix. Use this when the finding is valid but the pattern is deliberate in this codebase (e.g. intentional use of MD5 for non-security checksums, intentional exception swallowing in a specific error handler).
+ 
+-**For inline findings:** Reply on the thread (same rules as `false-positive`).
++**For inline findings:** Reply on the thread (same rules as `false-positive`, including thread resolution, review dismissal, and the auto-approve check).
+ 
+ **For body-level findings:** Top-level PR comment with finding ID:
+ ```
+@@ -140,6 +141,14 @@ Records the finding as intentional / won't-fix. Use this when the finding is val
+ 
+ Requires the same setup as `false-positive`.
+ 
++### Auto-approve on clear
++
++When a `dismiss`, `false-positive`, or `wont-fix` reply clears the **last** unresolved finding across **every** bot-authored `CHANGES_REQUESTED` review on the PR — not just the review the cleared finding belonged to — the bot dismisses the remaining review(s) and submits a brand-new **APPROVE** review, so the PR's review decision reaches `APPROVED` instead of sitting at `REVIEW_REQUIRED` with only a dismissed review. GitHub's REST API has no endpoint to convert an existing review's state, so this is the only way to reach an approving state after a slash-command dismissal.
++
++This is gated to commenters with `OWNER` or `MEMBER` repository association — one tier stricter than the `OWNER`/`MEMBER`/`COLLABORATOR` bar that dismissal itself uses, matching the trust level the learning-loop commands (`false-positive`/`wont-fix`'s persistent writes) already require. A `COLLABORATOR` can still dismiss/false-positive/wont-fix findings normally; they just never trigger the auto-approve.
++
++The check re-verifies review state immediately before dismissing/approving, so a finding introduced by a concurrent push between the triggering comment and the bot's action will abort the approve.
++
+ ### `/ai-pr-review feedback <text>`
+ 
+ Stores free-form feedback in the learning loop — not tied to a specific finding verdict. Useful for noting that a certain category of finding is too noisy for this repository.
+diff --git a/tests/python/test_cli_dismiss_inline.py b/tests/python/test_cli_dismiss_inline.py
+index e40a0f22..af94c4b4 100644
+--- a/tests/python/test_cli_dismiss_inline.py
++++ b/tests/python/test_cli_dismiss_inline.py
+@@ -331,3 +331,209 @@ def test_missing_required_option_fails() -> None:
+     )
+ 
+     assert result.exit_code != 0
++
++
++# ---------------------------------------------------------------------------
++# Issue #589: false-positive / wont-fix dismiss like dismiss does when
++# posted as a reply to an inline finding.
++# ---------------------------------------------------------------------------
++
++
++def test_false_positive_command_dismisses_review_same_as_dismiss(monkeypatch) -> None:
++    """`--command false-positive` must reach the same resolve+dismiss
++    behavior as `--command dismiss` -- the CLI's `click.Choice` already
++    accepted false-positive/wont-fix before this fix; the bug this pins was
++    entirely in the calling workflow's job-trigger `if:` condition and its
++    hardcoded `SLASH_COMMAND: dismiss` env var, never in this CLI layer."""
++    our_body = f"[High] leak\n{INLINE_MARKER}"
++    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
++    dismissed: list[str] = []
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            q = body.get("query", "")
++            if "resolveReviewThread" in q:
++                return httpx.Response(
++                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
++                )
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            dismissed.append(url)
++            return httpx.Response(200, json={})
++        return httpx.Response(404)
++
++    provider, _ = _make_provider(handler)
++    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
++
++    runner = CliRunner()
++    result = runner.invoke(cli, _base_args(55, review_id=41, command="false-positive"))
++
++    assert result.exit_code == 0, result.output
++    assert "marked as `false-positive` and resolved the thread" in result.stdout
++    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
++
++
++def test_wont_fix_command_dismisses_review_same_as_dismiss(monkeypatch) -> None:
++    our_body = f"[High] leak\n{INLINE_MARKER}"
++    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
++    dismissed: list[str] = []
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            q = body.get("query", "")
++            if "resolveReviewThread" in q:
++                return httpx.Response(
++                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
++                )
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            dismissed.append(url)
++            return httpx.Response(200, json={})
++        return httpx.Response(404)
++
++    provider, _ = _make_provider(handler)
++    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
++
++    runner = CliRunner()
++    result = runner.invoke(cli, _base_args(55, review_id=41, command="wont-fix"))
++
++    assert result.exit_code == 0, result.output
++    assert "marked as `wont-fix` and resolved the thread" in result.stdout
++    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
++
++
++# ---------------------------------------------------------------------------
++# Issue #590: --approve-allowed / SLASH_APPROVE_ALLOWED plumbing
++# ---------------------------------------------------------------------------
++
++
++def test_approve_allowed_flag_triggers_pr_approval(monkeypatch) -> None:
++    """End-to-end CLI proof that `--approve-allowed true` (as the workflow
++    would pass via SLASH_APPROVE_ALLOWED for an OWNER/MEMBER actor) reaches
++    the PR-wide approve path and the CLI reports it in the reply and the
++    reaction marker."""
++    our_body = f"[High] leak\n{INLINE_MARKER}"
++    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
++    approved: list[dict] = []
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
++        if req.method == "GET" and "/reviews" in url:
++            return httpx.Response(
++                200, json=[{"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}}]
++            )
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            q = body.get("query", "")
++            if "resolveReviewThread" in q:
++                return httpx.Response(
++                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
++                )
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            approved.append(_json.loads(req.content))
++            return httpx.Response(200, json={"id": 999, "state": "APPROVED"})
++        return httpx.Response(404)
++
++    provider, _ = _make_provider(handler)
++    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
++
++    runner = CliRunner()
++    result = runner.invoke(
++        cli, _base_args(55, review_id=41) + ["--approve-allowed", "true"]
++    )
++
++    assert result.exit_code == 0, result.output
++    assert "approved" in result.stdout
++    assert len(approved) == 1
++
++
++def test_approve_allowed_defaults_false_no_approval(monkeypatch) -> None:
++    """Without --approve-allowed (and without SLASH_APPROVE_ALLOWED in the
++    environment), the default must be False -- a COLLABORATOR-level actor
++    (or any caller that omits the flag) never triggers the PR-wide approve
++    escalation, only the ordinary per-review dismiss."""
++    our_body = f"[High] leak\n{INLINE_MARKER}"
++    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            q = body.get("query", "")
++            if "resolveReviewThread" in q:
++                return httpx.Response(
++                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
++                )
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            raise AssertionError("must not approve without --approve-allowed")
++        return httpx.Response(404)
++
++    provider, _ = _make_provider(handler)
++    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
++
++    runner = CliRunner()
++    result = runner.invoke(cli, _base_args(55, review_id=41))
++
++    assert result.exit_code == 0, result.output
++    assert "resolved the thread" in result.stdout
++    assert "approved" not in result.stdout
++
++
++def test_approve_allowed_explicit_false_string_env_var_no_approval(monkeypatch) -> None:
++    """The workflow passes SLASH_APPROVE_ALLOWED as the literal string
++    "false" for a COLLABORATOR-level actor (GitHub Actions' `contains(...)`
++    boolean renders to the string "false", not an absent env var) -- this is
++    the actual trust-boundary invocation in production, distinct from
++    `test_approve_allowed_defaults_false_no_approval`'s omitted-flag case,
++    which only proves Click's own default. This pins that Click's BOOL type
++    parses that exact string to False rather than truthy-by-presence."""
++    our_body = f"[High] leak\n{INLINE_MARKER}"
++    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            q = body.get("query", "")
++            if "resolveReviewThread" in q:
++                return httpx.Response(
++                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
++                )
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            raise AssertionError('must not approve when SLASH_APPROVE_ALLOWED="false"')
++        return httpx.Response(404)
++
++    provider, _ = _make_provider(handler)
++    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
++
++    runner = CliRunner()
++    result = runner.invoke(
++        cli, _base_args(55, review_id=41), env={"SLASH_APPROVE_ALLOWED": "false"}
++    )
++
++    assert result.exit_code == 0, result.output
++    assert "resolved the thread" in result.stdout
++    assert "approved" not in result.stdout
+diff --git a/tests/python/vcs/test_dismiss_github.py b/tests/python/vcs/test_dismiss_github.py
+index 283a886e..2878b409 100644
+--- a/tests/python/vcs/test_dismiss_github.py
++++ b/tests/python/vcs/test_dismiss_github.py
+@@ -672,3 +672,335 @@ def handler(req: httpx.Request) -> httpx.Response:
+     assert context.source == ""
+     assert context.file == "db.py"
+     assert "could not parse source tag" in context.missing_reason
++
++
++# ---------------------------------------------------------------------------
++# submit_approval — thin POST primitive (issue #590)
++# ---------------------------------------------------------------------------
++
++
++def test_submit_approval_happy_path() -> None:
++    def handler(req: httpx.Request) -> httpx.Response:
++        if req.method == "POST" and str(req.url).endswith("/pulls/1/reviews"):
++            body = _json.loads(req.content)
++            assert body["event"] == "APPROVE"
++            assert body["body"] == "all clear"
++            assert "comments" not in body
++            assert "commit_id" not in body
++            return httpx.Response(200, json={"id": 999, "state": "APPROVED"})
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    ok, status, _ = prov.submit_approval("all clear")
++
++    assert ok is True
++    assert status == 200
++
++
++def test_submit_approval_http_error_surfaces() -> None:
++    def handler(req: httpx.Request) -> httpx.Response:
++        return httpx.Response(422, text="Validation failed")
++
++    prov, _ = _make_provider(handler)
++    ok, status, body_snippet = prov.submit_approval("all clear")
++
++    assert ok is False
++    assert status == 422
++    assert "Validation failed" in body_snippet
++
++
++# ---------------------------------------------------------------------------
++# PR-wide approve-on-clear (issue #590)
++# ---------------------------------------------------------------------------
++
++
++def _cr_review(rid: int, body: str = "") -> dict:
++    return {"id": rid, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": body}
++
++
++@dataclass
++class _StatefulReviews:
++    """A small stateful review-list fixture for the approve-on-clear tests.
++
++    Unlike the other tests in this file (which use static, unconditional mock
++    responses), the approve path makes *two* separate GitHub calls that must
++    agree on a review's live state -- `list_bot_reviews()` (PR-wide snapshot)
++    and `get_review_state()` (per-review re-check right before dismissing).
++    A dismiss PUT must be reflected in both for the subsequent call in the
++    same test to see a consistent world, exactly as production GitHub would:
++    a review the approve path just dismissed is DISMISSED, not
++    CHANGES_REQUESTED, the next time anything asks.
++    """
++
++    reviews: dict[int, dict]
++
++    def state(self, rid: int) -> str | None:
++        r = self.reviews.get(rid)
++        return r["state"] if r else None
++
++    def dismiss(self, rid: int) -> None:
++        if rid in self.reviews:
++            self.reviews[rid]["state"] = "DISMISSED"
++
++    def as_list(self) -> list[dict]:
++        return list(self.reviews.values())
++
++
++def test_dismiss_inline_reply_approves_when_last_review_cleared() -> None:
++    """The defining #590 happy path: a single outstanding CHANGES_REQUESTED
++    review, its last unresolved thread is resolved by this call, and the
++    actor is trusted (approve_allowed=True) -- the review is dismissed and a
++    fresh APPROVE review is submitted.
++
++    This also pins the ordering fix that makes #590 reachable at all: the
++    PR-wide approve check must run BEFORE the per-review dismiss fallback, or
++    the per-review dismiss would flip review 41 to DISMISSED first and the
++    approve path's subsequent list_bot_reviews() would see zero
++    CHANGES_REQUESTED reviews -- silently never approving even in this
++    single-review case. Caught via a stateful mock (a naive always-CR mock
++    hides this ordering bug entirely -- see PR discussion)."""
++    nodes = [_inline_thread("T1", resolved=False, body=f"x\n{INLINE_MARKER}", comment_db_id=77, review_db_id=41)]
++    state = _StatefulReviews({41: _cr_review(41)})
++    approved: list[dict] = []
++    dismissed: list[str] = []
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            s = state.state(41)
++            return httpx.Response(200, json={"id": 41, "state": s})
++        if req.method == "GET" and "/reviews" in url:
++            return httpx.Response(200, json=state.as_list())
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            if "resolveReviewThread" in body.get("query", ""):
++                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            dismissed.append(url)
++            state.dismiss(41)
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            approved.append(_json.loads(req.content))
++            return httpx.Response(200, json={"id": 999, "state": "APPROVED"})
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="dismiss", approve_allowed=True)
++
++    assert result.thread_resolved is True
++    assert result.review_dismissed is True
++    assert result.pr_approved is True
++    assert len(approved) == 1
++    assert approved[0]["event"] == "APPROVE"
++    # Exactly one dismissal PUT for review 41 -- not two. The pre-fix ordering
++    # (per-review dismiss running before the PR-wide approve check) caused a
++    # second, redundant PUT here when tested against a mock naive enough not
++    # to notice; this stateful mock would surface that as a second entry.
++    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
++    assert "approved" in result.reply
++    assert result.errors == ()
++
++
++def test_dismiss_inline_reply_no_approve_when_other_cr_review_still_open() -> None:
++    """PR-wide scoping (issue #590's core design decision): clearing every
++    thread on ONE of several CHANGES_REQUESTED reviews must NOT trigger an
++    approve while another bot CHANGES_REQUESTED review still has unresolved
++    findings. Only the one cleared review is dismissed; no APPROVE POST."""
++    # Review 41 is the one being cleared by this call; review 42 is a second,
++    # still-open CHANGES_REQUESTED review with its own unresolved thread.
++    nodes = [
++        _inline_thread("T1", resolved=False, body=f"x\n{INLINE_MARKER}", comment_db_id=77, review_db_id=41),
++        _inline_thread("T2", resolved=False, body=f"y\n{INLINE_MARKER}", comment_db_id=88, review_db_id=42),
++    ]
++    state = _StatefulReviews({41: _cr_review(41), 42: _cr_review(42)})
++    dismissed: list[str] = []
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": state.state(41)})
++        if req.method == "GET" and "/reviews" in url:
++            return httpx.Response(200, json=state.as_list())
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            if "resolveReviewThread" in body.get("query", ""):
++                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            dismissed.append(url)
++            state.dismiss(41)
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            raise AssertionError("must not approve while another CR review still has unresolved findings")
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="dismiss", approve_allowed=True)
++
++    assert result.thread_resolved is True
++    assert result.review_dismissed is True  # review 41 alone is fully resolved
++    assert result.pr_approved is False
++    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
++    assert "approved" not in result.reply
++    assert result.errors == ()
++
++
++def test_dismiss_inline_reply_no_approve_when_not_allowed() -> None:
++    """Trust gate: even when clearing the last active finding PR-wide,
++    approve_allowed=False (the default, and what a COLLABORATOR-level actor
++    gets per the workflow's tighter OWNER/MEMBER bar for auto-approve) must
++    skip the approve step entirely -- no extra list_bot_reviews call, no
++    APPROVE POST -- while the ordinary dismiss still proceeds via the
++    existing per-review path."""
++    nodes = [_inline_thread("T1", resolved=False, body=f"x\n{INLINE_MARKER}", comment_db_id=77, review_db_id=41)]
++    state = _StatefulReviews({41: _cr_review(41)})
++    list_bot_reviews_calls = 0
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        nonlocal list_bot_reviews_calls
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": state.state(41)})
++        if req.method == "GET" and "/reviews" in url:
++            list_bot_reviews_calls += 1
++            return httpx.Response(200, json=state.as_list())
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            if "resolveReviewThread" in body.get("query", ""):
++                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            state.dismiss(41)
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            raise AssertionError("must not approve when approve_allowed=False")
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="dismiss", approve_allowed=False)
++
++    assert result.thread_resolved is True
++    assert result.review_dismissed is True
++    assert result.pr_approved is False
++    # approve_allowed=False short-circuits _approve_if_pr_fully_resolved
++    # before any list_bot_reviews call -- the dismiss above went through the
++    # existing per-review _dismiss_if_all_resolved path instead.
++    assert list_bot_reviews_calls == 0
++    assert "approved" not in result.reply
++
++
++def test_dismiss_by_finding_id_approves_when_last_review_cleared() -> None:
++    """Same PR-wide approve happy path, but via the top-level-comment /
++    body-finding-ID entry point (dismiss_by_finding_id) rather than the
++    inline-reply entry point, proving both call sites share the same
++    approve wiring and ordering fix."""
++    id_map = {"security-reviewer|api.py|10|abc123456789": 4}
++    our_body = f"[High] leak\n**[F4]**\n{INLINE_MARKER}\n" + build_id_map_marker(id_map)
++    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
++    state = _StatefulReviews({41: _cr_review(41, body=our_body)})
++    approved: list[dict] = []
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": state.state(41)})
++        if req.method == "GET" and "/reviews" in url:
++            return httpx.Response(200, json=state.as_list())
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            if "resolveReviewThread" in body.get("query", ""):
++                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            state.dismiss(41)
++            return httpx.Response(200, json={})
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            approved.append(_json.loads(req.content))
++            return httpx.Response(200, json={"id": 999, "state": "APPROVED"})
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    result = dismiss_by_finding_id(prov, 4, actor="alice", command="false-positive", approve_allowed=True)
++
++    assert result.thread_resolved is True
++    assert result.review_dismissed is True
++    assert result.pr_approved is True
++    assert len(approved) == 1
++    assert "approved" in result.reply
++
++
++def test_approve_race_guard_review_flips_state_before_dismiss() -> None:
++    """Race safety (mirrors _dismiss_if_all_resolved's get_review_state
++    re-check): the review is already DISMISSED by a concurrent run by the
++    time list_bot_reviews() is fetched, so the PR-wide approve check finds no
++    CHANGES_REQUESTED reviews at all and cleanly declines -- proving the
++    approve path never manufactures a dismiss/approve action from stale
++    state. The per-review fallback dismiss then also independently confirms
++    the same DISMISSED state via its own get_review_state re-check."""
++    nodes = [_inline_thread("T1", resolved=False, body=f"x\n{INLINE_MARKER}", comment_db_id=77, review_db_id=41)]
++    # Review 41 already flipped to DISMISSED before this call even starts --
++    # simulates a concurrent run winning the race.
++    state = _StatefulReviews({41: {**_cr_review(41), "state": "DISMISSED"}})
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(200, json={"id": 41, "state": state.state(41)})
++        if req.method == "GET" and "/reviews" in url:
++            return httpx.Response(200, json=state.as_list())
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            if "resolveReviewThread" in body.get("query", ""):
++                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            raise AssertionError("must not dismiss a review already flipped away from CHANGES_REQUESTED")
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            raise AssertionError("must not approve when no CHANGES_REQUESTED review remains")
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="dismiss", approve_allowed=True)
++
++    assert result.thread_resolved is True
++    assert result.review_dismissed is False
++    assert result.pr_approved is False
++    assert result.errors == ()
++
++
++def test_approve_race_guard_state_fetch_failure_fails_closed() -> None:
++    """A get_review_state HTTP failure during the PR-wide approve path's
++    per-review re-check must fail closed: no approve, no dismiss PUT, and the
++    failure surfaces in .errors -- never silently proceed on unverifiable
++    state. Because the approve path now runs FIRST (before the per-review
++    fallback), this failure also means the per-review fallback never gets a
++    chance to dismiss review 41 either -- the whole call reports nothing
++    dismissed, matching _dismiss_if_all_resolved's own fail-closed contract."""
++    nodes = [_inline_thread("T1", resolved=False, body=f"x\n{INLINE_MARKER}", comment_db_id=77, review_db_id=41)]
++    state = _StatefulReviews({41: _cr_review(41)})
++
++    def handler(req: httpx.Request) -> httpx.Response:
++        url = str(req.url)
++        if req.method == "GET" and url.endswith("/reviews/41"):
++            return httpx.Response(500, text="internal error")
++        if req.method == "GET" and "/reviews" in url:
++            return httpx.Response(200, json=state.as_list())
++        if req.method == "POST" and url.endswith("/graphql"):
++            body = _json.loads(req.content)
++            if "resolveReviewThread" in body.get("query", ""):
++                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
++            return httpx.Response(200, json=_threads_response(nodes))
++        if req.method == "PUT" and "/dismissals" in url:
++            raise AssertionError("must not dismiss when review state could not be verified")
++        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
++            raise AssertionError("must not approve when review state could not be verified")
++        return httpx.Response(404)
++
++    prov, _ = _make_provider(handler)
++    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="dismiss", approve_allowed=True)
++
++    assert result.thread_resolved is True
++    assert result.review_dismissed is False
++    assert result.pr_approved is False
++    assert any("get_review_state" in e for e in result.errors)

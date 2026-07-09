@@ -46,6 +46,18 @@ The action uses the Python engine in `ai_pr_review/`.
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
 | `bedrock-proxy` | `us.anthropic.claude-sonnet-5` | `global.anthropic.claude-opus-4-7` |
 
+### Verifying a model change before merge (required)
+
+Any PR that changes a default model (this table) or adds a new supported model **must** verify the change against a genuinely demanding diff before merge, not just a small representative one. This is a hard lesson from #592: Sonnet 5 became the default (#583) with unit tests (no network access, can't observe real model behavior) plus one live e2e run against a 310-line, 6-file diff. That diff didn't demand enough reasoning to trigger Sonnet 5's adaptive-thinking-exhausts-max_tokens failure mode, which then crashed `code-reviewer`/`silent-failure-hunter` on the first real PR complex enough to hit it.
+
+Before merging a model-default or new-model-support PR:
+
+1. Run `python tests/canary/live_model_canary.py` locally (or trigger the `Live Model Canary` workflow via `workflow_dispatch`) with the new model set as `standard`/`premium` for its provider. This exercises the real dispatch path against `tests/canary/stress_diff.txt` (a genuinely complex diff, not a toy example) and asserts every call completes with `stop_reason: end_turn` — not just "some text came back," which would silently pass a truncated, degraded response.
+2. If the canary fails, do not merge until the failure is understood — either the model needs different handling (see `resolve_effort`/`resolve_temperature` in `ai_pr_review/llm/_config.py` for the existing per-model-quirk pattern) or the failure reveals a real product-quality question worth resolving before shipping the default change.
+3. Disclose in the PR description what was verified: which model(s), against which diff, what the canary reported. "Verified" means verified against something hard, not verified against something.
+
+See `tests/canary/live_model_canary.py`'s module docstring and the #592 test-plan writeup for the full reasoning; this is one required step from that plan (the "process" tier), not the whole plan.
+
 ## Adding a new agent (Python engine)
 
 1. Add a prompt file to `prompts/<agent-name>.md`. The prompt must instruct the model to output a `json-findings` block.
