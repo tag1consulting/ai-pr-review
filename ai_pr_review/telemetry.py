@@ -22,12 +22,16 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class TelemetryEvent:
-    """Structured event emitted after each review run (schema version 2).
+    """Structured event emitted after each review run (schema version 3).
 
     Schema version history:
       1 — initial fields
       2 — added provider, model_standard, model_premium, review_mode,
           is_incremental; failed_agent_latency_ms
+      3 — token_usage_by_agent entries gained "thinking_tokens" and
+          "stop_reason" per agent (#592: lets a telemetry consumer alert
+          on max_tokens-truncation rate or thinking-budget exhaustion
+          without waiting for a user to hit a crash)
     """
 
     correlation_id: str
