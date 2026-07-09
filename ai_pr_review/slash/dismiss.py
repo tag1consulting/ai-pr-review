@@ -426,7 +426,14 @@ def _approve_if_pr_fully_resolved(
 
     ok, status, body_snippet = provider.submit_approval(approve_message)
     if not ok:
-        errors.append(f"submit_approval: HTTP {status}: {body_snippet}")
+        # dismissed_ids were already committed via real dismiss_review() API
+        # calls above and cannot be rolled back -- name them so the caller's
+        # reply/log surfaces the inconsistent state (dismissed but not
+        # approved) instead of only reporting the submit_approval failure.
+        errors.append(
+            f"submit_approval: HTTP {status}: {body_snippet} "
+            f"(reviews already dismissed without a completed approval: {dismissed_ids})"
+        )
         return False, errors
     return True, errors
 

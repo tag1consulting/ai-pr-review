@@ -802,6 +802,49 @@ def test_dismiss_inline_reply_approves_when_last_review_cleared() -> None:
     assert result.errors == ()
 
 
+def test_approve_partial_failure_surfaces_dismissed_ids_when_submit_approval_fails() -> None:
+    """A transient submit_approval failure (e.g. HTTP 5xx) after review 41 has
+    already been dismissed via a real, non-retractable PUT must not be
+    silent: .errors names the already-dismissed review id so the caller's
+    reply/log can flag the inconsistent state (dismissed but not approved)
+    rather than reporting only the submit_approval failure in isolation."""
+    nodes = [_inline_thread("T1", resolved=False, body=f"x\n{INLINE_MARKER}", comment_db_id=77, review_db_id=41)]
+    state = _StatefulReviews({41: _cr_review(41)})
+    dismissed: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": state.state(41)})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=state.as_list())
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            dismissed.append(url)
+            state.dismiss(41)
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(500, text="internal error")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="dismiss", approve_allowed=True)
+
+    assert result.thread_resolved is True
+    assert result.pr_approved is False
+    # Review 41 really was dismissed (the PUT above landed) before the
+    # approval call failed -- the per-review fallback must not re-report this
+    # as "nothing happened": get_review_state(41) reads back non-CR, so
+    # _dismiss_if_all_resolved's own guard treats it as a no-op.
+    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
+    assert result.review_dismissed is False
+    assert any("submit_approval" in e and "41" in e for e in result.errors)
+
+
 def test_dismiss_inline_reply_no_approve_when_other_cr_review_still_open() -> None:
     """PR-wide scoping (issue #590's core design decision): clearing every
     thread on ONE of several CHANGES_REQUESTED reviews must NOT trigger an
