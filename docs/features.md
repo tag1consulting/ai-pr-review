@@ -7,6 +7,14 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.1
+
+**Fixed a crash on demanding diffs: Claude Sonnet 5's adaptive thinking could exhaust `max_tokens` before producing any text**, taking down `code-reviewer` and `silent-failure-hunter` with no review output at all. Sonnet 5's thinking effort is now capped via `output_config: {"effort": "low"}` on affected models.
+
+**Live-API model canary added.** A new scheduled workflow runs the real dispatch path against a genuinely demanding diff for every model with a live API key configured, asserting each call completes with `stop_reason: end_turn` rather than a silent truncation. Catches the next model-behavior surprise before it reaches production.
+
+**Telemetry schema v3.** Per-agent telemetry events now include `stop_reason` and `thinking_tokens`. Consumers reading the telemetry sink should account for the schema version bump from v2.
+
 ## What's new in v2.4.0
 
 **Default Anthropic and Bedrock-proxy standard model bumped to Sonnet 5.** `claude-sonnet-5` / `us.anthropic.claude-sonnet-5` supersedes Sonnet 4.6 as the default standard-tier model; premium (Opus) defaults are unchanged. Pricing and temperature handling were updated alongside the default.

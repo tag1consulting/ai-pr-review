@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-07-09
+
+### Fixed
+
+- **Claude Sonnet 5 adaptive thinking could exhaust `max_tokens` before producing any text output**, crashing `code-reviewer` and `silent-failure-hunter` with no review at all on demanding diffs. The Sonnet 5 default (v2.4.0, #583) was verified against a small 310-line diff that wasn't demanding enough to trigger the failure mode. Fixed by capping Sonnet 5's thinking effort via a new `output_config: {"effort": "low"}` request parameter (`resolve_effort()` in `ai_pr_review/llm/_config.py`, mirroring the existing `resolve_temperature()` per-model-quirk pattern). `_parse_response` also now surfaces a specific diagnostic and the response's `thinking_tokens` count when a response hits `max_tokens` with no text, instead of a generic empty-output error. (#592, #593)
+
+### Added
+
+- **Per-agent `stop_reason` and `thinking_tokens` in telemetry** (schema v2 → **v3**): `AgentResult` gains `stop_reason` (the raw provider finish reason, e.g. `end_turn`, `max_tokens`) and `TokenUsage` gains `thinking_tokens`, both now emitted in the per-agent telemetry event. Consumers reading the telemetry sink should account for the schema version bump. (#592, #594)
+- **Live-API model canary**: a new scheduled workflow (`.github/workflows/model-canary.yml`, weekly + `workflow_dispatch`) runs the real dispatch path against a genuinely demanding diff (`tests/canary/stress_diff.txt`, the actual PR #591 diff) for every model this repo has a live API key for, asserting `stop_reason == "end_turn"` rather than just non-empty text. Intended to catch the next model-behavior surprise before it reaches production, rather than during it. A new required verification step was added to `CLAUDE.md` for any future PR that changes a default model or adds a new supported model. (#592, #595)
+
+### Dependencies
+
+- Bumped `ghcr.io/astral-sh/ruff` Docker tag to v0.15.21. (#596)
+
 ## [2.4.0] - 2026-07-08
 
 ### Changed

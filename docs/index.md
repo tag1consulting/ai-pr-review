@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.1
+
+**Fixed a crash on demanding diffs** where Claude Sonnet 5's adaptive thinking could exhaust `max_tokens` before producing any text, plus a new live-API model canary to catch this class of regression before it ships again.
+
+See [Features → v2.4.1](features#whats-new-in-v241) for details.
+
 ## What's new in v2.4.0
 
 **Default Anthropic/Bedrock-proxy model bumped to Sonnet 5**, plus category-aware dedup and category mapping across all 13 static analyzers, closing out the taxonomy work started in v2.3.1.
