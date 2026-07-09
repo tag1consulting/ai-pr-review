@@ -134,7 +134,10 @@ async def main() -> int:
             continue
         for model_id in {standard_model, premium_model}:
             for agent_name in TARGET_AGENT_NAMES:
-                result = await _run_one(provider, model_id, agent_name)
+                try:
+                    result = await _run_one(provider, model_id, agent_name)
+                except Exception as exc:  # noqa: BLE001 - one combo's crash must not hide the rest
+                    result = CanaryResult(provider, model_id, agent_name, False, f"unexpected: {exc!r}")
                 results.append(result)
                 status = "OK  " if result.ok else "FAIL"
                 print(f"{status} provider={provider} model={model_id} agent={agent_name}: {result.detail}")
