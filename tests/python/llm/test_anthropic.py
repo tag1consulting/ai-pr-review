@@ -57,6 +57,54 @@ def test_parse_empty_text_raises():
         _parse_response(json.dumps(data), {})
 
 
+def test_parse_thinking_exhausted_raises_specific_diagnostic():
+    """Regression lock for #592: adaptive thinking can consume max_tokens
+    entirely before any text is produced, leaving a thinking-only content
+    array with an empty `thinking` field (display: "omitted" on Sonnet 5).
+    The error must name the actual cause (thinking exhaustion) rather than
+    the generic "could not extract" message, and must not require reading
+    a truncated response_text[:500] to diagnose.
+    """
+    resp_text = fixture_text("anthropic_thinking_exhausted.json")
+    with pytest.raises(LLMError, match="exhausted max_tokens entirely on thinking"):
+        _parse_response(resp_text, {"max_tokens": 16384})
+
+
+def test_parse_thinking_exhausted_message_cites_token_counts():
+    resp_text = fixture_text("anthropic_thinking_exhausted.json")
+    with pytest.raises(LLMError, match=r"thinking_tokens=16384.*max_tokens=16384"):
+        _parse_response(resp_text, {"max_tokens": 16384})
+
+
+def test_parse_empty_text_without_thinking_exhaustion_uses_generic_message():
+    """A non-thinking-related empty-text failure (e.g. stop_reason=end_turn
+    with no content) must still surface the generic diagnostic, not be
+    misattributed to thinking exhaustion.
+    """
+    data = {
+        "content": [],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 0},
+    }
+    with pytest.raises(LLMError, match="Could not extract"):
+        _parse_response(json.dumps(data), {})
+
+
+def test_parse_populates_thinking_tokens_when_present():
+    resp = _parse_response(fixture_text("anthropic_thinking_with_text.json"), {})
+    assert resp.text == "Here is my review of the code."
+    assert resp.thinking_tokens == 512
+    # output_tokens is the inclusive authoritative total; must not be
+    # double-counted by adding thinking_tokens on top (unlike google.py,
+    # where candidatesTokenCount excludes thoughts).
+    assert resp.output_tokens == 8686
+
+
+def test_parse_thinking_tokens_defaults_to_zero_when_absent():
+    resp = _parse_response(fixture_text("anthropic_happy.json"), {})
+    assert resp.thinking_tokens == 0
+
+
 # ---------------------------------------------------------------------------
 # Request body construction
 # ---------------------------------------------------------------------------
@@ -186,6 +234,47 @@ def test_body_bedrock_extra_fields():
     body = build_body_for_bedrock(req, caching=False)
     assert body["anthropic_version"] == "bedrock-2023-05-31"
     assert "model" not in body
+
+
+def test_body_effort_set_for_sonnet_5():
+    """Regression lock for #592: Sonnet 5 must get output_config.effort="low"
+    capped so adaptive thinking can't consume max_tokens entirely before any
+    text is produced.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(model_id="claude-sonnet-5")
+    body = _build_body(req, caching=False, extra={})
+    assert body["output_config"] == {"effort": "low"}
+
+
+def test_body_effort_omitted_for_sonnet_4_6():
+    """Sonnet 4.6 predates output_config.effort; sending it risks a 400."""
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(model_id="claude-sonnet-4-6")
+    body = _build_body(req, caching=False, extra={})
+    assert "output_config" not in body
+
+
+def test_body_effort_omitted_for_opus_4_8():
+    """Opus 4.8 has thinking off by default; it doesn't have the #592
+    failure mode and must not receive output_config.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(model_id="claude-opus-4-8")
+    body = _build_body(req, caching=False, extra={})
+    assert "output_config" not in body
+
+
+def test_body_effort_set_for_bedrock_sonnet_5():
+    """Regression lock: the bedrock-proxy model id must also get the cap,
+    flowing through build_body_for_bedrock the same as direct Anthropic.
+    """
+    req = make_request(model_id="us.anthropic.claude-sonnet-5")
+    body = build_body_for_bedrock(req, caching=False)
+    assert body["output_config"] == {"effort": "low"}
 
 
 # ---------------------------------------------------------------------------
