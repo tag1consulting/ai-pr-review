@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.2
+
+**`false-positive`/`wont-fix` now dismiss the owning review and auto-approve on clear.** Replying `false-positive` or `wont-fix` to an inline finding now dismisses the owning `CHANGES_REQUESTED` review like `dismiss` already did, and clearing the last active finding across every bot review now submits a fresh `APPROVE` instead of leaving the PR's review decision stuck at `REVIEW_REQUIRED`.
+
+See [Features → v2.4.2](features#whats-new-in-v242) for details.
+
 ## What's new in v2.4.1
 
 **Fixed a crash on demanding diffs** where Claude Sonnet 5's adaptive thinking could exhaust `max_tokens` before producing any text, plus a new live-API model canary to catch this class of regression before it ships again.
