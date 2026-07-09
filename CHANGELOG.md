@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.2] - 2026-07-09
+
+### Fixed
+
+- **`/ai-pr-review false-positive` and `wont-fix`, posted as a reply to an inline finding comment, now dismiss the owning `CHANGES_REQUESTED` review the same way `dismiss` already did.** The `dismiss-finding` workflow job (the only one that dismisses reviews for inline replies) only triggered on a `dismiss` prefix and hardcoded `SLASH_COMMAND: dismiss`, so `false-positive`/`wont-fix` fell through to `feedback-command`'s resolve-only step, which never touches the owning review. (#589, #591)
+- **Clearing the last active finding across every bot review now submits a fresh `APPROVE`, not just a `DISMISSED` state.** GitHub's REST API has no review-state-conversion endpoint, so a dismiss/false-positive/wont-fix that clears the last finding could leave a PR's `reviewDecision` stuck at `REVIEW_REQUIRED` even with zero outstanding findings. `_approve_if_pr_fully_resolved()` now checks PR-wide (not just the review being acted on) and, when every bot `CHANGES_REQUESTED` review is clear, dismisses them and calls the new `GitHubProvider.submit_approval()` to post the APPROVE. Gated one tier stricter than plain dismiss (`OWNER`/`MEMBER`, not `COLLABORATOR`). (#590, #591)
+- **Partial-failure state during the auto-approve check is no longer silently discarded**: if `submit_approval` fails after one or more `CHANGES_REQUESTED` reviews were already dismissed via a real, non-retractable API call, the already-dismissed review ids are now named in the returned error instead of being dropped, so the failure surfaces rather than reading back as a clean no-op. (#591)
+
 ## [2.4.1] - 2026-07-09
 
 ### Fixed
