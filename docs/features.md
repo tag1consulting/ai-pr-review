@@ -9,7 +9,7 @@ render_with_liquid: false
 
 ## What's new in v2.4.2
 
-**`false-positive`/`wont-fix` now dismiss the owning review, matching `dismiss`.** Previously, replying `false-positive` or `wont-fix` to an inline finding fell through to a resolve-only step that never touched the owning `CHANGES_REQUESTED` review — only `dismiss` did. Both commands now trigger the same review-dismissal path.
+**`false-positive`/`wont-fix` now dismiss the owning review, matching `dismiss`.** Previously, replying `false-positive` or `wont-fix` to an inline finding fell through to a resolve-only step that never touched the owning `CHANGES_REQUESTED` review; only `dismiss` did. Both commands now trigger the same review-dismissal path.
 
 **Clearing the last active finding across every bot review now auto-approves the PR.** GitHub's REST API has no review-state-conversion endpoint, so a dismiss/false-positive/wont-fix that cleared the last finding could leave `reviewDecision` stuck at `REVIEW_REQUIRED` even with zero outstanding findings. A new PR-wide check (`_approve_if_pr_fully_resolved()`) dismisses every clear bot `CHANGES_REQUESTED` review and submits a fresh `APPROVE` once none have unresolved findings left. Gated one tier stricter than plain dismiss (requires `OWNER`/`MEMBER` author association, not `COLLABORATOR`).
 
