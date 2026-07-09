@@ -25,7 +25,9 @@ from ai_pr_review.llm.base import LLMResponse
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_response(text: str = "NONE", stop_reason: str = "end_turn") -> LLMResponse:
+def _make_response(
+    text: str = "NONE", stop_reason: str = "end_turn", thinking_tokens: int = 0
+) -> LLMResponse:
     return LLMResponse(
         text=text,
         input_tokens=100,
@@ -33,6 +35,7 @@ def _make_response(text: str = "NONE", stop_reason: str = "end_turn") -> LLMResp
         cache_creation_tokens=0,
         cache_read_tokens=0,
         stop_reason=stop_reason,
+        thinking_tokens=thinking_tokens,
     )
 
 
@@ -114,6 +117,33 @@ def test_agent_result_truncated_from_stop_reason() -> None:
         truncated=resp.stop_reason in ("max_tokens", "length", "MAX_TOKENS"),
     )
     assert result.truncated is True
+
+
+def test_token_usage_thinking_tokens_default() -> None:
+    usage = TokenUsage(input=10, output=5, cache_creation=0, cache_read=0, model="m")
+    assert usage.thinking_tokens == 0
+
+
+def test_token_usage_thinking_tokens_set() -> None:
+    usage = TokenUsage(
+        input=10, output=5, cache_creation=0, cache_read=0, model="m", thinking_tokens=16384
+    )
+    assert usage.thinking_tokens == 16384
+
+
+def test_agent_result_stop_reason_default() -> None:
+    usage = TokenUsage(input=10, output=5, cache_creation=0, cache_read=0, model="m")
+    result = AgentResult(name="code-reviewer", output="ok", token_log=usage, truncated=False)
+    assert result.stop_reason == ""
+
+
+def test_agent_result_stop_reason_set() -> None:
+    usage = TokenUsage(input=10, output=5, cache_creation=0, cache_read=0, model="m")
+    result = AgentResult(
+        name="code-reviewer", output="ok", token_log=usage, truncated=False,
+        stop_reason="max_tokens",
+    )
+    assert result.stop_reason == "max_tokens"
 
 
 def test_failed_agent_fields() -> None:
@@ -620,6 +650,59 @@ async def test_run_tier_isolates_systemexit_from_llm_call(tmp_path: Path) -> Non
     assert len(successes) == 1
     assert len(failures) == 1
     assert failures[0].exit_code == 2  # Preserved from SystemExit.code.
+
+
+@pytest.mark.anyio
+async def test_run_tier_propagates_thinking_tokens_to_token_usage(tmp_path: Path) -> None:
+    """#592: LLMResponse.thinking_tokens must reach AgentResult.token_log so a
+    telemetry consumer can see thinking-budget exhaustion without reading
+    container logs after the fact.
+    """
+    ctx = _make_context(tmp_path)
+    agents = [get_agent("code-reviewer")]
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("ok", thinking_tokens=12000)
+
+    successes, failures = await run_tier(agents, mock_llm, ctx, semaphore_size=1)
+    assert len(failures) == 0
+    assert successes[0].token_log is not None
+    assert successes[0].token_log.thinking_tokens == 12000
+
+
+@pytest.mark.anyio
+async def test_run_tier_propagates_stop_reason_to_agent_result(tmp_path: Path) -> None:
+    """#592: the raw provider stop_reason must reach AgentResult so a
+    telemetry consumer can alert on truncation rate (stop_reason=max_tokens)
+    even when truncated=True alone doesn't distinguish the cause.
+    """
+    ctx = _make_context(tmp_path)
+    agents = [get_agent("code-reviewer")]
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("partial", stop_reason="max_tokens", thinking_tokens=16384)
+
+    successes, failures = await run_tier(agents, mock_llm, ctx, semaphore_size=1)
+    assert len(failures) == 0
+    assert successes[0].stop_reason == "max_tokens"
+    assert successes[0].truncated is True
+
+
+@pytest.mark.anyio
+async def test_run_tier_thinking_tokens_defaults_to_zero(tmp_path: Path) -> None:
+    """A provider/response that doesn't report thinking_tokens must not
+    silently break TokenUsage construction; it defaults to zero.
+    """
+    ctx = _make_context(tmp_path)
+    agents = [get_agent("code-reviewer")]
+
+    async def mock_llm(request: object) -> LLMResponse:
+        return _make_response("ok")
+
+    successes, failures = await run_tier(agents, mock_llm, ctx, semaphore_size=1)
+    assert len(failures) == 0
+    assert successes[0].token_log is not None
+    assert successes[0].token_log.thinking_tokens == 0
 
 
 @pytest.mark.anyio

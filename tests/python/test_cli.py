@@ -495,3 +495,75 @@ class TestFailOnFindings:
     def test_fail_on_findings_default_is_false(self) -> None:
         config = _make_config()
         assert config.fail_on_findings is False
+
+
+class TestEmitTelemetryThinkingTokens:
+    """#592: telemetry's per-agent dict must carry thinking_tokens/stop_reason
+    so a consumer can alert on truncation/thinking-exhaustion without a human
+    reading container logs after the fact (schema v3).
+    """
+
+    @pytest.mark.anyio
+    async def test_per_agent_dict_includes_thinking_tokens_and_stop_reason(
+        self, tmp_path: Path,
+    ) -> None:
+        from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+        usage = TokenUsage(
+            input=100, output=16384, cache_creation=0, cache_read=0,
+            model="claude-sonnet-5", thinking_tokens=16384,
+        )
+        agent_result = AgentResult(
+            name="code-reviewer", output="", token_log=usage, truncated=True,
+            stop_reason="max_tokens",
+        )
+
+        result = MagicMock()
+        result.agent_results = [agent_result]
+        result.failed_agents = []
+        result.findings = []
+        result.outcome = MagicMock()
+        result.outcome.event = "COMMENT"
+
+        await _emit_telemetry(result, config, 0)
+
+        lines = sink_path.read_text().splitlines()
+        assert len(lines) == 1
+        event = json.loads(lines[0])
+        assert event["telemetry_schema_version"] == "3"
+        agent_usage = event["token_usage_by_agent"]["code-reviewer"]
+        assert agent_usage["thinking_tokens"] == 16384
+        assert agent_usage["stop_reason"] == "max_tokens"
+
+    @pytest.mark.anyio
+    async def test_per_agent_dict_thinking_tokens_zero_when_absent(
+        self, tmp_path: Path,
+    ) -> None:
+        from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+        usage = TokenUsage(
+            input=100, output=500, cache_creation=0, cache_read=0, model="gpt-5.4",
+        )
+        agent_result = AgentResult(
+            name="code-reviewer", output="ok", token_log=usage, truncated=False,
+        )
+
+        result = MagicMock()
+        result.agent_results = [agent_result]
+        result.failed_agents = []
+        result.findings = []
+        result.outcome = MagicMock()
+        result.outcome.event = "APPROVE"
+
+        await _emit_telemetry(result, config, 0)
+
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        agent_usage = event["token_usage_by_agent"]["code-reviewer"]
+        assert agent_usage["thinking_tokens"] == 0
+        assert agent_usage["stop_reason"] == ""

@@ -30,6 +30,11 @@ class TokenUsage:
     cache_creation: int
     cache_read: int
     model: str
+    thinking_tokens: int = 0
+    """Portion of `output` spent on extended/adaptive thinking, when the
+    provider reports it (currently Anthropic and Google). Zero for
+    providers/responses that don't report it. See #592: a response can
+    exhaust `output`/`max_tokens` entirely on thinking, producing no text."""
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,10 @@ class AgentResult:
     elapsed_ms: int = 0
     """Wall-clock milliseconds from call start to response received.
     E4.S4: used by cli.py to populate agent_latency_ms in TelemetryEvent."""
+    stop_reason: str = ""
+    """Raw provider stop/finish reason (e.g. "end_turn", "max_tokens").
+    See #592: surfaced so telemetry can alert on truncation rates without
+    a human reading container logs after the fact."""
 
 
 @dataclass(frozen=True)
@@ -611,6 +620,7 @@ async def _run_single_agent(
             cache_creation=response.cache_creation_tokens,
             cache_read=response.cache_read_tokens,
             model=model_id,
+            thinking_tokens=response.thinking_tokens,
         )
         truncated = response.stop_reason in ("max_tokens", "length", "MAX_TOKENS")
         elapsed = int((time.monotonic() - start) * 1000)
@@ -623,6 +633,7 @@ async def _run_single_agent(
             context_tokens_used=context_tokens_used,
             profile_tokens_used=profile_tokens_used,
             elapsed_ms=elapsed,
+            stop_reason=response.stop_reason,
         ))
     except BaseException as exc:
         # Catch BaseException (not Exception) so SystemExit from llm/client.py

@@ -317,6 +317,8 @@ async def _emit_telemetry(
                     "cache_creation": tl.cache_creation,
                     "cache_read": tl.cache_read,
                     "model": tl.model,
+                    "thinking_tokens": tl.thinking_tokens,
+                    "stop_reason": ar.stop_reason,
                 }
 
         findings_by_severity: dict[str, int] = dict(Counter(f.severity for f in findings))
@@ -335,7 +337,7 @@ async def _emit_telemetry(
             agent_latency_ms={ar.name: ar.elapsed_ms for ar in agent_results},
             sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
-            telemetry_schema_version="2",
+            telemetry_schema_version="3",
             provider=config.provider,
             model_standard=config.model_standard,
             model_premium=config.model_premium,
