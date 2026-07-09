@@ -760,6 +760,33 @@ class GitHubProvider:
         state = data.get("state")
         return state if isinstance(state, str) else None
 
+    def submit_approval(self, message: str) -> tuple[bool, int, str]:
+        """POST a standalone APPROVE review. Returns (ok, status, body_snippet).
+
+        A thin, lightweight primitive for the slash-command "approve on
+        clear" path (issue #590): GitHub's REST API has no endpoint to
+        convert an existing review's state, so the only way to reach an
+        `APPROVED` `reviewDecision` after a `dismiss`/`false-positive`/
+        `wont-fix` command clears the last active finding is to dismiss the
+        stale `CHANGES_REQUESTED` review(s) (`dismiss_review`) and then POST a
+        brand-new review with `event: "APPROVE"`.
+
+        Deliberately does not reuse `post_findings`: that method's APPROVE
+        path exists to post a whole findings summary (with an optional
+        pre-APPROVE COMMENT review to carry inline comments GitHub disallows
+        on an APPROVE payload) after a fresh analysis run. This primitive has
+        no findings to render and no inline comments to attach — it only
+        needs `commit_id` omitted (defaults to the PR's current head on
+        GitHub's side) and a short attribution body, mirroring
+        `dismiss_review`'s minimal-payload style.
+        """
+        resp = self.client.request(
+            "POST",
+            self._reviews_url(),
+            json_body={"body": message, "event": "APPROVE"},
+        )
+        return resp.status_code < 400, resp.status_code, resp.text[:200]
+
     def fetch_review_comment(self, comment_id: int) -> dict[str, Any] | None:
         """Fetch a single PR review (inline) comment by its REST databaseId.
 

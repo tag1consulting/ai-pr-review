@@ -262,10 +262,10 @@ jobs:
           - `/ai-pr-review rescan` — force full diff re-review
           - `/ai-pr-review review-full` — run all agents (full mode)
           - `/ai-pr-review skip` — suppress the next automated review
-          - `/ai-pr-review dismiss` — reply to an **inline** finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved)
+          - `/ai-pr-review dismiss` — reply to an **inline** finding to mark it as a false positive (resolves that thread; dismisses the review when all threads are resolved; approves the PR if that clears the last active finding and you are OWNER/MEMBER)
           - `/ai-pr-review dismiss F<n>` — dismiss a **body-level** finding by its stable ID (e.g. `/ai-pr-review dismiss F1`); IDs appear in the **`### Findings not attached to specific lines`** section. IDs are stable across review cycles — `F1` always refers to the same finding on this PR.
-          - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings
-          - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings
+          - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings; a reply on an inline finding also resolves the thread and dismisses/approves like `dismiss`
+          - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings; a reply on an inline finding also resolves the thread and dismisses/approves like `dismiss`
           - `/ai-pr-review feedback <text>` — store free-form feedback in the learning loop
           - `/ai-pr-review explain [F<n>]` — request a detailed explanation from the originating agent; use `F<n>` for body-level findings
           - `/ai-pr-review revise [F<n>] <hint>` — request the agent to revise its finding with a hint; use `F<n>` for body-level findings
@@ -695,14 +695,21 @@ jobs:
   # Dismiss a single false-positive finding.
   #
   # Triggered by replying to an inline review comment with
-  # "/ai-pr-review dismiss". Resolves only the thread the user replied to.
-  # If that was the last unresolved thread on the review, the
-  # CHANGES_REQUESTED review is dismissed automatically.
+  # "/ai-pr-review dismiss", "false-positive", or "wont-fix" (issue #589 --
+  # false-positive/wont-fix previously only reached feedback-command below,
+  # whose resolve-on-success step deliberately never dismisses the owning
+  # review; this job is the one that does). Resolves only the thread the user
+  # replied to. If that was the last unresolved thread on the review, the
+  # CHANGES_REQUESTED review is dismissed automatically. If OWNER/MEMBER and
+  # this cleared the last active finding PR-wide, the PR is also approved
+  # (issue #590) -- see the "Invoke Python dismiss-inline handler" step.
   # ---------------------------------------------------------------------------
   dismiss-finding:
     if: |
       inputs.event-name == 'pull_request_review_comment' &&
-      startsWith(inputs.comment-body, '/ai-pr-review dismiss') &&
+      (startsWith(inputs.comment-body, '/ai-pr-review dismiss') ||
+       startsWith(inputs.comment-body, '/ai-pr-review false-positive') ||
+       startsWith(inputs.comment-body, '/ai-pr-review wont-fix')) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
     runs-on: ubuntu-latest
     container:
@@ -711,6 +718,14 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Parse command
+        id: cmd
+        env:
+          COMMENT: ${{ inputs.comment-body }}
+        run: |
+          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          echo "command=$command" >> "$GITHUB_OUTPUT"
+
       - name: React — seen
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
@@ -763,8 +778,15 @@ jobs:
           SLASH_IN_REPLY_TO_ID: ${{ steps.validate.outputs.parent_id }}
           SLASH_REVIEW_ID: ${{ steps.validate.outputs.review_id }}
           SLASH_ACTOR: ${{ inputs.actor-login }}
-          SLASH_COMMAND: dismiss
+          SLASH_COMMAND: ${{ steps.cmd.outputs.command }}
           SLASH_PR_NUMBER: ${{ inputs.pr-number }}
+          # Auto-approve (issue #590) is a stronger side effect than a single
+          # dismiss, so it is gated at the OWNER/MEMBER bar feedback-command
+          # already uses for its persistent learning-loop writes -- tighter
+          # than this job's own OWNER/MEMBER/COLLABORATOR admission gate
+          # above. A COLLABORATOR can still dismiss/false-positive/wont-fix
+          # normally; they just never trigger the PR-wide auto-approve.
+          SLASH_APPROVE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           GH_TOKEN: ${{ secrets.github-token }}
           VCS_PROVIDER: 'github'
@@ -1072,30 +1094,22 @@ jobs:
             --repo "$REPOSITORY" \
             --body-file "$reply_file"
 
-      - name: Resolve review thread on success
-        # For false-positive / wont-fix from a review-thread reply, also
-        # resolve the thread — same UX as /ai-pr-review dismiss.  Skip for
-        # 'feedback' (free-form, not tied to a single finding) and 'explain'/
-        # 'revise' (informational, finding stays active).  Identified via
-        # the comment body prefix to keep the workflow free of Python deps.
-        #
-        # Resolve-only, by design: unlike `ai-pr-review dismiss`/`dismiss-inline`,
-        # this never dismisses the owning review, even if this is its last
-        # unresolved thread — the FeedbackEntry is already persisted by the
-        # slash handler above, and dismissal here would be a silent behavior
-        # change from what this job has always done. See ai_pr_review.slash.dismiss.resolve_only.
-        if: |
-          steps.handler.outputs.is_command == 'true' &&
-          steps.endpoints.outputs.is_review_comment == 'true' &&
-          (startsWith(inputs.comment-body, '/ai-pr-review false-positive') ||
-           startsWith(inputs.comment-body, '/ai-pr-review wont-fix'))
-        env:
-          GH_TOKEN: ${{ secrets.github-token }}
-          GITHUB_REPOSITORY: ${{ inputs.repository }}
-          VCS_PROVIDER: 'github'
-          SLASH_PR_NUMBER: ${{ inputs.pr-number }}
-          SLASH_IN_REPLY_TO_ID: ${{ inputs.in-reply-to-id }}
-        run: ai-pr-review resolve-thread
+      # NOTE (issue #589): a prior "Resolve review thread on success" step
+      # lived here, calling `ai-pr-review resolve-thread` (resolve_only --
+      # never dismisses the owning review) for false-positive/wont-fix
+      # replies on an inline thread. That was the root of #589: resolve_only
+      # is explicitly documented as never touching the owning review, so a
+      # false-positive/wont-fix reply could never clear a CHANGES_REQUESTED
+      # review the way `/ai-pr-review dismiss` could. The fix routes
+      # false-positive/wont-fix review-thread replies through the
+      # `dismiss-finding` job instead (same trigger condition, now widened to
+      # match all three command names), which resolves the thread AND
+      # dismisses the review AND (issue #590) approves the PR when
+      # everything is now clear. `dismiss-finding` has no `needs:` on this
+      # job, so both still react/reply independently for a review-thread
+      # false-positive/wont-fix, but the persist-plus-resolve step below
+      # remains this job's own responsibility (learning-loop storage);
+      # dismiss-finding no longer needs duplicating here.
 
       - name: React — done
         if: steps.handler.outputs.is_command == 'true' && success()

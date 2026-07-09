@@ -331,3 +331,209 @@ def test_missing_required_option_fails() -> None:
     )
 
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #589: false-positive / wont-fix dismiss like dismiss does when
+# posted as a reply to an inline finding.
+# ---------------------------------------------------------------------------
+
+
+def test_false_positive_command_dismisses_review_same_as_dismiss(monkeypatch) -> None:
+    """`--command false-positive` must reach the same resolve+dismiss
+    behavior as `--command dismiss` -- the CLI's `click.Choice` already
+    accepted false-positive/wont-fix before this fix; the bug this pins was
+    entirely in the calling workflow's job-trigger `if:` condition and its
+    hardcoded `SLASH_COMMAND: dismiss` env var, never in this CLI layer."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+    dismissed: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            dismissed.append(url)
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41, command="false-positive"))
+
+    assert result.exit_code == 0, result.output
+    assert "marked as `false-positive` and resolved the thread" in result.stdout
+    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
+
+
+def test_wont_fix_command_dismisses_review_same_as_dismiss(monkeypatch) -> None:
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+    dismissed: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            dismissed.append(url)
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41, command="wont-fix"))
+
+    assert result.exit_code == 0, result.output
+    assert "marked as `wont-fix` and resolved the thread" in result.stdout
+    assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #590: --approve-allowed / SLASH_APPROVE_ALLOWED plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_approve_allowed_flag_triggers_pr_approval(monkeypatch) -> None:
+    """End-to-end CLI proof that `--approve-allowed true` (as the workflow
+    would pass via SLASH_APPROVE_ALLOWED for an OWNER/MEMBER actor) reaches
+    the PR-wide approve path and the CLI reports it in the reply and the
+    reaction marker."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+    approved: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200, json=[{"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}}]
+            )
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            approved.append(_json.loads(req.content))
+            return httpx.Response(200, json={"id": 999, "state": "APPROVED"})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, _base_args(55, review_id=41) + ["--approve-allowed", "true"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "approved" in result.stdout
+    assert len(approved) == 1
+
+
+def test_approve_allowed_defaults_false_no_approval(monkeypatch) -> None:
+    """Without --approve-allowed (and without SLASH_APPROVE_ALLOWED in the
+    environment), the default must be False -- a COLLABORATOR-level actor
+    (or any caller that omits the flag) never triggers the PR-wide approve
+    escalation, only the ordinary per-review dismiss."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError("must not approve without --approve-allowed")
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41))
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "approved" not in result.stdout
+
+
+def test_approve_allowed_explicit_false_string_env_var_no_approval(monkeypatch) -> None:
+    """The workflow passes SLASH_APPROVE_ALLOWED as the literal string
+    "false" for a COLLABORATOR-level actor (GitHub Actions' `contains(...)`
+    boolean renders to the string "false", not an absent env var) -- this is
+    the actual trust-boundary invocation in production, distinct from
+    `test_approve_allowed_defaults_false_no_approval`'s omitted-flag case,
+    which only proves Click's own default. This pins that Click's BOOL type
+    parses that exact string to False rather than truthy-by-presence."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError('must not approve when SLASH_APPROVE_ALLOWED="false"')
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, _base_args(55, review_id=41), env={"SLASH_APPROVE_ALLOWED": "false"}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "approved" not in result.stdout

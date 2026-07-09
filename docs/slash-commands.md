@@ -88,7 +88,7 @@ Adds the `skip-ai-review` label to the PR, suppressing the next automated review
 
 ### `/ai-pr-review dismiss`
 
-Marks a specific AI review finding as a false positive.
+Marks a specific AI review finding as a false positive. `false-positive` and `wont-fix` (below) follow the exact same dismissal mechanics when posted as a reply to an inline finding — `dismiss` is documented first because it needs no learning-loop setup.
 
 #### For inline findings (reply on the review thread)
 
@@ -97,6 +97,7 @@ Post as a **reply to the bot's inline review comment**. When invoked:
 2. Resolves the review thread containing that finding
 3. Checks whether any unresolved threads remain on the same review
 4. If all threads are resolved, dismisses the `CHANGES_REQUESTED` review with an attribution message
+5. If that was the **last** active finding across **every** `CHANGES_REQUESTED` review on the PR (not just the one being dismissed), and the actor is `OWNER` or `MEMBER`, the bot also submits a fresh **APPROVE** review — see [Auto-approve on clear](#auto-approve-on-clear) below
 
 This allows selective dismissal — if a review has three findings and only one is a false positive, dismissing that one leaves the `CHANGES_REQUESTED` state in place until the remaining threads are also resolved.
 
@@ -112,13 +113,13 @@ IDs are **PR-wide and stable across review cycles** — if `F1` was assigned to 
 
 If you post `/ai-pr-review dismiss` without an ID as a top-level PR comment, the bot replies with the list of active body-level finding IDs and the correct syntax.
 
-When all **inline** review threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — the same behavior as the inline path. Remaining body-level findings will be suppressed on the next re-review run once they are recorded in the feedback store.
+When all **inline** review threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — the same behavior as the inline path, including the auto-approve check described below.
 
 ### `/ai-pr-review false-positive [F<n>] [reason]`
 
 Records the finding as a false positive in the learning loop. The `[reason]` is optional but encouraged — it helps future reviews avoid the same finding in similar contexts.
 
-**For inline findings:** Post as a reply on the AI's inline review-comment thread. The workflow auto-extracts source / file / rule_id from the parent comment and resolves the thread on success.
+**For inline findings:** Post as a reply on the AI's inline review-comment thread. This resolves the thread **and** dismisses the owning `CHANGES_REQUESTED` review once all of its threads are resolved — identical mechanics to `/ai-pr-review dismiss` (see above), including the auto-approve check. The workflow also auto-extracts source / file / rule_id from the parent comment for the learning-loop entry.
 
 **For body-level findings:** Post as a top-level PR comment with the finding's stable ID:
 ```
@@ -131,7 +132,7 @@ Requires `AI_FEEDBACK_LOOP=true` on the action input and a `GH_TOKEN` with `cont
 
 Records the finding as intentional / won't-fix. Use this when the finding is valid but the pattern is deliberate in this codebase (e.g. intentional use of MD5 for non-security checksums, intentional exception swallowing in a specific error handler).
 
-**For inline findings:** Reply on the thread (same rules as `false-positive`).
+**For inline findings:** Reply on the thread (same rules as `false-positive`, including thread resolution, review dismissal, and the auto-approve check).
 
 **For body-level findings:** Top-level PR comment with finding ID:
 ```
@@ -139,6 +140,14 @@ Records the finding as intentional / won't-fix. Use this when the finding is val
 ```
 
 Requires the same setup as `false-positive`.
+
+### Auto-approve on clear
+
+When a `dismiss`, `false-positive`, or `wont-fix` reply clears the **last** unresolved finding across **every** bot-authored `CHANGES_REQUESTED` review on the PR — not just the review the cleared finding belonged to — the bot dismisses the remaining review(s) and submits a brand-new **APPROVE** review, so the PR's review decision reaches `APPROVED` instead of sitting at `REVIEW_REQUIRED` with only a dismissed review. GitHub's REST API has no endpoint to convert an existing review's state, so this is the only way to reach an approving state after a slash-command dismissal.
+
+This is gated to commenters with `OWNER` or `MEMBER` repository association — one tier stricter than the `OWNER`/`MEMBER`/`COLLABORATOR` bar that dismissal itself uses, matching the trust level the learning-loop commands (`false-positive`/`wont-fix`'s persistent writes) already require. A `COLLABORATOR` can still dismiss/false-positive/wont-fix findings normally; they just never trigger the auto-approve.
+
+The check re-verifies review state immediately before dismissing/approving, so a finding introduced by a concurrent push between the triggering comment and the bot's action will abort the approve.
 
 ### `/ai-pr-review feedback <text>`
 
