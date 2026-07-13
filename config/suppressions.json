@@ -8,10 +8,25 @@
   },
   {
     "id": "ai-review-yml-action-pin-false-positive",
-    "reason": "uses: tag1consulting/ai-pr-review@main in ai-review.yml is intentional. Consumers deliberately pin to @main (or a tag/SHA) for this specific action. Flagging it as a supply-chain risk is a false positive \u2014 the action is the reviewed tool itself or is a known trusted dependency.",
+    "reason": "uses: tag1consulting/ai-pr-review@main in ai-review.yml (this repo's own workflow) or ai-pr-review.yml (the documented consumer filename, e.g. examples/workflows/pr-review.yml) is intentional. Consumers deliberately pin to @main (or a tag/SHA) for this specific action. Flagging it as a supply-chain risk is a false positive \u2014 the action is the reviewed tool itself or is a known trusted dependency. The file pattern was originally 'ai-review.yml' only, which is not a substring of the documented consumer filename 'ai-pr-review.yml' (the 'pr-' breaks it) \u2014 confirmed dead against the real-world case on tag1consulting/timebot#9; broadened to match both.",
     "match": {
-      "file": "ai-review.yml",
+      "file": "ai-pr-review\\.yml|ai-review\\.yml",
       "pattern": "floating branch|unpinned|supply.chain|pin.*@main|@main.*pin|commit sha|immutable"
+    }
+  },
+  {
+    "id": "self-action-mutable-tag-semgrep-false-positive",
+    "reason": "semgrep's yaml.github-actions.security.github-actions-mutable-action-tag rule flags 'uses: tag1consulting/ai-pr-review/...@main' in consumer workflows as a supply-chain risk. This is intentional and accepted by policy (issue #491, commit d4f6642): ai-pr-review referencing itself is not a third-party dependency, and the project deliberately keeps @main for dogfooding/canary purposes rather than pinning. The existing self-action-pin-not-supply-chain-risk rule (pattern: tag1consulting/ai-pr-review) can never match this specific finding because run-semgrep/analyzers/native/semgrep.py builds the finding text as \"{check_id}: {message}\" and discards the source line \u2014 the action name is never present in the finding text for a semgrep-sourced finding. This rule matches on the check_id instead, which IS present and is a stable, deterministic semgrep rule ID (not LLM-authored text). Scoped to the ai-pr-review workflow file itself via the file match so this does not suppress the same generic rule for genuine third-party actions elsewhere.",
+    "match": {
+      "file": "ai-pr-review\\.yml|ai-review\\.yml",
+      "pattern": "github-actions-mutable-action-tag"
+    }
+  },
+  {
+    "id": "pr-number-issue-number-fallback-not-a-bug",
+    "reason": "code-reviewer sometimes flags the pr-number/issue-number split-input pattern (used to route issue_comment and pull_request_review_comment slash-command events through one reusable workflow) as broken, missing that the workflow falls back to issue-number for issue_comment events. Confirmed false positive on tag1consulting/timebot#9 (see ai-pr-review#601) \u2014 github.event.pull_request genuinely does not exist on issue_comment payloads, and the sibling issue-number input plus fallback expression (commonly written inputs.pr-number || inputs.issue-number) is the correct, intended pattern. A prompt-level guard was also added to prompts/code-reviewer.md as the primary, wording-independent fix; this rule is the deterministic backstop for anything that slips through.",
+    "match": {
+      "pattern": "pr-number.{0,80}(resolve|empty|break).{0,200}issue_comment|issue_comment.{0,200}pr-number.{0,80}(resolve|empty|break)"
     }
   },
   {

@@ -49,6 +49,29 @@ This code runs inside a GitHub Actions CI pipeline. Understand what data is trus
 - DO flag issues where LLM output is used without validation (e.g., line numbers from JSON parsed into arithmetic)
 - DO flag actual injection vectors where external user input flows into commands or queries
 
+## GitHub Actions Event-Payload Reasoning
+
+**Do not flag `pr-number`/`issue-number` (or similarly named) split-input
+patterns in workflow YAML as broken** when a workflow or reusable workflow
+accepts separate inputs for `issue_comment` vs. `pull_request_review_comment`
+events (e.g. `pr-number` sourced from `github.event.pull_request.number` for
+`pull_request_review_comment`, `issue-number` sourced from
+`github.event.issue.number` for `issue_comment`, plus an `is-pull-request`
+flag). This is the standard, correct way to route both event types through
+one reusable workflow — `github.event.pull_request` genuinely does not exist
+on `issue_comment` payloads, so a caller MUST supply the PR number via a
+sibling field for that event type. Before flagging any such pattern as
+"resolves to empty string" or "breaks the primary use case," check whether
+the workflow's downstream logic references a fallback field (commonly
+written `inputs.pr-number || inputs.issue-number`) — if it does, the pattern
+is correct, not a bug.
+
+**Concrete example — DO NOT emit findings like this:**
+- ❌ "`pr-number` will resolve to empty string for all `issue_comment`-triggered
+  events since `github.event.pull_request` doesn't exist on that payload,
+  breaking the use case." (Wrong when a sibling `issue-number` input and a
+  `pr-number || issue-number` fallback are present.)
+
 ## What NOT to Report
 
 - Style preferences or formatting (that's what linters are for)

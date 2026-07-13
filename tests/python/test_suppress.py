@@ -330,6 +330,110 @@ class TestApplySuppressions:
 
 
 # ---------------------------------------------------------------------------
+# Real-world regression tests against the shipped global config
+# (ai-pr-review#601 + the self-action-mutable-tag semgrep false positive)
+#
+# These load the actual config/suppressions.json shipped with the action,
+# rather than a synthetic SuppressionRule, because both bugs this section
+# guards against were shipped rules whose match conditions were never
+# actually reachable against the real finding text/file — a synthetic-only
+# test suite did not catch either. See tag1consulting/timebot#9 and
+# ai-pr-review#601.
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class TestGlobalConfigRegressions:
+    def test_pr_number_issue_number_false_positive_suppressed(self) -> None:
+        rules = load_rules(str(_REPO_ROOT))
+        f = _finding(
+            source="code-reviewer",
+            file=".github/workflows/ai-pr-review.yml",
+            finding=(
+                "For issue_comment events (the primary way slash commands are "
+                "posted on PRs), github.event.pull_request does not exist in "
+                "the payload — only github.event.issue.pull_request (a link "
+                "object) is present. This means pr-number will resolve to "
+                "empty string for all issue_comment-triggered slash commands, "
+                "breaking the primary documented use case."
+            ),
+        )
+        kept, count = apply_suppressions([f], rules)
+        assert kept == []
+        assert count == 1
+
+    def test_pr_number_finding_in_unrelated_context_not_suppressed(self) -> None:
+        # Guard against over-broad matching: a genuine pr-number bug unrelated
+        # to the issue_comment/issue-number fallback pattern must still surface.
+        rules = load_rules(str(_REPO_ROOT))
+        f = _finding(
+            source="code-reviewer",
+            file="scripts/notify.sh",
+            finding=(
+                "pr-number is read from an unsanitized environment variable "
+                "and interpolated directly into a shell command without "
+                "quoting, allowing command injection."
+            ),
+        )
+        kept, count = apply_suppressions([f], rules)
+        assert len(kept) == 1
+        assert count == 0
+
+    def test_self_action_mutable_tag_semgrep_finding_suppressed(self) -> None:
+        # Matches the exact finding shape produced by
+        # ai_pr_review/analyzers/native/semgrep.py's f"{check_id}: {message}"
+        # construction, which discards the source line — the action name
+        # itself is never present in the finding text for this source.
+        rules = load_rules(str(_REPO_ROOT))
+        f = _finding(
+            source="semgrep",
+            file=".github/workflows/ai-pr-review.yml",
+            finding=(
+                "yaml.github-actions.security.github-actions-mutable-action-tag."
+                "github-actions-mutable-action-tag: GitHub Actions step uses a "
+                "mutable tag or branch reference. Tags and branch names can be "
+                "silently repointed by the action owner, enabling supply-chain "
+                "attacks — as seen in the trivy-action and kics-github-action "
+                "compromises. Pin the reference to a full 40-character commit "
+                "SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155"
+                "e62e844d188df1ea18608`."
+            ),
+            remediation=(
+                "See https://docs.github.com/en/actions/security-guides/"
+                "security-hardening-for-github-actions#using-third-party-actions"
+            ),
+        )
+        kept, count = apply_suppressions([f], rules)
+        assert kept == []
+        assert count == 1
+
+    def test_mutable_tag_finding_on_unrelated_file_not_suppressed(self) -> None:
+        # The same generic semgrep rule firing on a genuinely third-party
+        # action in a different workflow file must NOT be suppressed — the
+        # fix is scoped to ai-pr-review's own workflow file, not a blanket
+        # disable of the supply-chain rule.
+        rules = load_rules(str(_REPO_ROOT))
+        f = _finding(
+            source="semgrep",
+            file=".github/workflows/deploy.yml",
+            finding=(
+                "yaml.github-actions.security.github-actions-mutable-action-tag."
+                "github-actions-mutable-action-tag: GitHub Actions step uses a "
+                "mutable tag or branch reference. Tags and branch names can be "
+                "silently repointed by the action owner, enabling supply-chain "
+                "attacks — as seen in the trivy-action and kics-github-action "
+                "compromises. Pin the reference to a full 40-character commit "
+                "SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155"
+                "e62e844d188df1ea18608`."
+            ),
+        )
+        kept, count = apply_suppressions([f], rules)
+        assert len(kept) == 1
+        assert count == 0
+
+
+# ---------------------------------------------------------------------------
 # _get (HTTP helper)
 # ---------------------------------------------------------------------------
 
