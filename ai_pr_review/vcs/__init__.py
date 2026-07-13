@@ -141,7 +141,8 @@ def _build_gitlab_from_env() -> GitLabProvider:
         or os.environ.get("CI_PROJECT_ID")
         or os.environ.get("CI_PROJECT_PATH")
         or os.environ.get("GITHUB_REPOSITORY")
-    )
+        or ""
+    ).strip()
     if not project:
         raise ProviderConfigError(
             "Cannot resolve GitLab project; set one of GITLAB_PROJECT_ID, "
@@ -151,7 +152,8 @@ def _build_gitlab_from_env() -> GitLabProvider:
     diff_base_sha = (
         os.environ.get("GITLAB_DIFF_BASE_SHA")
         or os.environ.get("CI_MERGE_REQUEST_DIFF_BASE_SHA")
-    )
+        or ""
+    ).strip()
     if not diff_base_sha:
         raise ProviderConfigError(
             "GITLAB_DIFF_BASE_SHA (or CI_MERGE_REQUEST_DIFF_BASE_SHA) is required"
@@ -192,10 +194,10 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
     """
     email = _require_env("BITBUCKET_EMAIL")
     token = _require_env("BITBUCKET_API_TOKEN")
-    workspace = os.environ.get("BITBUCKET_WORKSPACE") or ""
-    repo_slug = os.environ.get("BITBUCKET_REPO_SLUG") or ""
+    workspace = (os.environ.get("BITBUCKET_WORKSPACE") or "").strip()
+    repo_slug = (os.environ.get("BITBUCKET_REPO_SLUG") or "").strip()
     if not (workspace and repo_slug):
-        repo_env = os.environ.get("GITHUB_REPOSITORY") or ""
+        repo_env = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
         if repo_env.count("/") != 1:
             raise ProviderConfigError(
                 "Set BITBUCKET_WORKSPACE + BITBUCKET_REPO_SLUG, or "

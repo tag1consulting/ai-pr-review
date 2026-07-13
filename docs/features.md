@@ -13,7 +13,7 @@ render_with_liquid: false
 
 **Two self-action-pin suppression rules that never actually fired are now fixed.** One's file match didn't cover the documented consumer filename; the other's text pattern could never match a semgrep-sourced finding, since semgrep findings are built from the rule ID and generic message only. The underlying supply-chain rule still fires normally for genuine third-party actions.
 
-**Provider API keys, tokens, and base URLs are now stripped of stray whitespace before use.** A trailing newline in a secret (easy to introduce via `echo "$KEY" | gh secret set ...`) previously produced a confusing `Illegal header value` error instead of a clear setup message.
+**Provider API keys, tokens, and base URLs are now stripped of stray whitespace before use.** A trailing newline in a secret (easy to introduce via `echo "$KEY" | gh secret set ...`) previously produced a confusing `Illegal header value` error instead of a clear setup message. The fix also covers control env vars (`AI_REVIEW_MODE`, `VCS_PROVIDER`, `REVIEW_TARGET`) and repo-identifier env vars (GitLab project ID, Bitbucket workspace/repo slug) that share the same risk, plus a `GITHUB_TOKEN` fallback so secret redaction can't miss a live token in the standard GitHub Actions default deployment.
 
 ## What's new in v2.4.2
 

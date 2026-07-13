@@ -91,6 +91,9 @@ def test_secrets_and_variables_stripped_of_whitespace(
     monkeypatch.setenv("AI_PROVIDER", "  anthropic\n")
     monkeypatch.setenv("AI_MODEL_STANDARD", "\tclaude-sonnet-5 ")
     monkeypatch.setenv("AI_MODEL_PREMIUM", " claude-opus-4-8\n")
+    monkeypatch.setenv("AI_REVIEW_MODE", "\tfull\n")
+    monkeypatch.setenv("VCS_PROVIDER", " gitlab ")
+    monkeypatch.setenv("REVIEW_TARGET", "standalone\t")
 
     cfg = ReviewConfig.from_env()
     assert cfg.anthropic_api_key == "secret-key"
@@ -106,6 +109,25 @@ def test_secrets_and_variables_stripped_of_whitespace(
     assert cfg.provider == "anthropic"
     assert cfg.model_standard == "claude-sonnet-5"
     assert cfg.model_premium == "claude-opus-4-8"
+    assert cfg.review_mode == "full"
+    assert cfg.vcs_provider == "gitlab"
+    assert cfg.review_target == "standalone"
+
+
+def test_gh_token_falls_back_to_github_token_and_is_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gh_token must fall back to GITHUB_TOKEN (the GitHub Actions default env
+    var) the same way vcs/__init__.py and feedback/store.py already do, since
+    this field is also the source of Layer 3 secret masking (cli._secret_set)
+    — without the fallback, a deployment that sets only GITHUB_TOKEN would
+    have its live token missing from the redaction set.
+    """
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "\tfallback-token\n")
+
+    cfg = ReviewConfig.from_env()
+    assert cfg.gh_token == "fallback-token"
 
 
 def test_unknown_ai_var_warns(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
