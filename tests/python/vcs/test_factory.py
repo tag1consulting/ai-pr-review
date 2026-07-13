@@ -171,3 +171,132 @@ def test_bitbucket_invalid_repo_format(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PR_NUMBER", "1")
     with pytest.raises(ProviderConfigError, match="workspace/repo_slug"):
         provider_from_env()
+
+
+# ---------------------------------------------------------------------------
+# Whitespace stripping (#600)
+# ---------------------------------------------------------------------------
+
+
+def test_github_token_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "\ttok\n")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.token == "tok"
+
+
+def test_github_token_whitespace_only_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "   ")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    with pytest.raises(ProviderConfigError, match="GH_TOKEN"):
+        provider_from_env()
+
+
+def test_gitlab_token_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "  tok  ")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "1")
+    monkeypatch.setenv("MR_IID", "1")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc123")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.token == "tok"
+
+
+def test_bitbucket_token_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", " x@y\n")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "\ttok")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ws/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.email == "x@y"
+    assert prov.config.api_token == "tok"
+
+
+def test_github_api_url_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("GITHUB_API_URL", "  https://ghe.example.com/api/v3\n")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.base_url == "https://ghe.example.com/api/v3"
+
+
+def test_github_api_url_whitespace_only_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("GITHUB_API_URL", "   ")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.base_url == "https://api.github.com"
+
+
+def test_gitlab_api_url_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "tok")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "1")
+    monkeypatch.setenv("MR_IID", "1")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc123")
+    monkeypatch.setenv("GITLAB_API_URL", "  https://gitlab.example.com/api/v4\t")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.base_url == "https://gitlab.example.com/api/v4"
+
+
+def test_gitlab_api_url_whitespace_only_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "tok")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "1")
+    monkeypatch.setenv("MR_IID", "1")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc123")
+    monkeypatch.setenv("GITLAB_API_URL", "   ")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.base_url == "https://gitlab.com/api/v4"
+
+
+def test_gitlab_project_id_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "tok")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "\t123\n")
+    monkeypatch.setenv("MR_IID", "1")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc123")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.project_id_or_path == "123"
+
+
+def test_bitbucket_workspace_and_repo_slug_whitespace_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", "x@y")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "tok")
+    monkeypatch.setenv("BITBUCKET_WORKSPACE", "\tws\n")
+    monkeypatch.setenv("BITBUCKET_REPO_SLUG", "  repo  ")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.workspace == "ws"
+    assert prov.config.repo_slug == "repo"

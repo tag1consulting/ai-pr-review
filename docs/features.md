@@ -7,6 +7,14 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.3
+
+**`code-reviewer` no longer flags the `pr-number`/`issue-number` split-input pattern as broken.** Workflows that route both `issue_comment` and `pull_request_review_comment` slash-command events through one reusable workflow correctly fall back to a sibling `issue-number` input when `github.event.pull_request` doesn't exist on the `issue_comment` payload — this is the intended pattern, not a bug. Fixed with a prompt-level constraint plus a deterministic suppression backstop, the same approach used for knowledge-cutoff false positives.
+
+**Two self-action-pin suppression rules that never actually fired are now fixed.** One's file match didn't cover the documented consumer filename; the other's text pattern could never match a semgrep-sourced finding, since semgrep findings are built from the rule ID and generic message only. The underlying supply-chain rule still fires normally for genuine third-party actions.
+
+**Provider API keys, tokens, and base URLs are now stripped of stray whitespace before use.** A trailing newline in a secret (easy to introduce via `echo "$KEY" | gh secret set ...`) previously produced a confusing `Illegal header value` error instead of a clear setup message. The fix also covers control env vars (`AI_REVIEW_MODE`, `VCS_PROVIDER`, `REVIEW_TARGET`) and repo-identifier env vars (GitLab project ID, Bitbucket workspace/repo slug) that share the same risk, plus a `GITHUB_TOKEN` fallback so secret redaction can't miss a live token in the standard GitHub Actions default deployment.
+
 ## What's new in v2.4.2
 
 **`false-positive`/`wont-fix` now dismiss the owning review, matching `dismiss`.** Previously, replying `false-positive` or `wont-fix` to an inline finding fell through to a resolve-only step that never touched the owning `CHANGES_REQUESTED` review; only `dismiss` did. Both commands now trigger the same review-dismissal path.

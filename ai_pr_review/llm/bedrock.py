@@ -19,8 +19,8 @@ from .base import LLMRequest, LLMResponse
 
 
 async def call(req: LLMRequest) -> LLMResponse:
-    api_url = os.environ.get("BEDROCK_API_URL", "")
-    api_key = os.environ.get("BEDROCK_API_KEY", "")
+    api_url = os.environ.get("BEDROCK_API_URL", "").strip()
+    api_key = os.environ.get("BEDROCK_API_KEY", "").strip()
     if not api_url:
         raise LLMError("BEDROCK_API_URL is required for AI_PROVIDER=bedrock-proxy")
     if not api_key:

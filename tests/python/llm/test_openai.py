@@ -146,3 +146,37 @@ async def test_call_429_exhausted_raises(monkeypatch):
         req = make_request(model_id="gpt-5.4")
         with pytest.raises(LLMTransientError):
             await call(req, provider="openai")
+
+
+@pytest.mark.anyio
+async def test_call_strips_whitespace_from_api_key(monkeypatch):
+    # #600: a trailing newline/whitespace in the secret must not reach the
+    # outgoing Authorization header.
+    monkeypatch.setenv("OPENAI_API_KEY", "\ntest-key\t")
+
+    with respx.mock:
+        route = respx.post(API_URL).mock(
+            return_value=httpx.Response(200, text=fixture_text("openai_happy.json"))
+        )
+        req = make_request(model_id="gpt-5.4")
+        await call(req, provider="openai")
+
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["Authorization"] == "Bearer test-key"
+
+
+@pytest.mark.anyio
+async def test_call_strips_whitespace_from_base_url(monkeypatch):
+    # #600: a trailing newline/whitespace in OPENAI_BASE_URL must not be
+    # baked into the constructed request URL.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1  \n")
+
+    with respx.mock:
+        route = respx.post("https://example.test/v1/chat/completions").mock(
+            return_value=httpx.Response(200, text=fixture_text("openai_happy.json"))
+        )
+        req = make_request(model_id="gpt-5.4")
+        await call(req, provider="openai-compatible")
+
+    assert route.calls.call_count == 1

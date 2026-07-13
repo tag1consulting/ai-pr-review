@@ -113,3 +113,21 @@ async def test_call_429_exhausted_raises(monkeypatch):
         req = make_request(model_id=MODEL_ID)
         with pytest.raises(LLMTransientError):
             await call(req)
+
+
+@pytest.mark.anyio
+async def test_call_strips_whitespace_from_key_and_url(monkeypatch):
+    # #600: trailing whitespace on either secret/variable must not reach the
+    # outgoing Authorization header or get baked into the constructed URL.
+    monkeypatch.setenv("BEDROCK_API_URL", f"  {BEDROCK_URL}\t")
+    monkeypatch.setenv("BEDROCK_API_KEY", "\ntest-key ")
+
+    with respx.mock:
+        route = respx.post(INVOKE_URL).mock(
+            return_value=httpx.Response(200, text=fixture_text("bedrock_happy.json"))
+        )
+        req = make_request(model_id=MODEL_ID)
+        await call(req)
+
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["Authorization"] == "Bearer test-key"

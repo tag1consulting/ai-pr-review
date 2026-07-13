@@ -75,6 +75,32 @@ def test_make_store_requires_github_repository(monkeypatch: pytest.MonkeyPatch) 
     assert isinstance(make_store(cfg), UnsupportedVcsStore)
 
 
+def test_make_store_strips_whitespace_from_token_and_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #600: a trailing newline/whitespace in the secret/variable must not
+    # reach the stored token/repo, or the resulting Authorization header.
+    monkeypatch.setenv("GH_TOKEN", "\tdummy-token\n")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "  owner/repo  ")
+
+    cfg = _StubConfig(vcs_provider="github")
+    store = make_store(cfg)
+    assert isinstance(store, GitBranchStore)
+    assert store.token == "dummy-token"
+    assert store.repo == "owner/repo"
+
+
+def test_make_store_whitespace_only_token_treated_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "   ")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+
+    cfg = _StubConfig(vcs_provider="github")
+    assert isinstance(make_store(cfg), UnsupportedVcsStore)
+
+
 # ---------------------------------------------------------------------------
 # UnsupportedVcsStore — returns False from append, [] from load_recent
 # ---------------------------------------------------------------------------

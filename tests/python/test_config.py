@@ -69,6 +69,67 @@ def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.confidence_threshold == 50
 
 
+def test_secrets_and_variables_stripped_of_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#600: trailing newline/whitespace on secrets and provider/model
+    variables must not survive into ReviewConfig, since these values are
+    also the source of Layer 3 secret masking (cli._secret_set) — an
+    unstripped value there would fail to mask the stripped value actually
+    sent over the wire by the LLM/VCS provider modules.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "\tsecret-key\n")
+    monkeypatch.setenv("OPENAI_API_KEY", "  secret-key2  ")
+    monkeypatch.setenv("GOOGLE_API_KEY", "secret-key3\t")
+    monkeypatch.setenv("BEDROCK_API_KEY", " secret-key4")
+    monkeypatch.setenv("BEDROCK_API_URL", " https://bedrock.example/ \n")
+    monkeypatch.setenv("OPENAI_BASE_URL", "\thttps://openai.example/v1")
+    monkeypatch.setenv("GH_TOKEN", "\ngh-token ")
+    monkeypatch.setenv("GITLAB_TOKEN", " gl-token\t")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "bb-token\n")
+    monkeypatch.setenv("CI_JOB_TOKEN", " ci-token ")
+    monkeypatch.setenv("AI_PROVIDER", "  anthropic\n")
+    monkeypatch.setenv("AI_MODEL_STANDARD", "\tclaude-sonnet-5 ")
+    monkeypatch.setenv("AI_MODEL_PREMIUM", " claude-opus-4-8\n")
+    monkeypatch.setenv("AI_REVIEW_MODE", "\tfull\n")
+    monkeypatch.setenv("VCS_PROVIDER", " gitlab ")
+    monkeypatch.setenv("REVIEW_TARGET", "standalone\t")
+
+    cfg = ReviewConfig.from_env()
+    assert cfg.anthropic_api_key == "secret-key"
+    assert cfg.openai_api_key == "secret-key2"
+    assert cfg.google_api_key == "secret-key3"
+    assert cfg.bedrock_api_key == "secret-key4"
+    assert cfg.bedrock_api_url == "https://bedrock.example/"
+    assert cfg.openai_base_url == "https://openai.example/v1"
+    assert cfg.gh_token == "gh-token"
+    assert cfg.gitlab_token == "gl-token"
+    assert cfg.bitbucket_api_token == "bb-token"
+    assert cfg.ci_job_token == "ci-token"
+    assert cfg.provider == "anthropic"
+    assert cfg.model_standard == "claude-sonnet-5"
+    assert cfg.model_premium == "claude-opus-4-8"
+    assert cfg.review_mode == "full"
+    assert cfg.vcs_provider == "gitlab"
+    assert cfg.review_target == "standalone"
+
+
+def test_gh_token_falls_back_to_github_token_and_is_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gh_token must fall back to GITHUB_TOKEN (the GitHub Actions default env
+    var) the same way vcs/__init__.py and feedback/store.py already do, since
+    this field is also the source of Layer 3 secret masking (cli._secret_set)
+    — without the fallback, a deployment that sets only GITHUB_TOKEN would
+    have its live token missing from the redaction set.
+    """
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "\tfallback-token\n")
+
+    cfg = ReviewConfig.from_env()
+    assert cfg.gh_token == "fallback-token"
+
+
 def test_unknown_ai_var_warns(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("AI_TOTALLY_MADE_UP", "1")
     ReviewConfig.from_env()  # must not raise

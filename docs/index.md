@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.3
+
+**Fixed a false positive on the pr-number/issue-number split-input pattern**, plus two dormant self-action-pin suppression rules that never actually fired, and stripped stray whitespace from provider secrets and variables to avoid a confusing setup error.
+
+See [Features → v2.4.3](features#whats-new-in-v243) for details.
+
 ## What's new in v2.4.2
 
 **`false-positive`/`wont-fix` now dismiss the owning review and auto-approve on clear.** Replying `false-positive` or `wont-fix` to an inline finding now dismisses the owning `CHANGES_REQUESTED` review like `dismiss` already did, and clearing the last active finding across every bot review now submits a fresh `APPROVE` instead of leaving the PR's review decision stuck at `REVIEW_REQUIRED`.

@@ -130,3 +130,20 @@ async def test_call_429_exhausted_raises(monkeypatch):
         req = make_request(model_id=MODEL_ID)
         with pytest.raises(LLMTransientError):
             await call(req)
+
+
+@pytest.mark.anyio
+async def test_call_strips_whitespace_from_api_key(monkeypatch):
+    # #600: a trailing newline/whitespace in the secret must not reach the
+    # outgoing x-goog-api-key header.
+    monkeypatch.setenv("GOOGLE_API_KEY", "  test-key\n")
+
+    with respx.mock:
+        route = respx.post(API_URL).mock(
+            return_value=httpx.Response(200, text=fixture_text("google_happy.json"))
+        )
+        req = make_request(model_id=MODEL_ID)
+        await call(req)
+
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["x-goog-api-key"] == "test-key"

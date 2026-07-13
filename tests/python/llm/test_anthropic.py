@@ -341,3 +341,31 @@ async def test_call_missing_api_key_raises(monkeypatch):
     req = make_request()
     with pytest.raises(LLMError, match="ANTHROPIC_API_KEY"):
         await call(req, caching=False)
+
+
+@pytest.mark.anyio
+async def test_call_strips_whitespace_from_api_key(monkeypatch):
+    # #600: a trailing newline/whitespace in the secret (e.g. from
+    # `echo "$KEY" | gh secret set ...`) must not reach the outgoing
+    # x-api-key header, or httpx raises "Illegal header value".
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "\ttest-key\n")
+
+    with respx.mock:
+        route = respx.post(API_URL).mock(
+            return_value=httpx.Response(200, text=fixture_text("anthropic_happy.json"))
+        )
+        req = make_request()
+        await call(req, caching=False)
+
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["x-api-key"] == "test-key"
+
+
+@pytest.mark.anyio
+async def test_call_whitespace_only_api_key_raises(monkeypatch):
+    # A whitespace-only secret must still raise the clear "required" error,
+    # not silently proceed with an empty api-key after stripping.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    req = make_request()
+    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY"):
+        await call(req, caching=False)

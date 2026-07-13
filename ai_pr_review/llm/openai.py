@@ -77,11 +77,11 @@ def _build_body(req: LLMRequest, *, provider: str) -> dict[str, Any]:
 
 
 async def call(req: LLMRequest, *, provider: str) -> LLMResponse:
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise LLMError(f"OPENAI_API_KEY is required for AI_PROVIDER={provider}")
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "")
+    base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
     if provider == "openai-compatible" and not base_url:
         raise LLMError(
             "AI_PROVIDER=openai-compatible requires base-url (OPENAI_BASE_URL); "
