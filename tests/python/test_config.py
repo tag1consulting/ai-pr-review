@@ -69,6 +69,45 @@ def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.confidence_threshold == 50
 
 
+def test_secrets_and_variables_stripped_of_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#600: trailing newline/whitespace on secrets and provider/model
+    variables must not survive into ReviewConfig, since these values are
+    also the source of Layer 3 secret masking (cli._secret_set) — an
+    unstripped value there would fail to mask the stripped value actually
+    sent over the wire by the LLM/VCS provider modules.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "\tsecret-key\n")
+    monkeypatch.setenv("OPENAI_API_KEY", "  secret-key2  ")
+    monkeypatch.setenv("GOOGLE_API_KEY", "secret-key3\t")
+    monkeypatch.setenv("BEDROCK_API_KEY", " secret-key4")
+    monkeypatch.setenv("BEDROCK_API_URL", " https://bedrock.example/ \n")
+    monkeypatch.setenv("OPENAI_BASE_URL", "\thttps://openai.example/v1")
+    monkeypatch.setenv("GH_TOKEN", "\ngh-token ")
+    monkeypatch.setenv("GITLAB_TOKEN", " gl-token\t")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "bb-token\n")
+    monkeypatch.setenv("CI_JOB_TOKEN", " ci-token ")
+    monkeypatch.setenv("AI_PROVIDER", "  anthropic\n")
+    monkeypatch.setenv("AI_MODEL_STANDARD", "\tclaude-sonnet-5 ")
+    monkeypatch.setenv("AI_MODEL_PREMIUM", " claude-opus-4-8\n")
+
+    cfg = ReviewConfig.from_env()
+    assert cfg.anthropic_api_key == "secret-key"
+    assert cfg.openai_api_key == "secret-key2"
+    assert cfg.google_api_key == "secret-key3"
+    assert cfg.bedrock_api_key == "secret-key4"
+    assert cfg.bedrock_api_url == "https://bedrock.example/"
+    assert cfg.openai_base_url == "https://openai.example/v1"
+    assert cfg.gh_token == "gh-token"
+    assert cfg.gitlab_token == "gl-token"
+    assert cfg.bitbucket_api_token == "bb-token"
+    assert cfg.ci_job_token == "ci-token"
+    assert cfg.provider == "anthropic"
+    assert cfg.model_standard == "claude-sonnet-5"
+    assert cfg.model_premium == "claude-opus-4-8"
+
+
 def test_unknown_ai_var_warns(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("AI_TOTALLY_MADE_UP", "1")
     ReviewConfig.from_env()  # must not raise

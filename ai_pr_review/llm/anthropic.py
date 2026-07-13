@@ -96,7 +96,7 @@ def _build_body(
 
 
 async def call(req: LLMRequest, *, caching: bool) -> LLMResponse:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         raise LLMError("ANTHROPIC_API_KEY is required for AI_PROVIDER=anthropic")
 

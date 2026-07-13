@@ -171,3 +171,52 @@ def test_bitbucket_invalid_repo_format(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PR_NUMBER", "1")
     with pytest.raises(ProviderConfigError, match="workspace/repo_slug"):
         provider_from_env()
+
+
+# ---------------------------------------------------------------------------
+# Whitespace stripping (#600)
+# ---------------------------------------------------------------------------
+
+
+def test_github_token_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "\ttok\n")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.token == "tok"
+
+
+def test_github_token_whitespace_only_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "   ")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    with pytest.raises(ProviderConfigError, match="GH_TOKEN"):
+        provider_from_env()
+
+
+def test_gitlab_token_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "  tok  ")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "1")
+    monkeypatch.setenv("MR_IID", "1")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc123")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.token == "tok"
+
+
+def test_bitbucket_token_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", " x@y\n")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "\ttok")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ws/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.email == "x@y"
+    assert prov.config.api_token == "tok"

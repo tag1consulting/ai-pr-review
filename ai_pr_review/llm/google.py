@@ -34,7 +34,7 @@ def _build_body(req: LLMRequest) -> dict[str, Any]:
 
 
 async def call(req: LLMRequest) -> LLMResponse:
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     if not api_key:
         raise LLMError("GOOGLE_API_KEY is required for AI_PROVIDER=google")
 

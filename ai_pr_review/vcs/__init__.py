@@ -80,7 +80,7 @@ def provider_from_env() -> VcsProvider:
 
 
 def _require_env(name: str) -> str:
-    val = os.environ.get(name)
+    val = (os.environ.get(name) or "").strip()
     if not val:
         raise ProviderConfigError(f"{name} is required for the selected VCS provider")
     return val
@@ -102,7 +102,7 @@ def _build_github_from_env() -> GitHubProvider:
     Required: GH_TOKEN (or GITHUB_TOKEN), GITHUB_REPOSITORY (owner/repo), PR_NUMBER.
     Optional: GITHUB_API_URL (defaults to https://api.github.com).
     """
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
     if not token:
         raise ProviderConfigError(
             "GH_TOKEN (or GITHUB_TOKEN) is required for VCS_PROVIDER=github"
@@ -114,7 +114,7 @@ def _build_github_from_env() -> GitHubProvider:
         )
     owner, name = repo.split("/", 1)
     pr_number = _require_int_env("PR_NUMBER")
-    base_url = os.environ.get("GITHUB_API_URL") or "https://api.github.com"
+    base_url = (os.environ.get("GITHUB_API_URL") or "").strip() or "https://api.github.com"
 
     config = GitHubConfig(
         owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url
@@ -131,7 +131,7 @@ def _build_gitlab_from_env() -> GitLabProvider:
              GITHUB_REPOSITORY (in priority order).
     Optional: GITLAB_API_URL, GITLAB_BOT_USERNAME.
     """
-    token = os.environ.get("GITLAB_TOKEN") or os.environ.get("CI_JOB_TOKEN")
+    token = (os.environ.get("GITLAB_TOKEN") or os.environ.get("CI_JOB_TOKEN") or "").strip()
     if not token:
         raise ProviderConfigError(
             "GITLAB_TOKEN (or CI_JOB_TOKEN) is required for VCS_PROVIDER=gitlab"
@@ -156,7 +156,7 @@ def _build_gitlab_from_env() -> GitLabProvider:
         raise ProviderConfigError(
             "GITLAB_DIFF_BASE_SHA (or CI_MERGE_REQUEST_DIFF_BASE_SHA) is required"
         )
-    base_url = os.environ.get("GITLAB_API_URL") or "https://gitlab.com/api/v4"
+    base_url = (os.environ.get("GITLAB_API_URL") or "").strip() or "https://gitlab.com/api/v4"
     # Normalize: if the caller passed the host without /api/v4 (e.g. the
     # action.yml default "https://gitlab.com"), append the path so httpx
     # constructs correct absolute URLs instead of silently returning empty bodies.

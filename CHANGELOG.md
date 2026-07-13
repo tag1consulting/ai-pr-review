@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3] - 2026-07-13
+
+### Fixed
+
+- **`code-reviewer` no longer flags the `pr-number`/`issue-number` split-input pattern used to route `issue_comment` and `pull_request_review_comment` slash-command events through one reusable workflow as broken.** `github.event.pull_request` genuinely does not exist on `issue_comment` payloads, so a caller correctly falls back to a sibling `issue-number` input for that event type — this is the intended pattern, not a bug. Fixed with a prompt-level hard constraint (generation-time, wording-independent) plus a deterministic `config/suppressions.json` backstop, the same two-layer approach already used for knowledge-cutoff false positives. (#601, #602)
+- **Two pre-existing self-action-pin suppression rules were dead code and never actually suppressed anything.** `ai-review-yml-action-pin-false-positive`'s file match (`ai-review.yml`) never matched the documented consumer filename (`ai-pr-review.yml` — the `pr-` breaks the substring match); `self-action-pin-not-supply-chain-risk`'s text pattern can never match a semgrep-sourced finding, since `analyzers/native/semgrep.py` builds finding text from the rule's `check_id` and generic message only, discarding the source line. Fixed both; added a rule keyed on the semgrep `check_id` (stable and deterministic, unlike LLM-authored prose) scoped to ai-pr-review's own workflow file so the underlying supply-chain rule still fires for genuine third-party actions elsewhere. (#602)
+- **Provider API keys, tokens, and base URLs are now stripped of leading/trailing whitespace at the point they're read from the environment.** A trailing newline in a GitHub Actions secret (easy to introduce via `echo "$KEY" | gh secret set ...`) previously caused a confusing `Illegal header value` failure from `httpx`, unrelated-looking to the actual cause. Applies to `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `GOOGLE_API_KEY`, `BEDROCK_API_KEY`, `BEDROCK_API_URL`, `GH_TOKEN`/`GITHUB_TOKEN`, `GITHUB_API_URL`, `GITLAB_TOKEN`/`CI_JOB_TOKEN`, `GITLAB_API_URL`, `BITBUCKET_EMAIL`, `BITBUCKET_API_TOKEN`, `AI_PROVIDER`, `AI_MODEL_STANDARD`, and `AI_MODEL_PREMIUM`. A whitespace-only secret is still treated as missing (raises the clear "required" error) rather than silently proceeding with an empty value after stripping. (#600)
+
 ## [2.4.2] - 2026-07-09
 
 ### Fixed

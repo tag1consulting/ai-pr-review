@@ -490,12 +490,12 @@ def make_store(config: object) -> FeedbackStore:
     if vcs != "github":
         return UnsupportedVcsStore()
 
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+    token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
     if not token:
         logger.warning("feedback store: no GH_TOKEN / GITHUB_TOKEN; store disabled")
         return UnsupportedVcsStore()
 
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if not repo:
         logger.warning("feedback store: no GITHUB_REPOSITORY; store disabled")
         return UnsupportedVcsStore()
