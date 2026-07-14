@@ -40,9 +40,15 @@ def run_compute(
 
     diff_lines = len(diff_result.diff_text.splitlines())
     if config.max_diff_lines > 0 and diff_lines > config.max_diff_lines:
+        reason = f"diff too large ({diff_lines} lines > {config.max_diff_lines})"
+        if diff_result.fallback_reason:
+            # The merge-commit filter failed and this diff is the fallback
+            # range, not the intended filtered one — surface why, so a skip
+            # doesn't look inexplicable (see issue #607).
+            reason += f"; merge-commit filter failed: {diff_result.fallback_reason}"
         return {
             "skip": True,
-            "reason": f"diff too large ({diff_lines} lines > {config.max_diff_lines})",
+            "reason": reason,
             "diff": "",
             "changed_files": diff_result.changed_files,
             "manifest": "",

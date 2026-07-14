@@ -102,6 +102,33 @@ class TestRunCompute:
         assert result["skip"] is True
         assert "too large" in str(result["reason"])
 
+    def test_diff_too_large_surfaces_merge_filter_fallback_reason(self) -> None:
+        """Regression test for #607: a skip caused by an unbounded fallback
+        diff must say *why* the filter fell back, not just report the line
+        count — otherwise the skip reads as inexplicable."""
+        config = _make_config(max_diff_lines=5)
+        diff_text = "\n".join([f"+line {i}" for i in range(10)])
+        diff = _make_diff_result(diff_text=diff_text)
+        diff.fallback_reason = "cherry-pick commit failed during merge-commit filtering"
+        with patch("ai_pr_review.diff.compute.compute_diff", return_value=diff):
+            result = _run_compute(config)
+        assert result["skip"] is True
+        assert "too large" in str(result["reason"])
+        assert "merge-commit filter failed" in str(result["reason"])
+        assert "cherry-pick commit failed during merge-commit filtering" in str(result["reason"])
+
+    def test_diff_too_large_without_fallback_reason_omits_filter_clause(self) -> None:
+        """When the filter didn't fail (fallback_reason=""), the skip message
+        stays exactly as before — no empty/misleading filter clause appended."""
+        config = _make_config(max_diff_lines=5)
+        diff_text = "\n".join([f"+line {i}" for i in range(10)])
+        diff = _make_diff_result(diff_text=diff_text)
+        assert diff.fallback_reason == ""
+        with patch("ai_pr_review.diff.compute.compute_diff", return_value=diff):
+            result = _run_compute(config)
+        assert result["skip"] is True
+        assert result["reason"] == "diff too large (10 lines > 5)"
+
     def test_diff_at_limit_not_skipped(self) -> None:
         config = _make_config(max_diff_lines=5)
         diff_text = "\n".join([f"+line {i}" for i in range(5)])  # exactly 5 lines

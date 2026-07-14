@@ -66,14 +66,40 @@ def _resolve_excludes(user_patterns: tuple[str, ...], mode: str) -> list[str]:
     return list(_EXCLUDE_PATTERNS) + normalized
 
 
+def _diff_variants(
+    git: list[str], range_spec: str, excludes: list[str]
+) -> tuple[list[str], str, str]:
+    """Run the three git-diff variants (names, stat, full text) for range_spec."""
+    changed_result = subprocess.run(
+        git + ["diff", "--name-only", range_spec] + ["--"] + excludes,
+        capture_output=True,
+        text=True,
+    )
+    changed_files = [f for f in changed_result.stdout.splitlines() if f]
+
+    stat_result = subprocess.run(
+        git + ["diff", "--stat", range_spec] + ["--"] + excludes,
+        capture_output=True,
+        text=True,
+    )
+    diff_stat = stat_result.stdout.strip().splitlines()[-1] if stat_result.stdout.strip() else ""
+
+    diff_result = subprocess.run(
+        git + ["diff", range_spec] + ["--"] + excludes,
+        capture_output=True,
+        text=True,
+    )
+    return changed_files, diff_stat, diff_result.stdout
+
+
 def _filtered_diff(
     diff_base: str,
     head_sha: str,
     base_ref: str,
     workspace: str = ".",
     exclude_patterns: list[str] | None = None,
-) -> tuple[str, str]:
-    """Return (diff_text, fallback_reason) after filtering base-branch merge commits.
+) -> tuple[list[str] | None, str, str, str]:
+    """Filter base-branch merge commits out of diff_base..head_sha.
 
     Identifies merge commits in diff_base..head_sha whose second parent is
     reachable from origin/<base_ref> (i.e. "merge main into feature" commits).
@@ -84,8 +110,11 @@ def _filtered_diff(
         exclude_patterns: Resolved pathspec patterns to pass to ``git diff``.
             Defaults to ``_EXCLUDE_PATTERNS`` when *None*.
 
-    Returns fallback_reason="" on success.  On conflict or git error, returns
-    ("", "<reason>") — the caller falls back to the unfiltered diff.
+    Returns (changed_files, diff_stat, diff_text, fallback_reason). On success
+    or no-op, fallback_reason="" and changed_files/diff_stat/diff_text describe
+    the filtered range (changed_files is None on no-op — caller keeps its own).
+    On conflict or git error, returns (None, "", "", "<reason>") — the caller
+    falls back to a full diff.
     """
     if exclude_patterns is None:
         exclude_patterns = list(_EXCLUDE_PATTERNS)
@@ -99,7 +128,7 @@ def _filtered_diff(
     )
     merges = [m for m in merges_result.stdout.splitlines() if m]
     if not merges:
-        return ("", "")  # no merges — signal no-op
+        return (None, "", "", "")  # no merges — signal no-op
 
     # 2. Filter to those whose M^2 is reachable from origin/<base_ref>
     origin_base = f"origin/{base_ref}"
@@ -121,7 +150,7 @@ def _filtered_diff(
             qualifying.append(m)
 
     if not qualifying:
-        return ("", "")  # no base-branch merges to filter — signal no-op
+        return (None, "", "", "")  # no base-branch merges to filter — signal no-op
 
     logger.info(
         "Merge-commit filter: %d upstream merge(s) found; building synthetic branch.",
@@ -151,7 +180,7 @@ def _filtered_diff(
         if add_wt.returncode != 0:
             reason = "could not create git worktree for merge-commit filtering"
             logger.warning("Merge-commit filter: %s", reason)
-            return ("", reason)
+            return (None, "", "", reason)
 
         try:
             wt_git = ["git", "-C", tmpdir]
@@ -167,17 +196,23 @@ def _filtered_diff(
                     )
                     reason = "cherry-pick conflict during merge-commit filtering"
                     logger.warning("Merge-commit filter: %s", reason)
-                    return ("", reason)
+                    return (None, "", "", reason)
                 commit_r = subprocess.run(
-                    wt_git + ["commit", "--no-edit", "--allow-empty", "-C", c],
+                    wt_git + [
+                        "-c", "user.name=ai-pr-review",
+                        "-c", "user.email=ai-pr-review@localhost",
+                        "commit", "--no-edit", "--allow-empty", "-C", c,
+                    ],
                     capture_output=True,
                 )
                 if commit_r.returncode != 0:
                     reason = "cherry-pick commit failed during merge-commit filtering"
                     logger.warning("Merge-commit filter: %s", reason)
-                    return ("", reason)
+                    return (None, "", "", reason)
 
-            # 4. Diff diff_base..synthetic_tip
+            # 4. Diff diff_base..synthetic_tip — compute changed_files/diff_stat
+            # here too (not just diff_text), and do it before the `finally`
+            # below removes the worktree: synthetic_tip only exists in it.
             tip_result = subprocess.run(
                 wt_git + ["rev-parse", "HEAD"],
                 capture_output=True,
@@ -186,19 +221,18 @@ def _filtered_diff(
             synthetic_tip = tip_result.stdout.strip()
             if not synthetic_tip or synthetic_tip == diff_base:
                 # No commits cherry-picked — return empty diff
-                return ("", "")
+                return (None, "", "", "")
 
-            diff_result = subprocess.run(
-                git + ["diff", f"{diff_base}..{synthetic_tip}"] + ["--"] + exclude_patterns,
-                capture_output=True,
-                text=True,
+            filtered_range = f"{diff_base}..{synthetic_tip}"
+            changed_files, diff_stat, filtered_text = _diff_variants(
+                git, filtered_range, exclude_patterns
             )
             logger.info(
                 "Merge-commit filter: synthetic diff ready (%s..%s).",
                 diff_base[:7],
                 synthetic_tip[:7],
             )
-            return (diff_result.stdout, "")
+            return (changed_files, diff_stat, filtered_text, "")
         finally:
             subprocess.run(
                 git + ["worktree", "remove", "--force", tmpdir],
@@ -271,47 +305,44 @@ def compute_diff(
         range_spec = f"{diff_base}...{head_sha}"
         label = f"full ({base_ref}..{head_sha[:7]})"
 
-    # Changed files (with exclusions)
-    changed_result = subprocess.run(
-        git + ["diff", "--name-only", range_spec] + ["--"] + excludes,
-        capture_output=True,
-        text=True,
-    )
-    changed_files = [
-        f for f in changed_result.stdout.splitlines() if f
-    ]
-
-    # Diff stat
-    stat_result = subprocess.run(
-        git + ["diff", "--stat", range_spec] + ["--"] + excludes,
-        capture_output=True,
-        text=True,
-    )
-    diff_stat = stat_result.stdout.strip().splitlines()[-1] if stat_result.stdout.strip() else ""
-
-    # Full diff text (initial, may be replaced by filtered version below)
-    diff_result = subprocess.run(
-        git + ["diff", range_spec] + ["--"] + excludes,
-        capture_output=True,
-        text=True,
-    )
-    diff_text = diff_result.stdout
+    changed_files, diff_stat, diff_text = _diff_variants(git, range_spec, excludes)
     fallback_reason = ""
 
     # Optionally filter out upstream base-branch merges
     if ignore_merge_commits and review_target != "standalone":
-        filtered_text, fallback_reason = _filtered_diff(
+        filtered_files, filtered_stat, filtered_text, fallback_reason = _filtered_diff(
             diff_base, head_sha, base_ref, workspace, exclude_patterns=excludes
         )
         if fallback_reason:
-            # Cherry-pick conflict — keep unfiltered diff, propagate reason
+            # Filter failed (identity error, real conflict, worktree error, ...).
+            # Falling back to the *unfiltered incremental* range is unsafe: it is
+            # unbounded by watermark age and can balloon to thousands of lines
+            # when last_reviewed_sha is stale (see issue #607). Recompute the
+            # full three-dot range instead, which is bounded by the merge-base
+            # regardless of how old the watermark is, and re-derive every field
+            # of the result from it so changed_files/diff_stat/diff_text/label
+            # all describe the same range.
             logger.warning(
-                "Merge-commit filter failed (%s); using unfiltered diff.", fallback_reason
+                "Merge-commit filter failed (%s); falling back to full diff "
+                "(unfiltered incremental range is unbounded).",
+                fallback_reason,
             )
-        elif filtered_text != "":
-            # Successfully filtered
+            if incremental:
+                range_spec = f"origin/{base_ref}...{head_sha}"
+                label = f"full ({base_ref}..{head_sha[:7]})"
+                incremental = False
+                changed_files, diff_stat, diff_text = _diff_variants(
+                    git, range_spec, excludes
+                )
+            # else: already computed the full three-dot range above — no-op.
+        elif filtered_files is not None:
+            # Successfully filtered — use the filtered range's changed_files
+            # and diff_stat too, not just diff_text, so all three describe
+            # the same (filtered) range instead of the pre-filter one.
+            changed_files = filtered_files
+            diff_stat = filtered_stat
             diff_text = filtered_text
-        # filtered_text == "" and fallback_reason == "" means no qualifying merges — no-op
+        # filtered_files is None and fallback_reason == "" means no qualifying merges — no-op
 
     return DiffResult(
         diff_text=diff_text,
