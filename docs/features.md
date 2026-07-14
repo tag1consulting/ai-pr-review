@@ -7,6 +7,10 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.4
+
+**Slash-command reviews (`rescan`, `review-full`) now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT's owner.** The reusable slash-commands workflow was routing the PAT reserved for the `dismiss` command's thread-resolution call into the same token used for posting the review itself, so anyone running `/ai-pr-review rescan` or `/ai-pr-review review-full` on a repo with a personal-PAT `GH_TOKEN` saw the review attributed to that person instead of the bot. Fixed to match the automatic review job's token wiring.
+
 ## What's new in v2.4.3
 
 **`code-reviewer` no longer flags the `pr-number`/`issue-number` split-input pattern as broken.** Workflows that route both `issue_comment` and `pull_request_review_comment` slash-command events through one reusable workflow correctly fall back to a sibling `issue-number` input when `github.event.pull_request` doesn't exist on the `issue_comment` payload — this is the intended pattern, not a bug. Fixed with a prompt-level constraint plus a deterministic suppression backstop, the same approach used for knowledge-cutoff false positives.
