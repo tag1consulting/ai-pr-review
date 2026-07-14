@@ -334,7 +334,12 @@ jobs:
           provider: ${{ inputs.provider }}
           api-key: ${{ secrets.api-key }}
           base-url: ${{ inputs.base-url }}
-          github-token: ${{ secrets.github-token }}
+          # actions-token (GITHUB_TOKEN), not github-token (PAT): this posts
+          # the review summary + inline findings, which must attribute to
+          # github-actions[bot] like the automatic review job does. The PAT
+          # is reserved for the dismiss command's resolveReviewThread mutation
+          # (see #608).
+          github-token: ${{ secrets.actions-token || github.token }}
           pr-number: ${{ inputs.issue-number }}
           base-ref: ${{ steps.pr.outputs.base }}
           head-sha: ${{ steps.pr.outputs.sha }}
@@ -354,7 +359,9 @@ jobs:
           provider: ${{ inputs.provider }}
           api-key: ${{ secrets.api-key }}
           base-url: ${{ inputs.base-url }}
-          github-token: ${{ secrets.github-token }}
+          # actions-token (GITHUB_TOKEN), not github-token (PAT): see rationale
+          # on the rescan step above (#608).
+          github-token: ${{ secrets.actions-token || github.token }}
           pr-number: ${{ inputs.issue-number }}
           base-ref: ${{ steps.pr.outputs.base }}
           head-sha: ${{ steps.pr.outputs.sha }}
