@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.4
+
+**Fixed slash-command review attribution.** `/ai-pr-review rescan` and `/ai-pr-review review-full` now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT owner's identity.
+
+See [Features → v2.4.4](features#whats-new-in-v244) for details.
+
 ## What's new in v2.4.3
 
 **Fixed a false positive on the pr-number/issue-number split-input pattern**, plus two dormant self-action-pin suppression rules that never actually fired, and stripped stray whitespace from provider secrets and variables to avoid a confusing setup error.
