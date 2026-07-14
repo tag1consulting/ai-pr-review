@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Release container builds now build `linux/amd64` and `linux/arm64` natively on separate runners and merge them into a single manifest, instead of emulating arm64 via QEMU. Cuts release wall-clock time; no change to image contents or published tags.
+- Release container builds now build `linux/amd64` and `linux/arm64` natively on separate runners and merge them into a single manifest, instead of emulating arm64 via QEMU. Intended to cut release wall-clock time; no change to image contents or published tags.
 
 ### Fixed
 
