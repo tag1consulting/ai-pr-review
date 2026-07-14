@@ -147,6 +147,29 @@ def test_filtered_changed_files_and_stat_match_filtered_diff(
     assert "1 file changed" in result.diff_stat
 
 
+def test_filtered_incremental_diff_label_reflects_filtered_range(
+    merge_repo: dict[str, str],
+) -> None:
+    """diff_label must describe the filtered range on a successful incremental filter.
+
+    Regression guard: a successful filter used to leave diff_label as the
+    pre-filter "incremental (...)" descriptor even after changed_files/diff_stat
+    were switched to the filtered range, making the manifest header (read by the
+    model) disagree with the data next to it.
+    """
+    result = compute_diff(
+        base_ref=merge_repo["base_ref"],
+        head_sha=merge_repo["dev_b"],
+        workspace=merge_repo["repo"],
+        ignore_merge_commits=True,
+        review_target="pr",
+        last_reviewed_sha=merge_repo["dev_a"],
+    )
+    assert result.fallback_reason == ""
+    assert result.is_incremental
+    assert "filtered" in result.diff_label
+
+
 def test_filtered_diff_contains_dev_changes(merge_repo: dict[str, str]) -> None:
     """Filtered diff still contains the developer's actual work."""
     result = compute_diff(

@@ -338,10 +338,15 @@ def compute_diff(
         elif filtered_files is not None:
             # Successfully filtered — use the filtered range's changed_files
             # and diff_stat too, not just diff_text, so all three describe
-            # the same (filtered) range instead of the pre-filter one.
+            # the same (filtered) range instead of the pre-filter one. Update
+            # the label to match: it otherwise still reads "incremental
+            # (diff_base..head_sha)" over data describing the synthetic
+            # filtered range.
             changed_files = filtered_files
             diff_stat = filtered_stat
             diff_text = filtered_text
+            if incremental:
+                label = f"incremental, filtered ({diff_base[:7]}..{head_sha[:7]})"
         # filtered_files is None and fallback_reason == "" means no qualifying merges — no-op
 
     return DiffResult(
