@@ -6,6 +6,12 @@ on:
       - 'v*.*.*'
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'tests/**'
+      - 'examples/**'
+      - 'memory-bank/**'
   workflow_dispatch:
     inputs:
       dry-run:
@@ -18,11 +24,13 @@ permissions:
   packages: write
   id-token: write  # for cosign keyless signing
 
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-push:
-    concurrency:
-      group: publish-image-${{ github.ref }}
-      cancel-in-progress: true
+  build-dev:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -34,10 +42,6 @@ jobs:
         with:
           images: ghcr.io/tag1consulting/ai-pr-review
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ !contains(github.ref, '-') && startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Log in to GHCR
@@ -48,35 +52,168 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.dry-run != 'true' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract label metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/tag1consulting/ai-pr-review
+          tags: |
+            type=raw,value=dev,enable=false
+
+      - name: Log in to GHCR
+        if: ${{ github.event.inputs.dry-run != 'true' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build (dry-run, no push)
+        if: ${{ github.event.inputs.dry-run == 'true' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Build and push by digest
+        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
         id: build
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          push: ${{ github.event.inputs.dry-run != 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          outputs: type=image,name=ghcr.io/tag1consulting/ai-pr-review,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Export digest
+        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    if: ${{ startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry-run != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract tag metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/tag1consulting/ai-pr-review
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags_args=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && tags_args+=("-t" "$tag")
+          done <<< "$TAGS"
+          digest_refs=()
+          for digest_file in *; do
+            digest_refs+=("ghcr.io/tag1consulting/ai-pr-review@sha256:${digest_file}")
+          done
+          # Guard against assembling and tagging :latest from a partial manifest
+          # (e.g. a future arch added to the matrix without updating this count).
+          expected_arches=2
+          if [[ ${#digest_refs[@]} -ne "$expected_arches" ]]; then
+            echo "Expected ${expected_arches} per-arch digests, found ${#digest_refs[@]}: ${digest_refs[*]}" >&2
+            exit 1
+          fi
+          docker buildx imagetools create "${tags_args[@]}" "${digest_refs[@]}"
+
+      - name: Inspect merged index digest
+        id: inspect
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          primary_tag=$(head -n1 <<< "$TAGS")
+          digest=$(docker buildx imagetools inspect "$primary_tag" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
-        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
         uses: sigstore/cosign-installer@v4.1.2
 
-      - name: Sign image
-        if: ${{ github.event.inputs.dry-run != 'true' && startsWith(github.ref, 'refs/tags/') }}
+      - name: Sign merged manifest
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.inspect.outputs.digest }}
         run: |
           cosign sign --yes \
             "ghcr.io/tag1consulting/ai-pr-review@${DIGEST}"

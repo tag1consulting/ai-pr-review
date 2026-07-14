@@ -121,6 +121,55 @@ def test_filtered_diff_excludes_upstream_changes(merge_repo: dict[str, str]) -> 
     assert "upstream v2" not in result.diff_text
 
 
+def test_filtered_changed_files_and_stat_match_filtered_diff(
+    merge_repo: dict[str, str],
+) -> None:
+    """changed_files/diff_stat must describe the same (filtered) range as diff_text.
+
+    Regression guard: a successful filter used to only swap in the filtered
+    diff_text, leaving changed_files/diff_stat computed from the pre-filter
+    (unfiltered) range — e.g. still listing upstream.txt even though the
+    filtered diff_text excluded it. All three must agree.
+    """
+    result = compute_diff(
+        base_ref=merge_repo["base_ref"],
+        head_sha=merge_repo["dev_b"],
+        workspace=merge_repo["repo"],
+        ignore_merge_commits=True,
+        review_target="pr",
+    )
+    assert result.fallback_reason == ""
+    assert result.changed_files == ["feature.txt"]
+    assert "upstream.txt" not in result.changed_files
+    # diff_stat is the summary line only (e.g. "1 file changed, ...") — assert
+    # it reflects a single-file change, matching changed_files, not two files
+    # (which the unfiltered range, including upstream.txt, would produce).
+    assert "1 file changed" in result.diff_stat
+
+
+def test_filtered_incremental_diff_label_reflects_filtered_range(
+    merge_repo: dict[str, str],
+) -> None:
+    """diff_label must describe the filtered range on a successful incremental filter.
+
+    Regression guard: a successful filter used to leave diff_label as the
+    pre-filter "incremental (...)" descriptor even after changed_files/diff_stat
+    were switched to the filtered range, making the manifest header (read by the
+    model) disagree with the data next to it.
+    """
+    result = compute_diff(
+        base_ref=merge_repo["base_ref"],
+        head_sha=merge_repo["dev_b"],
+        workspace=merge_repo["repo"],
+        ignore_merge_commits=True,
+        review_target="pr",
+        last_reviewed_sha=merge_repo["dev_a"],
+    )
+    assert result.fallback_reason == ""
+    assert result.is_incremental
+    assert "filtered" in result.diff_label
+
+
 def test_filtered_diff_contains_dev_changes(merge_repo: dict[str, str]) -> None:
     """Filtered diff still contains the developer's actual work."""
     result = compute_diff(
@@ -206,3 +255,169 @@ def test_fallback_reason_populated_on_default_flag(merge_repo: dict[str, str]) -
         review_target="pr",
     )
     assert result.fallback_reason == ""
+
+
+def test_filter_succeeds_with_no_ambient_git_identity(
+    merge_repo: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression test for #607.
+
+    Production containers configure no git identity anywhere (no ~/.gitconfig,
+    no /etc/gitconfig) — only the *local* repo config, which `merge_repo` sets
+    via `git config user.email`/`user.name`. That local config is shared by
+    every worktree of the same repo (worktrees share one `.git` config file),
+    so `merge_repo`'s existing tests never exercised the container's actual
+    environment: no identity at *any* level (local, global, or system).
+
+    `_filtered_diff()`'s cherry-pick loop rebuilds each commit via
+    `git commit --no-edit --allow-empty -C <c>` in a scratch worktree. `-C`
+    reuses the source commit's author, but git still requires a *committer*
+    identity — which is absent here. Without the fix (a synthetic committer
+    identity passed to that commit call), this fails on the first commit,
+    `_filtered_diff` returns a non-empty fallback_reason, and — before the
+    #607 fix — `compute_diff` fell back to the unfiltered incremental diff,
+    unbounded by watermark age. The fix must make the filter succeed even
+    with zero ambient identity, and must not leave the two-dot fallback in
+    place if it ever does fail.
+    """
+    repo = merge_repo["repo"]
+
+    # Blank local config's identity too (it's the one merge_repo actually
+    # set), then remove all HOME/global/system fallbacks.
+    subprocess.run(
+        ["git", "-C", repo, "config", "--unset", "user.email"], capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", repo, "config", "--unset", "user.name"], capture_output=True
+    )
+    empty_home = tmp_path / "empty-home"
+    empty_home.mkdir()
+    monkeypatch.setenv("HOME", str(empty_home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+    monkeypatch.delenv("GIT_AUTHOR_NAME", raising=False)
+    monkeypatch.delenv("GIT_AUTHOR_EMAIL", raising=False)
+    monkeypatch.delenv("GIT_COMMITTER_NAME", raising=False)
+    monkeypatch.delenv("GIT_COMMITTER_EMAIL", raising=False)
+
+    result = compute_diff(
+        base_ref=merge_repo["base_ref"],
+        head_sha=merge_repo["dev_b"],
+        workspace=repo,
+        ignore_merge_commits=True,
+        review_target="pr",
+    )
+
+    assert result.fallback_reason == ""
+    assert "feature.txt" in result.diff_text
+    assert "upstream v2" not in result.diff_text
+
+
+@pytest.fixture()
+def conflicting_merge_repo(tmp_path: Path) -> dict[str, str]:
+    """Build a repo where cherry-picking a dev commit onto diff_base conflicts.
+
+    Layout: dev edits shared.txt's line2 on the feature branch; upstream
+    edits the same line independently; the developer merges upstream in,
+    resolving the conflict by hand; then makes a second dev commit that
+    touches shared.txt again post-merge. Using the *upstream* commit as
+    last_reviewed_sha (a valid ancestor watermark, reachable via the merge)
+    makes compute_diff pick the incremental two-dot range first. Cherry-
+    picking the post-merge dev commit onto a worktree rooted at that
+    watermark then genuinely conflicts: the worktree has the pre-resolution
+    upstream text, but the commit's diff expects the post-resolution text.
+    This is what a real "cherry-pick conflict during merge-commit filtering"
+    fallback looks like (distinct from the identity-failure fallback above,
+    and it must exercise the *incremental* path to test fallback boundedness
+    at all — a non-incremental review already uses the bounded three-dot
+    range with nothing to fall back from).
+    """
+    repo = tmp_path / "conflict-repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        r = subprocess.run(
+            ["git", "-C", str(repo)] + list(args),
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0, f"git {args} failed:\n{r.stderr}"
+        return r.stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Tester")
+    git("config", "commit.gpgSign", "false")
+
+    (repo / "shared.txt").write_text("line1\nline2\nline3\n")
+    git("add", "shared.txt")
+    git("commit", "-q", "-m", "base")
+    main_sha = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", main_sha)
+
+    git("checkout", "-q", "-b", "feature")
+    (repo / "shared.txt").write_text("line1\nDEV CHANGE\nline3\n")
+    git("add", "shared.txt")
+    git("commit", "-q", "-m", "feat: dev edits line2")
+
+    git("checkout", "-q", "main")
+    (repo / "shared.txt").write_text("line1\nUPSTREAM CHANGE\nline3\n")
+    git("add", "shared.txt")
+    git("commit", "-q", "-m", "upstream: edits line2 too")
+    upstream_v2 = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", upstream_v2)
+
+    git("checkout", "-q", "feature")
+    # Merge main into feature, resolving the conflict by hand.
+    subprocess.run(["git", "-C", str(repo), "merge", "--no-edit", "main"], capture_output=True)
+    (repo / "shared.txt").write_text("line1\nRESOLVED\nline3\n")
+    git("add", "shared.txt")
+    git("commit", "-q", "-m", "Merge main into feature")
+
+    # Second dev commit after the merge, also touching shared.txt — this is
+    # the one that will fail to cherry-pick onto a worktree rooted at
+    # upstream_v2 (pre-resolution text).
+    (repo / "shared.txt").write_text("line1\nRESOLVED\nline3\nline4 new\n")
+    git("add", "shared.txt")
+    git("commit", "-q", "-m", "feat: dev commit B touches shared.txt again")
+    dev_b = git("rev-parse", "HEAD")
+
+    return {
+        "repo": str(repo),
+        "base_ref": "main",
+        "head_sha": dev_b,
+        "watermark": upstream_v2,
+    }
+
+
+def test_bounded_fallback_on_real_cherry_pick_conflict(
+    conflicting_merge_repo: dict[str, str],
+) -> None:
+    """Regression test for #607's fallback-boundedness fix.
+
+    Uses last_reviewed_sha=watermark (a valid ancestor of head, so
+    compute_diff picks the *incremental* two-dot range first — the case
+    that actually exercises the bug: an unbounded fallback only matters
+    when the initial range was incremental, since a non-incremental review
+    already uses the bounded three-dot range). When the filter then hits a
+    genuine cherry-pick conflict (not the identity failure covered above),
+    compute_diff must fall back to the bounded three-dot diff instead of
+    keeping the unfiltered incremental one — and every DiffResult field
+    (changed_files, diff_stat, diff_text, diff_label, is_incremental) must
+    describe that same three-dot range consistently.
+    """
+    result = compute_diff(
+        base_ref=conflicting_merge_repo["base_ref"],
+        head_sha=conflicting_merge_repo["head_sha"],
+        workspace=conflicting_merge_repo["repo"],
+        last_reviewed_sha=conflicting_merge_repo["watermark"],
+        ignore_merge_commits=True,
+        review_target="pr",
+    )
+
+    assert result.fallback_reason == "cherry-pick conflict during merge-commit filtering"
+    assert result.is_incremental is False
+    assert result.diff_label.startswith("full (")
+    assert "shared.txt" in result.changed_files
+    assert "RESOLVED" in result.diff_text
+    assert "1 file changed" in result.diff_stat

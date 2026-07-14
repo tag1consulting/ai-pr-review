@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Release container builds now build `linux/amd64` and `linux/arm64` natively on separate runners and merge them into a single manifest, instead of emulating arm64 via QEMU. Intended to cut release wall-clock time; no change to image contents or published tags.
+
+### Fixed
+
+- **The merge-commit filter (`ignore_merge_commits`) silently failed on every incremental review, because no production container configures a git identity.** `_filtered_diff()` rebuilds each cherry-picked commit via `git commit --no-edit --allow-empty -C <c>`, which reuses the source commit's author but still requires a committer identity (`user.name`/`user.email`) that no container sets. This failed on the first commit every time, and the caller then fell back to the **unfiltered incremental diff** — unbounded by how stale the review's watermark was. On a PR with a two-month-old watermark and heavy upstream-merge traffic, this produced a 21,013-line fallback diff that tripped the `max-diff-lines` skip, with no indication the filter had failed. Fixed by (1) passing a synthetic committer identity to the cherry-pick commit call so the filter works regardless of container identity, (2) falling back to the bounded three-dot diff (`origin/base...head`) instead of the unbounded two-dot range on any filter failure, and (3) surfacing the filter's failure reason in the "diff too large" skip message instead of swallowing it. Also fixed a related bug found while verifying (2): a *successful* filter only ever swapped in the filtered diff text, leaving `changed_files`/`diff_stat` computed from the pre-filter range — both are now derived from the same filtered range as the diff text. (#607)
+
 ## [2.4.4] - 2026-07-14
 
 ### Fixed
