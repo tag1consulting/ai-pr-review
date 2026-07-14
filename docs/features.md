@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.5
+
+**Fixed the merge-commit filter (`ignore_merge_commits`) silently failing on every incremental review, and unbounded fallback diffs.** No production container configures a git identity, so the filter's cherry-pick step failed on the first commit of every incremental review, then silently fell back to an unfiltered diff unbounded by watermark age — on one PR with a stale watermark this produced a 21,013-line diff that tripped the size skip with no explanation. Fixed to work regardless of container identity, to fall back to a bounded diff on any filter failure, and to surface the failure reason in skip messages instead of swallowing it.
+
+Release container builds now build `linux/amd64` and `linux/arm64` natively on separate runners and merge them into a single manifest, instead of emulating arm64 via QEMU. Intended to cut release wall-clock time; no change to image contents or published tags.
+
 ## What's new in v2.4.4
 
 **Slash-command reviews (`rescan`, `review-full`) now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT's owner.** The reusable slash-commands workflow was routing the PAT reserved for the `dismiss` command's thread-resolution call into the same token used for posting the review itself, so anyone running `/ai-pr-review rescan` or `/ai-pr-review review-full` on a repo with a personal-PAT `GH_TOKEN` saw the review attributed to that person instead of the bot. Fixed to match the automatic review job's token wiring.

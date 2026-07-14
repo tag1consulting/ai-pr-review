@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.5
+
+**Fixed the merge-commit filter silently failing in production, plus faster native-arm64 release builds.** The `ignore_merge_commits` filter no longer silently falls back to unbounded diffs when a container has no git identity configured, and release container builds now build `linux/amd64`/`linux/arm64` natively instead of emulating arm64 via QEMU.
+
+See [Features → v2.4.5](features#whats-new-in-v245) for details.
+
 ## What's new in v2.4.4
 
 **Fixed slash-command review attribution.** `/ai-pr-review rescan` and `/ai-pr-review review-full` now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT owner's identity.
