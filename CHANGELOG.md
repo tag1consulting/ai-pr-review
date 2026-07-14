@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`/ai-pr-review rescan` and `/ai-pr-review review-full` posted the review summary and inline findings under the `GH_TOKEN` PAT's identity instead of `github-actions[bot]`.** The reusable `slash-commands.yml` workflow passed `secrets.github-token` (a PAT, documented as reserved for the `dismiss` command's `resolveReviewThread` GraphQL mutation) straight into the container-action's `github-token` input for the `rescan`/`review-full` steps, so all VCS posting from those steps (not just the privileged GraphQL calls) authenticated as the PAT's owner. Latent since the reusable workflow was extracted (2026-05-11); it surfaced when a PAT configured under a real user's account was used for `GH_TOKEN`. Fixed by switching those two steps to `secrets.actions-token || github.token` (`GITHUB_TOKEN`), matching the automatic-review job's already-correct wiring. The `dismiss`/`false-positive`/`wont-fix`/`explain`/`revise` handlers were audited and already post their user-facing replies via the bot token, using the PAT only for the internal GraphQL/approval calls that require it. (#608)
+
 ## [2.4.3] - 2026-07-13
 
 ### Fixed
