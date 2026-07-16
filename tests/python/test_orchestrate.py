@@ -273,6 +273,49 @@ def test_failed_summary_post_skips_findings_and_stale(tmp_path: Path) -> None:
     anyio.run(_run)
 
 
+def test_failed_summary_post_still_retains_computed_findings(tmp_path: Path) -> None:
+    """Findings computed before a failed post_summary remain on result.findings (#588).
+
+    post_summary/post_findings failing (e.g. a 401) does not discard the
+    findings already computed by the pipeline -- they stay available on
+    result.findings for a caller (e.g. the step-summary fallback trace) to
+    still surface them durably.
+    """
+    provider = _FakeProvider(summary_ok=False)
+    diff_text = (
+        "diff --git a/db.py b/db.py\n--- a/db.py\n+++ b/db.py\n"
+        "@@ -40,3 +40,4 @@\n x\n a\n+query = f'SELECT'\n b\n"
+    )
+    ctx = _make_dispatch_context(tmp_path, diff_text)
+    analyzer_finding = Finding(
+        severity="High",
+        confidence=90,
+        file="db.py",
+        line=42,
+        finding="SQL injection via f-string",
+        source="semgrep",
+        sources=["semgrep"],
+    )
+    cfg = OrchestrationConfig(extra_findings=(analyzer_finding,))
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text=diff_text, head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=cfg,
+        )
+        assert result.ok is False
+        assert len(result.findings) == 1
+        assert result.findings[0].finding == "SQL injection via f-string"
+        assert result.findings[0].severity == "High"
+
+    anyio.run(_run)
+
+
 def test_failed_findings_post_blocks_stale(tmp_path: Path) -> None:
     provider = _FakeProvider(findings_ok=False)
     ctx = _make_dispatch_context(tmp_path)

@@ -476,6 +476,91 @@ class TestWriteStepSummary:
             _write_step_summary(self._make_result(), self._make_runtime(tmp_path), "")
         assert any("step summary" in r.message.lower() for r in caplog.records)
 
+    def test_failed_summary_post_dumps_findings_to_step_summary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed post_summary triggers the durable fallback trace (#588)."""
+        from ai_pr_review.findings.models import Finding
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
+        from ai_pr_review.vcs.protocol import SummaryResult
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        result = self._make_result()
+        result.summary = SummaryResult(
+            comment_id=None, created=False, updated=False,
+            error="HTTP 401: Bad credentials",
+        )
+        # result.findings_post left as the default MagicMock (truthy .ok), so
+        # its error line must NOT render -- this checks the per-clause guard.
+        result.findings = [
+            Finding(severity="High", file="login.py", line=10,
+                    finding="SQL injection in login handler", remediation="y",
+                    agent="code-reviewer", source="code-reviewer", confidence=90),
+        ]
+
+        _write_step_summary(result, self._make_runtime(tmp_path), "")
+
+        content = summary_path.read_text()
+        assert "⚠️ Posting failed" in content
+        assert "HTTP 401: Bad credentials" in content
+        assert "SQL injection in login handler" in content
+        assert "Findings post error:" not in content
+
+    def test_failed_findings_post_dumps_findings_to_step_summary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed post_findings triggers the durable fallback trace (#588)."""
+        from ai_pr_review.findings.models import Finding
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
+        from ai_pr_review.vcs.protocol import FindingsResult, SummaryResult
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        result = self._make_result()
+        result.summary = SummaryResult(comment_id=42, created=True, updated=False)
+        result.findings_post = FindingsResult(
+            review_id=None, inline_posted=0, body_findings=1,
+            event="COMMENT", error="HTTP 401: Bad credentials",
+        )
+        result.findings = [
+            Finding(severity="High", file="login.py", line=10,
+                    finding="SQL injection in login handler", remediation="y",
+                    agent="code-reviewer", source="code-reviewer", confidence=90),
+        ]
+
+        _write_step_summary(result, self._make_runtime(tmp_path), "")
+
+        content = summary_path.read_text()
+        assert "⚠️ Posting failed" in content
+        assert "HTTP 401: Bad credentials" in content
+        assert "SQL injection in login handler" in content
+
+    def test_successful_post_does_not_show_failure_banner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When both posts succeed, no failure banner is rendered."""
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
+        from ai_pr_review.vcs.protocol import FindingsResult, SummaryResult
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        result = self._make_result()
+        # Explicit real ok objects for both -- not default MagicMock
+        # truthiness -- so a future polarity bug can't hide behind a mock.
+        result.summary = SummaryResult(comment_id=42, created=True, updated=False)
+        result.findings_post = FindingsResult(
+            review_id=99, inline_posted=1, body_findings=0, event="COMMENT",
+        )
+
+        _write_step_summary(result, self._make_runtime(tmp_path), "")
+
+        content = summary_path.read_text()
+        assert "⚠️ Posting failed" not in content
+
 
 class TestFailOnFindings:
     """Exit code 2 is returned when AI_FAIL_ON_FINDINGS=true and outcome blocks.
