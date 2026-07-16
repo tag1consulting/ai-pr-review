@@ -169,6 +169,36 @@ def write_step_summary(
             + (f" ({n_failed} agent(s) failed)" if n_failed else ""),
             "",
         ]
+
+        # --- Durable fallback trace when the post itself failed (#588) ---
+        # post_summary/post_findings can fail (e.g. a 401) after every agent
+        # has already run and findings have been computed. The step summary
+        # is written unconditionally regardless of post outcome, so it is
+        # the one durable place left to record findings that never reached
+        # the PR. No API call is involved, so this path can never itself 401.
+        summary_failed = result.summary is not None and not result.summary.ok
+        findings_failed = result.findings_post is not None and not result.findings_post.ok
+        if summary_failed or findings_failed:
+            from ai_pr_review.vcs._body import format_body_finding, join_findings
+
+            lines += [
+                "### ⚠️ Posting failed: findings below were computed but NOT posted to the PR",
+                "",
+            ]
+            if result.summary is not None and not result.summary.ok and result.summary.error:
+                lines += [f"**Summary post error:** {result.summary.error}", ""]
+            if (
+                result.findings_post is not None
+                and not result.findings_post.ok
+                and result.findings_post.error
+            ):
+                lines += [f"**Findings post error:** {result.findings_post.error}", ""]
+            if result.findings:
+                lines += [
+                    join_findings(format_body_finding(f) for f in result.findings),
+                    "",
+                ]
+
         if token_section:
             lines.append(token_section)
         if summary_text.strip():
