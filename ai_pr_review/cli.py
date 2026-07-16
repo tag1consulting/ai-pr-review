@@ -31,6 +31,9 @@ from ai_pr_review.review.preflight import run_summarizer as _run_summarizer
 from ai_pr_review.review.reporting import (
     build_token_table_accordion as _build_token_table_accordion,
 )
+from ai_pr_review.review.reporting import (
+    emit_post_failure_annotation as _emit_post_failure_annotation,
+)
 from ai_pr_review.review.reporting import emit_review_result as _emit_review_result
 from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 from ai_pr_review.vcs import ProviderConfigError
@@ -153,6 +156,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
         result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config.resolve_models())
+        _emit_post_failure_annotation(result)
         if config.telemetry_enabled:
             try:
                 resolved_cfg = config.resolve_models()
@@ -269,6 +273,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
             judge_model=result.judge_model,
         ),
     )
+    _emit_post_failure_annotation(result)
 
     if rc.telemetry_enabled:
         await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,

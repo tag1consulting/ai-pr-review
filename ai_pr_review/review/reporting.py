@@ -213,6 +213,56 @@ def write_step_summary(
         )
 
 
+def emit_post_failure_annotation(result: ReviewResult) -> None:
+    """Emit a GitHub Actions ``::error::`` annotation when posting failed (#588).
+
+    ``write_step_summary`` (#617) gives the failure a durable trace, but that
+    trace lives in ``GITHUB_STEP_SUMMARY``, which most PR reviewers never
+    open — it is only visible from the Actions run UI. A workflow-command
+    annotation is written straight to the step's stdout, which GitHub Actions
+    parses automatically (no API call, so this path can never itself 401) and
+    surfaces on the PR's own Checks tab, so a reviewer looking at the PR sees
+    a concrete "the review couldn't post" signal rather than silence or a
+    bare red X indistinguishable from any other job failure.
+
+    Only fires when ``GITHUB_ACTIONS`` is set (avoids polluting local/test
+    runs, matching the guard already used in ``vcs/github.py``).
+
+    Deliberately does NOT key off ``result.ok``: ``ReviewResult.ok`` returns
+    True unconditionally when ``result.skipped`` is set (see
+    ``ReviewResult.ok`` in ``orchestrate.py``), even if the skip-comment post
+    itself failed (``provider.post_skip_comment`` can 401 exactly like
+    ``post_summary``/``post_findings`` can). Checking ``result.ok`` directly
+    would make this function permanently silent on the skip path -- the same
+    silent-failure class #588 exists to fix. Instead this checks
+    ``result.summary``/``result.findings_post`` for a populated ``.error``
+    directly, which is accurate on both the normal review path and the skip
+    path. A crash elsewhere in the pipeline raises before a ``ReviewResult``
+    exists at all (caught separately in ``cli.py``'s top-level handler), so
+    reaching here with either error field set already means "the review (or
+    skip) ran fine but could not post."
+
+    The message deliberately does not interpolate the raw post error: that
+    detail already lives in the step summary, and keeping it out of the
+    annotation avoids any risk of leaking credential/secret fragments that
+    might appear in a provider error string.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    summary_failed = result.summary is not None and not result.summary.ok
+    findings_failed = result.findings_post is not None and not result.findings_post.ok
+    if not (summary_failed or findings_failed):
+        return
+
+    n_findings = len(result.findings)
+    click.echo(
+        "::error::ai-pr-review: the review ran but could not post "
+        f"{n_findings} finding(s) to this PR (see the job's step summary "
+        "for the error detail and the computed findings).",
+        err=True,
+    )
+
+
 def emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
     """Emit a one-line summary to stderr."""
     if result.skipped:
