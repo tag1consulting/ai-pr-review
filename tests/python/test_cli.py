@@ -738,15 +738,37 @@ class TestWriteStepSummary:
 
 
 class TestEmitPostFailureAnnotation:
-    """Tests for _emit_post_failure_annotation (#588 remaining half: PR-visible signal)."""
+    """Tests for _emit_post_failure_annotation (#588 remaining half: PR-visible signal).
 
-    def _make_result(self, *, ok: bool, n_findings: int = 1) -> object:
+    Uses real SummaryResult/FindingsResult objects (not bare MagicMock.ok
+    assignment) so these tests exercise the actual summary/findings_post
+    error-field checks the function performs, rather than a mock attribute
+    that could drift out of sync with real ReviewResult construction. This
+    also means the tests correctly cover the skipped=True case, where
+    ReviewResult.ok short-circuits to True regardless of whether
+    post_skip_comment itself failed (see test_fires_on_skip_path_post_failure
+    below) -- a real gap caught by review before this landed.
+    """
+
+    def _make_result(
+        self, *, n_findings: int = 1, summary_error: str = "", findings_error: str = "",
+        skipped: bool = False,
+    ) -> object:
         from unittest.mock import MagicMock
 
         from ai_pr_review.findings.models import Finding
+        from ai_pr_review.vcs.protocol import FindingsResult, SummaryResult
 
         result = MagicMock()
-        result.ok = ok
+        result.skipped = skipped
+        result.summary = SummaryResult(
+            comment_id=None, created=False, updated=False,
+            error=summary_error or None,
+        )
+        result.findings_post = FindingsResult(
+            review_id=None, inline_posted=0, body_findings=n_findings, event="COMMENT",
+            error=findings_error or None,
+        )
         result.findings = [
             Finding(severity="High", file="foo.py", line=1,
                     finding="x", remediation="y", agent="code-reviewer",
@@ -755,21 +777,72 @@ class TestEmitPostFailureAnnotation:
         ]
         return result
 
-    def test_fires_on_post_failure_under_actions(
+    def test_fires_on_summary_post_failure_under_actions(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A failed post under GITHUB_ACTIONS emits an ::error:: annotation."""
+        """A failed post_summary under GITHUB_ACTIONS emits an ::error:: annotation."""
         from ai_pr_review.review.reporting import (
             emit_post_failure_annotation as _emit_post_failure_annotation,
         )
 
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
-        _emit_post_failure_annotation(self._make_result(ok=False, n_findings=3))
+        _emit_post_failure_annotation(
+            self._make_result(n_findings=3, summary_error="HTTP 401: Bad credentials")
+        )
 
         captured = capsys.readouterr()
         assert "::error::ai-pr-review:" in captured.err
         assert "could not post" in captured.err
         assert "3 finding(s)" in captured.err
+        # The raw provider error must not leak into the annotation.
+        assert "Bad credentials" not in captured.err
+
+    def test_fires_on_findings_post_failure_under_actions(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A failed post_findings (summary itself ok) still emits the annotation."""
+        from ai_pr_review.review.reporting import (
+            emit_post_failure_annotation as _emit_post_failure_annotation,
+        )
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        _emit_post_failure_annotation(
+            self._make_result(n_findings=2, findings_error="HTTP 401: Bad credentials")
+        )
+
+        captured = capsys.readouterr()
+        assert "::error::ai-pr-review:" in captured.err
+        assert "2 finding(s)" in captured.err
+
+    def test_fires_on_skip_path_post_failure(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A failed post_skip_comment (skipped=True) still emits the annotation.
+
+        ReviewResult.ok short-circuits to True whenever skipped=True, regardless
+        of whether provider.post_skip_comment itself failed (orchestrate.py's
+        skip branch stores post_skip_comment's result as `summary` -- see
+        run_review's skip_reason branch). Keying this function off result.ok
+        directly would make it permanently silent on the skip path -- the exact
+        silent-failure class #588 exists to fix. This test would fail if the
+        implementation ever regresses to checking result.ok instead of the
+        summary/findings_post error fields directly.
+        """
+        from ai_pr_review.review.reporting import (
+            emit_post_failure_annotation as _emit_post_failure_annotation,
+        )
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        result = self._make_result(
+            n_findings=0, summary_error="HTTP 401: Bad credentials", skipped=True,
+        )
+        assert result.skipped is True
+
+        _emit_post_failure_annotation(result)
+
+        captured = capsys.readouterr()
+        assert "::error::ai-pr-review:" in captured.err
+        assert "could not post" in captured.err
 
     def test_silent_when_github_actions_unset(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
@@ -780,22 +853,24 @@ class TestEmitPostFailureAnnotation:
         )
 
         monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-        _emit_post_failure_annotation(self._make_result(ok=False))
+        _emit_post_failure_annotation(
+            self._make_result(summary_error="HTTP 401: Bad credentials")
+        )
 
         captured = capsys.readouterr()
         assert "::error::" not in captured.err
         assert captured.err == ""
 
-    def test_silent_when_result_ok(
+    def test_silent_when_both_posts_succeed(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """No annotation is emitted when the post succeeded."""
+        """No annotation is emitted when both posts succeeded."""
         from ai_pr_review.review.reporting import (
             emit_post_failure_annotation as _emit_post_failure_annotation,
         )
 
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
-        _emit_post_failure_annotation(self._make_result(ok=True))
+        _emit_post_failure_annotation(self._make_result())
 
         captured = capsys.readouterr()
         assert "::error::" not in captured.err
@@ -809,7 +884,9 @@ class TestEmitPostFailureAnnotation:
         )
 
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
-        _emit_post_failure_annotation(self._make_result(ok=False, n_findings=0))
+        _emit_post_failure_annotation(
+            self._make_result(n_findings=0, summary_error="HTTP 401: Bad credentials")
+        )
 
         captured = capsys.readouterr()
         assert "::error::ai-pr-review:" in captured.err

@@ -226,12 +226,21 @@ def emit_post_failure_annotation(result: ReviewResult) -> None:
     bare red X indistinguishable from any other job failure.
 
     Only fires when ``GITHUB_ACTIONS`` is set (avoids polluting local/test
-    runs, matching the guard already used in ``vcs/github.py``) and only when
-    ``result.ok`` is false. ``ReviewResult.ok`` is false only when
-    ``summary.error`` or ``findings_post.error`` is set — a crash elsewhere
-    in the pipeline raises before a ``ReviewResult`` exists at all (caught
-    separately in ``cli.py``'s top-level handler), so reaching here with a
-    non-ok result already means "the review ran fine but could not post."
+    runs, matching the guard already used in ``vcs/github.py``).
+
+    Deliberately does NOT key off ``result.ok``: ``ReviewResult.ok`` returns
+    True unconditionally when ``result.skipped`` is set (see
+    ``ReviewResult.ok`` in ``orchestrate.py``), even if the skip-comment post
+    itself failed (``provider.post_skip_comment`` can 401 exactly like
+    ``post_summary``/``post_findings`` can). Checking ``result.ok`` directly
+    would make this function permanently silent on the skip path -- the same
+    silent-failure class #588 exists to fix. Instead this checks
+    ``result.summary``/``result.findings_post`` for a populated ``.error``
+    directly, which is accurate on both the normal review path and the skip
+    path. A crash elsewhere in the pipeline raises before a ``ReviewResult``
+    exists at all (caught separately in ``cli.py``'s top-level handler), so
+    reaching here with either error field set already means "the review (or
+    skip) ran fine but could not post."
 
     The message deliberately does not interpolate the raw post error: that
     detail already lives in the step summary, and keeping it out of the
@@ -240,7 +249,9 @@ def emit_post_failure_annotation(result: ReviewResult) -> None:
     """
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
-    if result.ok:
+    summary_failed = result.summary is not None and not result.summary.ok
+    findings_failed = result.findings_post is not None and not result.findings_post.ok
+    if not (summary_failed or findings_failed):
         return
 
     n_findings = len(result.findings)
