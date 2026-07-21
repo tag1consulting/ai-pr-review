@@ -26,8 +26,6 @@ annotations are not currently available on the Bitbucket path.
 
 - Inline review comments (deferred; all findings render inside the summary
   body)
-- `REVIEW_TARGET=standalone` mode (Bitbucket Cloud has no Issues product —
-  the script exits with an error if you set this)
 - APPROVE / REQUEST_CHANGES PR events (Bitbucket has different endpoints
   for approve/request-changes and the feature is optional)
 - Slash-command triggers (Bitbucket Pipelines has no `issue_comment`
@@ -157,11 +155,6 @@ group access**.
 Usually harmless if the base branch is already present in the clone. If the
 review aborts with `ERROR: origin/<ref> is not reachable`, set
 `clone.depth: full` in your pipeline YAML.
-
-### `ERROR: Standalone review mode is not supported for VCS_PROVIDER=bitbucket`
-
-You have `REVIEW_TARGET=standalone` set somewhere. Remove it — standalone
-mode is GitHub-only (Bitbucket Cloud has no Issues product).
 
 ### Nothing posts, review exits 0
 

@@ -49,11 +49,11 @@ That's it — reviews start firing on the next PR. For slash commands (`/ai-pr-r
 The same container image drives PR/MR reviews on GitHub, Bitbucket Cloud,
 and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github`).
 
-| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval | Standalone |
-|----------|---------------|---------|--------|-------------|----------|------------|
-| GitHub | `github` (default) | Yes | Yes | Yes | Yes | Yes |
-| Bitbucket Cloud | `bitbucket` | Yes (findings inside) | No | No | No | No |
-| GitLab | `gitlab` | Yes | Yes | Yes | Yes | Yes |
+| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval |
+|----------|---------------|---------|--------|-------------|----------|
+| GitHub | `github` (default) | Yes | Yes | Yes | Yes |
+| Bitbucket Cloud | `bitbucket` | Yes (findings inside the summary body) | No | No | No |
+| GitLab | `gitlab` | Yes | Yes | Yes | Yes |
 
 See [Bitbucket setup](bitbucket-setup) for Bitbucket Pipelines setup and
 [GitLab setup](gitlab-setup) for GitLab CI/CD setup (token scopes, CI
@@ -101,7 +101,7 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
     github-token: ${{ secrets.GITHUB_TOKEN }}
     max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
     max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
-    max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+    max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '16384' }}
     enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
     parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
     ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
@@ -124,7 +124,7 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
 | `AI_REVIEW_MAX_DIFF_LINES` | Variable | No | Skip review when diff exceeds this many lines (default: `5000`) |
 | `AI_REVIEW_MAX_INLINE` | Variable | No | Max inline comments per run; excess in summary (default: `25`) |
-| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | Variable | No | Output token budget per LLM agent (default: `8192`) |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | Variable | No | Output token budget per LLM agent (default: `16384`) |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | Variable | No | Enable "Apply suggestion" buttons (default: `true`) |
 | `AI_REVIEW_PARALLEL` | Variable | No | Parallel tiered fan-out; set `false` for sequential (default: `true`) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `true`; set to `false` to include upstream merges) |

@@ -26,8 +26,6 @@ fences that the MR author can apply with one click.
 - All existing AI agents and static analyzers (same container image)
 - Self-hosted GitLab instances via `GITLAB_API_URL`
 - Provider-auto retry on transient GitLab API errors (408/429/500-504)
-- Standalone review mode (`REVIEW_TARGET=standalone`) — posts findings as
-  a GitLab Issue with severity labels
 
 ## What does not work on GitLab
 

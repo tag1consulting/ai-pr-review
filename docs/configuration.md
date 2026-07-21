@@ -8,6 +8,8 @@ nav_order: 2
 
 ## Action inputs
 
+This table documents the root `action.yml` (direct-action) inputs. The container action (`container-action/action.yml`) mirrors all of these and adds `image-tag` (container image tag to pull), `registry-token` (deprecated, unused — the image is public), `fail-on-findings` (exit code 2 on `REQUEST_CHANGES`/`COMMENT`, for CI gating), and `context-max-queries` (cap on symbol lookups per run). See [`examples/workflows/pr-review.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/pr-review.yml) for the container-action input set in context.
+
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `provider` | No | `anthropic` | LLM provider |
@@ -16,7 +18,7 @@ nav_order: 2
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
-| `review-target` | No | `pr` | `pr` (PR review) or `standalone` (GitHub issue) |
+| `review-target` | No | `pr` | `pr` (PR review) or `standalone`. Standalone currently only disables merge-commit filtering during diff computation — it does not post findings anywhere (issue-posting was part of the bash engine removed in v2.0.0 and was never reimplemented in Python; tracked in [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
@@ -62,7 +64,8 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
 | `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
-| `AI_REVIEW_FAIL_ON_FINDINGS` | `false` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. |
+
+The `fail-on-findings` and `context-max-queries` container-action inputs (see [CI gate](#ci-gate-fail-on-findings)) are not currently wired into the shipped [`examples/workflows/pr-review.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/pr-review.yml) template — there is no `AI_REVIEW_FAIL_ON_FINDINGS` or `AI_REVIEW_CONTEXT_MAX_QUERIES` repo variable read by that workflow. To use either, set them directly as `with:` values in your own copy of the workflow, or set the underlying `AI_FAIL_ON_FINDINGS` / `AI_CONTEXT_MAX_QUERIES` engine env vars.
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -71,13 +74,13 @@ gh variable set AI_REVIEW_PROVIDER --body "openai" --repo owner/repo
 
 ## Supported VCS providers
 
-Select the VCS provider via the `VCS_PROVIDER` env var (default: `github`). This determines which post-review script is used and how findings are posted.
+Select the VCS provider via the `VCS_PROVIDER` env var (default: `github`). This determines which VCS provider module is used and how findings are posted. `review-target: standalone` is not currently implemented for any provider (see [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)) and is omitted from this table.
 
-| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval | Standalone |
-|----------|---------------|---------|--------|-------------|----------|------------|
-| GitHub | `github` (default) | Yes | Yes | Yes | Yes | Yes |
-| Bitbucket Cloud | `bitbucket` | Yes | No | No | No | No |
-| GitLab | `gitlab` | Yes | Yes | Yes | Yes | Yes |
+| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval |
+|----------|---------------|---------|--------|-------------|----------|
+| GitHub | `github` (default) | Yes | Yes | Yes | Yes |
+| Bitbucket Cloud | `bitbucket` | Yes (findings inside the summary body) | No | No | No |
+| GitLab | `gitlab` | Yes | Yes | Yes | Yes |
 
 See [Bitbucket setup](bitbucket-setup), [GitLab setup](gitlab-setup), or the [Getting Started](getting-started) page for provider-specific configuration.
 
@@ -113,7 +116,7 @@ to change them.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FORCE_FULL_DIFF` | `false` | Bypass the SHA watermark and review the full PR diff. Prefer the `ai-review-rescan` PR label instead — it sets this automatically. |
-| `STANDALONE_DEPTH` | `''` | In standalone mode, diff the last N commits when base and head resolve to the same SHA. If unset, diffs the entire tree. |
+| `STANDALONE_DEPTH` | `50` | Reserved for standalone review mode, which is not currently implemented (see [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). Not currently read outside config loading. |
 | `LLM_RETRY_COUNT` | `2` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings. Findings below this are dropped before suppressions. |
 | `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Disables the docs-only heuristic gate; `architecture-reviewer` always runs regardless of diff content. |

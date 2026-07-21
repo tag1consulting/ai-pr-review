@@ -198,7 +198,7 @@ By default the container runs in `quick` mode (code-reviewer + silent-failure-hu
 | `AI_PARALLEL` | No | `true` (default). Set to `false` to disable the tiered parallel fan-out if your LLM provider's rate limits can't sustain it. |
 | `AI_CONFIDENCE_THRESHOLD` | No | Minimum confidence 0–100 (default: 75) |
 | `AI_MAX_INLINE` | No | Max inline comments per run (default: 25) |
-| `AI_MAX_TOKENS_PER_AGENT` | No | Max tokens per agent call (default: 8192) |
+| `AI_MAX_TOKENS_PER_AGENT` | No | Max tokens per agent call (default: 16384) |
 | `AI_ENABLE_SUGGESTIONS` | No | `true` (default). Enable "Apply suggestion" buttons on inline comments (GitHub and GitLab; ignored on Bitbucket). |
 | `LLM_PROMPT_CACHING` | No | `auto` (default). Enable Anthropic/Bedrock prompt caching. `true` force-enables; `false` force-disables. |
 | `AI_CACHE_PRIMING` | No | `false` (default). Serialize cache-writing calls before parallel fan-out. Enable in rate-limited environments. |
