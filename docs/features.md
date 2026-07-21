@@ -7,6 +7,12 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.6
+
+**Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision.** A judge-downranked High-severity finding could vanish from the headline ("Overall Risk: None") on GitHub and Bitbucket even though the review still correctly requested changes and posted the finding inline. Fixed with a shared headline calculation both providers now use, plus two related fixes: a prompt-injection path that let an untrusted agent hide its own finding was closed, and a Bitbucket-specific bug that could blank the entire findings section when every finding happened to be out-of-diff was fixed.
+
+`REVIEW_TARGET=standalone` now emits a runtime deprecation warning — its original behavior (posting findings to an issue) was never carried over to the Python engine, and the value now only affects merge-commit filtering. `github_repository` is now stripped of whitespace like every other environment-sourced value. A VCS API error during `/ai-pr-review dismiss`/`false-positive`/`wont-fix` now surfaces as a Checks-tab annotation instead of only a run-log warning, so a failed dismiss is no longer indistinguishable from a successful one at a glance.
+
 ## What's new in v2.4.5
 
 **Fixed the merge-commit filter (`ignore_merge_commits`) silently failing on every incremental review, and unbounded fallback diffs.** No production container configures a git identity, so the filter's cherry-pick step failed on the first commit of every incremental review, then silently fell back to an unfiltered diff unbounded by watermark age — on one PR with a stale watermark this produced a 21,013-line diff that tripped the size skip with no explanation. Fixed to work regardless of container identity, to fall back to a bounded diff on any filter failure, and to surface the failure reason in skip messages instead of swallowing it.

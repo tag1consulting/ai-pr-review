@@ -201,6 +201,61 @@ def test_post_findings_approve_with_only_out_of_diff_findings_still_renders_them
         "an out_of_diff finding must still render in Bitbucket's flat "
         f"findings_block even when finding_total==0 triggers APPROVE; got: {raw[:400]!r}"
     )
+    # The summary line must not claim "Findings: 0" directly above a rendered,
+    # non-empty findings list -- that reintroduces the #622 bug one level
+    # deeper: a technically-non-empty count (0) that contradicts the content
+    # right below it. "0 in the diff" is the intentionally qualified wording.
+    assert "**Findings:** 0 in the diff" in raw, (
+        f"summary line must not read a bare 'Findings: 0' beside a rendered "
+        f"out_of_diff finding; got: {raw[:400]!r}"
+    )
+    assert "**Findings:** 0\n" not in raw and "**Findings:** 0\n\n" not in raw, (
+        f"bare 'Findings: 0' would contradict the rendered finding below it; got: {raw[:400]!r}"
+    )
+
+
+def test_post_findings_comment_with_only_out_of_diff_findings_does_not_contradict() -> None:
+    """Same class of bug as the APPROVE case above, reachable via event=COMMENT:
+    an all-out_of_diff finding set makes compute_headline() return risk="None"
+    (not "Unknown", since no agents failed), so the COMMENT+Unknown+empty
+    branch doesn't catch it and it falls to the generic trailing branch, which
+    must also avoid a bare "Findings: 0" beside the rendered finding."""
+    captured: list[dict] = []
+    existing = _existing_summary(comment_id=43)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json={"values": [existing]})
+        if req.method == "PUT":
+            import json
+
+            captured.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 43})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [
+        Finding(
+            severity="Low",
+            confidence=80,
+            finding="another style nit outside the diff",
+            source="phpcs",
+            file="legacy.php",
+            line=901,
+            out_of_diff=True,
+        )
+    ]
+    result = prov.post_findings(
+        findings, DiffContext(diff_text="", head_sha=_HEAD), event="COMMENT"
+    )
+    assert result.ok
+
+    raw = captured[0]["content"]["raw"]
+    assert "another style nit outside the diff" in raw
+    assert "**Findings:** 0 in the diff" in raw, (
+        f"summary line must not read a bare 'Findings: 0' beside a rendered "
+        f"out_of_diff finding; got: {raw[:400]!r}"
+    )
 
 
 def test_post_findings_approve_with_no_findings_renders_approved_block() -> None:

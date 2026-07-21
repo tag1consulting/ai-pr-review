@@ -361,6 +361,24 @@ def _render_combined_body(
             "the review."
         )
         findings_block = ""
+    elif event == "APPROVE" and finding_total == 0:
+        # findings is non-empty here (the `not findings` branch above already
+        # caught the empty case) but every finding is out_of_diff, so
+        # compute_headline()'s deliberately narrower count reads 0. Since
+        # Bitbucket has no collapsed section to hide those findings in (see
+        # this function's docstring), findings_block below still renders them
+        # — say so explicitly rather than printing "Findings: 0" directly
+        # above a non-empty list.
+        heading = "## AI Review: Approved"
+        summary_block = (
+            f"{severity_icon(risk)} **Overall Risk:** {risk} | "
+            "**Findings:** 0 in the diff\n\n"
+            "No Critical or High findings in the diff. The changes look good "
+            "— findings below are pre-existing issues on unchanged lines."
+        )
+        findings_block = "### Findings (informational)\n" + join_findings(
+            format_body_finding(f) for f in findings
+        )
     elif event == "APPROVE":
         heading = "## AI Review: Approved"
         summary_block = (
@@ -370,6 +388,19 @@ def _render_combined_body(
             "findings are informational only."
         )
         findings_block = "### Findings (informational)\n" + join_findings(
+            format_body_finding(f) for f in findings
+        )
+    elif finding_total == 0:
+        # Reachable for event == "COMMENT" with a non-empty, all-out_of_diff
+        # finding set (risk == "None", not "Unknown", so the branch above
+        # doesn't catch it) — same rationale as the APPROVE+finding_total==0
+        # branch above: don't print "Findings: 0" beside a rendered list.
+        heading = "## AI Review Findings"
+        summary_block = (
+            f"{severity_icon(risk)} **Overall Risk:** {risk} | "
+            "**Findings:** 0 in the diff"
+        )
+        findings_block = "### Findings\n" + join_findings(
             format_body_finding(f) for f in findings
         )
     else:
