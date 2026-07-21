@@ -213,6 +213,79 @@ def test_resolve_thread_401_emits_checks_tab_annotation_but_exit_0(
     assert result.stderr.count("Bad credentials") == 1
 
 
+def test_dismiss_put_failure_annotation_does_not_claim_finding_unresolved(monkeypatch) -> None:
+    """A thread that resolves successfully, followed by a failing dismiss PUT,
+    must not have its Checks-tab annotation claim the finding was "NOT
+    dismissed/resolved" -- the thread WAS resolved; only the secondary
+    review-dismissal step failed. Same request shape as
+    test_dismiss_put_failure_surfaces_as_warning_not_silent, with
+    GITHUB_ACTIONS set so the annotation path is exercised.
+    """
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(422, json={"message": "Review is not in a dismissable state"})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41))
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "::error::ai-pr-review dismiss-inline:" in result.stderr
+    assert "NOT dismissed/resolved" not in result.stderr
+    assert "thread was resolved, but a follow-up step" in result.stderr
+
+
+def test_annotation_silent_when_github_actions_unset(monkeypatch) -> None:
+    """The ::error:: annotation must not fire outside GitHub Actions -- e.g.
+    local dev runs or non-GHA CI -- even when the underlying command hit an
+    API error. Same 401 scenario as
+    test_resolve_thread_401_emits_checks_tab_annotation_but_exit_0, with
+    GITHUB_ACTIONS left unset.
+    """
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(401, json={"message": "Bad credentials"})
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41))
+
+    assert result.exit_code == 0, result.output
+    assert "::warning::dismiss-inline: resolve thread" in result.stderr
+    assert "::error::" not in result.stderr
+
+
 def test_missing_review_id_falls_back_to_thread_review_and_still_resolves(monkeypatch) -> None:
     # Note: a parent comment with no resolvable pull_request_review_id implies
     # the thread it belongs to also carries no review (the comment's review

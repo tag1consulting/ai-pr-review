@@ -285,6 +285,31 @@ def test_list_reviews_401_emits_checks_tab_annotation_but_exit_0(monkeypatch) ->
     assert "NOT dismissed/resolved" in result.stderr
 
 
+def test_list_reviews_401_annotation_silent_when_github_actions_unset(monkeypatch) -> None:
+    """The ::error:: annotation must not fire outside GitHub Actions -- e.g.
+    local dev runs or non-GHA CI -- even when the underlying command hit an
+    API error. Same 401 scenario as
+    test_list_reviews_401_emits_checks_tab_annotation_but_exit_0, with
+    GITHUB_ACTIONS left unset.
+    """
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(3, feedback_loop=False))
+
+    assert result.exit_code == 0, result.output
+    assert "::warning::dismiss: list reviews" in result.stderr
+    assert "::error::" not in result.stderr
+
+
 def test_non_github_provider_fails_closed_with_clear_message() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, _base_args(1), env={"VCS_PROVIDER": "gitlab"})

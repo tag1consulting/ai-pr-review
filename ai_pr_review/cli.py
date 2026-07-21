@@ -666,7 +666,9 @@ def dismiss(
     for error in result.errors:
         logger.warning("dismiss: %s", error)
         click.echo(f"::warning::dismiss: {error}", err=True)
-    _emit_dismiss_failure_annotation("dismiss", result.errors)
+    _emit_dismiss_failure_annotation(
+        "dismiss", result.errors, thread_resolved=result.thread_resolved
+    )
 
     is_body_finding = bool(result.feedback_source or result.feedback_file)
     if not is_body_finding:
@@ -807,11 +809,15 @@ def dismiss_inline(
     for error in result.errors:
         logger.warning("dismiss-inline: %s", error)
         click.echo(f"::warning::dismiss-inline: {error}", err=True)
-    _emit_dismiss_failure_annotation("dismiss-inline", result.errors)
+    _emit_dismiss_failure_annotation(
+        "dismiss-inline", result.errors, thread_resolved=result.thread_resolved
+    )
     click.echo(result.reply)
 
 
-def _emit_dismiss_failure_annotation(command_label: str, errors: tuple[str, ...]) -> None:
+def _emit_dismiss_failure_annotation(
+    command_label: str, errors: tuple[str, ...], *, thread_resolved: bool = False
+) -> None:
     """Emit a GitHub Actions ``::error::`` annotation when a dismiss/wont-fix/
     false-positive command hit a VCS API error (#611).
 
@@ -827,15 +833,30 @@ def _emit_dismiss_failure_annotation(command_label: str, errors: tuple[str, ...]
     review-posting path. Deliberately omits the raw error strings (already
     logged as ``::warning::`` by the caller) to avoid duplicating any
     credential fragment into the more widely-visible annotation.
+
+    ``thread_resolved`` distinguishes two distinct failure shapes: the finding
+    itself may still be genuinely unresolved (thread resolution failed), or the
+    thread may have resolved fine while a secondary step -- dismissing the
+    stale review, or the PR-wide auto-approve -- errored afterward. Asserting
+    "NOT dismissed/resolved" in the second case would contradict the CLI's own
+    reply text (which correctly says the thread was resolved) and mislead
+    anyone reading the Checks tab into re-running a command that already
+    succeeded.
     """
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
     if not errors:
         return
+    outcome = (
+        "the thread was resolved, but a follow-up step (review dismissal or "
+        "PR approval) failed."
+        if thread_resolved
+        else "the finding was likely NOT dismissed/resolved."
+    )
     click.echo(
         f"::error::ai-pr-review {command_label}: the command could not complete "
         f"due to {len(errors)} API error(s); see the ::warning:: lines above "
-        "for detail. The finding was likely NOT dismissed/resolved.",
+        f"for detail. {outcome}",
         err=True,
     )
 
