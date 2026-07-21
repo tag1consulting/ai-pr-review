@@ -255,6 +255,36 @@ def test_missing_finding_id_no_active_ids(monkeypatch) -> None:
     assert "no active body-level findings" in result.stdout
 
 
+def test_list_reviews_401_emits_checks_tab_annotation_but_exit_0(monkeypatch) -> None:
+    """#611: a 401 listing bot reviews (the API call backing F<n> classification)
+    must not be a silent green success. dismiss_by_finding_id classifies as
+    UNKNOWN with provider._errors populated, which the "not found" reply
+    already distinguishes with "due to an API error" -- this test additionally
+    covers that the CLI now also emits a Checks-tab ::error:: annotation for
+    that case, on top of the existing ::warning:: line, while still exiting 0
+    so the reply keeps posting via the workflow's fallback token.
+    """
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(3, feedback_loop=False))
+
+    assert result.exit_code == 0, result.output
+    assert "due to an API error" in result.stdout
+    assert "::warning::dismiss: list reviews" in result.stderr
+    assert "401" in result.stderr
+    assert "::error::ai-pr-review dismiss:" in result.stderr
+    assert "NOT dismissed/resolved" in result.stderr
+
+
 def test_non_github_provider_fails_closed_with_clear_message() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, _base_args(1), env={"VCS_PROVIDER": "gitlab"})

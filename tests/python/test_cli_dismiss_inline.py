@@ -174,6 +174,45 @@ def test_dismiss_put_failure_surfaces_as_warning_not_silent(monkeypatch) -> None
     assert "422" in result.stderr
 
 
+def test_resolve_thread_401_emits_checks_tab_annotation_but_exit_0(
+    monkeypatch,
+) -> None:
+    """#611: a 401 on the resolveReviewThread GraphQL mutation must not be a
+    silent green success. The command must still exit 0 (so the workflow step
+    still writes reply_b64 and posts the fallback reply via a different,
+    working token -- see the dismiss/dismiss-inline docstrings), but it must
+    also emit a GitHub Actions ::error:: annotation so the failure is visible
+    on the PR's Checks tab, not just as a ::warning:: buried in the run log.
+    """
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(401, json={"message": "Bad credentials"})
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41))
+
+    assert result.exit_code == 0, result.output
+    assert "::warning::dismiss-inline: resolve thread" in result.stderr
+    assert "401" in result.stderr
+    assert "::error::ai-pr-review dismiss-inline:" in result.stderr
+    assert "NOT dismissed/resolved" in result.stderr
+    # The raw provider error text must not be duplicated into the annotation.
+    assert result.stderr.count("Bad credentials") == 1
+
+
 def test_missing_review_id_falls_back_to_thread_review_and_still_resolves(monkeypatch) -> None:
     # Note: a parent comment with no resolvable pull_request_review_id implies
     # the thread it belongs to also carries no review (the comment's review
