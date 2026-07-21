@@ -94,6 +94,7 @@ def test_secrets_and_variables_stripped_of_whitespace(
     monkeypatch.setenv("AI_REVIEW_MODE", "\tfull\n")
     monkeypatch.setenv("VCS_PROVIDER", " gitlab ")
     monkeypatch.setenv("REVIEW_TARGET", "standalone\t")
+    monkeypatch.setenv("GITHUB_REPOSITORY", " owner/repo\n")
 
     cfg = ReviewConfig.from_env()
     assert cfg.anthropic_api_key == "secret-key"
@@ -112,6 +113,7 @@ def test_secrets_and_variables_stripped_of_whitespace(
     assert cfg.review_mode == "full"
     assert cfg.vcs_provider == "gitlab"
     assert cfg.review_target == "standalone"
+    assert cfg.github_repository == "owner/repo"
 
 
 def test_gh_token_falls_back_to_github_token_and_is_stripped(

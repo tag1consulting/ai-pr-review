@@ -509,7 +509,7 @@ class ReviewConfig(BaseModel):
             bedrock_api_url=os.environ.get("BEDROCK_API_URL", "").strip(),
             openai_base_url=os.environ.get("OPENAI_BASE_URL", "").strip(),
             gh_token=(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip(),
-            github_repository=os.environ.get("GITHUB_REPOSITORY", ""),
+            github_repository=os.environ.get("GITHUB_REPOSITORY", "").strip(),
             bitbucket_email=os.environ.get("BITBUCKET_EMAIL", ""),
             bitbucket_api_token=os.environ.get("BITBUCKET_API_TOKEN", "").strip(),
             bitbucket_workspace=os.environ.get("BITBUCKET_WORKSPACE", ""),
