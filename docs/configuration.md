@@ -64,8 +64,8 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
 | `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
-
-The `fail-on-findings` and `context-max-queries` container-action inputs (see [CI gate](#ci-gate-fail-on-findings)) are not currently wired into the shipped [`examples/workflows/pr-review.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/pr-review.yml) template — there is no `AI_REVIEW_FAIL_ON_FINDINGS` or `AI_REVIEW_CONTEXT_MAX_QUERIES` repo variable read by that workflow. To use either, set them directly as `with:` values in your own copy of the workflow, or set the underlying `AI_FAIL_ON_FINDINGS` / `AI_CONTEXT_MAX_QUERIES` engine env vars.
+| `AI_REVIEW_FAIL_ON_FINDINGS` | `false` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. Container-action only (see [CI gate](#ci-gate-fail-on-findings)). |
+| `AI_REVIEW_CONTEXT_MAX_QUERIES` | `200` | `context-max-queries` | Cap on ripgrep symbol-lookup queries shared across all agents in a run. Increase if logs show `context enrichment: max_queries=N reached`. Container-action only. |
 
 To set a variable via the GitHub CLI:
 ```bash

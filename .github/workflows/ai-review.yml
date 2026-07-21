@@ -270,8 +270,8 @@ jobs:
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
           # vars.AI_REVIEW_MAX_INLINE caps inline comments per run (default 25).
           max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
-          # vars.AI_REVIEW_MAX_TOKENS_PER_AGENT caps output tokens per agent (default 8192).
-          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          # vars.AI_REVIEW_MAX_TOKENS_PER_AGENT caps output tokens per agent (default 16384).
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '16384' }}
           # vars.AI_REVIEW_ENABLE_SUGGESTIONS enables "Apply suggestion" buttons (default true).
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
