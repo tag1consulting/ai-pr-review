@@ -40,7 +40,27 @@ def get_retry_base_delay() -> int:
 
 
 def resolve_temperature(raw: float, model_id: str) -> float | None:
-    """Return None when the model doesn't accept temperature; else the clamped value."""
+    """Return None when the model doesn't accept temperature; else the clamped value.
+
+    Returning None (which makes the provider modules omit the `temperature`
+    field entirely) is REQUIRED for the models listed below, not merely
+    conservative. Verified against the live Anthropic Messages API on
+    2026-07-21 (tests/canary/temperature_verify.py), identical for
+    claude-sonnet-5 and claude-opus-4-8:
+
+        temperature omitted -> HTTP 200
+        temperature=0.0     -> HTTP 400  "`temperature` is deprecated for this model."
+        temperature=1.0     -> HTTP 200  (1.0 is the model's default, so a no-op)
+
+    Consequences, do not "fix" this by making temperature apply:
+      * An explicit temperature is a hard 400 for these models -- including the
+        temperature=0.0 the judge pass is coded for (judge.py). Sending it would
+        break the judge entirely. This strip is what keeps that call valid.
+      * There is no lever below 1.0. Only omission (or the default 1.0) is
+        accepted, so AI_TEMPERATURE cannot be made to lower sampling entropy for
+        these models. Review-consistency work must lean on prompt guidance and
+        the confidence threshold instead, not on temperature.
+    """
     lower = model_id.lower()
     if (
         "opus-4-8" in lower
