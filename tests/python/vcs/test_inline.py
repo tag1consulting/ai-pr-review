@@ -107,6 +107,26 @@ def test_partition_findings_respects_cap() -> None:
     assert len(body) == 3
 
 
+def test_partition_findings_excludes_demoted_to_body() -> None:
+    """A judge-downranked finding must always land in body, regardless of
+    eligibility or cap headroom, and must not consume an inline slot that a
+    later eligible, non-demoted finding could otherwise take."""
+    findings = [
+        _f(file="a.py", line=1),
+        _f(file="a.py", line=2, demoted_to_body=True),
+        _f(file="a.py", line=3),
+    ]
+    eligible = {("a.py", 1), ("a.py", 2), ("a.py", 3)}
+    inline, body = partition_findings(findings, eligible_new=eligible, max_inline=2)
+    assert [f.line for f in inline] == [1, 3], (
+        "the demoted finding at line 2 must not consume a cap slot; "
+        "line 3 should take the second inline slot instead"
+    )
+    assert len(body) == 1
+    assert body[0].line == 2
+    assert body[0].demoted_to_body is True
+
+
 def test_split_body_findings_separates_ood() -> None:
     findings = [
         _f(file="a.py", line=1, out_of_diff=False),
