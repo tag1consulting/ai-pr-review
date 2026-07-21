@@ -27,6 +27,12 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
+## What's new in v2.4.6
+
+**Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision on GitHub and Bitbucket**, plus a related prompt-injection path and a Bitbucket findings-blanking bug. Also: a runtime deprecation warning for `REVIEW_TARGET=standalone`, a whitespace-stripping fix for `github_repository`, and a Checks-tab annotation when a `/ai-pr-review dismiss` command hits a VCS API error.
+
+See [Features → v2.4.6](features#whats-new-in-v246) for details.
+
 ## What's new in v2.4.5
 
 **Fixed the merge-commit filter silently failing in production, plus faster native-arm64 release builds.** The `ignore_merge_commits` filter no longer silently falls back to unbounded diffs when a container has no git identity configured, and release container builds now build `linux/amd64`/`linux/arm64` natively instead of emulating arm64 via QEMU.
