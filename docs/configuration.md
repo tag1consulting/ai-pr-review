@@ -18,7 +18,7 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
-| `review-target` | No | `pr` | `pr` (PR review) or `standalone`. Standalone currently only disables merge-commit filtering during diff computation — it does not post findings anywhere (issue-posting was part of the bash engine removed in v2.0.0 and was never reimplemented in Python; tracked in [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). |
+| `review-target` | No | `pr` | `pr` (PR review) or `standalone` (deprecated — emits a runtime warning). Standalone currently only disables merge-commit filtering during diff computation — it does not post findings anywhere (issue-posting was part of the bash engine removed in v2.0.0 and was never reimplemented in Python; formal removal is planned for a future major version; tracked in [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |

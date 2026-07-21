@@ -59,10 +59,12 @@ inputs:
 
   review-target:
     description: >
-      pr (default) or standalone. Standalone currently only disables
-      merge-commit filtering during diff computation — it does not post
-      findings anywhere (issue-posting was removed with the bash engine
-      in v2.0.0 and has not been reimplemented).
+      pr (default) or standalone (deprecated, emits a runtime warning — see
+      issue #623). Standalone currently only disables merge-commit filtering
+      during diff computation — it does not post findings anywhere
+      (issue-posting was removed with the bash engine in v2.0.0 and has not
+      been reimplemented; formal removal is planned for a future major
+      version).
     required: false
     default: 'pr'
 

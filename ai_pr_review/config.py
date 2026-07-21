@@ -134,6 +134,24 @@ def _check_unknown_ai_vars() -> None:
         )
 
 
+def _check_deprecated_review_target(value: str) -> None:
+    """Warn when REVIEW_TARGET=standalone is set.
+
+    Standalone mode was documented as posting findings to a GitHub/GitLab
+    Issue, but that behavior was never ported from the bash engine (removed
+    in v2.0.0) to the Python engine. The only remaining effect is disabling
+    merge-commit filtering in diff/compute.py. See #623.
+    """
+    if value == "standalone":
+        print(
+            "WARNING: REVIEW_TARGET=standalone no longer posts findings to an "
+            "issue (see https://github.com/tag1consulting/ai-pr-review/issues/623); "
+            "this value now only disables merge-commit filtering during diff "
+            "computation. Formal removal is planned for a future major version.",
+            file=sys.stderr,
+        )
+
+
 def _validate_names_tuple(
     values: tuple[str, ...],
     valid_names: frozenset[str],
@@ -400,6 +418,8 @@ class ReviewConfig(BaseModel):
     def from_env(cls) -> ReviewConfig:
         """Load config from environment variables. Raises ConfigError on unknown AI_* vars."""
         _check_unknown_ai_vars()
+
+        _check_deprecated_review_target(os.environ.get("REVIEW_TARGET", "pr").strip())
 
         def _bool(key: str, default: bool = False) -> bool:
             return os.environ.get(key, "true" if default else "false").lower() in (
