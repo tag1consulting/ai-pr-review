@@ -31,13 +31,15 @@
 #   AI_REVIEW_MODEL_PREMIUM      — override premium model ID (full mode only)
 #   AI_REVIEW_MAX_DIFF_LINES     — skip review when diff exceeds N lines (default: 5000)
 #   AI_REVIEW_MAX_INLINE         — max inline comments per run (default: 25)
-#   AI_REVIEW_MAX_TOKENS_PER_AGENT — output token budget per LLM agent (default: 8192)
+#   AI_REVIEW_MAX_TOKENS_PER_AGENT — output token budget per LLM agent (default: 16384)
 #   AI_REVIEW_ENABLE_SUGGESTIONS — "Apply suggestion" buttons on inline comments (default: true)
 #   AI_REVIEW_PARALLEL           — parallel tiered fan-out (default: true)
 #   AI_REVIEW_IGNORE_MERGE_COMMITS — strip upstream base-branch merge commits (default: true)
+#   AI_REVIEW_FAIL_ON_FINDINGS   — exit code 2 on REQUEST_CHANGES/COMMENT, for CI gates (default: true)
 #   AI_REVIEW_MODE_DEFAULT       — default mode used when /ai-pr-review rescan fires (default: quick)
 #   AI_REVIEW_FEEDBACK_LOOP      — enable learning loop (default: false; GitHub-only)
-#   AI_REVIEW_CONTEXT_ENRICHMENT — tree-sitter symbol-context injection (default: false)
+#   AI_REVIEW_CONTEXT_ENRICHMENT — tree-sitter symbol-context injection (default: true)
+#   AI_REVIEW_CONTEXT_MAX_QUERIES — cap on symbol-lookup queries per run (default: 200)
 #   AI_REVIEW_SARIF_PATHS        — comma-separated SARIF 2.1.0 paths to merge as findings
 #   AI_REVIEW_EXCLUDE_PATTERNS   — comma-separated glob patterns to exclude from the diff
 #   AI_REVIEW_EXCLUDE_PATTERNS_MODE — 'append' (default) or 'replace' for exclude-patterns
@@ -154,17 +156,27 @@ jobs:
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
           # AI_REVIEW_MAX_INLINE: max inline comments per run; excess goes to summary (default: 25)
           max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
-          # AI_REVIEW_MAX_TOKENS_PER_AGENT: output token budget per LLM agent (default: 8192)
-          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          # AI_REVIEW_MAX_TOKENS_PER_AGENT: output token budget per LLM agent (default: 16384)
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '16384' }}
           # AI_REVIEW_ENABLE_SUGGESTIONS: "Apply suggestion" buttons on inline comments (default: true)
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           # AI_REVIEW_PARALLEL: parallel tiered fan-out; set false to go sequential (default: true)
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
           # AI_REVIEW_IGNORE_MERGE_COMMITS: strip upstream base-branch merges from diff (default: true)
           ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
-          # --- Opt-in capabilities (Python engine only — the default since v1.0.0) ---
-          # AI_REVIEW_CONTEXT_ENRICHMENT: tree-sitter + ripgrep symbol-context injection (default: false)
-          context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
+          # AI_REVIEW_FAIL_ON_FINDINGS: exit code 2 on REQUEST_CHANGES/COMMENT, for CI
+          # gates (e.g. blocking Renovate auto-merge until the bot approves) (default: true).
+          # Set AI_REVIEW_FAIL_ON_FINDINGS=false to make the review job non-blocking.
+          fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'true' }}
+          # --- Capabilities (Python engine only — the default since v1.0.0) ---
+          # AI_REVIEW_CONTEXT_ENRICHMENT: tree-sitter + ripgrep symbol-context injection
+          # (default: true — matches the container image's own default, since it ships
+          # both tree-sitter-language-pack and ripgrep). Set to false to disable.
+          context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}
+          # AI_REVIEW_CONTEXT_MAX_QUERIES: cap on ripgrep symbol-lookup queries per run,
+          # shared across all agents (default: 200). Increase if logs show
+          # "context enrichment: max_queries=N reached; remaining symbols skipped".
+          context-max-queries: ${{ vars.AI_REVIEW_CONTEXT_MAX_QUERIES || '200' }}
           # AI_REVIEW_SARIF_PATHS: comma-separated SARIF 2.1.0 file paths to merge as findings
           # Example: 'results/codeql.sarif,results/trivy.sarif'
           sarif-paths: ${{ vars.AI_REVIEW_SARIF_PATHS || '' }}

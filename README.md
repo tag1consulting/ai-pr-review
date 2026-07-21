@@ -50,11 +50,11 @@ That's it — reviews start firing on the next PR.
 The same container image drives PR/MR reviews on GitHub, Bitbucket Cloud,
 and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github`).
 
-| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval | Standalone |
-|----------|---------------|---------|--------|-------------|----------|------------|
-| GitHub | `github` (default) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Bitbucket Cloud | `bitbucket` | ✅ | ❌ | ❌ | ❌ | ❌ |
-| GitLab | `gitlab` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval |
+|----------|---------------|---------|--------|-------------|----------|
+| GitHub | `github` (default) | ✅ | ✅ | ✅ | ✅ |
+| Bitbucket Cloud | `bitbucket` | ✅ (findings inside the summary body) | ❌ | ❌ | ❌ |
+| GitLab | `gitlab` | ✅ | ✅ | ✅ | ✅ |
 
 See [docs/bitbucket-setup.md](docs/bitbucket-setup.md) for Bitbucket Pipelines
 setup and [docs/gitlab-setup.md](docs/gitlab-setup.md) for GitLab CI/CD setup
@@ -237,7 +237,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
 | `review-mode` | No | `quick` | `quick` or `full` |
-| `review-target` | No | `pr` | `pr` (PR review) or `standalone` (GitHub issue) |
+| `review-target` | No | `pr` | `pr` (PR review) or `standalone`. Standalone currently only disables merge-commit filtering during diff computation — it does not post findings anywhere; issue-posting was part of the bash engine removed in v2.0.0 and has not been reimplemented. |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |

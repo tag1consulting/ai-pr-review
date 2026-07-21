@@ -115,13 +115,23 @@ The action auto-detects languages from file extensions and injects per-language 
 | Profile file | Covers |
 |---|---|
 | `go.md` | Go |
-| `php.md` | PHP / Drupal |
 | `python.md` | Python |
+| `javascript.md` | JavaScript |
+| `typescript.md` | TypeScript |
+| `php.md` | PHP / Drupal |
 | `shell.md` | Shell / Bash |
-| `typescript.md` | TypeScript / JavaScript |
 | `ruby.md` | Ruby / Rails |
 | `rust.md` | Rust |
 | `java.md` | Java |
 | `c++.md` | C and C++ |
+| `terraform.md` | Terraform |
+| `yaml.md` | YAML |
+| `kotlin.md` | Kotlin |
+| `swift.md` | Swift |
+| `csharp.md` | C# |
+| `scala.md` | Scala |
+| `sql.md` | SQL |
+| `lua.md` | Lua |
+| `perl.md` | Perl |
 
 To add a new language, create a `language-profiles/<language>.md` file. The filename (without extension) must match the lowercase language key returned by `detect_language()` in `ai_pr_review/languages.py` for the relevant file extensions.

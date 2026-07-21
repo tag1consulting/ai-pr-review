@@ -87,10 +87,10 @@ real typo or malicious downgrade.
 
 | `verify` value | Extracts from finding | Authoritative source |
 |---|---|---|
-| `github-release` | `owner/repo@vN.N.N` | `gh api repos/{owner}/{repo}/git/ref/tags/{tag}` |
+| `github-releases` | `owner/repo@vN.N.N` | `gh api repos/{owner}/{repo}/git/ref/tags/{tag}` |
 | `npm` | `pkg@version` or `"pkg": "version"` | `registry.npmjs.org` |
 | `pypi` | `pkg==version` | `pypi.org/pypi/{pkg}/{version}/json` |
-| `go-module` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
+| `go` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
 | `cargo` | `pkg = "version"` or `pkg@version` | `crates.io` |
 | `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com` |
 | `ruby-org` | Ruby `X.Y.Z` MRI version | `cache.ruby-lang.org/pub/ruby/{MAJ.MIN}/ruby-{MAJ.MIN.PATCH}.tar.gz` |

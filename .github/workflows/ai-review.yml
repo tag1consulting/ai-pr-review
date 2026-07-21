@@ -270,20 +270,22 @@ jobs:
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
           # vars.AI_REVIEW_MAX_INLINE caps inline comments per run (default 25).
           max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
-          # vars.AI_REVIEW_MAX_TOKENS_PER_AGENT caps output tokens per agent (default 8192).
-          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          # vars.AI_REVIEW_MAX_TOKENS_PER_AGENT caps output tokens per agent (default 16384).
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '16384' }}
           # vars.AI_REVIEW_ENABLE_SUGGESTIONS enables "Apply suggestion" buttons (default true).
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           # vars.AI_REVIEW_IGNORE_MERGE_COMMITS strips upstream base-branch
           # merge commits before diffing. Trusted repo variable; default true.
           ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
-          # vars.AI_REVIEW_FAIL_ON_FINDINGS exits with code 2 on REQUEST_CHANGES or COMMENT.
-          # Leave unset (false) for normal dogfood runs; set true to gate Renovate auto-merge.
-          fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'false' }}
-          # --- Epic 3: opt-in capabilities (Python engine only) ---
+          # vars.AI_REVIEW_FAIL_ON_FINDINGS exits with code 2 on REQUEST_CHANGES or COMMENT,
+          # gating this repo's own required checks on the bot's approval (default: true).
+          # Set AI_REVIEW_FAIL_ON_FINDINGS=false to make dogfood runs non-blocking.
+          fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'true' }}
+          # --- Epic 3: capabilities (Python engine only) ---
           # vars.AI_REVIEW_CONTEXT_ENRICHMENT enables tree-sitter symbol-context
           # injection into agent prompts (Capability A). Requires engine=python.
-          context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'false' }}
+          # Default true, matching the container image's own default.
+          context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}
           # SARIF findings from the sarif-prep job (Capability B). Paths are
           # workspace-relative; the ingestor silently skips any missing files.
           # vars.AI_REVIEW_SARIF_PATHS allows repo operators to override or extend

@@ -80,7 +80,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
           max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
-          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '8192' }}
+          max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '16384' }}
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
           ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
@@ -109,7 +109,7 @@ jobs:
 ```
 
 Pin to a specific version by replacing `@main` with a tag or commit SHA
-(e.g. `@v0.11.0` or `@cb9d7ee`).
+(e.g. `@v2.4.5` or `@cb9d7ee`).
 
 ## 2. Configure secrets and variables
 
@@ -128,7 +128,7 @@ In the **consuming** repository's settings:
 | `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | Override the premium model ID (full mode only) |
 | `AI_REVIEW_MAX_DIFF_LINES` | `5000` | Skip review when diff exceeds this many lines |
 | `AI_REVIEW_MAX_INLINE` | `25` | Max inline comments per run; excess routed to the summary body |
-| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `8192` | Output token budget per LLM agent call |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `16384` | Output token budget per LLM agent call |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | Parallel tiered fan-out; set `false` if you hit provider rate limits |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | Strip upstream base-branch merges from the diff before review |

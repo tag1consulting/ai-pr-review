@@ -247,23 +247,7 @@ After all agents complete:
 
 ## Standalone review mode
 
-In addition to reviewing open PRs, the action supports a **standalone** mode that reviews any branch or commit SHA and posts findings as a GitHub issue (or GitLab issue) rather than a PR review.
-
-### Triggering
-
-Via `workflow_dispatch` or programmatically by setting `REVIEW_TARGET=standalone` along with the required provider credentials and repository env vars.
-
-### Behavior differences
-
-- No PR comment or PR review is posted
-- All findings are posted as a single GitHub/GitLab issue
-- SHA watermark / incremental diff is skipped (always full diff)
-- `REVIEW_TARGET=standalone` is rejected for Bitbucket (no Issues product)
-
-### Issue output format
-
-- Title: `🚨 AI Review: High risk — abc1234 on main` (icon is severity-dependent via `severity_icon`)
-- Labels: `ai-review` (always), `ai-review-action-needed` (Critical/High)
+`review-target: standalone` (`REVIEW_TARGET=standalone`) is accepted by the engine, but the only behavior it currently changes is disabling merge-commit filtering in diff computation (`ai_pr_review/diff/compute.py`). Posting findings as a GitHub/GitLab issue was part of the bash engine removed in v2.0.0 and has not been reimplemented in the Python engine — no code path in `ai_pr_review/` currently creates an issue. Tracked as a known gap; see the repository issue tracker before relying on `standalone` for anything beyond `pr` mode's default behavior.
 
 ## Multi-arch container image
 
@@ -305,19 +289,35 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_PARALLEL` | `true` | Tiered parallel agent execution |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run |
-| `AI_MAX_TOKENS_PER_AGENT` | `8192` | Max output tokens per LLM agent call; clamped to [256, 65536] |
+| `AI_MAX_TOKENS_PER_AGENT` | `16384` | Max output tokens per LLM agent call; clamped to [256, 65536] |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons (GitHub and GitLab; ignored on Bitbucket) |
 | `LLM_PROMPT_CACHING` | `auto` | Anthropic/Bedrock prompt caching. Valid: `auto`, `true`, `false` |
 | `AI_CACHE_PRIMING` | `false` | Opt-in cache-writing serialization before parallel fan-out |
+| `AI_JUDGE_PASS` | `true` | Run the cheap-model judge pass (Phase 2.75) after findings are extracted. Set to `false` to disable. |
+| `AI_FAIL_ON_FINDINGS` | `false` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. CI-gate use case. |
+| `AI_ANALYZER_CONCURRENCY` | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `AI_PARALLEL=false`. |
+| `AI_ANALYZER_DIFF_SCOPE` | `cap` | How out-of-diff native-analyzer findings are handled. Valid: `cap`, `drop`, `off`. |
+| `AI_ANALYZERS` / `AI_EXCLUDE_ANALYZERS` | `''` | Allowlist / denylist of static analyzer names. See [Static analyzers](static-analyzers.md). |
+| `AI_AGENTS` / `AI_EXCLUDE_AGENTS` | `''` | Allowlist / denylist of review agent names. See [Agents](agents.md). |
+| `AI_PROFILE_MAX_TOKENS` | `4096` | Token budget for per-agent language-profile context sections. |
+| `AI_CONTEXT_ENRICHMENT` | `true` (config default) | Inject tree-sitter `<symbol-context>` blocks into agent prompts. |
+| `AI_CONTEXT_MAX_TOKENS` | `8192` | Token budget for the injected `<symbol-context>` block per agent call. |
+| `AI_CONTEXT_LOOKUP_LINES` | `8` | Lines of surrounding context captured per symbol lookup. |
+| `AI_CONTEXT_MAX_QUERIES` | `200` | Maximum symbol lookups per review run. |
+| `AI_EXCLUDE_PATTERNS` / `AI_EXCLUDE_PATTERNS_MODE` | `''` / `append` | Extra glob patterns to exclude from the diff, and whether they `append` to or `replace` the built-in excludes. |
+| `AI_LOG_FORMAT` / `AI_LOG_LEVEL` | `human` / `WARNING` | Structured logging output format and level. |
+| `AI_TELEMETRY_ENABLED` / `AI_TELEMETRY_SINK` | `false` / `''` | Emit structured telemetry events to the given sink. |
 | `VCS_PROVIDER` | `github` | Selects the VCS provider. Valid: `github`, `bitbucket`, `gitlab` |
 | `BITBUCKET_EMAIL` | — | Bitbucket-only. Bot user email (Basic-auth username) |
 | `BITBUCKET_API_TOKEN` | — | Bitbucket-only. API token (Basic-auth password) |
 | `BITBUCKET_WORKSPACE` / `BITBUCKET_REPO_SLUG` | — | Bitbucket-only. Optional explicit override |
 | `GITLAB_TOKEN` | — | GitLab-only. Access token with `api` scope; falls back to `CI_JOB_TOKEN` |
-| `GITLAB_API_URL` | `https://gitlab.com/api/v4` | GitLab-only. API base URL for self-hosted instances |
+| `GITLAB_API_URL` | `https://gitlab.com/api/v4` | GitLab-only. API base URL for self-hosted instances. A bare host without `/api/v4` is accepted and normalized automatically. |
 | `GITLAB_PROJECT_ID` | — | GitLab-only. Numeric project ID |
 | `GITLAB_MR_DIFF_BASE_SHA` | — | GitLab-only. Base SHA for inline discussion positions |
 | `GITLAB_BOT_USERNAME` | — | GitLab-only. Bot username for stale thread resolution |
+
+For the complete, always-current list of every `AI_*` variable, see `_KNOWN_AI_VARS` and `ReviewConfig.from_env()` in `ai_pr_review/config.py` — this table covers the ones most relevant to understanding the runtime, not a substitute for the source.
 
 ## Provider model defaults
 
