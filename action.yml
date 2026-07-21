@@ -58,11 +58,13 @@ inputs:
 
   review-target:
     description: >
-      Review target: pr (post review on a pull request) or standalone.
-      Standalone currently only disables merge-commit filtering during diff
+      Review target: pr (post review on a pull request) or standalone
+      (deprecated, emits a runtime warning — see issue #623). Standalone
+      currently only disables merge-commit filtering during diff
       computation — it does not post findings anywhere. Issue-posting was
       part of the bash engine removed in v2.0.0 and has not been
-      reimplemented in the Python engine. Default: pr.
+      reimplemented in the Python engine; formal removal is planned for a
+      future major version. Default: pr.
     required: false
     default: 'pr'
 

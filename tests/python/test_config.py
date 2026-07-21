@@ -155,6 +155,28 @@ def test_unknown_ai_var_typo_suggestion(monkeypatch: pytest.MonkeyPatch, capsys:
     assert "AI_REVIEW_MODE" in captured.err  # typo suggestion still appears
 
 
+def test_review_target_standalone_warns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#623: REVIEW_TARGET=standalone no longer posts findings to an issue;
+    emits a warning but does not raise, and review_target is still set."""
+    monkeypatch.setenv("REVIEW_TARGET", "standalone")
+    cfg = ReviewConfig.from_env()
+    assert cfg.review_target == "standalone"
+    captured = capsys.readouterr()
+    assert "REVIEW_TARGET=standalone" in captured.err
+    assert "#623" in captured.err or "issues/623" in captured.err
+
+
+def test_review_target_pr_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("REVIEW_TARGET", "pr")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "standalone" not in captured.err
+
+
 def test_deprecated_alias_does_not_raise(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
