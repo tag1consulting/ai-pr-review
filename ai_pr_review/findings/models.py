@@ -55,10 +55,14 @@ class Finding(BaseModel):
     # changed-line set.  Findings with out_of_diff=True are capped to Low
     # severity (by apply_diff_scope, in the same model_copy) and rendered in a
     # collapsed body section rather than the main findings list. This is a
-    # true invariant enforced at the single call site that sets the flag — do
-    # not set out_of_diff=True without also capping severity to Low, or
-    # renderers that filter on out_of_diff (e.g. vcs/_body.py's
+    # true invariant enforced at the single call site that sets the flag to
+    # True — do not set out_of_diff=True without also capping severity to
+    # Low, or renderers that filter on out_of_diff (e.g. vcs/_body.py's
     # compute_headline) will silently misrepresent the review's real risk.
+    # (extract.py also writes to this field, but only to reset an
+    # agent-injected out_of_diff=True back to False as a prompt-injection
+    # defense — that is not a second site that sets the invariant-bearing
+    # True value, so the "single call site" claim above still holds.)
     out_of_diff: bool = False
     # Set by judge._apply_verdicts on a "downrank" verdict. Distinct from
     # out_of_diff: severity is intentionally left unchanged (a downranked

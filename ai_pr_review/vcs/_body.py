@@ -62,10 +62,24 @@ def compute_headline(
     invariant). Judge-downranked findings (``demoted_to_body=True``) are
     NEVER excluded here regardless of severity: downrank changes where a
     finding is rendered (inline vs. body), not whether it counts toward risk.
-    This must stay in sync with ``review.outcome.classify_review_outcome``,
-    which computes the actual REQUEST_CHANGES/APPROVE decision from the same
-    true-severity view — a property test in tests/python/vcs/ asserts this
-    function's risk is never lower than that decision's for the same input.
+
+    Note the actual, narrower invariant with ``review.outcome
+    .classify_review_outcome`` (which computes the real REQUEST_CHANGES
+    /APPROVE decision, with no ``out_of_diff`` filtering of its own): this
+    function's risk never ranks *below* that decision's risk for the same
+    findings — never a silent understatement. The two functions do NOT
+    always agree outright, since ``classify_review_outcome`` counts every
+    finding (including ``out_of_diff``) while this function excludes
+    ``out_of_diff`` findings from the headline by design; for an
+    out_of_diff-only, all-Low finding set the two diverge (headline: None/0;
+    outcome: Low/APPROVE) without violating the never-understate invariant,
+    since neither one requests changes in that case. A combinatorial test in
+    tests/python/vcs/test_body.py (test_compute_headline_never_disagrees
+    _with_classify_review_outcome) covers the ``demoted_to_body`` axis this
+    invariant actually depends on; it deliberately excludes the
+    out_of_diff-mismatched-severity axis, since that state is never
+    constructed by production code (see the model-level guard test
+    alongside it).
     """
     in_headline = [f for f in findings if not f.out_of_diff]
     count = len(in_headline)

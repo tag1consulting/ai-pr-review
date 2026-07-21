@@ -232,7 +232,9 @@ def test_compute_headline_picks_highest_severity() -> None:
 
 
 def test_compute_headline_never_disagrees_with_classify_review_outcome() -> None:
-    """Property test: for every REALISTIC finding-set shape exercised here,
+    """Combinatorial test (exhaustive itertools.product sweep, not a
+    Hypothesis-style property test with generators/shrinking): for every
+    REALISTIC finding-set shape exercised here,
     the headline's risk must never rank LOWER than classify_review_outcome's
     risk for the identical findings. This is the exact invariant #622
     violated (GitHub's old _top_risk() silently dropped a judge-downranked

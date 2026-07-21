@@ -152,6 +152,57 @@ def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:
     )
 
 
+def test_post_findings_approve_with_only_out_of_diff_findings_still_renders_them() -> None:
+    """Regression test: an all-out_of_diff finding set combined with event=APPROVE
+    must NOT blank the rendered body. compute_headline() excludes genuine
+    out_of_diff findings from finding_total/risk (its documented headline-count
+    convention, shared with GitHub's collapsed-section logic) -- but per
+    _render_combined_body's own docstring, Bitbucket has no collapsed section,
+    so out_of_diff findings must still appear in the flat findings_block.
+    Gating the "no findings" branch on finding_total == 0 instead of on the raw
+    findings list would blank findings_block whenever every finding happens to
+    be out_of_diff (always Low severity, by apply_diff_scope's invariant), so
+    APPROVE + all-out_of_diff would silently drop real findings from the
+    rendered body while still claiming "No findings ... look good" -- the
+    exact class of bug #622 fixed, reintroduced on Bitbucket specifically by
+    an incomplete first pass at this fix."""
+    captured: list[dict] = []
+    existing = _existing_summary(comment_id=42)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json={"values": [existing]})
+        if req.method == "PUT":
+            import json
+
+            captured.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 42})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [
+        Finding(
+            severity="Low",
+            confidence=80,
+            finding="style nit outside the diff",
+            source="phpcs",
+            file="legacy.php",
+            line=900,
+            out_of_diff=True,
+        )
+    ]
+    result = prov.post_findings(
+        findings, DiffContext(diff_text="", head_sha=_HEAD), event="APPROVE"
+    )
+    assert result.ok
+
+    raw = captured[0]["content"]["raw"]
+    assert "style nit outside the diff" in raw, (
+        "an out_of_diff finding must still render in Bitbucket's flat "
+        f"findings_block even when finding_total==0 triggers APPROVE; got: {raw[:400]!r}"
+    )
+
+
 def test_post_findings_approve_with_no_findings_renders_approved_block() -> None:
     captured: list[dict] = []
 

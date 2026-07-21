@@ -94,6 +94,31 @@ def test_apply_verdicts_downrank_capped_at_zero() -> None:
     assert result[0].out_of_diff is False
 
 
+def test_apply_verdicts_downrank_on_already_out_of_diff_finding_is_safe() -> None:
+    """Regression test: the judge pass runs after apply_diff_scope in the
+    pipeline (see orchestrate.py), so a finding can legitimately reach
+    _apply_verdicts already carrying out_of_diff=True, severity="Low" (set
+    by apply_diff_scope's own invariant). A downrank verdict on such a
+    finding sets demoted_to_body=True on top, producing a Finding with BOTH
+    out_of_diff=True and demoted_to_body=True -- a combination not exercised
+    by any other test. This must degrade safely: compute_headline()
+    (vcs/_body.py) excludes any out_of_diff finding from the headline
+    regardless of demoted_to_body, so the combination can only affect a
+    finding already capped to Low, never mask a High/Critical. This test
+    pins the actual _apply_verdicts behavior for that combined state rather
+    than leaving it implicit."""
+    f = _finding(confidence=80, severity="Low", out_of_diff=True)
+    result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])
+    assert result[0].demoted_to_body is True
+    assert result[0].out_of_diff is True, (
+        "downrank must not clear a pre-existing out_of_diff flag"
+    )
+    assert result[0].severity == "Low", (
+        "downrank must never change severity, regardless of out_of_diff state"
+    )
+    assert count == 1
+
+
 def test_apply_verdicts_corroborated_exempt_from_downrank() -> None:
     f = _finding(confidence=80, corroborated=True)
     result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])

@@ -91,6 +91,19 @@ def _apply_verdicts(
       Severity is intentionally untouched.
     - ``keep`` → unchanged.
     - Missing verdict id defaults to ``keep``.
+
+    Note: the judge pass runs on ``kept`` *after* ``apply_diff_scope`` (see
+    orchestrate.py's pipeline order), so a finding can legitimately reach this
+    function already carrying ``out_of_diff=True, severity="Low"``. This
+    function does not skip such findings, so a downrank verdict on one sets
+    ``demoted_to_body=True`` on top, giving a Finding with BOTH flags True.
+    This is intentional, not an oversight: the two flags are independent
+    axes (out_of_diff = analyzer-scope exclusion; demoted_to_body =
+    judge-placement decision) and compute_headline() (vcs/_body.py) already
+    excludes any out_of_diff finding from the headline regardless of
+    demoted_to_body, so the combination degrades safely — it can only ever
+    affect a finding already capped to Low, never mask a High/Critical. See
+    test_judge.py's combined-flags regression test.
     """
     id_to_verdict: dict[int, str] = {}
     for v in verdicts:

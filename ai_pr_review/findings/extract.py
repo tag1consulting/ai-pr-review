@@ -128,6 +128,15 @@ def _parse_and_validate(
             # otherwise suppress the finding from CHANGES_REQUESTED evaluation.
             if f.out_of_diff:
                 f = f.model_copy(update={"out_of_diff": False})
+            # Strip demoted_to_body: it is set internally by
+            # judge._apply_verdicts, not by agents.  An injected
+            # "demoted_to_body": true in agent JSON would otherwise let a
+            # prompt-injected or malicious agent force its own finding out of
+            # inline PR visibility into the collapsed review-body section --
+            # the same suppression-bypass class the out_of_diff strip above
+            # defends against, for demoted_to_body's twin field.
+            if f.demoted_to_body:
+                f = f.model_copy(update={"demoted_to_body": False})
             results.append(f)
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
