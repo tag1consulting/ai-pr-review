@@ -26,6 +26,7 @@ import httpx
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import (
+    compute_headline,
     format_body_finding,
     join_findings,
     severity_icon,
@@ -313,19 +314,21 @@ def _render_combined_body(
     """Render the combined summary+findings body for Bitbucket.
 
     Bitbucket has no <details> rendering, so remediation is rendered as a
-    flat sub-bullet (per bash post-review-bitbucket.sh:281).
+    flat sub-bullet (per bash post-review-bitbucket.sh:281), and (unlike
+    GitHub) all findings — including genuine out_of_diff analyzer findings —
+    render in the flat findings_block below since there is no collapsed
+    section to redirect them to. The headline risk/count, however, use the
+    shared compute_headline() helper (vcs/_body.py) so "Overall Risk" agrees
+    with GitHub's headline and with review.outcome.classify_review_outcome's
+    actual APPROVE/REQUEST_CHANGES decision for the same findings. Prior to
+    the #622 fix this counted every finding unconditionally, which happened
+    to already agree with classify_review_outcome (no exclusion bug) but
+    over-counted analyzer out-of-diff findings relative to GitHub — this
+    fix brings the two providers into agreement.
     """
-    finding_total = len(findings)
-
-    def _top_risk() -> str:
-        if finding_total == 0:
-            return "Unknown" if failed_agents else "None"
-        for level in ("Critical", "High", "Medium", "Low"):
-            if any(f.severity == level for f in findings):
-                return level
-        return "Low"
-
-    risk = _top_risk()
+    headline = compute_headline(findings, failed_agents)
+    finding_total = headline.count
+    risk = headline.risk
 
     # Heading + summary block
     if event == "APPROVE" and finding_total == 0:

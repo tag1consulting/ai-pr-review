@@ -69,13 +69,20 @@ def partition_findings(
 ) -> tuple[list[Finding], list[Finding]]:
     """Split findings into (inline, body_only) honoring the inline cap.
 
-    A finding goes inline iff (a) its anchor is in eligible_new AND (b) the
-    cap hasn't been hit. Everything else goes body.
+    A finding goes inline iff (a) it was not judge-downranked
+    (``demoted_to_body`` is False — the judge's explicit contract is that a
+    downranked finding moves from inline to body, see findings/judge.py),
+    (b) its anchor is in eligible_new, AND (c) the cap hasn't been hit.
+    Everything else goes body.
     """
     inline: list[Finding] = []
     body: list[Finding] = []
     for f in findings:
-        if len(inline) < max_inline and is_inline_eligible(f, eligible_new):
+        if (
+            not f.demoted_to_body
+            and len(inline) < max_inline
+            and is_inline_eligible(f, eligible_new)
+        ):
             inline.append(f)
         else:
             body.append(f)

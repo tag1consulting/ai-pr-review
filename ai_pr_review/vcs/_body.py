@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from ai_pr_review.findings.models import Finding
@@ -31,6 +32,54 @@ _SEVERITY_ICONS: Final[dict[str, str]] = {
 
 def severity_icon(severity: str) -> str:
     return _SEVERITY_ICONS.get(severity.lower(), "🔵")
+
+
+@dataclass(frozen=True)
+class Headline:
+    """Review-body headline: the "Overall Risk | Findings: N" line's inputs.
+
+    Shared by every VCS renderer so "Overall Risk" can never disagree with
+    itself across providers, and can never contradict the true severity of a
+    finding just because that finding was judge-downranked or diff-scoped.
+    Fixes tag1consulting/ai-pr-review#622 (GitHub silently excluded
+    judge-downranked findings from this calculation via a stale out_of_diff
+    filter; Bitbucket over-counted the opposite way by not filtering
+    analyzer out-of-diff findings at all).
+    """
+
+    risk: str
+    count: int
+
+
+def compute_headline(
+    findings: Sequence[Finding], failed_agents: Sequence[str]
+) -> Headline:
+    """Compute the headline risk label and count for a review body.
+
+    Excludes only genuine ``out_of_diff`` findings (native-analyzer findings
+    outside the changed-line set, always capped to Low severity by
+    ``apply_diff_scope`` — see ``findings/models.py``'s field docs for the
+    invariant). Judge-downranked findings (``demoted_to_body=True``) are
+    NEVER excluded here regardless of severity: downrank changes where a
+    finding is rendered (inline vs. body), not whether it counts toward risk.
+    This must stay in sync with ``review.outcome.classify_review_outcome``,
+    which computes the actual REQUEST_CHANGES/APPROVE decision from the same
+    true-severity view — a property test in tests/python/vcs/ asserts this
+    function's risk is never lower than that decision's for the same input.
+    """
+    in_headline = [f for f in findings if not f.out_of_diff]
+    count = len(in_headline)
+
+    if count == 0:
+        risk = "None" if not failed_agents else "Unknown"
+    else:
+        risk = "Low"
+        for level in ("Critical", "High", "Medium", "Low"):
+            if any(f.severity == level for f in in_headline):
+                risk = level
+                break
+
+    return Headline(risk=risk, count=count)
 
 
 # HTML control sequences that, when smuggled into a finding via prompt

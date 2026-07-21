@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The review body's "Overall Risk" headline could silently contradict the review's own submitted state and attached findings.** `Finding.out_of_diff` was overloaded for two unrelated meanings: `apply_diff_scope` sets it (always paired with capping severity to Low) for native-analyzer findings outside the changed-line set, but `judge._apply_verdicts` also set it, on a `downrank` verdict, for LLM-agent findings *without* touching severity — a High finding the judge downranked stayed a High. GitHub's and Bitbucket's review-body renderers each independently (and inconsistently with each other) filtered on `out_of_diff` when computing the headline risk/count, so a judge-downranked High vanished from the headline ("Overall Risk: None") even though `review.outcome.classify_review_outcome` correctly saw the true severity and returned `CHANGES_REQUESTED`, and the finding still posted as an inline comment. Fixed by giving the judge pass its own distinct field, `demoted_to_body`, which changes only where a finding renders (inline vs. body) and never its severity; `out_of_diff` now exclusively means what its docstring always said (analyzer finding, capped to Low). Added a shared `compute_headline()` helper (`vcs/_body.py`) used by both the GitHub and Bitbucket renderers so their headlines can no longer diverge from each other or from the true review state. GitLab was unaffected (it renders the pre-computed summarizer text verbatim, with no independent risk/count logic to have this bug). (#622)
+
 ## [2.4.5] - 2026-07-14
 
 ### Changed

@@ -129,6 +129,53 @@ def test_post_findings_out_of_diff_goes_to_details_section() -> None:
     assert "**Findings:** 2" not in body, "ood finding must not inflate the headline count"
 
 
+def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:
+    """Regression test for #622: a judge-downranked High finding
+    (demoted_to_body=True) must still count at its true severity in the
+    headline risk/count — unlike a genuine out_of_diff finding, it is NOT
+    excluded. Downrank changes placement (inline -> body), never risk."""
+    demoted_high = Finding(
+        severity="High",
+        confidence=65,
+        finding="author_association is not a reliable authorization check",
+        source="code-reviewer",
+        file=".github/workflows/ai-pr-review.yml",
+        line=195,
+        demoted_to_body=True,
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            body = json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 1, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([demoted_high], diff, event="REQUEST_CHANGES")
+    assert result.ok
+
+    assert bodies, "no review body posted"
+    body = bodies[0]
+
+    # The headline must report High risk and count the finding — the exact
+    # inverse of the #622 bug, where this same shape produced "Overall Risk:
+    # None | Findings: 0".
+    assert "Overall Risk:** High" in body, (
+        f"demoted_to_body must not hide a High finding from the headline risk; got: {body[:400]!r}"
+    )
+    assert "**Findings:** 1" in body, (
+        f"demoted_to_body must not exclude the finding from the headline count; got: {body[:400]!r}"
+    )
+    # It must NOT appear inline — that's the whole point of downrank.
+    assert result.inline_posted == 0, "a demoted_to_body finding must not post inline"
+
+
 def test_ood_only_prior_review_preserves_finding_id() -> None:
     """Issue #550 regression: an out-of-diff-only prior review body (no
     "### Findings not attached to specific lines" heading) must still be

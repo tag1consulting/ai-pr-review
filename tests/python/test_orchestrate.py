@@ -752,8 +752,9 @@ def _make_dispatch_context_with_prompts(tmp_path: Path, diff_text: str = "") -> 
 
 
 def test_orchestrate_judge_on_downranks_weak_finding(tmp_path: Path) -> None:
-    """Judge-on path: weak finding is downranked (lower confidence + out_of_diff),
-    corroborated finding is kept unchanged. Both still reach post_findings."""
+    """Judge-on path: weak finding is downranked (lower confidence +
+    demoted_to_body), corroborated finding is kept unchanged. Both still
+    reach post_findings."""
     import json
 
     provider = _FakeProvider()
@@ -848,11 +849,14 @@ def test_orchestrate_judge_on_downranks_weak_finding(tmp_path: Path) -> None:
         weak = findings_by_file.get("app.py")
         assert weak is not None, f"app.py finding missing; all findings: {result.findings}"
         assert weak.confidence == 80 - 15  # JUDGE_DOWNRANK_AMOUNT
-        assert weak.out_of_diff is True
+        assert weak.demoted_to_body is True
+        assert weak.out_of_diff is False  # distinct flag; judge never sets this
+        assert weak.severity == "Medium"  # downrank never changes severity
         # Corroborated finding must be kept unchanged (exempt from judge downranking)
         strong = findings_by_file.get("db.py")
         assert strong is not None, f"db.py finding missing; all findings: {result.findings}"
         assert strong.corroborated is True
+        assert strong.demoted_to_body is False
         assert strong.out_of_diff is False
 
     anyio.run(_run)
