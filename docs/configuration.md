@@ -64,7 +64,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_EXCLUDE_PATTERNS_MODE` | `append` | `exclude-patterns-mode` | How `exclude-patterns` interacts with built-in excludes: `append` (default) or `replace`. |
 | `AI_REVIEW_FEEDBACK_LOOP` | `false` | `feedback-loop` / `enable-feedback-loop` | Enable the learning loop in both the main review workflow (inject `<repo-feedback>` block) and the slash-commands workflow (allow `/ai-pr-review false-positive`, `wont-fix`, `feedback`, `explain`, `revise` commands). GitHub-only. Requires the Python engine, which is the default. |
 | `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
-| `AI_REVIEW_FAIL_ON_FINDINGS` | `false` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. Container-action only (see [CI gate](#ci-gate-fail-on-findings)). |
+| `AI_REVIEW_FAIL_ON_FINDINGS` | `false` (action default); shipped example workflow overrides to `true` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. Container-action only (see [CI gate](#ci-gate-fail-on-findings)). Set `AI_REVIEW_FAIL_ON_FINDINGS=false` as a repo variable to make the review job non-blocking. |
 | `AI_REVIEW_CONTEXT_MAX_QUERIES` | `200` | `context-max-queries` | Cap on ripgrep symbol-lookup queries shared across all agents in a run. Increase if logs show `context enrichment: max_queries=N reached`. Container-action only. |
 
 To set a variable via the GitHub CLI:
@@ -185,7 +185,7 @@ These variables enable optional capabilities that are off by default.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_FAIL_ON_FINDINGS` | `false` | When `true`, exit with code 2 if the review outcome is `REQUEST_CHANGES` or `COMMENT` (incomplete or unknown risk). Exit code 1 still signals a posting or config error. Exit code 0 means the bot approved. Use this to block auto-merge or required CI checks until the bot approves. Pair with branch protection requiring the `review` status check and set `fail-on-findings: true` in your workflow. |
+| `AI_FAIL_ON_FINDINGS` | `false` (engine); shipped example workflow sets `fail-on-findings: true` | When `true`, exit with code 2 if the review outcome is `REQUEST_CHANGES` or `COMMENT` (incomplete or unknown risk). Exit code 1 still signals a posting or config error. Exit code 0 means the bot approved. Use this to block auto-merge or required CI checks until the bot approves. Pair with branch protection requiring the `review` status check. Set the `AI_REVIEW_FAIL_ON_FINDINGS` repo variable to `false` if you don't want the gate. |
 
 #### Judge pass
 
