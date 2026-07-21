@@ -77,7 +77,12 @@ def test_apply_verdicts_downrank_lowers_confidence() -> None:
     f = _finding(confidence=80)
     result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])
     assert result[0].confidence == 80 - JUDGE_DOWNRANK_AMOUNT
-    assert result[0].out_of_diff is True
+    assert result[0].demoted_to_body is True
+    # out_of_diff is a distinct flag (set only by apply_diff_scope, always
+    # paired with a Low severity cap — see findings/models.py). The judge
+    # must never touch it: downrank changes placement, not risk. Fixes #622.
+    assert result[0].out_of_diff is False
+    assert result[0].severity == "High"  # downrank never changes severity
     assert count == 1
 
 
@@ -85,7 +90,33 @@ def test_apply_verdicts_downrank_capped_at_zero() -> None:
     f = _finding(confidence=5)
     result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])
     assert result[0].confidence == 0
-    assert result[0].out_of_diff is True
+    assert result[0].demoted_to_body is True
+    assert result[0].out_of_diff is False
+
+
+def test_apply_verdicts_downrank_on_already_out_of_diff_finding_is_safe() -> None:
+    """Regression test: the judge pass runs after apply_diff_scope in the
+    pipeline (see orchestrate.py), so a finding can legitimately reach
+    _apply_verdicts already carrying out_of_diff=True, severity="Low" (set
+    by apply_diff_scope's own invariant). A downrank verdict on such a
+    finding sets demoted_to_body=True on top, producing a Finding with BOTH
+    out_of_diff=True and demoted_to_body=True -- a combination not exercised
+    by any other test. This must degrade safely: compute_headline()
+    (vcs/_body.py) excludes any out_of_diff finding from the headline
+    regardless of demoted_to_body, so the combination can only affect a
+    finding already capped to Low, never mask a High/Critical. This test
+    pins the actual _apply_verdicts behavior for that combined state rather
+    than leaving it implicit."""
+    f = _finding(confidence=80, severity="Low", out_of_diff=True)
+    result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])
+    assert result[0].demoted_to_body is True
+    assert result[0].out_of_diff is True, (
+        "downrank must not clear a pre-existing out_of_diff flag"
+    )
+    assert result[0].severity == "Low", (
+        "downrank must never change severity, regardless of out_of_diff state"
+    )
+    assert count == 1
 
 
 def test_apply_verdicts_corroborated_exempt_from_downrank() -> None:
@@ -93,6 +124,7 @@ def test_apply_verdicts_corroborated_exempt_from_downrank() -> None:
     result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])
     assert result[0] is f
     assert result[0].confidence == 80
+    assert result[0].demoted_to_body is False
     assert result[0].out_of_diff is False
     assert count == 0
 
@@ -115,9 +147,9 @@ def test_apply_verdicts_multiple_findings_mixed() -> None:
         ],
     )
     assert result[0].confidence == 70 - JUDGE_DOWNRANK_AMOUNT
-    assert result[0].out_of_diff is True
+    assert result[0].demoted_to_body is True
     assert result[1].confidence == 90  # corroborated → exempt
-    assert result[1].out_of_diff is False
+    assert result[1].demoted_to_body is False
     assert count == 1
 
 
@@ -164,7 +196,8 @@ async def test_judge_downrank_lowers_confidence(tmp_path: Path) -> None:
 
     result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
     assert result.findings[0].confidence == 80 - JUDGE_DOWNRANK_AMOUNT
-    assert result.findings[0].out_of_diff is True
+    assert result.findings[0].demoted_to_body is True
+    assert result.findings[0].out_of_diff is False
 
 
 @pytest.mark.anyio
@@ -269,9 +302,9 @@ def test_apply_verdicts_malformed_entry_skipped() -> None:
         ],
     )
     assert result[0].confidence == 70  # malformed entry skipped → keep
-    assert result[0].out_of_diff is False
+    assert result[0].demoted_to_body is False
     assert result[1].confidence == 90 - JUDGE_DOWNRANK_AMOUNT  # valid entry applied
-    assert result[1].out_of_diff is True
+    assert result[1].demoted_to_body is True
     assert count == 1
 
 

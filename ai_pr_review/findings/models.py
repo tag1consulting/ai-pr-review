@@ -53,9 +53,24 @@ class Finding(BaseModel):
     agent: str = ""
     # Set by apply_diff_scope when a native-analyzer finding falls outside the
     # changed-line set.  Findings with out_of_diff=True are capped to Low
-    # severity and rendered in a collapsed body section rather than the main
-    # findings list.
+    # severity (by apply_diff_scope, in the same model_copy) and rendered in a
+    # collapsed body section rather than the main findings list. This is a
+    # true invariant enforced at the single call site that sets the flag to
+    # True — do not set out_of_diff=True without also capping severity to
+    # Low, or renderers that filter on out_of_diff (e.g. vcs/_body.py's
+    # compute_headline) will silently misrepresent the review's real risk.
+    # (extract.py also writes to this field, but only to reset an
+    # agent-injected out_of_diff=True back to False as a prompt-injection
+    # defense — that is not a second site that sets the invariant-bearing
+    # True value, so the "single call site" claim above still holds.)
     out_of_diff: bool = False
+    # Set by judge._apply_verdicts on a "downrank" verdict. Distinct from
+    # out_of_diff: severity is intentionally left unchanged (a downranked
+    # High is still a High) — only its *placement* changes, from an inline PR
+    # comment to the review body's findings list. See findings/judge.py and
+    # prompts/finding-judge.md for the judge's contract ("no information is
+    # lost; the only question is inline vs. summary").
+    demoted_to_body: bool = False
     # Set by merge._collapse_cluster when the proximity cluster contains BOTH
     # at least one native static-analyzer source AND at least one LLM-agent
     # source — independent corroboration of the same file+line region.

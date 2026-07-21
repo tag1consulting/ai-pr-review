@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from ai_pr_review.findings.models import Finding
@@ -31,6 +32,68 @@ _SEVERITY_ICONS: Final[dict[str, str]] = {
 
 def severity_icon(severity: str) -> str:
     return _SEVERITY_ICONS.get(severity.lower(), "🔵")
+
+
+@dataclass(frozen=True)
+class Headline:
+    """Review-body headline: the "Overall Risk | Findings: N" line's inputs.
+
+    Shared by every VCS renderer so "Overall Risk" can never disagree with
+    itself across providers, and can never contradict the true severity of a
+    finding just because that finding was judge-downranked or diff-scoped.
+    Fixes tag1consulting/ai-pr-review#622 (GitHub silently excluded
+    judge-downranked findings from this calculation via a stale out_of_diff
+    filter; Bitbucket over-counted the opposite way by not filtering
+    analyzer out-of-diff findings at all).
+    """
+
+    risk: str
+    count: int
+
+
+def compute_headline(
+    findings: Sequence[Finding], failed_agents: Sequence[str]
+) -> Headline:
+    """Compute the headline risk label and count for a review body.
+
+    Excludes only genuine ``out_of_diff`` findings (native-analyzer findings
+    outside the changed-line set, always capped to Low severity by
+    ``apply_diff_scope`` — see ``findings/models.py``'s field docs for the
+    invariant). Judge-downranked findings (``demoted_to_body=True``) are
+    NEVER excluded here regardless of severity: downrank changes where a
+    finding is rendered (inline vs. body), not whether it counts toward risk.
+
+    Note the actual, narrower invariant with ``review.outcome
+    .classify_review_outcome`` (which computes the real REQUEST_CHANGES
+    /APPROVE decision, with no ``out_of_diff`` filtering of its own): this
+    function's risk never ranks *below* that decision's risk for the same
+    findings — never a silent understatement. The two functions do NOT
+    always agree outright, since ``classify_review_outcome`` counts every
+    finding (including ``out_of_diff``) while this function excludes
+    ``out_of_diff`` findings from the headline by design; for an
+    out_of_diff-only, all-Low finding set the two diverge (headline: None/0;
+    outcome: Low/APPROVE) without violating the never-understate invariant,
+    since neither one requests changes in that case. A combinatorial test in
+    tests/python/vcs/test_body.py (test_compute_headline_never_disagrees
+    _with_classify_review_outcome) covers the ``demoted_to_body`` axis this
+    invariant actually depends on; it deliberately excludes the
+    out_of_diff-mismatched-severity axis, since that state is never
+    constructed by production code (see the model-level guard test
+    alongside it).
+    """
+    in_headline = [f for f in findings if not f.out_of_diff]
+    count = len(in_headline)
+
+    if count == 0:
+        risk = "None" if not failed_agents else "Unknown"
+    else:
+        risk = "Low"
+        for level in ("Critical", "High", "Medium", "Low"):
+            if any(f.severity == level for f in in_headline):
+                risk = level
+                break
+
+    return Headline(risk=risk, count=count)
 
 
 # HTML control sequences that, when smuggled into a finding via prompt

@@ -9,8 +9,13 @@ Design constraints (from user decisions, session 2026-06-22):
 - ``drop`` is NOT a valid verdict: the judge never removes a finding.
   A false positive is better than a missed vulnerability.
 - ``downrank`` lowers confidence and routes the finding to the review body
-  (sets ``out_of_diff=True``) so it is still visible but does not appear
-  as an inline PR comment.
+  (sets ``demoted_to_body=True``) so it is still visible but does not appear
+  as an inline PR comment. Severity is deliberately left unchanged — downrank
+  affects placement, not risk. (Prior to the #622 fix this set
+  ``out_of_diff=True`` instead, which collided with apply_diff_scope's
+  distinct out_of_diff+Low-severity-cap invariant and caused renderers that
+  filter on out_of_diff to silently drop a downranked High from the review's
+  headline risk/count. See findings/models.py's field docs.)
 - Corroborated findings (``finding.corroborated is True``) are ALWAYS kept
   regardless of the judge's verdict. Independent static-analyzer + LLM-agent
   corroboration cannot be overridden by a single judge call.
@@ -82,9 +87,23 @@ def _apply_verdicts(
     Rules:
     - ``corroborated is True`` → always ``keep``, log DEBUG.
     - ``downrank`` → lower confidence by JUDGE_DOWNRANK_AMOUNT (floor 0),
-      set out_of_diff=True so the finding routes to the review body.
+      set demoted_to_body=True so the finding routes to the review body.
+      Severity is intentionally untouched.
     - ``keep`` → unchanged.
     - Missing verdict id defaults to ``keep``.
+
+    Note: the judge pass runs on ``kept`` *after* ``apply_diff_scope`` (see
+    orchestrate.py's pipeline order), so a finding can legitimately reach this
+    function already carrying ``out_of_diff=True, severity="Low"``. This
+    function does not skip such findings, so a downrank verdict on one sets
+    ``demoted_to_body=True`` on top, giving a Finding with BOTH flags True.
+    This is intentional, not an oversight: the two flags are independent
+    axes (out_of_diff = analyzer-scope exclusion; demoted_to_body =
+    judge-placement decision) and compute_headline() (vcs/_body.py) already
+    excludes any out_of_diff finding from the headline regardless of
+    demoted_to_body, so the combination degrades safely — it can only ever
+    affect a finding already capped to Low, never mask a High/Critical. See
+    test_judge.py's combined-flags regression test.
     """
     id_to_verdict: dict[int, str] = {}
     for v in verdicts:
@@ -113,9 +132,11 @@ def _apply_verdicts(
         verdict = id_to_verdict.get(idx, "keep")
         if verdict == "downrank":
             new_confidence = max(0, finding.confidence - JUDGE_DOWNRANK_AMOUNT)
-            # model_copy skips validator re-runs; safe here — only confidence and
-            # out_of_diff are updated and neither has cross-field validation.
-            result.append(finding.model_copy(update={"confidence": new_confidence, "out_of_diff": True}))
+            # model_copy skips validator re-runs; safe here — only confidence
+            # and demoted_to_body are updated and neither has cross-field
+            # validation. severity is deliberately untouched: downrank means
+            # "less prominent placement," not "lower risk."
+            result.append(finding.model_copy(update={"confidence": new_confidence, "demoted_to_body": True}))
             downrank_count += 1
         else:
             result.append(finding)
@@ -133,7 +154,7 @@ async def judge_findings(
     """Run the judge pass: one LLM call to score all candidate findings.
 
     Returns a ``JudgeResult`` with a modified copy of ``kept`` (downranked
-    findings have lower confidence and ``out_of_diff=True``) and the token
+    findings have lower confidence and ``demoted_to_body=True``) and the token
     usage for the judge LLM call. On any error the function returns the
     original ``kept`` unchanged with zero token counts (fail-soft).
 
