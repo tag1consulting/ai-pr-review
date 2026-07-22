@@ -27,60 +27,6 @@ hero_tagline: "AI-powered pull request review using multiple LLM agents. Posts a
   </div>
 </div>
 
-## What's new in v2.4.6
-
-**Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision on GitHub and Bitbucket**, plus a related prompt-injection path and a Bitbucket findings-blanking bug. Also: a runtime deprecation warning for `REVIEW_TARGET=standalone`, a whitespace-stripping fix for `github_repository`, and a Checks-tab annotation when a `/ai-pr-review dismiss` command hits a VCS API error.
-
-See [Features → v2.4.6](features#whats-new-in-v246) for details.
-
-## What's new in v2.4.5
-
-**Fixed the merge-commit filter silently failing in production, plus faster native-arm64 release builds.** The `ignore_merge_commits` filter no longer silently falls back to unbounded diffs when a container has no git identity configured, and release container builds now build `linux/amd64`/`linux/arm64` natively instead of emulating arm64 via QEMU.
-
-See [Features → v2.4.5](features#whats-new-in-v245) for details.
-
-## What's new in v2.4.4
-
-**Fixed slash-command review attribution.** `/ai-pr-review rescan` and `/ai-pr-review review-full` now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT owner's identity.
-
-See [Features → v2.4.4](features#whats-new-in-v244) for details.
-
-## What's new in v2.4.3
-
-**Fixed a false positive on the pr-number/issue-number split-input pattern**, plus two dormant self-action-pin suppression rules that never actually fired, and stripped stray whitespace from provider secrets and variables to avoid a confusing setup error.
-
-See [Features → v2.4.3](features#whats-new-in-v243) for details.
-
-## What's new in v2.4.2
-
-**`false-positive`/`wont-fix` now dismiss the owning review and auto-approve on clear.** Replying `false-positive` or `wont-fix` to an inline finding now dismisses the owning `CHANGES_REQUESTED` review like `dismiss` already did, and clearing the last active finding across every bot review now submits a fresh `APPROVE` instead of leaving the PR's review decision stuck at `REVIEW_REQUIRED`.
-
-See [Features → v2.4.2](features#whats-new-in-v242) for details.
-
-## What's new in v2.4.1
-
-**Fixed a crash on demanding diffs** where Claude Sonnet 5's adaptive thinking could exhaust `max_tokens` before producing any text, plus a new live-API model canary to catch this class of regression before it ships again.
-
-See [Features → v2.4.1](features#whats-new-in-v241) for details.
-
-## What's new in v2.4.0
-
-**Default Anthropic/Bedrock-proxy model bumped to Sonnet 5**, plus category-aware dedup and category mapping across all 13 static analyzers, closing out the taxonomy work started in v2.3.1.
-
-See [Features → v2.4.0](features#whats-new-in-v240) for details.
-
-## What's new in v2.3.1
-
-**`category` field added to the shared findings schema.** Findings now carry an 11-value taxonomy (`authz`, `injection`, `secret`, etc.) instead of being untagged; unrecognized values normalise to `"other"` rather than dropping the finding.
-
-See [Features → v2.3.1](features#whats-new-in-v231) for details.
-
-## What's new in v2.3.0
-
-**Slash-command dismiss orchestration ported from workflow-embedded bash to the Python engine.** `/ai-pr-review dismiss`, `false-positive`, and `wont-fix` now run through a tested Python module and CLI subcommands instead of ~1,100 lines of inline bash and GraphQL calls. User-facing command syntax is unchanged. Also fixes two dismiss bugs: out-of-diff findings that couldn't be located, and a dismiss PUT attempted against an already-resolved review.
-
-See [Features → v2.3.0](features#whats-new-in-v230) for details.
-
 ## What it does
 
 On every push to a pull request, AI PR Review runs a roster of LLM agents and deterministic static analyzers against the diff, then posts a structured review — a summary comment plus inline findings with "Apply suggestion" buttons where applicable. It's incremental (subsequent pushes only review what changed), suppresses known false positives via a JSON rules file, and is designed to fail gracefully when a model times out or a scanner is missing. Runs on GitHub Actions, Bitbucket Cloud Pipelines, or GitLab CI/CD against Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint.
@@ -121,6 +67,24 @@ jobs:
 ```
 
 That's it — reviews start firing on the next PR.
+
+## What's new in v2.4.6
+
+**Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision on GitHub and Bitbucket**, plus a related prompt-injection path and a Bitbucket findings-blanking bug. Also: a runtime deprecation warning for `REVIEW_TARGET=standalone`, a whitespace-stripping fix for `github_repository`, and a Checks-tab annotation when a `/ai-pr-review dismiss` command hits a VCS API error.
+
+See [Features → v2.4.6](features#whats-new-in-v246) for details.
+
+## What's new in v2.4.5
+
+**Fixed the merge-commit filter silently failing in production, plus faster native-arm64 release builds.** The `ignore_merge_commits` filter no longer silently falls back to unbounded diffs when a container has no git identity configured, and release container builds now build `linux/amd64`/`linux/arm64` natively instead of emulating arm64 via QEMU.
+
+See [Features → v2.4.5](features#whats-new-in-v245) for details.
+
+## What's new in v2.4.4
+
+**Fixed slash-command review attribution.** `/ai-pr-review rescan` and `/ai-pr-review review-full` now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT owner's identity.
+
+See [Features → v2.4.4](features#whats-new-in-v244) for details.
 
 ## Learn more
 
