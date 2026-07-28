@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -181,11 +182,17 @@ def _write_github_output(failed: list[CanaryResult]) -> None:
         return
     all_quota = all(_is_quota_error(r.detail) for r in failed)
     detail_lines = [f"{r.provider}/{r.model}/{r.agent}: {r.detail}" for r in failed]
+    # Random per-run delimiter, not a fixed string: failure_detail can embed raw
+    # provider error text/tracebacks we don't control, and a fixed delimiter that
+    # happened to appear in that text would silently truncate the multiline
+    # GITHUB_OUTPUT value at that point (GitHub Actions heredoc-style outputs
+    # terminate on the first line matching the delimiter, verbatim).
+    delimiter = f"CANARY_FAILURE_{uuid.uuid4().hex}"
     with open(output_path, "a", encoding="utf-8") as f:
         f.write(f"all_quota_exhausted={'true' if all_quota else 'false'}\n")
-        f.write("failure_detail<<CANARY_FAILURE_EOF\n")
+        f.write(f"failure_detail<<{delimiter}\n")
         f.write("\n".join(detail_lines) + "\n")
-        f.write("CANARY_FAILURE_EOF\n")
+        f.write(f"{delimiter}\n")
 
 
 if __name__ == "__main__":

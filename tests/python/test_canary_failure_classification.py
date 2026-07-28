@@ -27,6 +27,26 @@ from tests.canary.live_model_canary import (  # noqa: E402
 )
 
 
+def _parse_github_output_multiline(content: str, key: str) -> str:
+    """Parse a `key<<DELIM\\n...\\nDELIM\\n` block the way GitHub Actions does.
+
+    Mirrors the runner's actual behavior: the value ends at the first line that
+    matches the opening delimiter verbatim, whatever that delimiter is. Raises
+    AssertionError if the key isn't present or the block is malformed, so a
+    delimiter collision (the F2 finding this guards against) fails loudly
+    instead of silently truncating.
+    """
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}<<"):
+            delimiter = line[len(f"{key}<<") :]
+            for j in range(i + 1, len(lines)):
+                if lines[j] == delimiter:
+                    return "\n".join(lines[i + 1 : j])
+            raise AssertionError(f"no closing delimiter {delimiter!r} found for key {key!r}")
+    raise AssertionError(f"key {key!r} not found in GITHUB_OUTPUT content")
+
+
 class TestIsQuotaError:
     def test_workspace_usage_limit_is_quota(self) -> None:
         detail = (
@@ -80,9 +100,46 @@ class TestWriteGithubOutput:
         _write_github_output(failed)
         content = out_path.read_text()
         assert "all_quota_exhausted=true" in content
-        assert "failure_detail<<CANARY_FAILURE_EOF" in content
-        assert "anthropic/claude-opus-4-8/code-reviewer: usage limit reached" in content
-        assert "CANARY_FAILURE_EOF" in content
+        detail_value = _parse_github_output_multiline(content, "failure_detail")
+        assert "anthropic/claude-opus-4-8/code-reviewer: usage limit reached" in detail_value
+
+    def test_delimiter_is_random_per_call(self, tmp_path, monkeypatch) -> None:
+        out_path = tmp_path / "gh_output"
+        result = [CanaryResult("anthropic", "claude-sonnet-5", "code-reviewer", False, "usage limit")]
+
+        out_path.write_text("")
+        monkeypatch.setenv("GITHUB_OUTPUT", str(out_path))
+        _write_github_output(result)
+        first_delimiter = next(
+            line[len("failure_detail<<") :]
+            for line in out_path.read_text().splitlines()
+            if line.startswith("failure_detail<<")
+        )
+
+        out_path.write_text("")
+        _write_github_output(result)
+        second_delimiter = next(
+            line[len("failure_detail<<") :]
+            for line in out_path.read_text().splitlines()
+            if line.startswith("failure_detail<<")
+        )
+
+        assert first_delimiter != second_delimiter
+
+    def test_failure_detail_containing_old_fixed_delimiter_does_not_truncate(self, tmp_path, monkeypatch) -> None:
+        # F2 regression: a fixed delimiter could appear inside provider error
+        # text/tracebacks and silently truncate the value. Embed the literal
+        # string this script used to hardcode as the delimiter, inside the
+        # failure detail itself, and confirm parsing still recovers it whole
+        # rather than cutting off at that line.
+        out_path = tmp_path / "gh_output"
+        out_path.write_text("")
+        monkeypatch.setenv("GITHUB_OUTPUT", str(out_path))
+        poisoned_detail = "anthropic/claude-sonnet-5/code-reviewer: error containing CANARY_FAILURE_EOF verbatim"
+        _write_github_output([CanaryResult("anthropic", "claude-sonnet-5", "code-reviewer", False, poisoned_detail)])
+
+        detail_value = _parse_github_output_multiline(out_path.read_text(), "failure_detail")
+        assert poisoned_detail in detail_value
 
     def test_mixed_failures_not_all_quota(self, tmp_path, monkeypatch) -> None:
         out_path = tmp_path / "gh_output"
