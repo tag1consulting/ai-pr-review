@@ -53,9 +53,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Routed through env vars (not interpolated directly via ${{ }} into the
+          # body string below) so that arbitrary text in an Anthropic error message
+          # can't be read as shell syntax -- these values only ever reach bash as
+          # quoted variable expansions.
+          ALL_QUOTA_EXHAUSTED: ${{ steps.canary.outputs.all_quota_exhausted }}
+          FAILURE_DETAIL: ${{ steps.canary.outputs.failure_detail }}
         run: |
+          # #636: this used to unconditionally claim every failure was "the same
+          # class as #592" (Sonnet 5 adaptive thinking exhausting max_tokens). It
+          # wasn't -- #636 itself was the CI key's Anthropic workspace usage limit,
+          # not a model-behavior regression, and the hardcoded text sent whoever
+          # triaged it chasing the wrong root cause. Word it from what actually
+          # happened instead.
+          if [ "$ALL_QUOTA_EXHAUSTED" = "true" ]; then
+            EXPLANATION="Every failing model/agent combination hit the same Anthropic API quota/billing error below -- this looks like the CI key's usage limit, not a model-behavior regression or code bug. Re-run manually (workflow_dispatch) once the limit resets to confirm; no investigation needed unless it recurs after that."
+          else
+            EXPLANATION="See the failure detail below for what actually happened before assuming a cause. This *may* be the same class of failure as #592 (Sonnet 5 adaptive thinking exhausting max_tokens before any text was produced), but check the stop_reason/error text first -- #636 looked like a #592 repeat from the title alone and turned out to be an unrelated API quota block."
+          fi
+          BODY="The scheduled live-model canary (\`tests/canary/live_model_canary.py\`) failed. See the [failed run]($RUN_URL) for full logs.
+
+          $EXPLANATION
+
+          \`\`\`
+          $FAILURE_DETAIL
+          \`\`\`"
           gh issue create \
             --repo "$REPO" \
             --title "Live model canary failed on $(date -u +%Y-%m-%d)" \
             --label bug \
-            --body "The scheduled live-model canary (\`tests/canary/live_model_canary.py\`) failed. See the [failed run]($RUN_URL) for details on which model/agent combination hit a non-end_turn stop_reason or a crash. This is the same class of failure as #592 (Sonnet 5 adaptive thinking exhausting max_tokens before any text was produced) -- check whether a model default changed recently, or whether an existing model's behavior has drifted."
+            --body "$BODY"
