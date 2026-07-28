@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,6 +67,21 @@ class CanaryResult:
     agent: str
     ok: bool
     detail: str
+
+
+# Substrings identifying an API quota/billing block rather than a genuine
+# model-behavior surprise (#592's actual bug: empty-thinking, no text, wrong
+# stop_reason). Filed 2026-07-28 after issue #636 turned out to be the CI
+# key's Anthropic workspace usage limit (resets monthly) auto-labeled as a
+# "#592-class" model regression by the workflow's hardcoded issue body --
+# nothing to do with model behavior at all. Matched case-insensitively.
+_QUOTA_ERROR_MARKERS = ("usage limit", "rate_limit_error", "credit balance is too low")
+
+
+def _is_quota_error(detail: str) -> bool:
+    """True if a failure detail looks like a quota/billing block, not a model bug."""
+    lowered = detail.lower()
+    return any(marker in lowered for marker in _QUOTA_ERROR_MARKERS)
 
 
 async def _run_one(provider: str, model_id: str, agent_name: str) -> CanaryResult:
@@ -148,7 +164,35 @@ async def main() -> int:
 
     failed = [r for r in results if not r.ok]
     print(f"\n=== {len(results) - len(failed)}/{len(results)} passed ===")
+
+    _write_github_output(failed)
     return 1 if failed else 0
+
+
+def _write_github_output(failed: list[CanaryResult]) -> None:
+    """Expose failure classification to the calling workflow step.
+
+    Lets .github/workflows/model-canary.yml compose an issue body that
+    reflects what actually happened instead of always assuming a #592-class
+    model-behavior regression (see _QUOTA_ERROR_MARKERS above). No-op outside
+    GitHub Actions (GITHUB_OUTPUT unset) or when nothing failed.
+    """
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if not output_path or not failed:
+        return
+    all_quota = all(_is_quota_error(r.detail) for r in failed)
+    detail_lines = [f"{r.provider}/{r.model}/{r.agent}: {r.detail}" for r in failed]
+    # Random per-run delimiter, not a fixed string: failure_detail can embed raw
+    # provider error text/tracebacks we don't control, and a fixed delimiter that
+    # happened to appear in that text would silently truncate the multiline
+    # GITHUB_OUTPUT value at that point (GitHub Actions heredoc-style outputs
+    # terminate on the first line matching the delimiter, verbatim).
+    delimiter = f"CANARY_FAILURE_{uuid.uuid4().hex}"
+    with open(output_path, "a", encoding="utf-8") as f:
+        f.write(f"all_quota_exhausted={'true' if all_quota else 'false'}\n")
+        f.write(f"failure_detail<<{delimiter}\n")
+        f.write("\n".join(detail_lines) + "\n")
+        f.write(f"{delimiter}\n")
 
 
 if __name__ == "__main__":
