@@ -77,3 +77,4 @@
 {"ts": "2026-06-29T19:35:13Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 1}
 {"ts": "2026-06-29T19:36:11Z", "command": "false-positive", "reason": "", "source": "adversarial-general", "file": "THIRD-PARTY-LICENSES/NOTICE.md", "rule_id": ""}
 {"ts": "2026-06-29T19:41:43Z", "command": "false-positive", "reason": "", "source": "", "file": "", "rule_id": "", "finding_id": 1}
+{"ts": "2026-07-28T20:51:59Z", "command": "false-positive", "reason": "Verified empirically -- bash does not re-parse an already-expanded variable&#x27;s value for further command substitution inside a double-quoted string. Tested directly:", "source": "code-reviewer", "file": ".github/workflows/model-canary.yml", "rule_id": ""}
