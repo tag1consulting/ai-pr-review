@@ -47,6 +47,7 @@ import html as _html
 import logging
 import re
 from collections.abc import Sequence
+from typing import Final
 
 from ai_pr_review.findings.models import Finding
 
@@ -61,6 +62,22 @@ _SOURCE_RE = re.compile(r"\[([^\]]+)\]")
 
 # Matches file:line location at end of bullet, e.g. *(at `foo.py:10`...)*
 _LOCATION_RE = re.compile(r"\*\(at `([^`]+)`")
+
+# Headings that open a body-findings bullet section, one per renderer path in
+# `ai_pr_review/vcs/github.py`: REQUEST_CHANGES/COMMENT reviews, the
+# out-of-diff analyzer bucket (no heading of its own, matched by its
+# containing <details> label instead), and APPROVE reviews with only
+# Medium/Low findings (issue #645 — this third heading was missing from both
+# this fallback scanner and `ai_pr_review/slash/dismiss.py`'s
+# `_scan_body_bullets`, so an approved review's body findings were never
+# locatable by `/ai-pr-review dismiss|false-positive|wont-fix F<n>`). Shared
+# here so the two scanners cannot drift out of sync again over a future
+# fourth heading.
+BODY_SECTION_START_MARKERS: Final[tuple[str, ...]] = (
+    "### Findings not attached to specific lines",
+    "Out-of-diff analyzer findings",
+    "### Findings (informational)",
+)
 
 
 def fingerprint(f: Finding) -> str:
@@ -102,20 +119,19 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
 
         # Fallback: parse **[F<n>]** tokens from body-findings bullets.
         # Only covers body-level findings (inline finding IDs are not in
-        # bullet form); use this path only for pre-marker reviews. Both
-        # body-level buckets are scanned: the in-diff "### Findings not
-        # attached to specific lines" section, and the out-of-diff
-        # "<details>...Out-of-diff analyzer findings...</details>" block —
-        # the latter has no ### heading, so it needs its own start/end
-        # markers (issue #550; same fix already applied to the workflow's
-        # bash/Python body scanners and to _list_prior_bot_review_bodies).
+        # bullet form); use this path only for pre-marker reviews. All three
+        # body-level headings are scanned (see BODY_SECTION_START_MARKERS):
+        # the in-diff "### Findings not attached to specific lines" section,
+        # the out-of-diff "<details>...Out-of-diff analyzer
+        # findings...</details>" block (no ### heading of its own, so it
+        # needs its own start/end markers — issue #550; same fix already
+        # applied to the workflow's bash/Python body scanners and to
+        # _list_prior_bot_review_bodies), and the APPROVE-path "### Findings
+        # (informational)" heading (issue #645).
         in_body_section = False
         for line in body.splitlines():
             stripped = line.strip()
-            if "### Findings not attached to specific lines" in stripped:
-                in_body_section = True
-                continue
-            if "Out-of-diff analyzer findings" in stripped:
+            if any(marker in stripped for marker in BODY_SECTION_START_MARKERS):
                 in_body_section = True
                 continue
             if in_body_section and stripped.startswith("###"):

@@ -199,6 +199,28 @@ def test_marker_less_out_of_diff_ids_preserved_across_reviews() -> None:
     assert id_map2[fingerprint(fb)] == 2
 
 
+def test_marker_less_approve_path_ids_preserved_across_reviews() -> None:
+    """Issue #645 regression: the marker-less fallback bullet scan must also
+    recognize the APPROVE-path "### Findings (informational)" heading (used
+    when a review has only Medium/Low findings), not just the
+    REQUEST_CHANGES/COMMENT heading and the out-of-diff bucket — else a
+    legacy/marker-stripped approved review loses F-ID stability across
+    review cycles."""
+    fa = _finding("informational note A", source="adversarial-general", file="app.py", line=5)
+    fb = _finding("informational note B", source="code-reviewer", file="app.py", line=9)
+
+    id_map1 = assemble_id_map([], [fa, fb])
+    bullets = "\n".join(
+        format_body_finding(f, finding_id=id_map1[fingerprint(f)]) for f in [fa, fb]
+    )
+    body_a = "### Findings (informational)\n" + bullets
+    assert id_map1[fingerprint(fa)] == 1
+    assert id_map1[fingerprint(fb)] == 2
+
+    id_map2 = assemble_id_map([body_a], [fb])
+    assert id_map2[fingerprint(fb)] == 2
+
+
 # ---------------------------------------------------------------------------
 # format_body_finding() with finding_id
 # ---------------------------------------------------------------------------
