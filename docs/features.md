@@ -11,7 +11,7 @@ render_with_liquid: false
 
 **`max_tokens_per_agent` default raised from 16384 back to 32768 (closes #642).** Claude Sonnet 5's adaptive thinking runs at implicit `effort="high"`, and `resolve_effort()` (#592) already caps it to `"low"` for that model family, but the live model canary showed that isn't always enough headroom: `silent-failure-hunter` hit `stop_reason=max_tokens` after spending 14101 of the 16384-token budget on thinking, leaving zero room for output text. This reverses the default-lowering half of the v1.3.0 change that closed #357. Non-overriding consumers will see a higher worst-case per-agent token spend; set `max-tokens-per-agent: 16384` (or `AI_MAX_TOKENS_PER_AGENT=16384`) to restore the prior budget.
 
-**The live-model-canary's auto-filed GitHub issue no longer mislabels an API quota/billing block as a Sonnet 5 model-behavior regression (#637).** The issue body's explanation text was hardcoded to describe every canary failure as the same class of failure as #592, regardless of what actually happened. The canary now classifies each failure as quota/billing or a genuine model-behavior anomaly and composes the issue body accordingly.
+**The live-model-canary's auto-filed GitHub issue no longer mislabels an API quota/billing block as a Sonnet 5 model-behavior regression (#636).** The issue body's explanation text was hardcoded to describe every canary failure as the same class of failure as #592, regardless of what actually happened. The canary now classifies each failure as quota/billing or a genuine model-behavior anomaly and composes the issue body accordingly.
 
 ## What's new in v2.4.6
 
