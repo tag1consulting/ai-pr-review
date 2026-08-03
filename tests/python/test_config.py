@@ -354,9 +354,9 @@ def test_bedrock_proxy_premium_unchanged(monkeypatch: pytest.MonkeyPatch) -> Non
 # ---------------------------------------------------------------------------
 
 def test_max_tokens_per_agent_default() -> None:
-    """Default value is 16384 (not 32768)."""
+    """Default value is 32768 (#642: 16384 left Sonnet 5's adaptive thinking no room for output)."""
     cfg = ReviewConfig()
-    assert cfg.max_tokens_per_agent == 16384
+    assert cfg.max_tokens_per_agent == 32768
 
 
 def test_max_tokens_per_agent_valid_passthrough() -> None:
@@ -388,10 +388,10 @@ def test_max_tokens_per_agent_clamp_too_high(capsys: pytest.CaptureFixture[str])
 
 
 def test_max_tokens_per_agent_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """from_env() reads 16384 when AI_MAX_TOKENS_PER_AGENT is unset."""
+    """from_env() reads 32768 when AI_MAX_TOKENS_PER_AGENT is unset."""
     monkeypatch.delenv("AI_MAX_TOKENS_PER_AGENT", raising=False)
     cfg = ReviewConfig.from_env()
-    assert cfg.max_tokens_per_agent == 16384
+    assert cfg.max_tokens_per_agent == 32768
 
 
 def test_max_tokens_per_agent_env_clamp_low(

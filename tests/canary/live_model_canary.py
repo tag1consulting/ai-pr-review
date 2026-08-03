@@ -99,8 +99,8 @@ async def _run_one(provider: str, model_id: str, agent_name: str) -> CanaryResul
         provider=provider,
         standard_model=model_id,
         premium_model=model_id,
-        # Match the ceiling that actually crashed in CI (#592), not a looser one.
-        max_tokens_per_agent=16384,
+        # Match the production ceiling so the canary tests what actually ships (#592, #642).
+        max_tokens_per_agent=32768,
         changed_files=[
             ".github/workflows/slash-commands.yml",
             "ai_pr_review/slash/dismiss.py",

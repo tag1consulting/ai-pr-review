@@ -130,9 +130,12 @@ inputs:
       Maximum number of output tokens each LLM agent may generate per call.
       Lower values reduce cost and latency; higher values allow more detailed output
       on large diffs. Must be a positive integer; values outside [256, 65536] are
-      clamped to that range with a warning. Default changed from 32768 to 16384 in v1.3.0.
+      clamped to that range with a warning. Lowered from 32768 to 16384 in v1.3.0 for
+      cross-engine consistency, then raised back to 32768 to give Claude Sonnet 5's
+      adaptive thinking enough headroom to avoid exhausting the budget before
+      producing output text (#592, #642).
     required: false
-    default: '16384'
+    default: '32768'
 
   analyzer-concurrency:
     description: >

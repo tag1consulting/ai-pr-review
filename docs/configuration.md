@@ -27,7 +27,7 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 | `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). Lower values produce more deterministic output. |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `16384` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 in v1.3.0. |
+| `max-tokens-per-agent` | No | `32768` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 to 16384 in v1.3.0, raised back for #642. |
 | `analyzer-concurrency` | No | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `parallel: false`. Requires the Python engine. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. |
 | `ignore-merge-commits` | No | `true` | Strip merge commits that pulled in upstream base-branch changes before computing the diff. Only the PR author's own commits are reviewed. Falls back to the unfiltered diff if cherry-pick conflicts occur. Set to `false` to review all commits including upstream merges. |
@@ -53,7 +53,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | `model-premium` | Override the premium agent model ID (full mode only) |
 | `AI_REVIEW_MAX_DIFF_LINES` | `5000` | `max-diff-lines` | Skip review when diff exceeds this many lines |
 | `AI_REVIEW_MAX_INLINE` | `25` | `max-inline` | Max inline comments per run; excess routed to the summary body |
-| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `16384` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | `32768` | `max-tokens-per-agent` | Output token budget per LLM agent call (clamped to 256–65536) |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | `enable-suggestions` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | `parallel` | Run agents in parallel (tiered fan-out). Set `false` if you hit provider rate limits |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | `ignore-merge-commits` | Strip upstream base-branch merges from the diff before review |
