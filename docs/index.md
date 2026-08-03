@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.4.7
+
+**Raised the `max_tokens_per_agent` default from 16384 back to 32768.** Claude Sonnet 5's adaptive thinking could exhaust the lower budget on thinking alone, leaving no room for output text. Also fixes the live-model canary's auto-filed issue mislabeling an API quota block as a model-behavior regression, and a bug that made `/ai-pr-review dismiss`/`false-positive`/`wont-fix` fail to locate a finding on a review approved with only Medium/Low findings.
+
+See [Features → v2.4.7](features#whats-new-in-v247) for details.
+
 ## What's new in v2.4.6
 
 **Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision on GitHub and Bitbucket**, plus a related prompt-injection path and a Bitbucket findings-blanking bug. Also: a runtime deprecation warning for `REVIEW_TARGET=standalone`, a whitespace-stripping fix for `github_repository`, and a Checks-tab annotation when a `/ai-pr-review dismiss` command hits a VCS API error.
@@ -79,12 +85,6 @@ See [Features → v2.4.6](features#whats-new-in-v246) for details.
 **Fixed the merge-commit filter silently failing in production, plus faster native-arm64 release builds.** The `ignore_merge_commits` filter no longer silently falls back to unbounded diffs when a container has no git identity configured, and release container builds now build `linux/amd64`/`linux/arm64` natively instead of emulating arm64 via QEMU.
 
 See [Features → v2.4.5](features#whats-new-in-v245) for details.
-
-## What's new in v2.4.4
-
-**Fixed slash-command review attribution.** `/ai-pr-review rescan` and `/ai-pr-review review-full` now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT owner's identity.
-
-See [Features → v2.4.4](features#whats-new-in-v244) for details.
 
 ## Learn more
 

@@ -7,6 +7,14 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.7
+
+**`max_tokens_per_agent` default raised from 16384 back to 32768 (closes #642).** Claude Sonnet 5's adaptive thinking runs at implicit `effort="high"`, and `resolve_effort()` (#592) already caps it to `"low"` for that model family, but the live model canary showed that isn't always enough headroom: `silent-failure-hunter` hit `stop_reason=max_tokens` after spending 14101 of the 16384-token budget on thinking, leaving zero room for output text. This reverses the default-lowering half of the v1.3.0 change that closed #357. Non-overriding consumers will see a higher worst-case per-agent token spend; set `max-tokens-per-agent: 16384` (or `AI_MAX_TOKENS_PER_AGENT=16384`) to restore the prior budget.
+
+**The live-model-canary's auto-filed GitHub issue no longer mislabels an API quota/billing block as a Sonnet 5 model-behavior regression (#636).** The issue body's explanation text was hardcoded to describe every canary failure as the same class of failure as #592, regardless of what actually happened. The canary now classifies each failure as quota/billing or a genuine model-behavior anomaly and composes the issue body accordingly.
+
+**`/ai-pr-review dismiss|false-positive|wont-fix F<n>` no longer fails to locate a finding on an APPROVEd review (#645).** The review-body renderer opens the body-findings bullet section under one of three headings depending on outcome, and the bullet scanner only recognized two of them — missing the APPROVE-path `### Findings (informational)` heading used when a review has only Medium/Low findings. Both scanners now share one recognized-heading constant so they can't drift apart again.
+
 ## What's new in v2.4.6
 
 **Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision.** A judge-downranked High-severity finding could vanish from the headline ("Overall Risk: None") on GitHub and Bitbucket even though the review still correctly requested changes and posted the finding inline. Fixed with a shared headline calculation both providers now use, plus two related fixes: a prompt-injection path that let an untrusted agent hide its own finding was closed, and a Bitbucket-specific bug that could blank the entire findings section when every finding happened to be out-of-diff was fixed.
