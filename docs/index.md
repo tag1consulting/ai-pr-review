@@ -70,7 +70,7 @@ That's it — reviews start firing on the next PR.
 
 ## What's new in v2.4.7
 
-**Raised the `max_tokens_per_agent` default from 16384 back to 32768.** Claude Sonnet 5's adaptive thinking could exhaust the lower budget on thinking alone, leaving no room for output text. Also fixes the live-model canary's auto-filed issue mislabeling an API quota block as a model-behavior regression.
+**Raised the `max_tokens_per_agent` default from 16384 back to 32768.** Claude Sonnet 5's adaptive thinking could exhaust the lower budget on thinking alone, leaving no room for output text. Also fixes the live-model canary's auto-filed issue mislabeling an API quota block as a model-behavior regression, and a bug that made `/ai-pr-review dismiss`/`false-positive`/`wont-fix` fail to locate a finding on a review approved with only Medium/Low findings.
 
 See [Features → v2.4.7](features#whats-new-in-v247) for details.
 
