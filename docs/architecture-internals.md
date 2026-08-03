@@ -289,7 +289,7 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_PARALLEL` | `true` | Tiered parallel agent execution |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run |
-| `AI_MAX_TOKENS_PER_AGENT` | `16384` | Max output tokens per LLM agent call; clamped to [256, 65536] |
+| `AI_MAX_TOKENS_PER_AGENT` | `32768` | Max output tokens per LLM agent call; clamped to [256, 65536] |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons (GitHub and GitLab; ignored on Bitbucket) |
 | `LLM_PROMPT_CACHING` | `auto` | Anthropic/Bedrock prompt caching. Valid: `auto`, `true`, `false` |
 | `AI_CACHE_PRIMING` | `false` | Opt-in cache-writing serialization before parallel fan-out |

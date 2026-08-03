@@ -101,7 +101,7 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
     github-token: ${{ secrets.GITHUB_TOKEN }}
     max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
     max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
-    max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '16384' }}
+    max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '32768' }}
     enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
     parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
     ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
@@ -124,7 +124,7 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
 | `AI_REVIEW_MAX_DIFF_LINES` | Variable | No | Skip review when diff exceeds this many lines (default: `5000`) |
 | `AI_REVIEW_MAX_INLINE` | Variable | No | Max inline comments per run; excess in summary (default: `25`) |
-| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | Variable | No | Output token budget per LLM agent (default: `16384`) |
+| `AI_REVIEW_MAX_TOKENS_PER_AGENT` | Variable | No | Output token budget per LLM agent (default: `32768`) |
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | Variable | No | Enable "Apply suggestion" buttons (default: `true`) |
 | `AI_REVIEW_PARALLEL` | Variable | No | Parallel tiered fan-out; set `false` for sequential (default: `true`) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | Strip upstream base-branch merges from diff (default: `true`; set to `false` to include upstream merges) |

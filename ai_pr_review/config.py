@@ -200,7 +200,7 @@ class ReviewConfig(BaseModel):
     # which meant CLI users (no action.yml input) saw a different cap than
     # workflow-driven users.
     max_inline: int = 25
-    max_tokens_per_agent: int = 16384
+    max_tokens_per_agent: int = 32768
     enable_suggestions: bool = True
     cache_priming: bool = False
     llm_prompt_caching: str = "auto"
@@ -467,7 +467,7 @@ class ReviewConfig(BaseModel):
             parallel=_bool("AI_PARALLEL", True),
             analyzer_concurrency=max(1, _int("AI_ANALYZER_CONCURRENCY", 4)),
             max_inline=_int("AI_MAX_INLINE", 25),
-            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 16384),
+            max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 32768),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
             cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),

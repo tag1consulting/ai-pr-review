@@ -255,7 +255,7 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         provider=PROVIDER,
         standard_model=model_id,
         premium_model=model_id,
-        max_tokens_per_agent=16384,
+        max_tokens_per_agent=32768,
     )
 
     try:
