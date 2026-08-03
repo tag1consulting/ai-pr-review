@@ -21,7 +21,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
-from ai_pr_review.vcs._finding_ids import _ID_RE, _LOCATION_RE, _SOURCE_RE
+from ai_pr_review.vcs._finding_ids import (
+    _ID_RE,
+    _LOCATION_RE,
+    _SOURCE_RE,
+    BODY_SECTION_START_MARKERS,
+)
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.marker import extract_id_map
 
@@ -90,28 +95,27 @@ class DismissResult:
 
 
 def _scan_body_bullets(bodies: Sequence[str]) -> dict[int, ClassifiedFinding]:
-    """Scan both body-finding buckets in every body, unconditionally.
+    """Scan all body-finding buckets in every body, unconditionally.
 
     Unlike `_parse_existing_ids` (which takes a marker fast-path and never
     scans bullets when the id-map marker is present), this scan always walks
     every body's lines. The id-map marker carries fingerprints for *all*
-    finding buckets (inline + both body buckets) indiscriminately, so it
+    finding buckets (inline + body buckets) indiscriminately, so it
     cannot answer "which bucket is F<n> in" — only a bullet-scan can.
 
     Section tracking mirrors `_parse_existing_ids`'s fallback loop: entered by
-    either the in-diff "### Findings not attached to specific lines" heading
-    or the out-of-diff "Out-of-diff analyzer findings" marker (no heading of
-    its own), exited by the next "###" or a "</details>" close.
+    any of `BODY_SECTION_START_MARKERS` (the in-diff "### Findings not
+    attached to specific lines" heading, the out-of-diff "Out-of-diff
+    analyzer findings" marker with no heading of its own, or the APPROVE-path
+    "### Findings (informational)" heading — issue #645), exited by the next
+    "###" or a "</details>" close.
     """
     result: dict[int, ClassifiedFinding] = {}
     for body in bodies:
         in_body_section = False
         for line in body.splitlines():
             stripped = line.strip()
-            if "### Findings not attached to specific lines" in stripped:
-                in_body_section = True
-                continue
-            if "Out-of-diff analyzer findings" in stripped:
+            if any(marker in stripped for marker in BODY_SECTION_START_MARKERS):
                 in_body_section = True
                 continue
             if in_body_section and stripped.startswith("###"):
