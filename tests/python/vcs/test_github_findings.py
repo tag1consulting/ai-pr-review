@@ -440,6 +440,41 @@ def test_post_findings_request_changes_retries_as_comment_on_failure() -> None:
     assert attempt["n"] == 2
 
 
+def test_post_findings_approve_degraded_to_comment_corrects_body() -> None:
+    """When GitHub rejects an APPROVE POST and the COMMENT retry succeeds, the
+    posted body must not still read as an unqualified approval (#650 follow-up:
+    the body was rendered for the APPROVE outcome before the fallback fired,
+    so without a correction a downgraded review would silently say "Approved"
+    while GitHub itself only recorded a COMMENTED review)."""
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+    post_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/reviews" in str(req.url):
+            import json
+
+            body = json.loads(req.content)
+            post_bodies.append(body)
+            if body["event"] == "APPROVE":
+                return httpx.Response(422, json={"message": "no permission"})
+            return httpx.Response(201, json={"id": 300})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([], diff, event="APPROVE")
+    assert result.ok
+    assert result.event == "COMMENT"
+    assert result.degraded_to_comment is True
+    assert len(post_bodies) == 2
+    assert post_bodies[0]["event"] == "APPROVE"
+    assert post_bodies[1]["event"] == "COMMENT"
+    posted_body = post_bodies[1]["body"]
+    assert "NOT been approved" in posted_body
+    # Original heading is still present underneath the correction note --
+    # only prepended to, not silently swapped out.
+    assert "## AI Review: Approved" in posted_body
+
+
 def test_post_findings_final_fallback_to_issue_comment() -> None:
     findings = [
         Finding(severity="High", confidence=90, finding="x", file="app.py", line=4)

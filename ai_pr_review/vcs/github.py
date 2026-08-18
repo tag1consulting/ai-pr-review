@@ -553,11 +553,37 @@ class GitHubProvider:
             )
 
         # Fallback 1: retry as COMMENT (GITHUB_TOKEN may not be able to block/approve)
-        self._errors.append(
-            f"post review ({event}): HTTP {resp.status_code}: {resp.text[:200]}"
-        )
+        degrade_detail = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        self._errors.append(f"post review ({event}): {degrade_detail}")
         if event in ("APPROVE", "REQUEST_CHANGES"):
+            import os as _os
+            _log.warning(
+                "github: post review as %s failed (%s); retrying as COMMENT — "
+                "the PR will NOT actually be %s",
+                event, degrade_detail,
+                "approved" if event == "APPROVE" else "marked as changes requested",
+            )
+            if _os.environ.get("GITHUB_ACTIONS") == "true":
+                print(
+                    f"::warning::ai-pr-review: could not post review as {event} "
+                    f"({degrade_detail}); falling back to a plain COMMENT review. "
+                    "This PR has NOT been approved by ai-pr-review.",
+                    flush=True,
+                )
+            if event == "APPROVE":
+                # The body was rendered for an APPROVE outcome and claims the
+                # PR was approved. Since GitHub is about to receive this as a
+                # COMMENT instead, that claim would be false — prepend a
+                # visible correction so nobody mistakes the comment for a
+                # real approval.
+                body = (
+                    "> **Note:** GitHub rejected posting this review as an "
+                    f"approval ({degrade_detail}); posting the findings below "
+                    "as a comment instead. **This PR has NOT been approved "
+                    "by ai-pr-review.**\n\n"
+                ) + body
             review_payload["event"] = "COMMENT"
+            review_payload["body"] = body
             resp2 = self.client.request(
                 "POST", self._reviews_url(), json_body=review_payload
             )

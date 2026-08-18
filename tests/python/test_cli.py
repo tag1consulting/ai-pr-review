@@ -379,6 +379,84 @@ class TestParseChangedFilesPayload:
         assert "b.py" in result.all_files
 
 
+class TestEmitReviewResult:
+    """Tests for emit_review_result's degraded-event warning (#650 follow-up).
+
+    A silently-degraded APPROVE->COMMENT post has FindingsResult.ok=True (the
+    COMMENT retry succeeded), so it must not be mistaken for a normal
+    successful run: emit_review_result must report the event actually
+    posted, not just the pre-post decision.
+    """
+
+    def _make_result(self, *, outcome_event: str, posted_event: str | None,
+                      degraded: bool = False) -> object:
+        from unittest.mock import MagicMock
+
+        from ai_pr_review.review.outcome import ReviewOutcome
+        from ai_pr_review.vcs.protocol import FindingsResult
+
+        result = MagicMock()
+        result.skipped = False
+        result.findings = []
+        result.failed_agents = []
+        result.outcome = ReviewOutcome(
+            risk="Low", event=outcome_event, may_approve=(outcome_event == "APPROVE"),
+            incomplete=False, finding_total=0,
+        )
+        result.findings_post = (
+            FindingsResult(
+                review_id=1, inline_posted=0, body_findings=0,
+                event=posted_event, degraded_to_comment=degraded,
+            )
+            if posted_event is not None else None
+        )
+        return result
+
+    def test_reports_actual_posted_event_not_intended_event(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from ai_pr_review.review.reporting import emit_review_result
+
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="COMMENT", degraded=True,
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "event=COMMENT" in err
+        assert "event=APPROVE" not in err
+
+    def test_warns_when_degraded(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from ai_pr_review.review.reporting import emit_review_result
+
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="COMMENT", degraded=True,
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" in err
+        assert "was NOT approved" in err
+
+    def test_no_warning_when_event_matches(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from ai_pr_review.review.reporting import emit_review_result
+
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="APPROVE", degraded=False,
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" not in err
+
+    def test_no_warning_when_findings_post_is_none(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Skip path / crash-before-post: nothing to compare, no warning."""
+        from ai_pr_review.review.reporting import emit_review_result
+
+        result = self._make_result(outcome_event="APPROVE", posted_event=None)
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" not in err
+        assert "event=APPROVE" in err
+
+
 class TestWriteStepSummary:
     """Tests for _write_step_summary (E4.S3 — GITHUB_STEP_SUMMARY output)."""
 
@@ -599,6 +677,38 @@ class TestWriteStepSummary:
         _write_step_summary(result, self._make_runtime(tmp_path), "")
 
         content = summary_path.read_text()
+        assert "⚠️ Posting failed" not in content
+
+    def test_degraded_approve_to_comment_shows_banner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A silently-degraded APPROVE->COMMENT (github.py's fallback, ok=True
+        since the retry succeeded) must still surface a visible banner --
+        otherwise a rejected approval reads as a normal, successful post."""
+        from ai_pr_review.review.outcome import ReviewOutcome
+        from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
+        from ai_pr_review.vcs.protocol import FindingsResult, SummaryResult
+
+        summary_path = tmp_path / "step_summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        result = self._make_result()
+        result.outcome = ReviewOutcome(
+            risk="Low", event="APPROVE", may_approve=True, incomplete=False,
+            finding_total=0,
+        )
+        result.summary = SummaryResult(comment_id=42, created=True, updated=False)
+        result.findings_post = FindingsResult(
+            review_id=99, inline_posted=0, body_findings=0, event="COMMENT",
+            degraded_to_comment=True,
+        )
+
+        _write_step_summary(result, self._make_runtime(tmp_path), "")
+
+        content = summary_path.read_text()
+        assert "posted as COMMENT, not APPROVE" in content
+        assert "NOT approved" in content
+        # ok=True path (no .error) must not also trip the unrelated posting-failed banner
         assert "⚠️ Posting failed" not in content
 
     def test_run_review_async_writes_step_summary_before_failure_exit(
