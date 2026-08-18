@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.8] - 2026-08-18
+
+### Fixed
+
+- **A GitHub review that failed to post as `APPROVE` could silently post as a plain `COMMENT` while its body still claimed the PR was approved.** `GitHubProvider.post_findings()` renders the review body for the intended outcome before posting; when GitHub rejected the `APPROVE` request, the code retried as `COMMENT` and, if that retry succeeded, returned an `ok` result with the misleading "Approved" body text uncorrected — GitHub recorded a `COMMENTED` review with `reviewDecision` staying `REVIEW_REQUIRED`, but every visible artifact (the PR comment, the workflow log, `GITHUB_STEP_SUMMARY`) still read as a successful approval, with no signal anywhere that it never actually landed. Fixed: the review body now gets a visible correction ("This PR has NOT been approved by ai-pr-review") before the `COMMENT` retry, sized to fit alongside GitHub's body-size limit; the underlying HTTP failure is logged and raised as a `::warning::` GitHub Actions annotation; and `emit_review_result`/`write_step_summary` now report the event actually posted rather than only the pre-post decision, flagging the two whenever they diverge. (#651)
+
 ## [2.4.7] - 2026-08-03
 
 ### Fixed
