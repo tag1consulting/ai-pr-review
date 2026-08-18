@@ -7,6 +7,10 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.8
+
+**A GitHub review that failed to post as `APPROVE` no longer silently posts as a plain `COMMENT` while still claiming the PR was approved (#651).** Diagnosed on a real PR: GitHub's `reviewDecision` stayed `REVIEW_REQUIRED` while the review comment itself read "AI Review: Approved." The review body is rendered for the intended outcome before posting, and when GitHub rejected the `APPROVE` request, the retry-as-`COMMENT` fallback left that misleading text uncorrected — with no signal anywhere (PR comment, workflow log, or step summary) that the approval never actually landed. The body now gets a visible correction before the `COMMENT` retry, the underlying HTTP failure is logged and raised as a Checks-tab annotation, and the workflow log / step summary now report the event actually posted instead of only the pre-post decision.
+
 ## What's new in v2.4.7
 
 **`max_tokens_per_agent` default raised from 16384 back to 32768 (closes #642).** Claude Sonnet 5's adaptive thinking runs at implicit `effort="high"`, and `resolve_effort()` (#592) already caps it to `"low"` for that model family, but the live model canary showed that isn't always enough headroom: `silent-failure-hunter` hit `stop_reason=max_tokens` after spending 14101 of the 16384-token budget on thinking, leaving zero room for output text. This reverses the default-lowering half of the v1.3.0 change that closed #357. Non-overriding consumers will see a higher worst-case per-agent token spend; set `max-tokens-per-agent: 16384` (or `AI_MAX_TOKENS_PER_AGENT=16384`) to restore the prior budget.
