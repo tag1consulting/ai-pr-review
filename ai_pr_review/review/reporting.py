@@ -199,6 +199,29 @@ def write_step_summary(
                     "",
                 ]
 
+        # --- Degraded-event trace (silent APPROVE→COMMENT downgrade) ---
+        # A degraded post still has ok=True (no error — the COMMENT retry
+        # succeeded), so the findings_failed branch above never fires for it.
+        # Without this, a rejected APPROVE silently becomes a plain comment
+        # that still reads "Approved" with no visible signal anywhere that
+        # the PR was never actually approved.
+        degraded = (
+            result.findings_post is not None
+            and result.findings_post.degraded_to_comment
+            and result.outcome.event != result.findings_post.event
+        )
+        if degraded:
+            assert result.findings_post is not None
+            lines += [
+                f"### ⚠️ Review posted as {result.findings_post.event}, "
+                f"not {result.outcome.event}",
+                "",
+                "GitHub rejected the intended review event and ai-pr-review "
+                "fell back to a plain comment. **This PR was NOT approved by "
+                "ai-pr-review.** See the job log for the underlying HTTP error.",
+                "",
+            ]
+
         if token_section:
             lines.append(token_section)
         if summary_text.strip():
@@ -264,17 +287,45 @@ def emit_post_failure_annotation(result: ReviewResult) -> None:
 
 
 def emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> None:
-    """Emit a one-line summary to stderr."""
+    """Emit a one-line summary to stderr.
+
+    Reports the event actually posted to the VCS (``findings_post.event``)
+    rather than only the pre-post decision (``outcome.event``): a provider
+    can silently downgrade APPROVE to COMMENT when the approval POST is
+    rejected (e.g. GitHub's github.py degrade-to-COMMENT fallback), and this
+    line is the only per-run signal a human scanning workflow logs sees, so
+    it must not claim an approval that was never actually recorded.
+    """
     if result.skipped:
         click.echo(f"Review skipped: {result.skip_reason}", err=True)
         return
     n_findings = len(result.findings)
     n_failed = len(result.failed_agents)
+    posted = result.findings_post
+    event = posted.event if posted is not None else result.outcome.event
     click.echo(
         f"Review complete: {n_findings} findings, "
         f"{n_failed} failed agents, "
-        f"event={result.outcome.event}, "
+        f"event={event}, "
         f"base={base_ref[:7] if base_ref else '?'}..{head[:7] if head else '?'}",
         err=True,
     )
+    # Gated like every other ::warning::/::error:: annotation in this codebase
+    # (see emit_post_failure_annotation below, github.py's own degrade
+    # annotation): github.py already emits its own ::warning:: for this exact
+    # event when running in GitHub Actions, so an ungated echo here would
+    # both duplicate that annotation and print raw workflow-command syntax
+    # to stderr on local/non-Actions runs.
+    if (
+        posted is not None
+        and posted.degraded_to_comment
+        and result.outcome.event != posted.event
+        and os.environ.get("GITHUB_ACTIONS") == "true"
+    ):
+        click.echo(
+            f"::warning::ai-pr-review: intended review event was "
+            f"{result.outcome.event} but it was posted as {posted.event} "
+            "instead — the PR was NOT approved/changes-requested by this run",
+            err=True,
+        )
 

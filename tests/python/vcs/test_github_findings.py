@@ -440,6 +440,145 @@ def test_post_findings_request_changes_retries_as_comment_on_failure() -> None:
     assert attempt["n"] == 2
 
 
+def test_post_findings_approve_degraded_to_comment_corrects_body() -> None:
+    """When GitHub rejects an APPROVE POST and the COMMENT retry succeeds, the
+    posted body must not still read as an unqualified approval (#650 follow-up:
+    the body was rendered for the APPROVE outcome before the fallback fired,
+    so without a correction a downgraded review would silently say "Approved"
+    while GitHub itself only recorded a COMMENTED review)."""
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+    post_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/reviews" in str(req.url):
+            import json
+
+            body = json.loads(req.content)
+            post_bodies.append(body)
+            if body["event"] == "APPROVE":
+                return httpx.Response(422, json={"message": "no permission"})
+            return httpx.Response(201, json={"id": 300})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([], diff, event="APPROVE")
+    assert result.ok
+    assert result.event == "COMMENT"
+    assert result.degraded_to_comment is True
+    assert len(post_bodies) == 2
+    assert post_bodies[0]["event"] == "APPROVE"
+    assert post_bodies[1]["event"] == "COMMENT"
+    posted_body = post_bodies[1]["body"]
+    assert "NOT been approved" in posted_body
+    # Original heading is still present underneath the correction note --
+    # only prepended to, not silently swapped out.
+    assert "## AI Review: Approved" in posted_body
+
+
+def test_post_findings_approve_degrade_logs_and_annotates_in_github_actions(
+    monkeypatch, caplog,
+) -> None:
+    """The degrade-to-COMMENT path must surface the real HTTP failure somewhere
+    a human can see it: a log warning always, and a GitHub Actions ::warning::
+    annotation (matching this file's existing pattern) when running in CI."""
+    import logging
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/reviews" in str(req.url):
+            import json
+
+            body = json.loads(req.content)
+            if body["event"] == "APPROVE":
+                return httpx.Response(422, json={"message": "no permission"})
+            return httpx.Response(201, json={"id": 301})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    with caplog.at_level(logging.WARNING):
+        result = prov.post_findings([], diff, event="APPROVE")
+    assert result.degraded_to_comment is True
+    assert any("retrying as COMMENT" in r.message for r in caplog.records)
+
+
+def test_post_findings_approve_degrade_prints_warning_annotation(monkeypatch, capsys) -> None:
+    """Same scenario, asserting the printed ::warning:: annotation via capsys
+    (caplog only sees the logging-module warning; this is the separate
+    workflow-command print statement GitHub Actions itself parses)."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/reviews" in str(req.url):
+            import json
+
+            body = json.loads(req.content)
+            if body["event"] == "APPROVE":
+                return httpx.Response(422, json={"message": "no permission"})
+            return httpx.Response(201, json={"id": 302})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    prov.post_findings([], diff, event="APPROVE")
+    out = capsys.readouterr().out
+    assert "::warning::" in out
+    assert "NOT been approved" in out
+
+
+def test_post_findings_approve_fully_degraded_to_issue_comment_corrects_body() -> None:
+    """When BOTH the APPROVE POST and the COMMENT retry fail, the final
+    plain-issue-comment fallback must still carry the approval correction --
+    the `body` reassignment happens before the COMMENT retry and must survive
+    into Fallback 2, which reuses the same `body` variable."""
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+    fallback_bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            return httpx.Response(422, json={"message": "broken"})
+        if req.method == "POST" and "/issues/" in str(req.url) and "/comments" in str(req.url):
+            body = _json.loads(req.content) if req.content else {}
+            fallback_bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 888})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([], diff, event="APPROVE")
+    assert result.degraded_to_comment is True
+    assert result.review_id is None
+    assert len(fallback_bodies) == 1
+    assert "NOT been approved" in fallback_bodies[0]
+
+
+def test_post_findings_comment_event_falling_through_to_issue_comment_is_not_approve_degrade() -> None:
+    """github.py's Fallback 2 (final plain issue-comment) sets
+    degraded_to_comment=True for ANY event whose review POST fails, not just
+    APPROVE/REQUEST_CHANGES -- when the original event was already COMMENT,
+    this is reachable with posted event == intended event, which downstream
+    reporting (reporting.py) must not mistake for a rejected approval."""
+    findings = [
+        Finding(severity="Low", confidence=80, finding="x", file="app.py", line=4)
+    ]
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/reviews" in str(req.url):
+            return httpx.Response(500, json={"message": "broken"})
+        if req.method == "POST" and "/issues/" in str(req.url) and "/comments" in str(req.url):
+            return httpx.Response(201, json={"id": 889})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings(findings, diff, event="COMMENT")
+    assert result.ok
+    assert result.event == "COMMENT"
+    assert result.degraded_to_comment is True
+
+
 def test_post_findings_final_fallback_to_issue_comment() -> None:
     findings = [
         Finding(severity="High", confidence=90, finding="x", file="app.py", line=4)
