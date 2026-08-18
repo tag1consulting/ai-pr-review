@@ -575,13 +575,26 @@ class GitHubProvider:
                 # PR was approved. Since GitHub is about to receive this as a
                 # COMMENT instead, that claim would be false — prepend a
                 # visible correction so nobody mistakes the comment for a
-                # real approval.
-                body = (
+                # real approval. The raw HTTP detail stays in the log/annotation
+                # above rather than the public body: it's upstream response
+                # text of unknown shape, and embedding it here risks breaking
+                # the blockquote (embedded newline) or widening its audience
+                # from log readers to anyone with PR read access.
+                note = (
                     "> **Note:** GitHub rejected posting this review as an "
-                    f"approval ({degrade_detail}); posting the findings below "
-                    "as a comment instead. **This PR has NOT been approved "
-                    "by ai-pr-review.**\n\n"
-                ) + body
+                    "approval; posting the findings below as a comment "
+                    "instead. **This PR has NOT been approved by "
+                    "ai-pr-review.** See the workflow run log for details.\n\n"
+                )
+                # body may already sit near GITHUB_MAX_BODY_SIZE (truncated
+                # earlier in this method for the original event) — reserve
+                # room for the note so the COMMENT retry can't itself fail
+                # for being too long.
+                note_bytes = len(note.encode("utf-8"))
+                body = truncate_body(
+                    body, limit=max(0, GITHUB_MAX_BODY_SIZE - note_bytes)
+                )
+                body = note + body
             review_payload["event"] = "COMMENT"
             review_payload["body"] = body
             resp2 = self.client.request(

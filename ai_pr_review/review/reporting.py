@@ -310,7 +310,18 @@ def emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> Non
         f"base={base_ref[:7] if base_ref else '?'}..{head[:7] if head else '?'}",
         err=True,
     )
-    if posted is not None and posted.degraded_to_comment and result.outcome.event != posted.event:
+    # Gated like every other ::warning::/::error:: annotation in this codebase
+    # (see emit_post_failure_annotation below, github.py's own degrade
+    # annotation): github.py already emits its own ::warning:: for this exact
+    # event when running in GitHub Actions, so an ungated echo here would
+    # both duplicate that annotation and print raw workflow-command syntax
+    # to stderr on local/non-Actions runs.
+    if (
+        posted is not None
+        and posted.degraded_to_comment
+        and result.outcome.event != posted.event
+        and os.environ.get("GITHUB_ACTIONS") == "true"
+    ):
         click.echo(
             f"::warning::ai-pr-review: intended review event was "
             f"{result.outcome.event} but it was posted as {posted.event} "

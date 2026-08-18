@@ -425,9 +425,12 @@ class TestEmitReviewResult:
         assert "event=COMMENT" in err
         assert "event=APPROVE" not in err
 
-    def test_warns_when_degraded(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_warns_when_degraded_in_github_actions(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         from ai_pr_review.review.reporting import emit_review_result
 
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
         result = self._make_result(
             outcome_event="APPROVE", posted_event="COMMENT", degraded=True,
         )
@@ -436,11 +439,49 @@ class TestEmitReviewResult:
         assert "::warning::" in err
         assert "was NOT approved" in err
 
-    def test_no_warning_when_event_matches(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_no_warning_annotation_outside_github_actions(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The ::warning:: workflow-command syntax is GitHub Actions-specific;
+        a local/non-Actions run must not print it verbatim to stderr, and must
+        not duplicate github.py's own annotation for the same degrade event."""
         from ai_pr_review.review.reporting import emit_review_result
 
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="COMMENT", degraded=True,
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" not in err
+
+    def test_no_warning_when_event_matches(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ai_pr_review.review.reporting import emit_review_result
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
         result = self._make_result(
             outcome_event="APPROVE", posted_event="APPROVE", degraded=False,
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" not in err
+
+    def test_no_warning_when_degraded_to_comment_but_events_already_match(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """github.py's Fallback-2 (final plain issue-comment path) sets
+        degraded_to_comment=True for ANY original event, not just APPROVE/
+        REQUEST_CHANGES. When the original event was already COMMENT, the
+        posted event ("COMMENT") equals the intended event ("COMMENT") even
+        though degraded_to_comment is True -- the mismatch guard, not the
+        degraded flag alone, must be what gates the warning."""
+        from ai_pr_review.review.reporting import emit_review_result
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        result = self._make_result(
+            outcome_event="COMMENT", posted_event="COMMENT", degraded=True,
         )
         emit_review_result(result, base_ref="main", head="abc1234")
         err = capsys.readouterr().err
@@ -480,6 +521,7 @@ class TestWriteStepSummary:
         from unittest.mock import MagicMock
 
         from ai_pr_review.findings.models import Finding
+        from ai_pr_review.review.outcome import ReviewOutcome
         result = MagicMock()
         result.findings = [
             Finding(severity="High", file="foo.py", line=1,
@@ -489,6 +531,16 @@ class TestWriteStepSummary:
         result.failed_agents = []
         result.agent_results = []
         result.skipped = False
+        # Explicit, deterministic defaults rather than bare MagicMock attributes:
+        # the degraded-event banner compares result.outcome.event against
+        # result.findings_post.event, and two distinct auto-generated
+        # MagicMock reprs always compare unequal, which would silently trip
+        # that banner in every test in this class that doesn't override these.
+        result.outcome = ReviewOutcome(
+            risk="Low", event="COMMENT", may_approve=False,
+            incomplete=False, finding_total=1,
+        )
+        result.findings_post = None
         return result
 
     def test_writes_to_step_summary_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
