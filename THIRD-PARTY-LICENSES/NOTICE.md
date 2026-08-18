@@ -42,7 +42,7 @@ update this manifest. See `memory-bank/license-audit-2026-06-01.md` for the full
 | gh CLI | 2.91.0 | MIT | GitHub, Inc. | https://github.com/cli/cli/releases/tag/v2.91.0 | `gh-cli.LICENSE.txt` |
 | phpstan/phpstan | 2.1.51 | MIT | Ondřej Mirtes / PHPStan s.r.o. | https://github.com/phpstan/phpstan/releases/tag/2.1.51 | `phpstan.LICENSE.txt` |
 | mglaman/phpstan-drupal | 2.0.15 | MIT | Matt Glaman & contributors | https://github.com/mglaman/phpstan-drupal/releases/tag/2.0.15 | `phpstan-drupal.LICENSE.txt` |
-| squizlabs/php_codesniffer | 4.0.1 | BSD-3-Clause | Squiz Pty Ltd; PHPCSStandards | https://github.com/PHPCSStandards/PHP_CodeSniffer/releases/tag/4.0.1 | `php_codesniffer.LICENSE.txt` |
+| squizlabs/php_codesniffer | 4.0.4 | BSD-3-Clause | Squiz Pty Ltd; PHPCSStandards | https://github.com/PHPCSStandards/PHP_CodeSniffer/releases/tag/4.0.4 | `php_codesniffer.LICENSE.txt` |
 | drupal/coder | 9.0.0 | GPL-2.0-or-later | Drupal Coder maintainers & contributors | https://www.drupal.org/project/coder/releases/9.0.0 | `GPL-2.0.txt` |
 | ripgrep | (Ubuntu apt) | MIT / Unlicense (dual) | Andrew Gallant & contributors | https://github.com/BurntSushi/ripgrep | `ripgrep.LICENSE-MIT.txt` |
 
