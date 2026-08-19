@@ -38,7 +38,7 @@ FROM ghcr.io/astral-sh/ruff:0.16.3@sha256:afcc3c5d8893a58eff0189a7c7757e6a4ead99
 # ==============================================================================
 # Builder stage — pip packages, composer packages, gh CLI, semgrep rulesets
 # ==============================================================================
-FROM ubuntu:26.04@sha256:4b928535d153630c63e51b8888cffa732b46c612712e6f8bc1370cbc99992558 AS builder
+FROM ubuntu:26.04@sha256:6df9e8dd1eac389ebfef692c9648449adeb815d01e16e29cd6f3e50fe64ba9a6 AS builder
 
 ARG TARGETARCH
 
@@ -150,7 +150,7 @@ RUN curl -fsSL -o /usr/local/bin/composer \
 # ==============================================================================
 # Final stage
 # ==============================================================================
-FROM ubuntu:26.04@sha256:4b928535d153630c63e51b8888cffa732b46c612712e6f8bc1370cbc99992558
+FROM ubuntu:26.04@sha256:6df9e8dd1eac389ebfef692c9648449adeb815d01e16e29cd6f3e50fe64ba9a6
 
 # ARG must be re-declared in this stage; multi-stage Dockerfiles do not share
 # ARG scope. Default must match the builder stage above.
