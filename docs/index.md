@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.4.9
+
+**Asimov's Three Laws are now stated explicitly in `prompts/_governance.md`, and a new rule ties the learning loop's recorded maintainer verdicts to real suppression behavior.** A follow-up security fix closes an injection path where an attacker-controlled file name could forge a second maintainer verdict inside the trusted feedback block, and a relevance floor keeps verdicts about unrelated files from being injected at all.
+
+See [Features → v2.4.9](features#whats-new-in-v249) for details.
+
 ## What's new in v2.4.8
 
 **A GitHub review that failed to post as an approval no longer silently posts as a plain comment while still claiming the PR was approved.** The review body is rendered before posting, and when GitHub rejected the approval request, the fallback-to-comment path left that misleading text uncorrected — with no signal anywhere that the approval never actually landed. Fixed with a visible in-body correction, a Checks-tab annotation on the underlying failure, and a workflow log / step summary that now report the event actually posted.
@@ -79,12 +85,6 @@ See [Features → v2.4.8](features#whats-new-in-v248) for details.
 **Raised the `max_tokens_per_agent` default from 16384 back to 32768.** Claude Sonnet 5's adaptive thinking could exhaust the lower budget on thinking alone, leaving no room for output text. Also fixes the live-model canary's auto-filed issue mislabeling an API quota block as a model-behavior regression, and a bug that made `/ai-pr-review dismiss`/`false-positive`/`wont-fix` fail to locate a finding on a review approved with only Medium/Low findings.
 
 See [Features → v2.4.7](features#whats-new-in-v247) for details.
-
-## What's new in v2.4.6
-
-**Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision on GitHub and Bitbucket**, plus a related prompt-injection path and a Bitbucket findings-blanking bug. Also: a runtime deprecation warning for `REVIEW_TARGET=standalone`, a whitespace-stripping fix for `github_repository`, and a Checks-tab annotation when a `/ai-pr-review dismiss` command hits a VCS API error.
-
-See [Features → v2.4.6](features#whats-new-in-v246) for details.
 
 ## Learn more
 
