@@ -145,7 +145,26 @@ def _is_file_relevant(entry_file: str, changed_paths: list[str]) -> bool:
     """
     if not entry_file:
         return True
-    return any(entry_file in p or p in entry_file for p in changed_paths)
+    return any(_paths_match(entry_file, p) for p in changed_paths)
+
+
+def _paths_match(a: str, b: str) -> bool:
+    """Path-segment-aware match, tolerant of one side being a path suffix
+    of the other (e.g. a relative fragment vs. a full repo-root-relative
+    path), but not a bare substring match.
+
+    Bare substring containment (``a in b or b in a``) is what ``_rank``'s
+    pre-existing scoring already uses for ordering, where a false positive
+    only costs ranking precision. This filter *excludes* entries outright,
+    so the same looseness would let an unrelated file slip past the
+    relevance floor purely because its basename happens to contain another
+    basename as a substring -- e.g. ``file="b.py"`` would satisfy plain
+    substring containment against a changed path ``"lib/ab.py"``, even
+    though they are different files.
+    """
+    a = a.strip("/")
+    b = b.strip("/")
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
 
 
 def _rank(

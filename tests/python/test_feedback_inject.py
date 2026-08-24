@@ -134,6 +134,28 @@ def test_irrelevant_file_entry_excluded() -> None:
     assert "unrelated file" not in result
 
 
+def test_relevance_floor_rejects_basename_substring_false_positive() -> None:
+    """The relevance floor must not treat one basename as a substring match
+    of another unrelated, longer basename that happens to contain it as
+    literal characters -- e.g. "b.py" is a character substring of "ab.py"
+    but they are different files. Path-segment-aware matching (exact path,
+    or one side is a "/"-aligned suffix of the other) avoids this false
+    positive that bare `in` containment would produce."""
+    diff_with_similar_names = """\
+diff --git a/lib/ab.py b/lib/ab.py
+--- a/lib/ab.py
++++ b/lib/ab.py
+@@ -1,2 +1,3 @@
+ x = 1
++y = 2
+"""
+    unrelated_but_substring = _entry(file="b.py", reason="different file entirely")
+    result = build_feedback_addendum(
+        [unrelated_but_substring], diff_with_similar_names
+    )
+    assert "different file entirely" not in result
+
+
 def test_empty_file_entry_always_included() -> None:
     """General feedback with no file attached always passes the relevance
     floor -- it is not tied to any path, so there is nothing to filter on.
