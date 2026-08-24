@@ -101,7 +101,7 @@ When `enable-suggestions` is `true` (the default), eligible LLM agents emit an o
 Not eligible: `architecture-reviewer`, `adversarial-general`, `pr-summarizer`. Static analyzers never emit suggestions.
 
 **Prompt composition.** The dispatch layer composes the base prompt with up to four shared trailers at runtime:
-- `prompts/_governance.md` — Asimov-style severity lens, don't-reinvent-the-wheel detection, and verify-before-naming + secret-redaction posture. Applied to all 7 finding-producing agents (not `pr-summarizer`). Always-on; no env var toggle.
+- `prompts/_governance.md` — Asimov's Three Laws stated explicitly (First and Second binding, Third stated and rejected), then five operational rules: drop self-refuting findings, severity-by-harm, don't-reinvent-the-wheel detection, verify-before-naming plus secret redaction, and obey recorded maintainer verdicts from the `<repo-feedback>` block. Applied to all 7 finding-producing agents (not `pr-summarizer`). Always-on; no env var toggle.
 - `prompts/_knowledge-cutoff.md` — HARD CONSTRAINT block against version-existence hallucinations. Applied to all 7 finding-producing agents (not `pr-summarizer`).
 - `prompts/_trailer-findings.md` — `json-findings` schema instruction. Applied to all 7 finding-producing agents.
 - `prompts/suggestion-addendum.md` — "Apply suggestion" formatting. Gated by `AI_ENABLE_SUGGESTIONS`; applied only to the 5 eligible agents.

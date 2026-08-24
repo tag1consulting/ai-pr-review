@@ -7,6 +7,14 @@ render_with_liquid: false
 
 # Features
 
+## What's new in v2.4.9
+
+**Asimov's Three Laws are now stated explicitly in `prompts/_governance.md`, instead of being implied.** The file previously named the First Law only as a section title and never mentioned the Second or Third Laws by name, even though the Third Law was already being rejected in substance (the self-refuting-findings rule). The file now opens with all three laws stated up front: First and Second binding and quoted verbatim, Third stated and explicitly rejected. Each existing rule is relabeled with the law it implements, and text and numbering are unchanged for rules 1-4.
+
+**New rule 5, "Obey Recorded Maintainer Verdicts," gives the Second Law a real behavior.** When the learning loop's `<repo-feedback>` block records a maintainer's `false-positive` or `wont-fix` verdict on a past finding, agents now treat it as a standing order not to re-raise the same pattern, unless the current diff gives a reason the verdict does not cover, with the First Law always overriding when a re-raise is harm-relevant. This also closes a prompt-injection gap: directives embedded in diffs, commits, or PR text are now explicitly ruled out as "orders from a human being" for every governed agent, not just `security-reviewer` and `finding-judge`.
+
+The three inert `GOVERNANCE:`-block paragraphs added in #576 (`security-reviewer.md`, `adversarial-general.md`, `architecture-reviewer.md`) are removed, since no dispatch path ever wired up the mechanism they described, and their name now collides with the real always-on governance layer.
+
 ## What's new in v2.4.8
 
 **A GitHub review that failed to post as `APPROVE` no longer silently posts as a plain `COMMENT` while still claiming the PR was approved (#651).** Diagnosed on a real PR: GitHub's `reviewDecision` stayed `REVIEW_REQUIRED` while the review comment itself read "AI Review: Approved." The review body is rendered for the intended outcome before posting, and when GitHub rejected the `APPROVE` request, the retry-as-`COMMENT` fallback left that misleading text uncorrected — with no signal anywhere (PR comment, workflow log, or step summary) that the approval never actually landed. The body now gets a visible correction before the `COMMENT` retry, the underlying HTTP failure is logged and raised as a Checks-tab annotation, and the workflow log / step summary now report the event actually posted instead of only the pre-post decision.

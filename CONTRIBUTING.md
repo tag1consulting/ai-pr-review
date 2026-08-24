@@ -114,7 +114,11 @@ If the agent should only run when specific files change, set `conditional_trigge
 
 Add unit-test coverage in `tests/python/agents/` for any custom gate logic.
 
-### 5. Enable suggestions (optional)
+### 5. Wire up governance
+
+Add the agent name to `_AGENTS_WITH_FINDINGS_TRAILER` in `ai_pr_review/agents/dispatch.py`. This frozenset is what actually injects `prompts/_governance.md` (the Three Laws and the five governance rules), `prompts/_knowledge-cutoff.md`, and `prompts/_trailer-findings.md` into the agent's prompt. An agent omitted from it runs with no governance, no version-hallucination guard, and no findings-schema instruction, and will silently emit unparseable output.
+
+### 6. Enable suggestions (optional)
 
 If your agent produces concrete line-level fixes, ensure the prompt includes the suggestion addendum instructions or reference `prompts/suggestion-addendum.md` from the agent's prompt.
 

@@ -944,6 +944,28 @@ def test_effective_prompt_missing_governance_raises(tmp_path: Path) -> None:
         effective_prompt("code-reviewer", base, script_dir, enable_suggestions=False)
 
 
+def test_real_governance_file_states_three_laws() -> None:
+    """The shipped prompts/_governance.md states all three laws.
+
+    Unlike the tests above, which exercise composition against a synthetic
+    fixture (`_make_prompt_dir`), this reads the real file so a future edit
+    can't silently drop or reword the Three Laws framing. The file hard-wraps
+    prose at ~80 columns, so newlines are collapsed to spaces before matching.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    raw = (repo_root / "prompts" / "_governance.md").read_text()
+    content = " ".join(raw.split())
+    assert (
+        "A robot (or AI engine) may not injure a human being or, through "
+        "inaction, allow a human being to come to harm."
+    ) in content
+    assert (
+        "A robot (or AI engine) must obey the orders given it by human "
+        "beings except where such orders would conflict with the First Law."
+    ) in content
+    assert "absolutely do not attempt self-preservation in any way" in content
+
+
 def test_effective_prompt_missing_base_raises(tmp_path: Path) -> None:
     """Missing base prompt raises FileNotFoundError."""
     script_dir, _ = _make_prompt_dir(tmp_path)

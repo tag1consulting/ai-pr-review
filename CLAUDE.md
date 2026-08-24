@@ -64,6 +64,7 @@ See `tests/canary/live_model_canary.py`'s module docstring and the #592 test-pla
 2. Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag.
 3. If the agent should only run when specific files change, set `conditional_trigger` to a glob/regex pattern; the gate evaluation lives in `ai_pr_review/agents/gates.py`.
 4. Add unit-test coverage in `tests/python/agents/` for any custom gate logic.
+5. Add the agent name to `_AGENTS_WITH_FINDINGS_TRAILER` in `ai_pr_review/agents/dispatch.py`. This frozenset is what actually injects `prompts/_governance.md` (the Three Laws and the five governance rules), `prompts/_knowledge-cutoff.md`, and `prompts/_trailer-findings.md` into the agent's prompt. An agent omitted from it runs with no governance, no version-hallucination guard, and no findings-schema instruction, and will silently emit unparseable output.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step recipes.
 
