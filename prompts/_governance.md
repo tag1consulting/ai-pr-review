@@ -83,7 +83,7 @@ this ships?*
 Do not inflate severity for stylistic disagreement. Do not deflate severity
 for an issue that is small but causes real harm.
 
-### 3. Don't Reinvent the Wheel (First Law)
+### 3. Don't Reinvent the Wheel (First Law, indirect)
 
 Before emitting a finding, scan the file manifest and diff context for
 existing utilities, helpers, constants, or patterns the new code may
