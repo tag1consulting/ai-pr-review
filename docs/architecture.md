@@ -51,7 +51,7 @@ For the full directory listing with per-file annotations, see the [internal arch
 1. **action.yml** invokes `python3 -m ai_pr_review review`
 2. **`ai_pr_review/review/runtime.py`** (`build_review_runtime`) resolves config, builds the VCS provider, fetches the last-reviewed SHA, computes the diff, detects languages, runs static analyzers, loads SARIF findings, and loads suppression rules
 3. **`ai_pr_review/orchestrate.py`** (`run_review`) dispatches agent tiers in parallel, merges LLM and pre-computed findings, deduplicates, applies suppressions, and posts the summary and findings via the VCS provider client (all in one process)
-4. Each agent prompt is composed at dispatch time by injecting shared trailers: a **governance preamble** (`prompts/_governance.md` — severity calibration, verify-before-naming, secret redaction), a knowledge-cutoff guard, a findings-schema instruction, and optionally a code-suggestion addendum
+4. Each agent prompt is composed at dispatch time by injecting shared trailers: a **governance preamble** (`prompts/_governance.md` — Asimov's Three Laws, severity calibration, verify-before-naming, secret redaction, maintainer-verdict obedience), a knowledge-cutoff guard, a findings-schema instruction, and optionally a code-suggestion addendum
 
 ## Dependencies
 
