@@ -144,6 +144,10 @@ class GitHubProvider:
         c = self.config
         return f"/repos/{c.owner}/{c.repo}/pulls/comments/{comment_id}"
 
+    def _check_runs_url(self) -> str:
+        c = self.config
+        return f"/repos/{c.owner}/{c.repo}/check-runs"
+
     # ------------------------------------------------------------------
     # Summary comment find helpers
     # ------------------------------------------------------------------
@@ -825,6 +829,48 @@ class GitHubProvider:
             json_body={"body": message, "event": "APPROVE"},
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def post_check_run(
+        self, head_sha: str, name: str, conclusion: str, title: str, summary: str
+    ) -> bool:
+        """Create a GitHub check run reporting whether a required policy.yml
+        tier (see docs/policy.md) has run for `head_sha`.
+
+        GitHub-only (no GitLab/Bitbucket equivalent is wired here) — a
+        follow-up, not required for the policy.yml routing feature itself.
+        This is intentionally a create-only, fire-and-forget primitive: each
+        invocation (the automatic review, or a later `/ai-pr-review
+        review-full`) posts its own check run for the current head_sha, so
+        a later run naturally supersedes an earlier `neutral` one in the
+        Checks tab without needing to look up or update a prior run's ID.
+        Never raises — a failure to post is logged to self._errors and
+        must never block or fail the review itself (fail-soft, matching
+        every other best-effort posting step in this provider).
+
+        `conclusion` must be a valid GitHub check-run conclusion value —
+        this method only ever calls it with "success" or "neutral" (see
+        cli.py's post-review policy-gate step); "failure" is deliberately
+        never used here (see docs/policy.md's rationale: an unmet
+        requirement on the automatic push is not itself a failure, only an
+        unactioned manual step).
+        """
+        resp = self.client.request(
+            "POST",
+            self._check_runs_url(),
+            json_body={
+                "name": name,
+                "head_sha": head_sha,
+                "status": "completed",
+                "conclusion": conclusion,
+                "output": {"title": title, "summary": summary},
+            },
+        )
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"post_check_run: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return False
+        return True
 
     def fetch_review_comment(self, comment_id: int) -> dict[str, Any] | None:
         """Fetch a single PR review (inline) comment by its REST databaseId.

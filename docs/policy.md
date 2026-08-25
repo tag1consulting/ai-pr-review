@@ -82,3 +82,28 @@ This generalizes cleanly to any branch convention (`hotfix/*`, merges into a spe
 ## Requiring `head-ref`
 
 Route matching on `when.head-branch` requires the action to know the PR's head branch name. The `head-ref` action input (optional, defaults to `''`) carries this — the shipped templates for GitHub, GitLab, and Bitbucket all wire it. If you're on an older copy of a template that predates `head-ref`, add it (see [Configuration](configuration.md)) before using `head-branch` routes; `paths` and `base-branch` routes work without it.
+
+## Requiring a review tier before merge
+
+A route can name a policy that must have (at least) run before merge, via `require`. This is a **manual-trigger merge gate**: the automatic push doesn't need to run that tier itself, but a required status check on the target branch blocks merge until *some* run — automatic or `/ai-pr-review review-full` — satisfies it.
+
+```yaml
+policies:
+  integration:
+    extends: quick
+  deep:
+    extends: full
+
+routes:
+  - when: {base-branch: 'staging-*'}
+    policy: integration
+    require: deep
+```
+
+Every automatic push to a PR targeting `staging-*` runs the (cheap) `integration` tier and posts a GitHub check run named `ai-pr-review/policy-gate`:
+- **`neutral`** if only `integration` has run so far — the check summary tells the reviewer to comment `/ai-pr-review review-full` (or add the `ai-review-full` label) to satisfy the requirement. `neutral`, not `failure`, because an unmet requirement on an ordinary automatic push is not itself a defect — it's an unactioned manual step.
+- **`success`** once a run at the required tier (or full mode, which satisfies any requirement) has completed for the current commit — including a later `/ai-pr-review review-full` run, which re-posts the check for the same SHA and GitHub re-evaluates branch protection automatically.
+
+To make this a real merge gate, add branch protection on the target branch requiring the `ai-pr-review/policy-gate` check (**Settings → Branches → Branch protection rules**). The shipped GitHub templates grant the `checks: write` permission needed to post it.
+
+**GitHub only for now.** No GitLab/Bitbucket equivalent is wired yet — `require` is silently a no-op (logged at `info` level) on those providers; routing (`policies`/`routes` without `require`) works identically everywhere.

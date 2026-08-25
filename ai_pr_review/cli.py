@@ -40,6 +40,7 @@ from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
+    from ai_pr_review.review.runtime import ReviewRuntime
     from ai_pr_review.vcs import GitHubProvider
     from ai_pr_review.vcs.protocol import VcsProvider
 
@@ -101,6 +102,54 @@ def compute(output: str) -> None:
     except OSError as exc:
         click.echo(f"ERROR: could not write compute output: {exc}", err=True)
         sys.exit(1)
+
+
+def _post_policy_gate_check_run(runtime: ReviewRuntime) -> None:
+    """Post the ``ai-pr-review/policy-gate`` check run for the matched
+    policy.yml route's ``require`` field (see docs/policy.md). No-op when
+    no route requirement applies to this PR, or when the provider isn't
+    GitHub (GitHub-only for v1 — no check-run equivalent is wired for
+    GitLab/Bitbucket). Fail-soft: a posting failure is logged and must
+    never affect the review's own exit code.
+
+    Each invocation (the automatic review, or a later `/ai-pr-review
+    review-full`) posts its own check run for the current head_sha, so a
+    later run naturally supersedes an earlier `neutral` one in the Checks
+    tab -- no lookup or update of a prior run is needed.
+    """
+    if runtime.policy_gate_required is None:
+        return
+    from ai_pr_review.vcs import GitHubProvider  # noqa: PLC0415
+
+    if not isinstance(runtime.provider, GitHubProvider):
+        logger.info(
+            "policy-gate: 'require: %s' set but provider is not GitHub; "
+            "skipping check run (GitHub-only, see docs/policy.md)",
+            runtime.policy_gate_required,
+        )
+        return
+    if runtime.policy_gate_satisfied:
+        conclusion, title = "success", f"'{runtime.policy_gate_required}' review tier satisfied"
+        summary = (
+            f"This run satisfies the '{runtime.policy_gate_required}' review tier "
+            "required by the matched .github/ai-pr-review/policy.yml route."
+        )
+    else:
+        conclusion, title = "neutral", f"'{runtime.policy_gate_required}' review tier required"
+        summary = (
+            f"The matched .github/ai-pr-review/policy.yml route requires the "
+            f"'{runtime.policy_gate_required}' review tier before merge, and this "
+            "run did not run at that tier. Comment `/ai-pr-review review-full` on "
+            "this PR (or add the `ai-review-full` label) to satisfy it."
+        )
+    if not runtime.provider.post_check_run(
+        head_sha=runtime.head_sha,
+        name="ai-pr-review/policy-gate",
+        conclusion=conclusion,
+        title=title,
+        summary=summary,
+    ):
+        logger.warning("policy-gate: failed to post check run (see provider errors)")
 
 
 @cli.command()
@@ -274,6 +323,9 @@ async def _run_review_async(config: ReviewConfig) -> int:
         ),
     )
     _emit_post_failure_annotation(result)
+
+    if result.ok:
+        _post_policy_gate_check_run(runtime)
 
     if rc.telemetry_enabled:
         await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,

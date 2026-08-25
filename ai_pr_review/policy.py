@@ -53,12 +53,21 @@ class PolicyDef:
 
 @dataclass(frozen=True)
 class RouteRule:
-    """One ordered route: the first rule whose ``when`` matches wins."""
+    """One ordered route: the first rule whose ``when`` matches wins.
+
+    ``require``, when set, names a policy that must have (transitively)
+    run for this route's merge gate to pass — see
+    ``ai_pr_review.vcs.github.GitHubProvider.post_check_run`` and
+    ``policy_satisfies``. It plays no role in route matching or in
+    resolve_policy(); it is read back out by the caller after the review
+    completes, once the *actually applied* policy for this run is known.
+    """
 
     policy: str
     paths: tuple[str, ...] = ()
     base_branch: str | None = None
     head_branch: str | None = None
+    require: str | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +143,23 @@ def load_policy_file(workspace: str, base_ref: str) -> PolicyFile | None:
         return None
 
 
+def match_route(
+    policy_file: PolicyFile,
+    changed_files: Sequence[str],
+    base_ref: str,
+    head_ref: str,
+) -> RouteRule | None:
+    """Return the first matching route in full (including ``require``), or
+    None when no route matches — the caller falls back to
+    ``policy_file.default``, which carries no merge-gate requirement of its
+    own (only an explicit route can set ``require``).
+    """
+    for route in policy_file.routes:
+        if _route_matches(route, changed_files, base_ref, head_ref):
+            return route
+    return None
+
+
 def resolve_route(
     policy_file: PolicyFile,
     changed_files: Sequence[str],
@@ -145,10 +171,22 @@ def resolve_route(
     Falls back to ``policy_file.default`` when no route matches, and to
     None (caller uses hardcoded defaults) when there is no default either.
     """
-    for route in policy_file.routes:
-        if _route_matches(route, changed_files, base_ref, head_ref):
-            return route.policy
-    return policy_file.default
+    route = match_route(policy_file, changed_files, base_ref, head_ref)
+    return route.policy if route else policy_file.default
+
+
+def policy_satisfies(policy_file: PolicyFile, ran_policy_name: str, required_policy_name: str) -> bool:
+    """True if the policy that actually ran meets or exceeds ``required_policy_name``.
+
+    Two ways to satisfy a requirement: the ran policy IS the required one
+    (exact name match — handles two same-tier policies that aren't
+    otherwise comparable), or the ran policy resolved to full review mode,
+    which is a superset of any 'quick'-based tier by construction (full
+    mode runs strictly more agents than quick mode).
+    """
+    if ran_policy_name == required_policy_name:
+        return True
+    return resolve_policy(policy_file, ran_policy_name).review_mode == "full"
 
 
 def resolve_policy(policy_file: PolicyFile, policy_name: str) -> ResolvedPolicy:
@@ -253,6 +291,9 @@ def _parse_policy_file(raw: dict[object, object]) -> PolicyFile:
             raise ValueError(f"routes[{i}].policy must be a non-empty string")
         if policy_name not in policies and policy_name not in _BUILTIN_BASES:
             raise ValueError(f"routes[{i}].policy references unknown policy {policy_name!r}")
+        require = _opt_str(r.get("require"), f"routes[{i}].require")
+        if require is not None and require not in policies and require not in _BUILTIN_BASES:
+            raise ValueError(f"routes[{i}].require references unknown policy {require!r}")
         when = r.get("when") or {}
         if not isinstance(when, dict):
             raise ValueError(f"routes[{i}].when must be a mapping")
@@ -269,7 +310,13 @@ def _parse_policy_file(raw: dict[object, object]) -> PolicyFile:
                 "would match every PR, silently shadowing every route after it)"
             )
         routes.append(
-            RouteRule(policy=policy_name, paths=paths, base_branch=base_branch, head_branch=head_branch)
+            RouteRule(
+                policy=policy_name,
+                paths=paths,
+                base_branch=base_branch,
+                head_branch=head_branch,
+                require=require,
+            )
         )
 
     default = raw.get("default")

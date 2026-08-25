@@ -71,6 +71,11 @@ class ReviewRuntime:
     diff_path: Path
     feedback_entries_count: int
     sarif_elapsed_s: float | None
+    # Merge-gate inputs from a matched policy.yml route's 'require' field
+    # (see docs/policy.md). None when no policy.yml route requirement
+    # applies to this PR; the CLI's post_check_run step is a no-op then.
+    policy_gate_required: str | None
+    policy_gate_satisfied: bool
 
 
 async def build_review_runtime(
@@ -178,11 +183,14 @@ async def build_review_runtime(
     # explicit action input, label, or slash-command override always wins,
     # so behavior is unchanged for repos not adopting a policy file. Must
     # run before the DispatchContext below, which captures config.review_mode.
-    from ai_pr_review.policy import load_policy_file, resolve_policy, resolve_route
+    from ai_pr_review.policy import load_policy_file, match_route, resolve_policy
     _policy_file = load_policy_file(workspace=".", base_ref=base_ref)
     _resolved_policy = None
+    _matched_route = None
+    _policy_name: str | None = None
     if _policy_file is not None:
-        _policy_name = resolve_route(_policy_file, _changed_list, base_ref, config.head_ref)
+        _matched_route = match_route(_policy_file, _changed_list, base_ref, config.head_ref)
+        _policy_name = _matched_route.policy if _matched_route else _policy_file.default
         if _policy_name is not None:
             _resolved_policy = resolve_policy(_policy_file, _policy_name)
     config = config.model_copy(
@@ -198,6 +206,23 @@ async def build_review_runtime(
             "exclude_analyzers": config.exclude_analyzers
             or (_resolved_policy.exclude_analyzers if _resolved_policy else ()),
         }
+    )
+
+    # A route's 'require' is a merge-gate hint, not a routing input — it
+    # names the policy tier that must have run for post_check_run() (in
+    # cli.py) to report success. A full-mode run always satisfies any
+    # requirement (it runs a superset of every documented agent), whether
+    # that fullness came from the matched policy or from an explicit
+    # override (e.g. /ai-pr-review review-full). Otherwise it is satisfied
+    # only when the policy that actually matched this run IS the required
+    # one — an explicit override that only partially diverges from the
+    # matched policy (e.g. an extra --agents filter) does not count as
+    # satisfying a *different* named tier.
+    policy_gate_required: str | None = _matched_route.require if _matched_route else None
+    policy_gate_satisfied = (
+        policy_gate_required is None
+        or config.review_mode == "full"
+        or _policy_name == policy_gate_required
     )
 
     # 7. Build language-profile router once per run (avoid per-agent disk reads).
@@ -380,4 +405,6 @@ async def build_review_runtime(
         diff_path=diff_path,
         feedback_entries_count=feedback_entries_count,
         sarif_elapsed_s=sarif_elapsed_s,
+        policy_gate_required=policy_gate_required,
+        policy_gate_satisfied=policy_gate_satisfied,
     )

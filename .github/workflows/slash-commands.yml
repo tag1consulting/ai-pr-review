@@ -197,6 +197,10 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # checks: write is only exercised when a matched .github/ai-pr-review/
+  # policy.yml route sets 'require' (see docs/policy.md) — rescan and
+  # review-full re-post the ai-pr-review/policy-gate check run too.
+  checks: write
 
 jobs:
   handle-command:
