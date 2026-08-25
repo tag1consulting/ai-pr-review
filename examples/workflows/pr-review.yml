@@ -36,7 +36,7 @@
 #   AI_REVIEW_PARALLEL           — parallel tiered fan-out (default: true)
 #   AI_REVIEW_IGNORE_MERGE_COMMITS — strip upstream base-branch merge commits (default: true)
 #   AI_REVIEW_FAIL_ON_FINDINGS   — exit code 2 on REQUEST_CHANGES/COMMENT, for CI gates (default: true)
-#   AI_REVIEW_MODE_DEFAULT       — default mode used when /ai-pr-review rescan fires (default: quick)
+#   AI_REVIEW_MODE_DEFAULT       — mode for automatic review AND /ai-pr-review rescan when set (default: '' — defer to policy.yml, else quick)
 #   AI_REVIEW_FEEDBACK_LOOP      — enable learning loop (default: false; GitHub-only)
 #   AI_REVIEW_CONTEXT_ENRICHMENT — tree-sitter symbol-context injection (default: true)
 #   AI_REVIEW_CONTEXT_MAX_QUERIES — cap on symbol-lookup queries per run (default: 200)
@@ -145,13 +145,19 @@ jobs:
           # AI_REVIEW_MODEL_STANDARD / AI_REVIEW_MODEL_PREMIUM: override provider defaults
           model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
           model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
-          # Auto-select full mode for release PRs; customize the branch pattern
-          # for your repo's convention. See README "Auto-detecting release PRs".
+          # Explicit signals only: the ai-review-full label always wins, then
+          # the AI_REVIEW_MODE_DEFAULT repo variable (same var the rescan
+          # slash command uses), then '' — deferring to
+          # .github/ai-pr-review/policy.yml route matching by changed-file
+          # path, base branch, or head branch (see docs/policy.md), and
+          # finally the engine's own hardcoded 'quick' default if no policy
+          # file exists. A branch-name convention like "full mode for
+          # release/* PRs" belongs in policy.yml now, not hardcoded here —
+          # see the 'routes' example in docs/policy.md.
           review-mode: >-
             ${{
               contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' ||
-              startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
-              'quick'
+              vars.AI_REVIEW_MODE_DEFAULT || ''
             }}
           # AI_REVIEW_MAX_DIFF_LINES: skip review when diff exceeds this many lines (default: 5000)
           max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
@@ -240,7 +246,7 @@ jobs:
       provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
       base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
       image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
-      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || 'quick' }}
+      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || '' }}
       # --- Learning loop (Capability C) ---
       # AI_REVIEW_FEEDBACK_LOOP gates the feedback-command job which handles
       # /ai-pr-review false-positive | wont-fix | feedback | explain | revise.

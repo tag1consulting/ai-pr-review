@@ -73,9 +73,9 @@ curl -fsSL \
   -o .github/workflows/ai-pr-review-commands.yml
 ```
 
-## Auto-full for release PRs
+## Routing review depth by branch or path
 
-The example workflow auto-selects full review mode when the source branch starts with `release/`. Customize the `startsWith()` pattern in the `review-mode` expression for your repo's branch convention. See [README > Auto-detecting release PRs](../README.md#auto-detecting-release-prs) for common patterns.
+The example workflow's `review-mode` input defers to `.github/ai-pr-review/policy.yml` route matching whenever the `ai-review-full` label isn't present and `vars.AI_REVIEW_MODE_DEFAULT` isn't set — add that file to route full mode to a release branch, quick mode elsewhere, near-zero-cost reviews for content-only paths, etc. See [docs/policy.md](../docs/policy.md) for the schema and worked examples, including a release-branch escalation route.
 
 ## Slash commands
 

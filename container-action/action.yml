@@ -53,9 +53,11 @@ inputs:
     default: ${{ github.token }}
 
   review-mode:
-    description: 'quick (default) or full'
+    description: >
+      quick or full. Empty (default): defer to
+      .github/ai-pr-review/policy.yml route matching if present, else 'quick'.
     required: false
-    default: 'quick'
+    default: ''
 
   review-target:
     description: >

@@ -105,7 +105,7 @@ jobs:
       provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
       base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
       image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
-      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || 'quick' }}
+      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || '' }}
       # --- Learning loop (Capability C) ---
       # AI_REVIEW_FEEDBACK_LOOP gates the feedback-command job which handles
       # /ai-pr-review false-positive | wont-fix | feedback | explain | revise.

@@ -57,13 +57,16 @@ ai-review:
   script:
     - export VCS_PROVIDER=gitlab
     - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
-    - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+    # Empty (default): defer to .github/ai-pr-review/policy.yml route
+    # matching if present, else 'quick'. Set AI_REVIEW_MODE=full to override.
+    - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-}"
     - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-true}"
     # Opt-in capabilities (Python engine only — the default)
     - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
     - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"
     - export PR_NUMBER="$CI_MERGE_REQUEST_IID"
     - export BASE_REF="$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - export HEAD_REF="$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
     - export HEAD_SHA="$CI_COMMIT_SHA"
     - export GITLAB_PROJECT_ID="$CI_PROJECT_ID"
     - export GITLAB_MR_DIFF_BASE_SHA="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
