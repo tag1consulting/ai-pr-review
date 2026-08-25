@@ -307,8 +307,9 @@ jobs:
         run: |
           pr_json=$(gh pr view "$ISSUE_NUMBER" \
             --repo "$REPOSITORY" \
-            --json baseRefName,headRefOid)
+            --json baseRefName,headRefName,headRefOid)
           echo "base=$(echo "$pr_json" | jq -r .baseRefName)" >> "$GITHUB_OUTPUT"
+          echo "head=$(echo "$pr_json" | jq -r .headRefName)" >> "$GITHUB_OUTPUT"
           echo "sha=$(echo  "$pr_json" | jq -r .headRefOid)"  >> "$GITHUB_OUTPUT"
 
       - name: React — launching
@@ -342,6 +343,7 @@ jobs:
           github-token: ${{ secrets.actions-token || github.token }}
           pr-number: ${{ inputs.issue-number }}
           base-ref: ${{ steps.pr.outputs.base }}
+          head-ref: ${{ steps.pr.outputs.head }}
           head-sha: ${{ steps.pr.outputs.sha }}
           review-mode: ${{ inputs.review-mode-default }}
           analyzers: ${{ inputs.analyzers }}
@@ -364,6 +366,7 @@ jobs:
           github-token: ${{ secrets.actions-token || github.token }}
           pr-number: ${{ inputs.issue-number }}
           base-ref: ${{ steps.pr.outputs.base }}
+          head-ref: ${{ steps.pr.outputs.head }}
           head-sha: ${{ steps.pr.outputs.sha }}
           review-mode: 'full'
           analyzers: ${{ inputs.analyzers }}

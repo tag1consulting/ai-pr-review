@@ -197,8 +197,10 @@ jobs:
           PR_NUM: ${{ inputs.pr_number }}
         run: |
           base_ref=$(gh pr view "$PR_NUM" --json baseRefName --jq '.baseRefName')
+          head_ref=$(gh pr view "$PR_NUM" --json headRefName --jq '.headRefName')
           head_sha=$(gh pr view "$PR_NUM" --json headRefOid --jq '.headRefOid')
           echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
+          echo "head_ref=${head_ref}" >> "$GITHUB_OUTPUT"
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
 
       # For workflow_dispatch (standalone mode): resolve HEAD SHA; always diff against default branch.
@@ -259,6 +261,7 @@ jobs:
           review-target: ${{ (github.event_name == 'workflow_dispatch' && inputs.pr_number == '') && 'standalone' || 'pr' }}
           pr-number: ${{ inputs.pr_number || github.event.pull_request.number || '' }}
           base-ref: ${{ steps.resolve-standalone.outputs.base_ref || steps.resolve-pr.outputs.base_ref || github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          head-ref: ${{ steps.resolve-pr.outputs.head_ref || github.event.pull_request.head.ref || '' }}
           head-sha: ${{ steps.resolve-standalone.outputs.head_sha || steps.resolve-pr.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # vars.AI_REVIEW_PARALLEL disables tiered parallel fan-out (default true).
