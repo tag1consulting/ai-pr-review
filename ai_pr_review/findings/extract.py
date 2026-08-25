@@ -10,9 +10,17 @@ import json
 import re
 import sys
 
+from ai_pr_review.agents.roster import ADVISORY_AGENT_NAMES
 from ai_pr_review.findings.models import Finding
 
 _FENCE_RE = re.compile(r"```json-findings\n(.*?)```", re.DOTALL)
+
+# Severity an advisory agent's finding is clamped to (see AgentSpec.advisory).
+# Findings from these sources can never drive REQUEST_CHANGES on their own —
+# classify_review_outcome() only treats Critical/High as blocking, so
+# clamping here (not just asking nicely in the prompt) is what actually
+# enforces "advisory means non-blocking."
+_ADVISORY_SEVERITY_CAP = "Medium"
 
 # Phrases that indicate the finding's own narrative refutes itself.
 # Defense-in-depth backstop for the prompt directive in _governance.md
@@ -110,6 +118,19 @@ def _parse_and_validate(
             item["source"] = agent_name
         try:
             f = Finding.model_validate(item)
+            # Advisory agents (AgentSpec.advisory=True — e.g. product-owner)
+            # cannot drive REQUEST_CHANGES: their severity is server-side
+            # clamped here regardless of what the model emitted, matching
+            # the agent's own prompt instructions defense-in-depth (a model
+            # can still emit "Critical"/"High" despite being told not to).
+            if agent_name in ADVISORY_AGENT_NAMES and f.severity in ("Critical", "High"):
+                preview = f.finding[:120].replace("\n", " ")
+                print(
+                    f"NOTICE: {agent_name} is advisory; clamping "
+                    f"{f.severity} finding to {_ADVISORY_SEVERITY_CAP}: {preview}",
+                    file=sys.stderr,
+                )
+                f = f.model_copy(update={"severity": _ADVISORY_SEVERITY_CAP})
             # Drop self-refuting findings whose own narrative concludes the
             # issue is not real (e.g. "...on closer inspection the logic is
             # correct.", "no bug", "withdraw"). Backstop for _governance.md

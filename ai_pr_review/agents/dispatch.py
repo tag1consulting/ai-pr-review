@@ -155,6 +155,8 @@ class DispatchContext:
     changed_files: list[str] = field(default_factory=list)
     # --- Feedback loop ---
     feedback_addendum: str = ""
+    # --- PR intent (title/body), shared by every agent's prompt ---
+    pr_intent_addendum: str = ""
     # #316: user-configurable per-agent output cap (0 = use roster default)
     max_tokens_per_agent: int = 0
     # #356: user-configurable temperature for agent LLM calls
@@ -192,6 +194,7 @@ _AGENTS_WITH_FINDINGS_TRAILER: frozenset[str] = frozenset({
     "blind-hunter",
     "architecture-reviewer",
     "adversarial-general",
+    "product-owner",
 })
 
 _AGENTS_WITH_SUGGESTION_ADDENDUM: frozenset[str] = frozenset({
@@ -586,6 +589,8 @@ async def _run_single_agent(
         profile_tokens_used = 0
         if context.feedback_addendum:
             prefix_parts.append(context.feedback_addendum)
+        if context.pr_intent_addendum:
+            prefix_parts.append(context.pr_intent_addendum)
         if spec.context_enrichment_eligible and context.profile_router is not None:
             from ai_pr_review.context.budget import estimate_tokens
             from ai_pr_review.language_profile_sections import ProfileRouter

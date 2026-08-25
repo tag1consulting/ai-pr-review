@@ -242,7 +242,7 @@ inputs:
       Allowlist: comma-separated list of review agent names to run. When set, only
       the listed agents run and exclude-agents is ignored. Valid names: pr-summarizer,
       code-reviewer, silent-failure-hunter, architecture-reviewer, security-reviewer,
-      blind-hunter, edge-case-hunter, adversarial-general, issue-linker. Entries are
+      blind-hunter, edge-case-hunter, adversarial-general, product-owner, issue-linker. Entries are
       split on commas; surrounding whitespace is trimmed and empty entries are dropped.
       Gates (full_mode_only, conditional triggers) still apply on top of the allowlist.
       Empty (default): no allowlist — all eligible agents run (subject to
@@ -257,7 +257,7 @@ inputs:
       agents except those listed will run. Ignored when agents (allowlist) is set.
       Valid names: pr-summarizer, code-reviewer, silent-failure-hunter,
       architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter,
-      adversarial-general, issue-linker. Note: excluding pr-summarizer suppresses
+      adversarial-general, product-owner, issue-linker. Note: excluding pr-summarizer suppresses
       the PR summary comment entirely, not just one reviewer. Entries are split on
       commas; surrounding whitespace is trimmed and empty entries are dropped.
       Empty (default): no denylist — all eligible agents run. Unknown names are

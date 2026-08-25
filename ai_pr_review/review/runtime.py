@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import anyio
+
 from ai_pr_review.agents.dispatch import (
     DispatchContext,
     _unique_language_labels,
@@ -145,6 +147,23 @@ async def build_review_runtime(
                 "feedback loop: could not load feedback store: %s", exc, exc_info=True
             )
 
+    # 5b. Build the <pr-intent> addendum (PR title/body) shared by every
+    # agent's prompt (see prompts/product-owner.md, but not exclusive to
+    # it — any agent benefits from knowing the stated intent). GitHub-only,
+    # mirrors issue-linker's gate; fail-soft, never raises.
+    pr_intent_addendum = ""
+    if config.vcs_provider == "github" and config.pr_number:
+        try:
+            from ai_pr_review.review.preflight import build_pr_intent_addendum, fetch_pr_intent
+            pr_intent_text = await anyio.to_thread.run_sync(
+                lambda: fetch_pr_intent(config.pr_number, config.github_repository)
+            )
+            pr_intent_addendum = build_pr_intent_addendum(pr_intent_text)
+        except ImportError:
+            raise
+        except Exception as exc:
+            logger.warning("pr-intent: could not fetch PR title/body: %s", exc, exc_info=True)
+
     # 6. Resolve script_dir / diff_path from env conventions.
     # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
     # can locate prompts/language-profiles when installed as a pip package.
@@ -206,6 +225,7 @@ async def build_review_runtime(
         repo_root=Path("."),
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,
+        pr_intent_addendum=pr_intent_addendum,
         max_tokens_per_agent=config.max_tokens_per_agent,
         temperature=config.temperature,
         profile_router=_profile_router,

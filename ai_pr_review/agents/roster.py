@@ -41,6 +41,14 @@ class AgentSpec:
     context_enrichment_eligible: bool
     separately_dispatched: bool = False
     profile_focus: frozenset[str] = field(default_factory=frozenset)
+    # When True, this agent's findings are structurally incapable of
+    # driving REQUEST_CHANGES on their own: findings/extract.py clamps any
+    # Critical/High it emits down to Medium at parse time (not just a
+    # prompt request — enforced server-side). For agents whose judgment is
+    # inherently more speculative than a reproducible bug (e.g.
+    # intent-vs-delivery scope assessment), so they surface in the review
+    # without being able to block merge by themselves.
+    advisory: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -122,6 +130,25 @@ AGENTS: list[AgentSpec] = [
         profile_focus=frozenset({"security"}),
     ),
     AgentSpec(
+        # Intent-vs-delivery lens: does the diff match the PR's stated title/
+        # body? Scope creep and premature optimization, judged against stated
+        # intent -- distinct from architecture-reviewer's "is the design
+        # sound" lens (see prompts/product-owner.md Scope Boundaries).
+        # advisory=True: this judgment is inherently more speculative than a
+        # reproducible bug, so it cannot drive REQUEST_CHANGES on its own
+        # (see findings/extract.py's severity clamp).
+        name="product-owner",
+        prompt_path="prompts/product-owner.md",
+        tier=2,
+        conditional_trigger="has_code_or_infra",
+        max_output_tokens=32768,
+        full_mode_only=True,
+        # Judges intent, not code idiom -- no symbol context needed.
+        context_enrichment_eligible=False,
+        advisory=True,
+        profile_focus=frozenset(),
+    ),
+    AgentSpec(
         # Diff-only by design (#189): no symbol context injected.
         name="blind-hunter",
         prompt_path="prompts/blind-hunter.md",
@@ -184,6 +211,11 @@ if len(_AGENTS_BY_NAME) != len(AGENTS):
 
 # Public canonical set — used by config validation for the agents allowlist/denylist inputs.
 AGENT_NAMES: frozenset[str] = frozenset(_AGENTS_BY_NAME)
+
+# Names of agents whose findings are severity-clamped at extraction time
+# (see findings/extract.py). Used by dispatch to pass source names, not
+# AgentSpec objects, across the async LLM-call boundary.
+ADVISORY_AGENT_NAMES: frozenset[str] = frozenset(a.name for a in AGENTS if a.advisory)
 
 
 def get_agent(name: str) -> AgentSpec:

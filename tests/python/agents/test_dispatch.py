@@ -64,7 +64,7 @@ def _make_context(tmp_path: Path) -> DispatchContext:
     for agent_name in (
         "code-reviewer", "silent-failure-hunter", "architecture-reviewer",
         "security-reviewer", "blind-hunter", "edge-case-hunter",
-        "adversarial-general", "pr-summarizer",
+        "adversarial-general", "pr-summarizer", "product-owner",
     ):
         (prompts / f"{agent_name}.md").write_text(f"## {agent_name} prompt\n")
     return DispatchContext(
@@ -278,6 +278,33 @@ async def test_run_tier_language_profile_excluded_for_ineligible_agent(
     assert "recent learnings" in req.system_prefix
     # Language profile must NOT appear in the prefix for ineligible agents.
     assert "Project uses click + pydantic" not in req.system_prefix
+
+
+@pytest.mark.anyio
+async def test_run_tier_pr_intent_addendum_reaches_system_prefix(tmp_path: Path) -> None:
+    """pr_intent_addendum (<pr-intent> block) is a run-shared signal like
+    feedback_addendum -- it must reach every agent's system_prefix,
+    including a context_enrichment_eligible=False agent like blind-hunter,
+    since intent-vs-delivery judgment isn't gated on symbol-context
+    eligibility.
+    """
+    ctx = _make_context(tmp_path)
+    ctx.pr_intent_addendum = "<pr-intent>\nTitle: Fix the thing\n</pr-intent>"
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("blind-hunter")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    assert "Fix the thing" in captured[0].system_prefix
 
 
 @pytest.mark.anyio
@@ -905,6 +932,23 @@ def test_effective_prompt_no_suggestion_for_architecture_reviewer(tmp_path: Path
     assert "suggestion addendum" not in content
     # architecture-reviewer isn't in the suggestion set, so missing addendum
     # doesn't count as degraded
+    assert degraded is False
+
+
+def test_effective_prompt_no_suggestion_for_product_owner(tmp_path: Path) -> None:
+    """product-owner is NOT in the suggestion set: its findings are about
+    scope/intent, not code, so an "Apply suggestion" button makes no sense.
+    It IS in the findings trailer set (governance must still reach it).
+    """
+    script_dir, _ = _make_prompt_dir(tmp_path)
+    base = script_dir / "prompts" / "product-owner.md"
+    base.write_text("## product-owner base\n")
+    path, degraded = effective_prompt(
+        "product-owner", base, script_dir, enable_suggestions=True
+    )
+    content = path.read_text()
+    assert "findings trailer" in content
+    assert "suggestion addendum" not in content
     assert degraded is False
 
 

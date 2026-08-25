@@ -77,6 +77,32 @@ def test_medium_only_approves() -> None:
     outcome = classify_review_outcome([_medium(), _medium()], [], mode="full")
     assert outcome.risk == "Medium"
     assert outcome.event == "APPROVE"
+
+
+# ---------------------------------------------------------------------------
+# Advisory agent findings (product-owner) can never solo-trigger
+# REQUEST_CHANGES — end-to-end through extract_findings's severity clamp,
+# since classify_review_outcome itself only ever sees .severity (it has no
+# concept of "advisory"; the clamp in findings/extract.py is what actually
+# enforces this).
+# ---------------------------------------------------------------------------
+
+
+def test_advisory_agent_critical_findings_never_request_changes() -> None:
+    from ai_pr_review.findings.extract import extract_findings
+
+    output = """
+```json-findings
+[
+  {"severity": "Critical", "confidence": 95, "finding": "massive scope creep"},
+  {"severity": "High", "confidence": 90, "finding": "premature optimization"}
+]
+```
+"""
+    findings = extract_findings(output, "product-owner")
+    outcome = classify_review_outcome(findings, [], mode="full")
+    assert outcome.event == "APPROVE"
+    assert outcome.risk == "Medium"
     assert outcome.may_approve is True
     assert outcome.incomplete is False
 

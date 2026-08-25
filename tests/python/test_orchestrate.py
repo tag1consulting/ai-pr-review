@@ -739,7 +739,7 @@ def _make_dispatch_context_with_prompts(tmp_path: Path, diff_text: str = "") -> 
     for name in ("_governance", "_knowledge-cutoff", "_trailer-findings", "suggestion-addendum",
                  "code-reviewer", "pr-summarizer", "security-reviewer", "silent-failure-hunter",
                  "architecture-reviewer", "blind-hunter", "edge-case-hunter", "adversarial-general",
-                 "issue-linker"):
+                 "issue-linker", "product-owner"):
         (prompts_dir / f"{name}.md").write_text(f"## {name}\n")
     return DispatchContext(
         script_dir=tmp_path,

@@ -52,15 +52,16 @@ The VCS provider keeps at most one summary comment on the PR/MR by cleaning up d
 
 To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. The workflow sets `FORCE_FULL_DIFF=true` via the `env:` block, which causes the engine to skip the last-reviewed SHA lookup and fall through to the full `origin/BASE_REF...HEAD_SHA` diff.
 
-## Context message variants
+## Context assembly
 
-Three context variants are assembled and passed selectively to agents:
+Every agent's user message carries the diff plus the changed-files manifest (`ai_pr_review/manifest.py`). Beyond that, context is layered per agent rather than assembled as fixed named variants:
 
-- **full context** — manifest + PR description (title + body) + commit log + CLAUDE.md excerpt (first 2000 chars) + language profiles + diff
-- **code context** — manifest + PR description (title + body) + language profiles + diff (no commit log or project context)
-- **blind** — raw diff only (intentional zero context for `blind-hunter`)
+- **`system_prefix`** (run-shared, built once in `build_review_runtime()`, cached as a single Anthropic/Bedrock prompt-cache breakpoint): the `<repo-feedback>` addendum (when `AI_REVIEW_FEEDBACK_LOOP=true`) and the `<pr-intent>` addendum — the PR's title and body, fetched via `gh pr view` (GitHub-only; `ai_pr_review/review/preflight.py:fetch_pr_intent`), truncated to 4000 chars, omitted entirely when both are empty. Both reach every dispatched agent unconditionally, including `blind-hunter`.
+- **Routed language-profile sections** — gated on `AgentSpec.context_enrichment_eligible`; each agent receives only the profile sections matching its `profile_focus` (Story 7-2, #355).
+- **Tree-sitter symbol context** (`<symbol-context>` block, opt-in via `context-enrichment`) — also gated on `context_enrichment_eligible`.
+- **`blind-hunter`** is deliberately `context_enrichment_eligible=False` (#189): no language profiles, no symbol context — intentional zero project-context, though it still receives the run-shared `system_prefix` (feedback and PR-intent addenda) like every other agent.
 
-The PR description is fetched from the VCS provider API early in the run. It includes the PR/MR title and body (truncated to 4000 chars). HTML comment lines from PR templates are stripped. The section is omitted entirely when the title and body are both empty (e.g., standalone reviews or PRs with no description). This gives agents visibility into the author's stated intent, reducing false positives on intentional changes.
+`pr-summarizer` and `issue-linker` additionally receive a commit log (`git log origin/{base}..HEAD`), fetched separately in `ai_pr_review/review/preflight.py` — not part of the shared `system_prefix`.
 
 ## Parallel agent execution
 
@@ -76,7 +77,7 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 |------|--------|------|
 | Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional, standard model in quick / premium in full) | Always |
 | Tier 1 (static analyzers, concurrent with Tier 1) | All native analyzers (`ai_pr_review/analyzers/`) | Always (graceful no-op if binary absent) |
-| Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
+| Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general`, `product-owner` | `review-mode: full` only |
 
 Tier 1 and Tier 2 are separated by a barrier so Tier 2 never starts until all Tier 1 agents complete.
 
@@ -98,12 +99,12 @@ When `enable-suggestions` is `true` (the default), eligible LLM agents emit an o
 
 **Eligible agents** (system prompt is augmented with `prompts/suggestion-addendum.md`): `code-reviewer`, `edge-case-hunter`, `security-reviewer`, `silent-failure-hunter`, `blind-hunter`.
 
-Not eligible: `architecture-reviewer`, `adversarial-general`, `pr-summarizer`. Static analyzers never emit suggestions.
+Not eligible: `architecture-reviewer`, `adversarial-general`, `product-owner`, `pr-summarizer`. Static analyzers never emit suggestions.
 
 **Prompt composition.** The dispatch layer composes the base prompt with up to four shared trailers at runtime:
-- `prompts/_governance.md` — Asimov's Three Laws stated explicitly (First and Second binding, Third stated and rejected), then five operational rules: drop self-refuting findings, severity-by-harm, don't-reinvent-the-wheel detection, verify-before-naming plus secret redaction, and obey recorded maintainer verdicts from the `<repo-feedback>` block. Applied to all 7 finding-producing agents (not `pr-summarizer`). Always-on; no env var toggle.
-- `prompts/_knowledge-cutoff.md` — HARD CONSTRAINT block against version-existence hallucinations. Applied to all 7 finding-producing agents (not `pr-summarizer`).
-- `prompts/_trailer-findings.md` — `json-findings` schema instruction. Applied to all 7 finding-producing agents.
+- `prompts/_governance.md` — Asimov's Three Laws stated explicitly (First and Second binding, Third stated and rejected), then five operational rules: drop self-refuting findings, severity-by-harm, don't-reinvent-the-wheel detection, verify-before-naming plus secret redaction, and obey recorded maintainer verdicts from the `<repo-feedback>` block. Applied to all 8 finding-producing agents (not `pr-summarizer`). Always-on; no env var toggle.
+- `prompts/_knowledge-cutoff.md` — HARD CONSTRAINT block against version-existence hallucinations. Applied to all 8 finding-producing agents (not `pr-summarizer`).
+- `prompts/_trailer-findings.md` — `json-findings` schema instruction. Applied to all 8 finding-producing agents.
 - `prompts/suggestion-addendum.md` — "Apply suggestion" formatting. Gated by `AI_ENABLE_SUGGESTIONS`; applied only to the 5 eligible agents.
 
 Composition order: base prompt + governance + knowledge-cutoff + findings-trailer + (optional) suggestion-addendum. The order is deliberate for Anthropic prompt-cache locality — the existing `_knowledge-cutoff → _trailer-findings → suggestion-addendum` byte sequence at the tail is preserved unchanged.

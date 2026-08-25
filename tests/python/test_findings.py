@@ -203,6 +203,65 @@ def test_extract_findings_strips_demoted_to_body_injection() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Advisory agent severity clamp (AgentSpec.advisory — product-owner)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_findings_clamps_critical_from_advisory_agent(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """product-owner is advisory: a Critical it emits is clamped to Medium
+    server-side, regardless of what its prompt asked for — this is the
+    enforcement mechanism, not just a prompt request.
+    """
+    output = """
+```json-findings
+[{"severity": "Critical", "confidence": 90, "finding": "scope creep", "category": "scope-intent"}]
+```
+"""
+    findings = extract_findings(output, "product-owner")
+    assert len(findings) == 1
+    assert findings[0].severity == "Medium"
+    assert "clamping Critical finding to Medium" in capsys.readouterr().err
+
+
+def test_extract_findings_clamps_high_from_advisory_agent() -> None:
+    output = """
+```json-findings
+[{"severity": "High", "confidence": 90, "finding": "scope creep", "category": "scope-intent"}]
+```
+"""
+    findings = extract_findings(output, "product-owner")
+    assert findings[0].severity == "Medium"
+
+
+def test_extract_findings_advisory_agent_medium_and_low_unaffected() -> None:
+    output = """
+```json-findings
+[
+  {"severity": "Medium", "confidence": 90, "finding": "a"},
+  {"severity": "Low", "confidence": 76, "finding": "b"}
+]
+```
+"""
+    findings = extract_findings(output, "product-owner")
+    assert [f.severity for f in findings] == ["Medium", "Low"]
+
+
+def test_extract_findings_non_advisory_agent_critical_unaffected() -> None:
+    """Regression guard: the clamp must not touch non-advisory agents'
+    Critical/High findings — only agents in ADVISORY_AGENT_NAMES.
+    """
+    output = """
+```json-findings
+[{"severity": "Critical", "confidence": 90, "finding": "real bug"}]
+```
+"""
+    findings = extract_findings(output, "security-reviewer")
+    assert findings[0].severity == "Critical"
+
+
+# ---------------------------------------------------------------------------
 # Self-refuting finding lint pass (issue #504)
 # ---------------------------------------------------------------------------
 

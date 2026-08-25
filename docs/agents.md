@@ -26,7 +26,7 @@ On every PR push, this action:
 | **code-reviewer** | Finds bugs, logic errors, and code quality issues |
 | **silent-failure-hunter** | Detects swallowed errors and unsafe fallbacks (runs when error-handling patterns are detected) |
 
-**Full mode** adds 5 more agents:
+**Full mode** adds 6 more agents:
 
 | Agent | Purpose |
 |-------|---------|
@@ -35,6 +35,7 @@ On every PR push, this action:
 | **blind-hunter** | Context-free review (zero project knowledge, catches familiarity blindness) |
 | **edge-case-hunter** | Traces every branching path for unhandled gaps |
 | **adversarial-general** | Cynical adversarial review |
+| **product-owner** | Advisory: does the diff match the PR's stated intent? Flags scope creep and premature optimization against the `<pr-intent>` block. Findings are capped at Medium severity — they can never drive `REQUEST_CHANGES` on their own. |
 
 Full mode also runs **issue-linker** (GitHub-only, full mode): discovers related issues/PRs and assesses whether they are resolved by the current changes.
 
@@ -67,7 +68,7 @@ Findings use shape-distinct icons for accessibility:
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs up to 8 agents — 6 always-on finding agents (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
+**Full mode**: Runs up to 9 agents — 7 always-on finding agents (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general, product-owner), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`

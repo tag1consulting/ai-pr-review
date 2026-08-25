@@ -118,6 +118,7 @@ EXPECTED_AGENTS = {
     "edge-case-hunter",
     "adversarial-general",
     "issue-linker",
+    "product-owner",
 }
 
 
@@ -201,6 +202,7 @@ _PROSE_AGENTS = {
     "blind-hunter",
     "edge-case-hunter",
     "adversarial-general",
+    "product-owner",
 }
 
 
@@ -253,6 +255,39 @@ def test_agent_names_covers_separately_dispatched() -> None:
     """pr-summarizer and issue-linker must be in AGENT_NAMES for validation."""
     assert "pr-summarizer" in AGENT_NAMES
     assert "issue-linker" in AGENT_NAMES
+
+
+# ---------------------------------------------------------------------------
+# advisory / ADVISORY_AGENT_NAMES
+# ---------------------------------------------------------------------------
+
+
+def test_product_owner_is_advisory() -> None:
+    assert get_agent("product-owner").advisory is True
+
+
+def test_product_owner_is_tier2_full_mode_only() -> None:
+    spec = get_agent("product-owner")
+    assert spec.tier == 2
+    assert spec.full_mode_only is True
+
+
+def test_product_owner_not_context_enrichment_eligible() -> None:
+    """Judges intent, not code idiom -- no symbol context needed."""
+    assert get_agent("product-owner").context_enrichment_eligible is False
+
+
+def test_non_advisory_agents_default_false() -> None:
+    """advisory defaults to False; only product-owner opts in (for now)."""
+    for spec in AGENTS:
+        if spec.name != "product-owner":
+            assert spec.advisory is False, f"{spec.name} unexpectedly advisory=True"
+
+
+def test_advisory_agent_names_matches_roster() -> None:
+    from ai_pr_review.agents.roster import ADVISORY_AGENT_NAMES
+    assert {a.name for a in AGENTS if a.advisory} == ADVISORY_AGENT_NAMES
+    assert {"product-owner"} == ADVISORY_AGENT_NAMES
 
 
 # ---------------------------------------------------------------------------

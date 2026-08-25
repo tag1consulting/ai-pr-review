@@ -161,6 +161,79 @@ def fetch_open_issues(github_repository: str) -> str:
     return "\n".join(lines)
 
 
+_PR_INTENT_MAX_BODY_CHARS = 4000
+
+_PR_INTENT_BLOCK_HEADER = (
+    "<pr-intent>\n"
+    "The PR's stated title and description, as authored by the PR author "
+    "(GitHub-rendered markdown; may reference other issues by number). Use "
+    "this to judge whether the diff matches what was actually asked for.\n\n"
+)
+_PR_INTENT_BLOCK_FOOTER = "</pr-intent>"
+
+
+def fetch_pr_intent(pr_number: str, github_repository: str) -> str:
+    """Fetch the PR title and body via gh CLI, or "" on any failure.
+
+    GitHub-only (mirrors fetch_open_issues/issue-linker). Unlike
+    fetch_open_issues, this returns "" rather than an "(unavailable)"
+    placeholder on failure — build_pr_intent_addendum() below omits the
+    block entirely when empty, which is the right behavior for the common
+    non-PR contexts (standalone review-target, unit tests) rather than
+    surfacing a placeholder to every agent's prompt.
+    """
+    if not pr_number:
+        return ""
+    import json as _json
+
+    cmd = ["gh", "pr", "view", pr_number, "--repo", github_repository, "--json", "title,body"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        logger.warning("pr-intent: gh CLI not found; PR title/body unavailable")
+        return ""
+    except subprocess.TimeoutExpired:
+        logger.warning("pr-intent: gh pr view timed out; PR title/body unavailable")
+        return ""
+    except Exception as exc:
+        logger.warning("pr-intent: gh pr view failed: %s", exc, exc_info=True)
+        return ""
+
+    if proc.returncode != 0:
+        logger.warning(
+            "pr-intent: gh pr view exited %d; PR title/body unavailable: %s",
+            proc.returncode, proc.stderr.strip()[:500],
+        )
+        return ""
+
+    try:
+        data = _json.loads(proc.stdout)
+    except _json.JSONDecodeError as exc:
+        logger.warning("pr-intent: could not parse gh pr view output: %s", exc)
+        return ""
+
+    title = str(data.get("title") or "").strip()
+    body = str(data.get("body") or "").strip()
+    if not title and not body:
+        return ""
+    if len(body) > _PR_INTENT_MAX_BODY_CHARS:
+        body = body[:_PR_INTENT_MAX_BODY_CHARS] + "\n\n[...truncated...]"
+
+    parts = [f"Title: {title}"] if title else []
+    if body:
+        parts.append(body)
+    return "\n\n".join(parts)
+
+
+def build_pr_intent_addendum(pr_intent_text: str) -> str:
+    """Wrap fetch_pr_intent()'s text in the shared <pr-intent> block, or ""
+    when there is nothing to inject (no PR context available).
+    """
+    if not pr_intent_text:
+        return ""
+    return f"{_PR_INTENT_BLOCK_HEADER}{pr_intent_text}\n{_PR_INTENT_BLOCK_FOOTER}"
+
+
 async def run_issue_linker(
     *,
     manifest_text: str,
