@@ -109,3 +109,7 @@ To make this a real merge gate, add branch protection on the target branch requi
 **GitHub only for now.** No GitLab/Bitbucket equivalent is wired yet — `require` is silently a no-op (logged at `info` level) on those providers; routing (`policies`/`routes` without `require`) works identically everywhere.
 
 [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) includes this exact `staging-*` → `integration`, `require: deep` route as a working starting point — copy it and add the branch-protection rule above to turn it on.
+
+## Live example
+
+This repo dogfoods its own feature: [`.github/ai-pr-review/policy.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/.github/ai-pr-review/policy.yml) routes docs-only PRs (`docs/**`, `language-profiles/**`) to the near-zero-cost tier, and gates `release/*` branches on a manually-triggered full review before merge — automatic pushes to a release branch stay at `quick`, and `/ai-pr-review review-full` is required to satisfy the merge gate.
