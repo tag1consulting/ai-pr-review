@@ -313,7 +313,12 @@ class ReviewConfig(BaseModel):
     @field_validator("review_mode")
     @classmethod
     def _validate_review_mode(cls, v: str) -> str:
-        if v not in ("quick", "full"):
+        # '' means "not explicitly set" (action.yml's review-mode input
+        # defaults to '' — see #policy.py) — deferred to policy.yml routing,
+        # else the hardcoded 'quick' default, resolved in
+        # review/runtime.py:build_review_runtime before dispatch. It is
+        # never a valid mode by the time agents actually run.
+        if v not in ("", "quick", "full"):
             raise ValueError(f"review_mode must be 'quick' or 'full', got {v!r}")
         return v
 

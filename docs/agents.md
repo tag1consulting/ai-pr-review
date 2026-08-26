@@ -71,42 +71,15 @@ Findings use shape-distinct icons for accessibility:
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`
-- Auto-detecting release PRs (see below)
+- Routing by changed-file path, base branch, or head branch via a repo-local `.github/ai-pr-review/policy.yml` (see below)
 
-### Auto-detecting release PRs
+### Routing review depth by branch or path
 
-Full mode can be triggered automatically based on branch name, PR title, or other PR metadata by extending the `review-mode` expression in your workflow file. This keeps release PRs from getting only a quick review without requiring someone to remember to add a label.
+For anything beyond a single global quick/full choice — e.g. near-zero-cost review for content-only PRs, a full smoke-test review once when features land on a staging branch, quick review on feature branches otherwise — add `.github/ai-pr-review/policy.yml` to your repo. See **[Policies](policy.md)** for the full schema, the precedence chain (an explicit `ai-review-full` label or `review-mode` input always wins over policy routing), and worked examples including a release-branch escalation.
 
-The [example workflow](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/pr-review.yml) demonstrates auto-detecting `release/*` branches:
+The `ai-review-full` label and `workflow_dispatch`'s `review_mode` input remain the way to force a one-off full review regardless of any policy file.
 
-```yaml
-review-mode: >-
-  ${{
-    contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' ||
-    startsWith(github.event.pull_request.head.ref, 'release/') && 'full' ||
-    'quick'
-  }}
-```
-
-Customize the `startsWith()` pattern for your repo's branch convention. Common patterns:
-
-| Convention | Expression |
-|---|---|
-| Branch prefix `release/` | `startsWith(github.event.pull_request.head.ref, 'release/')` |
-| Branch prefix `hotfix/` | `startsWith(github.event.pull_request.head.ref, 'hotfix/')` |
-| PR title starts with "Release" | `startsWith(github.event.pull_request.title, 'Release ')` |
-| Merges to `main` from `release/*` | `github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'release/')` |
-| Multiple patterns | Chain with `\|\|` — each clause evaluates to `'full'` or falls through |
-
-Branch matching is case-sensitive — `release/v1.0` matches but `Release/v1.0` does not.
-
-**Bitbucket Pipelines** — use a shell conditional instead of GitHub Actions expressions:
-
-```bash
-if [[ "$BITBUCKET_PR_SOURCE_BRANCH" == release/* ]]; then
-  export AI_REVIEW_MODE=full
-fi
-```
+**Bitbucket Pipelines / GitLab CI** work the same way — `policy.yml` is engine-side, not GitHub-specific — as long as `BASE_REF`/`HEAD_REF` are exported (see the example pipelines in `examples/pipelines/`).
 
 ## Language profiles
 

@@ -333,7 +333,7 @@ jobs:
       provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
       base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
       image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'dev' }}
-      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || 'quick' }}
+      review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || '' }}
       enable-feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
       analyzers: ${{ vars.AI_REVIEW_ANALYZERS || '' }}
       exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}

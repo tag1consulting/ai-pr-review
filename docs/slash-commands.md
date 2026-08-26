@@ -223,7 +223,7 @@ The starter template exposes optional inputs for common customizations, each bac
 provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}        # LLM provider
 base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}                  # For openai-compatible/bedrock-proxy
 image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}          # Pin to a specific container version
-review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || 'quick' }}  # Default mode for rescan command
+review-mode-default: ${{ vars.AI_REVIEW_MODE_DEFAULT || '' }}  # Mode for rescan; '' defers to .github/ai-pr-review/policy.yml, else quick
 
 # Analyzer / agent filtering (Python engine) — honored on rescan and review-full
 analyzers: ${{ vars.AI_REVIEW_ANALYZERS || '' }}                # Allowlist of analyzers (empty = all eligible)

@@ -17,7 +17,7 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `base-url` | No | `''` | Base URL for OpenAI-compatible or bedrock-proxy |
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
-| `review-mode` | No | `quick` | `quick` or `full` |
+| `review-mode` | No | `''` | `quick` or `full`. Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. See [Policies](policy.md). |
 | `review-target` | No | `pr` | `pr` (PR review) or `standalone` (deprecated — emits a runtime warning). Standalone currently only disables merge-commit filtering during diff computation — it does not post findings anywhere (issue-posting was part of the bash engine removed in v2.0.0 and was never reimplemented in Python; formal removal is planned for a future major version; tracked in [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
@@ -49,6 +49,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 |----------|---------|---------------------|-------------|
 | `AI_REVIEW_API_KEY` | — | `api-key` | **(Secret)** API key for your LLM provider |
 | `AI_REVIEW_PROVIDER` | `anthropic` | `provider` | LLM provider name |
+| `AI_REVIEW_MODE_DEFAULT` | `''` | `review-mode` (main review job) / `review-mode-default` (rescan) | Mode for the automatic review job and `/ai-pr-review rescan` when set. Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. See [Policies](policy.md). |
 | `AI_REVIEW_BASE_URL` | `''` | `base-url` | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
 | `AI_REVIEW_MODEL_STANDARD` | Per-provider default | `model-standard` | Override the standard agent model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | `model-premium` | Override the premium agent model ID (full mode only) |

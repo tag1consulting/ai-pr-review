@@ -52,9 +52,11 @@ inputs:
   review-mode:
     description: >
       Review mode: quick (code-reviewer + conditional agents) or full (all agents including architecture,
-      security, blind-hunter, edge-case-hunter, adversarial-general).
+      security, blind-hunter, edge-case-hunter, adversarial-general). Empty
+      (default): defer to .github/ai-pr-review/policy.yml route matching if
+      present, else 'quick'. Set explicitly to override policy routing.
     required: false
-    default: 'quick'
+    default: ''
 
   review-target:
     description: >

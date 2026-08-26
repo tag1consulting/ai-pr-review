@@ -1,0 +1,96 @@
+# AI PR Review — repo-local review policy
+#
+# Copy this file to .github/ai-pr-review/policy.yml in your repo and edit
+# to taste. Full schema and precedence rules: docs/policy.md
+#
+# ── How this is loaded ────────────────────────────────────────────────────
+#
+# Read via `git show origin/{base-ref}:.github/ai-pr-review/policy.yml` —
+# from the PR's BASE branch, never from the PR's own working tree. A PR
+# that edits this file has no effect on its own review; the file that
+# governs a PR's review is whatever is committed on the target branch.
+# Merge changes to this file to your default branch to have them apply
+# going forward.
+#
+# ── Precedence (highest wins) ────────────────────────────────────────────
+#
+#   1. /ai-pr-review review-full slash command (always full mode)
+#   2. Explicit action input / repo variable (the ai-review-full label,
+#      review-mode set to a real value, agents/analyzers set explicitly)
+#   3. This file's route matching
+#   4. Engine default (quick mode, no agent/analyzer restriction)
+#
+# A repo with no policy.yml sees no behavior change at all — this file is
+# entirely opt-in.
+#
+# ── If this doesn't exist yet ────────────────────────────────────────────
+#
+# Delete everything below and start from just:
+#
+#   version: 1
+#   policies: {}
+#   routes: []
+#
+# and add policies/routes incrementally as you find a case you want to
+# route differently.
+
+version: 1
+
+# Named policies. `extends` is either a built-in base ('quick' or 'full' —
+# reproducing today's roster exactly) or another policy defined below.
+# `agents` / `exclude-agents` / `analyzers` / `exclude-analyzers` override
+# the extended base for that field only; an unset field inherits from
+# `extends`. Omitting `extends` implies 'quick'.
+policies:
+  # Near-zero-cost review for content-only changes (e.g. a static site's
+  # copy/content directories). Runs no agents and no static analyzers —
+  # useful when a route matches paths that are never code.
+  content:
+    agents: []
+    analyzers: []
+
+  # The default day-to-day tier: today's quick mode, unmodified. Fast and
+  # cheap, suitable for iterating on a PR before it's ready for deeper
+  # review.
+  feature:
+    extends: quick
+
+  # A smoke-test tier for batching feature work onto a staging branch:
+  # broader than quick mode's default agent set, but cheaper than a full
+  # review. Adjust the agent list to whatever your team considers a
+  # reasonable pre-merge check.
+  integration:
+    extends: quick
+    agents: [code-reviewer, silent-failure-hunter, edge-case-hunter]
+
+  # Full mode, unmodified — the deepest tier available.
+  deep:
+    extends: full
+
+# Ordered routes. The first route whose `when` matches the PR wins. Each
+# route must constrain at least one of paths/base-branch/head-branch — an
+# unconstrained route would match every PR and silently shadow every route
+# after it, so the file is rejected if one is found.
+routes:
+  # Any changed file under these paths -> the near-zero-cost tier.
+  # `paths` matches if ANY changed file matches ANY glob here.
+  - when: {paths: ['docs/**', 'content/**', '*.md']}
+    policy: content
+
+  # PRs targeting a staging-* branch get the integration smoke-test tier —
+  # broader than quick mode, cheaper than a full review.
+  - when: {base-branch: 'staging-*'}
+    policy: integration
+
+  # Release-branch escalation — replaces a hand-rolled
+  # startsWith(head.ref, 'release/') workflow expression.
+  - when: {head-branch: 'release/*'}
+    policy: deep
+
+  # Everyday feature branches: quick mode.
+  - when: {head-branch: 'feature/*'}
+    policy: feature
+
+# Policy used when no route above matches. Omit this key to fall back to
+# the engine's hard-coded default (quick mode, no restriction) instead.
+default: feature

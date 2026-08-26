@@ -373,3 +373,137 @@ class TestExplicitConfigNoBashDefaults:
         assert runtime.config.model_premium == "gpt-custom-premium"
         assert runtime.dispatch_context.standard_model == "gpt-custom-standard"
         assert runtime.dispatch_context.premium_model == "gpt-custom-premium"
+
+
+class TestPolicyResolution:
+    """review_mode/agents/analyzers left unset ('' / ()) defer to a matched
+    .github/ai-pr-review/policy.yml route; an explicit config value always
+    wins over policy. See ai_pr_review.policy.
+    """
+
+    @pytest.mark.anyio
+    async def test_no_policy_file_and_unset_mode_falls_back_to_quick(
+        self, tmp_path: Path
+    ) -> None:
+        """No policy.yml present (load_policy_file returns None) — unset
+        review_mode resolves to today's hardcoded 'quick' default, so
+        repos that don't opt in see zero behavior change.
+        """
+        config = _make_config(review_mode="")
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=None),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.config.review_mode == "quick"
+
+    @pytest.mark.anyio
+    async def test_unset_mode_defers_to_matched_policy(self, tmp_path: Path) -> None:
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="")
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="deep")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch("ai_pr_review.policy.resolve_route", return_value="deep"),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(name="deep", review_mode="full"),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.config.review_mode == "full"
+        assert len(runtime.agents) > 0, "full mode should include tier-2 agents"
+
+    @pytest.mark.anyio
+    async def test_explicit_mode_wins_over_policy(self, tmp_path: Path) -> None:
+        """An explicit review_mode always overrides a matched policy — the
+        precedence order the epic's design depends on.
+        """
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="quick")  # explicit, not deferred
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="deep")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch("ai_pr_review.policy.resolve_route", return_value="deep"),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(name="deep", review_mode="full"),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.config.review_mode == "quick"
+
+    @pytest.mark.anyio
+    async def test_unset_agents_defer_to_policy(self, tmp_path: Path) -> None:
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="full")  # explicit mode; agents left unset
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="lean")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch("ai_pr_review.policy.resolve_route", return_value="lean"),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(
+                    name="lean", review_mode="full", agents=("code-reviewer",)
+                ),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.config.agents == ("code-reviewer",)
+        assert {a.name for a in runtime.agents} <= {"code-reviewer"}
+
+    @pytest.mark.anyio
+    async def test_explicit_agents_win_over_policy(self, tmp_path: Path) -> None:
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="full", agents=("security-reviewer",))
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="lean")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch("ai_pr_review.policy.resolve_route", return_value="lean"),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(
+                    name="lean", review_mode="full", agents=("code-reviewer",)
+                ),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.config.agents == ("security-reviewer",)

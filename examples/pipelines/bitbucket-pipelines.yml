@@ -63,13 +63,16 @@ pipelines:
           script:
             - export VCS_PROVIDER=bitbucket
             - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
-            - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-quick}"
+            # Empty (default): defer to .github/ai-pr-review/policy.yml route
+            # matching if present, else 'quick'. Set AI_REVIEW_MODE=full to override.
+            - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-}"
             - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-true}"
             # Opt-in capabilities (Python engine only — the default)
             - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
             - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"
             - export PR_NUMBER="$BITBUCKET_PR_ID"
             - export BASE_REF="$BITBUCKET_PR_DESTINATION_BRANCH"
+            - export HEAD_REF="$BITBUCKET_BRANCH"
             - export HEAD_SHA="$BITBUCKET_COMMIT"
             - export GITHUB_REPOSITORY="${BITBUCKET_WORKSPACE}/${BITBUCKET_REPO_SLUG}"
             # BITBUCKET_EMAIL + BITBUCKET_API_TOKEN come from repo variables.

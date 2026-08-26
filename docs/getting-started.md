@@ -94,7 +94,7 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
     model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
     model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
-    review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
+    review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || '' }}
     pr-number: ${{ github.event.pull_request.number }}
     base-ref: ${{ github.event.pull_request.base.ref }}
     head-sha: ${{ github.event.pull_request.head.sha }}

@@ -157,9 +157,10 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
-    review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || 'quick' }}
+    review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || '' }}
     pr-number: ${{ github.event.pull_request.number }}
     base-ref: ${{ github.event.pull_request.base.ref }}
+    head-ref: ${{ github.event.pull_request.head.ref }}
     head-sha: ${{ github.event.pull_request.head.sha }}
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -283,9 +284,9 @@ See [docs/configuration.md](docs/configuration.md#opt-in-capabilities) for the f
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs up to 8 agents — 6 always-on finding agents plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger with the `ai-review-full` PR label, `workflow_dispatch` input, or by setting `review-mode: full` (optionally via an expression that auto-selects full mode for release branches).
+**Full mode**: Runs up to 8 agents — 6 always-on finding agents plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger with the `ai-review-full` PR label, `workflow_dispatch` input, `review-mode: full`, or by routing to it via `.github/ai-pr-review/policy.yml` (e.g. full mode for release branches, quick mode elsewhere).
 
-For the full agent roster, trigger patterns, and auto-full-on-release workflow expressions (GitHub Actions and Bitbucket Pipelines), see [docs/agents.md](docs/agents.md#review-modes).
+For the full agent roster and trigger patterns, see [docs/agents.md](docs/agents.md#review-modes). For per-branch/per-path routing, see [docs/policy.md](docs/policy.md).
 
 ## Code suggestions
 

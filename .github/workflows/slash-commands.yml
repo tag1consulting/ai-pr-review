@@ -41,10 +41,14 @@ on:
         required: false
         default: 'latest'
       review-mode-default:
-        description: 'Default review mode for rescan command (quick or full)'
+        description: >
+          Default review mode for the rescan command (quick or full). Empty
+          (default): defer to .github/ai-pr-review/policy.yml route
+          matching if present, else 'quick' — same precedence as the main
+          review job.
         type: string
         required: false
-        default: 'quick'
+        default: ''
       analyzers:
         description: >
           Allowlist of static analyzer names to run (comma-separated). When set, only the

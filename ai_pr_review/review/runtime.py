@@ -170,6 +170,36 @@ async def build_review_runtime(
     cf = parse_changed_files_payload(raw_paths)
     _changed_list = cf.all_files
 
+    # 6b. Resolve .github/ai-pr-review/policy.yml (fail-soft; loaded from the
+    # base ref, never the PR head's working tree — see ai_pr_review.policy's
+    # module docstring for the trust-model rationale). Only fields the
+    # config left unset (review_mode == "" ; agents/exclude_agents/
+    # analyzers/exclude_analyzers == ()) defer to the resolved policy — an
+    # explicit action input, label, or slash-command override always wins,
+    # so behavior is unchanged for repos not adopting a policy file. Must
+    # run before the DispatchContext below, which captures config.review_mode.
+    from ai_pr_review.policy import load_policy_file, resolve_policy, resolve_route
+    _policy_file = load_policy_file(workspace=".", base_ref=base_ref)
+    _resolved_policy = None
+    if _policy_file is not None:
+        _policy_name = resolve_route(_policy_file, _changed_list, base_ref, config.head_ref)
+        if _policy_name is not None:
+            _resolved_policy = resolve_policy(_policy_file, _policy_name)
+    config = config.model_copy(
+        update={
+            "review_mode": config.review_mode
+            or (_resolved_policy.review_mode if _resolved_policy else "")
+            or "quick",
+            "agents": config.agents or (_resolved_policy.agents if _resolved_policy else ()),
+            "exclude_agents": config.exclude_agents
+            or (_resolved_policy.exclude_agents if _resolved_policy else ()),
+            "analyzers": config.analyzers
+            or (_resolved_policy.analyzers if _resolved_policy else ()),
+            "exclude_analyzers": config.exclude_analyzers
+            or (_resolved_policy.exclude_analyzers if _resolved_policy else ()),
+        }
+    )
+
     # 7. Build language-profile router once per run (avoid per-agent disk reads).
     # ProfileRouter parses all detected profiles into classified sections so
     # each agent receives only the subset relevant to its profile_focus.
