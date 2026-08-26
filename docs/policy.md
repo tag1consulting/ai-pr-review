@@ -107,3 +107,5 @@ Every automatic push to a PR targeting `staging-*` runs the (cheap) `integration
 To make this a real merge gate, add branch protection on the target branch requiring the `ai-pr-review/policy-gate` check (**Settings → Branches → Branch protection rules**). The shipped GitHub templates grant the `checks: write` permission needed to post it.
 
 **GitHub only for now.** No GitLab/Bitbucket equivalent is wired yet — `require` is silently a no-op (logged at `info` level) on those providers; routing (`policies`/`routes` without `require`) works identically everywhere.
+
+[`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) includes this exact `staging-*` → `integration`, `require: deep` route as a working starting point — copy it and add the branch-protection rule above to turn it on.

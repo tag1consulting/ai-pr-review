@@ -492,3 +492,19 @@ def test_example_policy_file_routes_match_as_documented() -> None:
     assert resolve_route(pf, ["src/app.py"], "main", "release/2.0") == "deep"
     assert resolve_route(pf, ["src/app.py"], "main", "feature/x") == "feature"
     assert resolve_route(pf, ["src/app.py"], "main", "random-branch") == "feature"  # default
+
+
+def test_example_policy_file_staging_route_requires_deep() -> None:
+    """The staging-* route's require: deep is the merge-gate example this
+    file's top-of-file comment documents (docs/policy.md #requiring-a-
+    review-tier-before-merge)."""
+    import yaml
+
+    path = _find_repo_root() / "examples" / "policy.yml.example"
+    pf = _parse_policy_file(yaml.safe_load(path.read_text()))
+
+    route = match_route(pf, ["src/app.py"], "staging-1.2", "feature/x")
+    assert route is not None
+    assert route.require == "deep"
+    assert policy_satisfies(pf, "integration", "deep") is False
+    assert policy_satisfies(pf, "deep", "deep") is True

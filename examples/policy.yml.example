@@ -23,6 +23,17 @@
 # A repo with no policy.yml sees no behavior change at all — this file is
 # entirely opt-in.
 #
+# ── Requiring a tier before merge (GitHub only) ───────────────────────────
+#
+# A route can set `require: <policy-name>` to post a GitHub check run named
+# ai-pr-review/policy-gate: 'success' once a run at that tier (or full
+# mode) has completed for the current commit, 'neutral' (never 'failure')
+# otherwise — an unmet requirement on an ordinary automatic push is an
+# unactioned manual step, not a defect. Pair with a required
+# branch-protection check on the target branch (Settings -> Branches ->
+# Branch protection rules -> add "ai-pr-review/policy-gate") to actually
+# gate merge. See docs/policy.md#requiring-a-review-tier-before-merge.
+#
 # ── If this doesn't exist yet ────────────────────────────────────────────
 #
 # Delete everything below and start from just:
@@ -63,7 +74,8 @@ policies:
     extends: quick
     agents: [code-reviewer, silent-failure-hunter, edge-case-hunter]
 
-  # Full mode, unmodified — the deepest tier available.
+  # Full mode, unmodified — the deepest tier available. Pair with `require`
+  # below to gate merge on this tier having run at least once.
   deep:
     extends: full
 
@@ -77,10 +89,16 @@ routes:
   - when: {paths: ['docs/**', 'content/**', '*.md']}
     policy: content
 
-  # PRs targeting a staging-* branch get the integration smoke-test tier —
-  # broader than quick mode, cheaper than a full review.
+  # PRs targeting a staging-* branch get the integration smoke-test tier,
+  # and MUST have a 'deep' (full-mode) review run at least once before
+  # merge — `require` posts the ai-pr-review/policy-gate check run; add it
+  # as a required branch-protection check on staging-* to enforce it. An
+  # automatic push only satisfies `require` if it happens to run at 'deep'
+  # or full mode; otherwise a maintainer runs `/ai-pr-review review-full`
+  # to satisfy it manually.
   - when: {base-branch: 'staging-*'}
     policy: integration
+    require: deep
 
   # Release-branch escalation — replaces a hand-rolled
   # startsWith(head.ref, 'release/') workflow expression.
