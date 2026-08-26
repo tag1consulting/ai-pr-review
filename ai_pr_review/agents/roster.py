@@ -190,7 +190,12 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/issue-linker.md",
         tier=2,
         conditional_trigger=None,
-        max_output_tokens=4096,
+        # Expected output is a short markdown blurb (a handful of "Related to
+        # #N" lines), but even at effort="low" adaptive thinking can exhaust a
+        # too-tight ceiling before any text is produced (see anthropic.py's
+        # thinking-budget guard, hit on PR #666's own review run). 8192 keeps
+        # output small while giving thinking headroom; was 4096.
+        max_output_tokens=8192,
         full_mode_only=True,
         context_enrichment_eligible=False,
         separately_dispatched=True,

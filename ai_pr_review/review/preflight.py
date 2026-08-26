@@ -43,10 +43,15 @@ async def run_summarizer(
 
     Fail-soft: on any error logs a WARNING and returns _SUMMARIZER_FAILURE_NOTICE
     so the PR comment communicates the partial failure rather than silently
-    omitting the summary.  except Exception is intentional: the fail-soft contract
-    requires that any unexpected error (KeyError, TypeError, etc.) in the prompt
-    assembly or parse path skips the summary rather than aborting the whole review.
+    omitting the summary.  Catches BaseException (not just Exception) so that
+    SystemExit raised by llm/client.py's call_llm() -- on auth failure, retry
+    exhaustion, content-filter block, or an unrecoverable LLMError such as
+    thinking-budget exhaustion (see anthropic.py's max_tokens-on-thinking guard) --
+    is isolated here rather than aborting the whole review, mirroring the same
+    hardening dispatch.py's run_tier() already applies. KeyboardInterrupt is
+    re-raised so Ctrl-C still aborts the run.
     """
+    from ai_pr_review.agents.roster import get_agent
     from ai_pr_review.agents.summarizer import (
         build_summarizer_system_prompt,
         build_summarizer_user_message,
@@ -86,14 +91,16 @@ async def run_summarizer(
             model_id=model,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=4096,
+            max_tokens=get_agent("pr-summarizer").max_output_tokens,
             temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
         parse_summarizer_output(response.text)
         return response.text
-    except Exception as exc:
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
             type(exc).__name__, exc, exc_info=True,
@@ -258,7 +265,16 @@ async def run_issue_linker(
     repository slug, and PROVIDER. The agent itself executes no shell commands or tools;
     the open-issue list is injected as plain text so the model can match and cite real
     issue numbers without any tool-calling loop.
+
+    Catches BaseException (not just Exception) so that SystemExit raised by
+    llm/client.py's call_llm() -- on auth failure, retry exhaustion,
+    content-filter block, or an unrecoverable LLMError such as thinking-budget
+    exhaustion (see anthropic.py's max_tokens-on-thinking guard) -- is isolated
+    here rather than aborting the whole review, mirroring the same hardening
+    dispatch.py's run_tier() already applies. KeyboardInterrupt is re-raised so
+    Ctrl-C still aborts the run.
     """
+    from ai_pr_review.agents.roster import get_agent
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -334,7 +350,7 @@ async def run_issue_linker(
             model_id=model,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=4096,
+            max_tokens=get_agent("issue-linker").max_output_tokens,
             temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
@@ -343,7 +359,9 @@ async def run_issue_linker(
             logger.debug("issue-linker: returned NONE or empty; skipping")
             return ""
         return text
-    except Exception as exc:
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         logger.warning(
             "issue-linker: failed (review will continue without issue links): %s: %s",
             type(exc).__name__, exc, exc_info=True,

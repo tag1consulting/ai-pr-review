@@ -230,6 +230,26 @@ async def test_judge_fail_soft_on_llm_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_judge_fail_soft_on_llm_client_system_exit(tmp_path: Path) -> None:
+    """llm/client.py's call_llm() raises SystemExit (not a plain Exception) on an
+    unrecoverable LLMError, e.g. thinking-budget exhaustion. SystemExit inherits
+    from BaseException, not Exception, so the judge's LLM-call site must catch
+    BaseException to actually honor its documented fail-soft contract."""
+    prompt = tmp_path / "finding-judge.md"
+    prompt.write_text("You are a finding-quality judge.")
+
+    f = _finding(confidence=80)
+    call = AsyncMock(side_effect=SystemExit(1))
+
+    result = await judge_findings([f], llm_call=call, model="claude-test", prompt_path=prompt)
+    assert isinstance(result, JudgeResult)
+    assert len(result.findings) == 1
+    assert result.findings[0].confidence == 80  # unchanged
+    assert result.input_tokens == 0
+    assert result.output_tokens == 0
+
+
+@pytest.mark.anyio
 async def test_judge_fail_soft_on_bad_json(tmp_path: Path) -> None:
     prompt = tmp_path / "finding-judge.md"
     prompt.write_text("You are a finding-quality judge.")
@@ -337,4 +357,4 @@ async def test_judge_llm_request_has_correct_model(tmp_path: Path) -> None:
     await judge_findings([f], llm_call=capture_call, model="claude-haiku-test", prompt_path=prompt)
     assert captured[0].model_id == "claude-haiku-test"
     assert captured[0].temperature == 0.0
-    assert captured[0].max_tokens == 4096
+    assert captured[0].max_tokens == 8192

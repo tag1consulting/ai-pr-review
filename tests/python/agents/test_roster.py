@@ -216,9 +216,9 @@ def test_prose_agents_have_raised_token_budget() -> None:
 
 
 def test_issue_linker_has_small_token_budget() -> None:
-    """issue-linker is not prose-heavy; its budget should remain 4096."""
+    """issue-linker is not prose-heavy, but needs headroom for adaptive thinking."""
     spec = get_agent("issue-linker")
-    assert spec.max_output_tokens == 4096
+    assert spec.max_output_tokens == 8192
 
 
 def test_get_agent_raises_on_unknown() -> None:

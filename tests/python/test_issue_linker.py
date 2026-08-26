@@ -212,3 +212,36 @@ class TestRunIssueLinkerUserMessage:
             )
 
         assert result == ""  # fail-soft: empty string, not an exception
+
+    def test_run_issue_linker_never_raises_on_system_exit(self, prompt_dir: Path) -> None:
+        """llm/client.py's call_llm() raises SystemExit (not a plain Exception) on an
+        unrecoverable LLMError, e.g. thinking-budget exhaustion. SystemExit inherits
+        from BaseException, not Exception, so this call site must catch BaseException
+        to actually honor its documented fail-soft contract."""
+        captured: list[LLMRequest] = []
+
+        async def _exiting_llm(req: LLMRequest) -> LLMResponse:
+            captured.append(req)
+            raise SystemExit(1)
+
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("ai_pr_review.review.preflight.fetch_open_issues", return_value="(no open issues)"),
+        ):
+            mock_run.side_effect = [
+                _completed(stdout="abc1234 fix: something\n"),
+                _completed(stdout="feat/branch"),
+            ]
+            result = anyio.run(
+                lambda: _run_issue_linker(
+                    manifest_text="## Manifest",
+                    base_ref="main",
+                    script_dir=prompt_dir,
+                    provider="github",
+                    github_repository="owner/repo",
+                    model="claude-haiku-4-5",
+                    llm_call=_exiting_llm,
+                )
+            )
+
+        assert result == ""  # fail-soft: empty string, not a crash

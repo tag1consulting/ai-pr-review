@@ -21,7 +21,12 @@ Design constraints (from user decisions, session 2026-06-22):
   corroboration cannot be overridden by a single judge call.
 - The judge is fail-soft: any LLM error, parse error, timeout, or empty
   input returns ``kept`` unchanged and logs a WARNING. A failed judge must
-  never modify any finding.
+  never modify any finding. The LLM-call site catches BaseException (not just
+  Exception) so SystemExit raised by llm/client.py's call_llm() -- on auth
+  failure, retry exhaustion, content-filter block, or an unrecoverable
+  LLMError such as thinking-budget exhaustion -- is isolated here too,
+  mirroring the hardening dispatch.py's run_tier() already applies.
+  KeyboardInterrupt is re-raised so Ctrl-C still aborts the run.
 """
 
 from __future__ import annotations
@@ -179,13 +184,19 @@ async def judge_findings(
         model_id=model,
         system_prompt=system_prompt,
         user_message=user_message,
-        max_tokens=4096,
+        # Output is JSON verdicts only, but even at effort="low" adaptive
+        # thinking can exhaust a too-tight ceiling before any text is
+        # produced (see anthropic.py's thinking-budget guard). 8192 keeps
+        # output small while giving thinking headroom; was 4096.
+        max_tokens=8192,
         temperature=0.0,
     )
 
     try:
         response = await llm_call(request)
-    except Exception as exc:
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         logger.warning("judge: LLM call failed (fail-soft); keeping findings unchanged: %s", exc, exc_info=True)
         return JudgeResult(findings=kept)
 
