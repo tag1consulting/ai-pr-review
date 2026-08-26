@@ -10,6 +10,8 @@ nav_order: 4.5
 
 This solves the common case of mixed PR traffic: a repo that merges content-only changes straight to `main` but collects feature work onto a `staging` branch, tested with a full review once per batch rather than on every push.
 
+A ready-to-copy starting point lives at [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) — copy it to `.github/ai-pr-review/policy.yml` and edit to taste.
+
 ## Example
 
 ```yaml

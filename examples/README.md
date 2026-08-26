@@ -11,6 +11,7 @@ Copy these files into your repository to enable AI PR/MR reviews.
 | `workflows/sarif-codeql.yml` | GitHub Actions: example **CodeQL + AI review** pipeline using Capability B (SARIF 2.1.0 ingestion) |
 | `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
 | `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
+| `policy.yml.example` | Repo-local review-policy template: routes review depth by changed-file path, base branch, or head branch. Copy to `.github/ai-pr-review/policy.yml`. See [docs/policy.md](../docs/policy.md). |
 
 GitHub workflows use the `container-action` variant, which pulls a pinned public image from GHCR with all analyzer binaries pre-installed. Bitbucket and GitLab pipelines use the same image directly.
 
@@ -75,7 +76,7 @@ curl -fsSL \
 
 ## Routing review depth by branch or path
 
-The example workflow's `review-mode` input defers to `.github/ai-pr-review/policy.yml` route matching whenever the `ai-review-full` label isn't present and `vars.AI_REVIEW_MODE_DEFAULT` isn't set — add that file to route full mode to a release branch, quick mode elsewhere, near-zero-cost reviews for content-only paths, etc. See [docs/policy.md](../docs/policy.md) for the schema and worked examples, including a release-branch escalation route.
+The example workflow's `review-mode` input defers to `.github/ai-pr-review/policy.yml` route matching whenever the `ai-review-full` label isn't present and `vars.AI_REVIEW_MODE_DEFAULT` isn't set — add that file to route full mode to a release branch, quick mode elsewhere, near-zero-cost reviews for content-only paths, etc. Copy [`policy.yml.example`](policy.yml.example) to `.github/ai-pr-review/policy.yml` as a starting point. See [docs/policy.md](../docs/policy.md) for the full schema.
 
 ## Slash commands
 

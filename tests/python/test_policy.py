@@ -343,3 +343,55 @@ def test_load_policy_file_never_reads_from_pr_head_working_tree(
     # Deliberately NOT committed/pushed — simulates a PR-head-only edit.
     result = load_policy_file(str(git_repo), "main")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# examples/policy.yml.example — the maintainer-facing copy/paste template
+# must stay parseable and resolve routes the way its own comments claim.
+# ---------------------------------------------------------------------------
+
+
+def _find_repo_root() -> Path:
+    here = Path(__file__).resolve().parent
+    for candidate in (here, *here.parents):
+        if (candidate / "examples" / "policy.yml.example").is_file():
+            return candidate
+    pytest.fail("Could not locate examples/policy.yml.example from repo root")
+
+
+def test_example_policy_file_parses() -> None:
+    import yaml
+
+    path = _find_repo_root() / "examples" / "policy.yml.example"
+    raw = yaml.safe_load(path.read_text())
+    pf = _parse_policy_file(raw)
+    assert set(pf.policies) == {"content", "feature", "integration", "deep"}
+    assert pf.default == "feature"
+
+
+def test_example_policy_file_resolves_documented_policies() -> None:
+    import yaml
+
+    path = _find_repo_root() / "examples" / "policy.yml.example"
+    pf = _parse_policy_file(yaml.safe_load(path.read_text()))
+
+    assert resolve_policy(pf, "content").review_mode == "quick"
+    assert resolve_policy(pf, "content").agents == ()
+    assert resolve_policy(pf, "feature").review_mode == "quick"
+    assert resolve_policy(pf, "integration").agents == (
+        "code-reviewer", "silent-failure-hunter", "edge-case-hunter",
+    )
+    assert resolve_policy(pf, "deep").review_mode == "full"
+
+
+def test_example_policy_file_routes_match_as_documented() -> None:
+    import yaml
+
+    path = _find_repo_root() / "examples" / "policy.yml.example"
+    pf = _parse_policy_file(yaml.safe_load(path.read_text()))
+
+    assert resolve_route(pf, ["docs/index.md"], "main", "feature/x") == "content"
+    assert resolve_route(pf, ["src/app.py"], "staging-1.2", "feature/x") == "integration"
+    assert resolve_route(pf, ["src/app.py"], "main", "release/2.0") == "deep"
+    assert resolve_route(pf, ["src/app.py"], "main", "feature/x") == "feature"
+    assert resolve_route(pf, ["src/app.py"], "main", "random-branch") == "feature"  # default
