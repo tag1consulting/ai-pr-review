@@ -285,6 +285,20 @@ def test_load_policy_file_missing_returns_none_silently(
     assert capsys.readouterr().err == ""
 
 
+def test_load_policy_file_invalid_ref_warns(
+    git_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bad/unknown ref (unlike a valid ref simply missing the file) is a real
+    misconfiguration -- git show's 'invalid object name' fatal, not its 'does
+    not exist in' path-not-found fatal -- and must produce a WARNING rather
+    than silently looking identical to the common no-policy-adopted case."""
+    result = load_policy_file(str(git_repo), "nonexistent-branch")
+    assert result is None
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "nonexistent-branch" in err
+
+
 def test_load_policy_file_valid(git_repo: Path) -> None:
     policy_dir = git_repo / ".github" / "ai-pr-review"
     policy_dir.mkdir(parents=True)

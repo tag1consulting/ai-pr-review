@@ -105,8 +105,19 @@ def load_policy_file(workspace: str, base_ref: str) -> PolicyFile | None:
         )
         return None
     if proc.returncode != 0:
-        # No policy.yml at that ref (or the ref/remote is unavailable) — the
-        # expected state for a repo that hasn't opted in. Not an error.
+        # git show's fatal message for "the path isn't tracked at that ref"
+        # is stable across git versions: "fatal: path '<path>' does not
+        # exist in '<ref>'". That's the common, expected case for a repo
+        # that hasn't adopted policy.yml and must stay silent. Any other
+        # non-zero exit (bad/unknown ref, unreachable remote, permissions) is
+        # a real misconfiguration masquerading as "no policy adopted" and is
+        # worth a WARNING so it doesn't silently look like normal operation.
+        if "does not exist in" not in proc.stderr:
+            print(
+                f"WARNING: could not read {_POLICY_PATH} from origin/{base_ref} "
+                f"(git show exited {proc.returncode}): {proc.stderr.strip()[:500]}",
+                file=sys.stderr,
+            )
         return None
     try:
         raw = yaml.safe_load(proc.stdout)
