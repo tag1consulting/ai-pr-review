@@ -52,7 +52,7 @@ than to report one that is impossible in practice.
 2. **Unguarded inputs** — parameters used without null/bounds checks at trust boundaries (public APIs, deserialized data, LLM output); negative/zero values reaching functions that can't handle them
 3. **Off-by-one** — `<` vs `<=` against array length; inconsistent endpoint inclusion in slices/substrings; fence-post errors in pagination; index-base confusion
 4. **Integer overflow/underflow** — arithmetic on user-controlled values without bounds checks; unsigned subtraction wrapping; multiply-before-divide overflow; over-wide bit shifts (shifting by >= type width)
-5. **Implicit type coercion** — JS `==` vs `===`; Go type assertions without `ok` check; Python truthy/falsy where explicit check is safer; PHP loose comparisons; bash arithmetic on non-numeric strings
+5. **Implicit type coercion** — JS `==` vs `===`; Go type assertions without `ok` check; Python truthy/falsy where explicit check is safer; PHP loose comparisons across types; bash arithmetic on non-numeric strings
 6. **Race conditions** — unsynchronized shared mutable state across threads/goroutines/async; check-then-act patterns; TOCTOU in filesystem operations
 7. **Timeout/cancellation gaps** — context/token not propagated to child calls; network/IO/lock calls without timeout; uncancellable goroutines/tasks leaking on parent cancellation
 8. **Resource cleanup gaps** — files/connections/locks not closed on all paths (especially error paths); missing `defer`/`finally`/`using`/`with`/`trap`; resources opened in loops without per-iteration cleanup

@@ -75,11 +75,12 @@ analysis rather than surface-level pattern recognition.
 - Are there N+1 query patterns or unbounded loops that would degrade under load?
 - Is pagination missing where results could be large?
 - Are there missing caches or unnecessary re-computation?
+- Are goroutine/thread lifetimes and resource cleanup handled correctly?
 
 ### 6. Maintainability
 
 - Will a new contributor understand the design intent?
-- Are complex invariants documented?
+- Are complex invariants documented with comments?
 
 ### 7. Technical Debt
 
