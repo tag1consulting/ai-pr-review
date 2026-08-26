@@ -19,23 +19,26 @@ policies:
     agents: []
     analyzers: []
 
-  # Full review, gated at merge via `require` below — for release branches,
-  # where we want at least one full-mode pass before merging to main.
+  # Full review, run manually via `/ai-pr-review review-full` — never
+  # routed to automatically, only referenced by `require` below.
   deep:
     extends: full
 
 routes:
-  # Release branches first, ahead of the content route below: a release PR
-  # that happens to touch docs/** (e.g. CHANGELOG-style updates) must still
-  # get the deep/required tier, not silently downgrade to the docs tier
-  # because of the any-file-matches-any-glob semantics above. An automatic
-  # push only satisfies `require` if it happens to run at full/deep mode
-  # already; otherwise run `/ai-pr-review review-full` to satisfy it
-  # manually. Pair with a required branch-protection check
-  # (ai-pr-review/policy-gate) on main to actually enforce this — not yet
-  # added, see rollout plan.
+  # Release branches first, ahead of the content route below, so a release
+  # PR that happens to touch docs/** (e.g. CHANGELOG-style updates) doesn't
+  # match the docs route instead — the any-file-matches-any-glob semantics
+  # above would otherwise let a docs change on a release branch skip this
+  # entirely. Automatic pushes stay at 'quick' (cheap, iterate freely); the
+  # 'deep' full-mode pass required before merge must be kicked off
+  # manually with `/ai-pr-review review-full` — this is the actual gate,
+  # not a decoration: an automatic push here does NOT satisfy `require`
+  # (quick mode's review_mode is 'quick', not 'full'), so it posts
+  # 'neutral' until someone runs review-full. Pair with a required
+  # branch-protection check (ai-pr-review/policy-gate) on main to actually
+  # enforce this — not yet added, see rollout plan.
   - when: {head-branch: 'release/*'}
-    policy: deep
+    policy: quick
     require: deep
 
   # Doc-only PRs get the near-zero-cost tier.
