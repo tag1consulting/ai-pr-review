@@ -73,6 +73,13 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Uncomment if .github/ai-pr-review/policy.yml uses a route's `require`
+  # field (see docs/policy.md) and you want /ai-pr-review rescan /
+  # review-full to be able to (re-)post the ai-pr-review/policy-gate check
+  # run for it. Optional -- without it, `require` routing still works, the
+  # check run just silently doesn't get posted (fail-soft, logged as a
+  # warning in the run).
+  # checks: write
 
 jobs:
   slash-commands:
