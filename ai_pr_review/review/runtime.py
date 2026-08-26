@@ -150,7 +150,13 @@ async def build_review_runtime(
     # 5b. Build the <pr-intent> addendum (PR title/body) shared by every
     # agent's prompt (see prompts/product-owner.md, but not exclusive to
     # it — any agent benefits from knowing the stated intent). GitHub-only,
-    # mirrors issue-linker's gate; fail-soft, never raises.
+    # mirrors issue-linker's gate; fail-soft against the fetch itself (gh
+    # CLI/network failures degrade to no addendum) but not against a broken
+    # deployment: ImportError deliberately propagates rather than being
+    # swallowed, matching the identical except ImportError: raise pattern
+    # in the feedback-loop block above and the static-analyzers block below
+    # -- a missing/renamed module indicates the engine itself is broken,
+    # not that this optional feature is merely unavailable.
     pr_intent_addendum = ""
     if config.vcs_provider == "github" and config.pr_number:
         try:

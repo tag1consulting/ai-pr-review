@@ -213,7 +213,7 @@ def fetch_pr_intent(pr_number: str, github_repository: str) -> str:
     except subprocess.TimeoutExpired:
         logger.warning("pr-intent: gh pr view timed out; PR title/body unavailable")
         return ""
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("pr-intent: gh pr view failed: %s", exc, exc_info=True)
         return ""
 

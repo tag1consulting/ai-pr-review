@@ -10,6 +10,8 @@ import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from ai_pr_review.review.preflight import build_pr_intent_addendum, fetch_pr_intent
 
 
@@ -84,10 +86,25 @@ class TestFetchPrIntent:
             result = fetch_pr_intent("7", "owner/repo")
         assert result == ""
 
-    def test_unexpected_exception_returns_empty(self) -> None:
-        with patch("subprocess.run", side_effect=RuntimeError("unexpected")):
+    def test_permission_error_returns_empty(self) -> None:
+        """OSError (and subclasses, e.g. PermissionError) are the expected failure
+        shape for a subprocess call and must fail soft, unlike a genuine
+        programming error -- see test_programming_error_propagates below."""
+        with patch("subprocess.run", side_effect=PermissionError("denied")):
             result = fetch_pr_intent("7", "owner/repo")
         assert result == ""
+
+    def test_programming_error_propagates(self) -> None:
+        """A bug in this function's own code (not a subprocess/OS failure) must
+        not be silently swallowed as "PR intent unavailable" -- the except
+        clause is narrowed to (OSError, subprocess.SubprocessError) specifically
+        so this doesn't happen (see the same reasoning as runtime.py's
+        except ImportError: raise for the module import itself)."""
+        with (
+            patch("subprocess.run", side_effect=RuntimeError("unexpected")),
+            pytest.raises(RuntimeError),
+        ):
+            fetch_pr_intent("7", "owner/repo")
 
 
 # ---------------------------------------------------------------------------
