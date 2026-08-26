@@ -435,3 +435,20 @@ Example showing an embedded fence:
     result = parse_summarizer_output(raw)
     assert result.pr_type == "refactor"
     assert result.effort == 2
+
+
+# ---------------------------------------------------------------------------
+# Prompt contract — no duplicate "Related Issues & PRs" heading
+# ---------------------------------------------------------------------------
+
+def test_summarizer_prompt_does_not_emit_related_issues_heading() -> None:
+    """issue-linker is the sole source of `## Related Issues & PRs`.
+
+    The summarizer never receives issue-linker output (build_summarizer_user_message
+    passes manifest/commit-log/diff only), so any Step-4-style instruction here can
+    only ever produce the "no related issues" fallback, which then collides with
+    issue-linker's own heading appended downstream in cli.py.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    raw = (repo_root / "prompts" / "pr-summarizer.md").read_text()
+    assert "Related Issues" not in raw
