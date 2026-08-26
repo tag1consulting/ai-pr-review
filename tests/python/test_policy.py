@@ -13,6 +13,8 @@ from ai_pr_review.policy import (
     RouteRule,
     _parse_policy_file,
     load_policy_file,
+    match_route,
+    policy_satisfies,
     resolve_policy,
     resolve_route,
 )
@@ -250,6 +252,87 @@ def test_resolve_route_combined_constraints_all_must_match() -> None:
 
 
 # ---------------------------------------------------------------------------
+# match_route / require / policy_satisfies (merge gate)
+# ---------------------------------------------------------------------------
+
+
+def test_match_route_returns_full_route_including_require() -> None:
+    pf = _pf(
+        (RouteRule(policy="integration", base_branch="staging-*", require="deep"),)
+    )
+    route = match_route(pf, [], "staging-1", "")
+    assert route is not None
+    assert route.policy == "integration"
+    assert route.require == "deep"
+
+
+def test_match_route_no_match_returns_none() -> None:
+    pf = _pf((RouteRule(policy="integration", base_branch="staging-*", require="deep"),))
+    assert match_route(pf, [], "main", "") is None
+
+
+def test_parse_require_references_unknown_policy_rejected() -> None:
+    raw = {
+        "policies": {"x": {}},
+        "routes": [{"when": {"paths": ["**"]}, "policy": "x", "require": "nonexistent"}],
+    }
+    with pytest.raises(ValueError, match="unknown policy"):
+        _parse_policy_file(raw)
+
+
+def test_parse_require_accepts_builtin_and_named_policy() -> None:
+    raw = {
+        "policies": {"x": {}, "deep": {"extends": "full"}},
+        "routes": [
+            {"when": {"paths": ["a/**"]}, "policy": "x", "require": "full"},
+            {"when": {"paths": ["b/**"]}, "policy": "x", "require": "deep"},
+        ],
+    }
+    pf = _parse_policy_file(raw)
+    assert pf.routes[0].require == "full"
+    assert pf.routes[1].require == "deep"
+
+
+def test_policy_satisfies_exact_name_match() -> None:
+    pf = PolicyFile(
+        version=1,
+        policies={"deep": PolicyDef(name="deep", extends="full")},
+        routes=(),
+        default=None,
+    )
+    assert policy_satisfies(pf, "deep", "deep") is True
+
+
+def test_policy_satisfies_full_mode_run_satisfies_any_requirement() -> None:
+    """A full-mode run is a superset of any quick-based tier, regardless of
+    whether it came from the matched policy or an explicit override.
+    """
+    pf = PolicyFile(
+        version=1,
+        policies={
+            "integration": PolicyDef(name="integration", extends="quick"),
+            "deep": PolicyDef(name="deep", extends="full"),
+        },
+        routes=(),
+        default=None,
+    )
+    assert policy_satisfies(pf, "deep", "integration") is True
+
+
+def test_policy_satisfies_lesser_tier_does_not_satisfy_greater_requirement() -> None:
+    pf = PolicyFile(
+        version=1,
+        policies={
+            "integration": PolicyDef(name="integration", extends="quick"),
+            "deep": PolicyDef(name="deep", extends="full"),
+        },
+        routes=(),
+        default=None,
+    )
+    assert policy_satisfies(pf, "integration", "deep") is False
+
+
+# ---------------------------------------------------------------------------
 # load_policy_file (git integration)
 # ---------------------------------------------------------------------------
 
@@ -409,3 +492,19 @@ def test_example_policy_file_routes_match_as_documented() -> None:
     assert resolve_route(pf, ["src/app.py"], "main", "release/2.0") == "deep"
     assert resolve_route(pf, ["src/app.py"], "main", "feature/x") == "feature"
     assert resolve_route(pf, ["src/app.py"], "main", "random-branch") == "feature"  # default
+
+
+def test_example_policy_file_staging_route_requires_deep() -> None:
+    """The staging-* route's require: deep is the merge-gate example this
+    file's top-of-file comment documents (docs/policy.md #requiring-a-
+    review-tier-before-merge)."""
+    import yaml
+
+    path = _find_repo_root() / "examples" / "policy.yml.example"
+    pf = _parse_policy_file(yaml.safe_load(path.read_text()))
+
+    route = match_route(pf, ["src/app.py"], "staging-1.2", "feature/x")
+    assert route is not None
+    assert route.require == "deep"
+    assert policy_satisfies(pf, "integration", "deep") is False
+    assert policy_satisfies(pf, "deep", "deep") is True
