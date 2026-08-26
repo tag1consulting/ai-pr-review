@@ -252,12 +252,15 @@ jobs:
           # provider defaults. Leave unset to use provider defaults.
           model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
           model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
+          # Defer to .github/ai-pr-review/policy.yml route matching when
+          # nothing explicit applies — see docs/policy.md. The release/*
+          # escalation used to be hardcoded here; it's now a policy.yml
+          # route instead (issue #675).
           review-mode: >-
             ${{
               inputs.review_mode ||
               (contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full') ||
-              (startsWith(github.event.pull_request.head.ref, 'release/') && 'full') ||
-              'quick'
+              ''
             }}
           review-target: ${{ (github.event_name == 'workflow_dispatch' && inputs.pr_number == '') && 'standalone' || 'pr' }}
           pr-number: ${{ inputs.pr_number || github.event.pull_request.number || '' }}
