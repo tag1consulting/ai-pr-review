@@ -22,6 +22,7 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
+| `head-ref` | No | `''` | Head branch name (e.g. `feature/foo`). Optional — only used for head-branch route matching in `.github/ai-pr-review/policy.yml` (see [Policies](policy.md)). |
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |

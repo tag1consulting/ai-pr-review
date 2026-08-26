@@ -19,7 +19,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # Strip all relevant env vars
     for key in list(os.environ.keys()):
         if key.startswith("AI_") or key in (
-            "PR_NUMBER", "BASE_REF", "HEAD_SHA", "VCS_PROVIDER",
+            "PR_NUMBER", "BASE_REF", "HEAD_REF", "HEAD_SHA", "VCS_PROVIDER",
             "REVIEW_TARGET", "GH_TOKEN", "GITHUB_REPOSITORY",
             "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
             "BEDROCK_API_KEY", "BEDROCK_API_URL", "OPENAI_BASE_URL",
@@ -36,6 +36,20 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # action.yml's max-inline default is '25'; CLI default must match so
     # that workflow-driven and CLI-only callers see the same cap.
     assert cfg.max_inline == 25
+
+
+def test_head_ref_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """head_ref defaults to '' when HEAD_REF is unset (optional field)."""
+    monkeypatch.delenv("HEAD_REF", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.head_ref == ""
+
+
+def test_head_ref_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """head_ref is read verbatim from HEAD_REF, matching base_ref's BASE_REF pattern."""
+    monkeypatch.setenv("HEAD_REF", "feature/foo")
+    cfg = ReviewConfig.from_env()
+    assert cfg.head_ref == "feature/foo"
 
 
 def test_max_inline_default_matches_action_yml() -> None:

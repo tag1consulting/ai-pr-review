@@ -86,6 +86,14 @@ inputs:
     description: Base branch name (e.g., main)
     required: true
 
+  head-ref:
+    description: >
+      Head branch name (e.g., feature/foo). Optional — used only for
+      head-branch route matching in .github/ai-pr-review/policy.yml. Not
+      required when no policy file routes on head-branch.
+    required: false
+    default: ''
+
   head-sha:
     description: Head commit SHA
     required: true
@@ -387,6 +395,7 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ inputs.pr-number }}
         BASE_REF: ${{ inputs.base-ref }}
+        HEAD_REF: ${{ inputs.head-ref }}
         HEAD_SHA: ${{ inputs.head-sha }}
         AI_PARALLEL: ${{ inputs.parallel }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}

@@ -184,6 +184,7 @@ class ReviewConfig(BaseModel):
     # --- PR / VCS ---
     pr_number: str = ""
     base_ref: str = ""
+    head_ref: str = ""
     head_sha: str = ""
     vcs_provider: str = "github"
     review_target: str = "pr"
@@ -459,6 +460,7 @@ class ReviewConfig(BaseModel):
             dry_run=_bool("AI_DRY_RUN"),
             pr_number=os.environ.get("PR_NUMBER", ""),
             base_ref=os.environ.get("BASE_REF", ""),
+            head_ref=os.environ.get("HEAD_REF", ""),
             head_sha=os.environ.get("HEAD_SHA", ""),
             vcs_provider=os.environ.get("VCS_PROVIDER", "github").strip(),
             review_target=os.environ.get("REVIEW_TARGET", "pr").strip(),
