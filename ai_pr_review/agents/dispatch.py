@@ -645,8 +645,14 @@ async def _run_single_agent(
         # — raised on auth failure (exit 1), retry exhaustion (exit 2), or
         # content-filter block (exit 3) — is isolated to a single FailedAgent
         # instead of cancelling sibling tasks in the anyio task group.
-        # KeyboardInterrupt is re-raised so Ctrl-C still aborts the run.
-        if isinstance(exc, KeyboardInterrupt):
+        # KeyboardInterrupt and anyio's cancellation exception class are
+        # re-raised (not absorbed): this function runs under tg.start_soon
+        # inside a real anyio task group (run_tier(), below), so swallowing a
+        # delivered cancellation here (e.g. from a sibling task's failure, or
+        # an enclosing timeout) would violate structured-concurrency's
+        # cancellation-propagation contract instead of merely isolating one
+        # agent's failure. See the identical precedent in analyzers/bridge.py.
+        if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt)):
             raise
         elapsed = int((time.monotonic() - start) * 1000)
         exit_code = 1

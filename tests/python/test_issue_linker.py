@@ -178,6 +178,17 @@ class TestRunIssueLinkerUserMessage:
         assert "## Open Issues" in user_msg
         assert "(unavailable)" in user_msg
 
+    def test_max_tokens_matches_roster_spec(self, prompt_dir: Path) -> None:
+        """max_tokens must be sourced from AgentSpec.max_output_tokens, not a
+        hardcoded literal that can silently drift from the roster (see PR #666's
+        pr-summarizer 4096-vs-16384 drift, which reporting.py's cost table had
+        been silently misreporting)."""
+        from ai_pr_review.agents.roster import get_agent
+
+        _result, captured = self._run(prompt_dir)
+        assert len(captured) == 1
+        assert captured[0].max_tokens == get_agent("issue-linker").max_output_tokens
+
     def test_llm_none_sentinel_returns_empty_string(self, prompt_dir: Path) -> None:
         """When the LLM returns NONE, _run_issue_linker returns ""."""
         result, _captured = self._run(prompt_dir, llm_text="NONE")

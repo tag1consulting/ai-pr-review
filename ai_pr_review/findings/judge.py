@@ -26,7 +26,9 @@ Design constraints (from user decisions, session 2026-06-22):
   failure, retry exhaustion, content-filter block, or an unrecoverable
   LLMError such as thinking-budget exhaustion -- is isolated here too,
   mirroring the hardening dispatch.py's run_tier() already applies.
-  KeyboardInterrupt is re-raised so Ctrl-C still aborts the run.
+  KeyboardInterrupt and anyio's cancellation exception class are re-raised
+  (not absorbed) so Ctrl-C and structured-concurrency cancellation still
+  propagate -- see the identical precedent in analyzers/bridge.py.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+import anyio
 
 from ai_pr_review.agents.dispatch import LLMCall
 from ai_pr_review.findings.models import Finding
@@ -195,7 +199,7 @@ async def judge_findings(
     try:
         response = await llm_call(request)
     except BaseException as exc:
-        if isinstance(exc, KeyboardInterrupt):
+        if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt)):
             raise
         logger.warning("judge: LLM call failed (fail-soft); keeping findings unchanged: %s", exc, exc_info=True)
         return JudgeResult(findings=kept)

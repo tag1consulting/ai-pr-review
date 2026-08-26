@@ -43,13 +43,17 @@ async def run_summarizer(
 
     Fail-soft: on any error logs a WARNING and returns _SUMMARIZER_FAILURE_NOTICE
     so the PR comment communicates the partial failure rather than silently
-    omitting the summary.  Catches BaseException (not just Exception) so that
-    SystemExit raised by llm/client.py's call_llm() -- on auth failure, retry
-    exhaustion, content-filter block, or an unrecoverable LLMError such as
-    thinking-budget exhaustion (see anthropic.py's max_tokens-on-thinking guard) --
-    is isolated here rather than aborting the whole review, mirroring the same
-    hardening dispatch.py's run_tier() already applies. KeyboardInterrupt is
-    re-raised so Ctrl-C still aborts the run.
+    omitting the summary. The llm_call() await is wrapped in its own narrow
+    except BaseException (not just Exception) so that SystemExit raised by
+    llm/client.py's call_llm() -- on auth failure, retry exhaustion,
+    content-filter block, or an unrecoverable LLMError such as thinking-budget
+    exhaustion (see anthropic.py's max_tokens-on-thinking guard) -- is isolated
+    here rather than aborting the whole review, mirroring the same hardening
+    dispatch.py's run_tier() already applies. KeyboardInterrupt and anyio's
+    cancellation exception class are re-raised (not absorbed) so Ctrl-C and
+    structured-concurrency cancellation still propagate -- see the identical
+    precedent in analyzers/bridge.py. The outer except Exception (unchanged)
+    still covers prompt assembly and parse_summarizer_output.
     """
     from ai_pr_review.agents.roster import get_agent
     from ai_pr_review.agents.summarizer import (
@@ -94,13 +98,20 @@ async def run_summarizer(
             max_tokens=get_agent("pr-summarizer").max_output_tokens,
             temperature=temperature,
         )
-        response: LLMResponse = await llm_call(request)
+        try:
+            response: LLMResponse = await llm_call(request)
+        except BaseException as exc:
+            if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt)):
+                raise
+            logger.warning(
+                "pr-summarizer: failed (review will continue without summary): %s: %s",
+                type(exc).__name__, exc, exc_info=True,
+            )
+            return _SUMMARIZER_FAILURE_NOTICE
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
         parse_summarizer_output(response.text)
         return response.text
-    except BaseException as exc:
-        if isinstance(exc, KeyboardInterrupt):
-            raise
+    except Exception as exc:
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
             type(exc).__name__, exc, exc_info=True,
@@ -266,13 +277,17 @@ async def run_issue_linker(
     the open-issue list is injected as plain text so the model can match and cite real
     issue numbers without any tool-calling loop.
 
-    Catches BaseException (not just Exception) so that SystemExit raised by
-    llm/client.py's call_llm() -- on auth failure, retry exhaustion,
-    content-filter block, or an unrecoverable LLMError such as thinking-budget
-    exhaustion (see anthropic.py's max_tokens-on-thinking guard) -- is isolated
-    here rather than aborting the whole review, mirroring the same hardening
-    dispatch.py's run_tier() already applies. KeyboardInterrupt is re-raised so
-    Ctrl-C still aborts the run.
+    The llm_call() await is wrapped in its own narrow except BaseException
+    (not just Exception) so that SystemExit raised by llm/client.py's
+    call_llm() -- on auth failure, retry exhaustion, content-filter block, or
+    an unrecoverable LLMError such as thinking-budget exhaustion (see
+    anthropic.py's max_tokens-on-thinking guard) -- is isolated here rather
+    than aborting the whole review, mirroring the same hardening dispatch.py's
+    run_tier() already applies. KeyboardInterrupt and anyio's cancellation
+    exception class are re-raised (not absorbed) so Ctrl-C and
+    structured-concurrency cancellation still propagate -- see the identical
+    precedent in analyzers/bridge.py. The outer except Exception (unchanged)
+    still covers everything else in this function.
     """
     from ai_pr_review.agents.roster import get_agent
     from ai_pr_review.llm.base import LLMRequest
@@ -353,15 +368,22 @@ async def run_issue_linker(
             max_tokens=get_agent("issue-linker").max_output_tokens,
             temperature=temperature,
         )
-        response: LLMResponse = await llm_call(request)
+        try:
+            response: LLMResponse = await llm_call(request)
+        except BaseException as exc:
+            if isinstance(exc, (anyio.get_cancelled_exc_class(), KeyboardInterrupt)):
+                raise
+            logger.warning(
+                "issue-linker: failed (review will continue without issue links): %s: %s",
+                type(exc).__name__, exc, exc_info=True,
+            )
+            return ""
         text = response.text.strip()
         if text == "NONE" or not text:
             logger.debug("issue-linker: returned NONE or empty; skipping")
             return ""
         return text
-    except BaseException as exc:
-        if isinstance(exc, KeyboardInterrupt):
-            raise
+    except Exception as exc:
         logger.warning(
             "issue-linker: failed (review will continue without issue links): %s: %s",
             type(exc).__name__, exc, exc_info=True,
