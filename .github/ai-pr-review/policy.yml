@@ -1,0 +1,46 @@
+# AI PR Review — repo-local review policy for ai-pr-review itself (dogfooding).
+#
+# Loaded via `git show origin/{base-ref}:.github/ai-pr-review/policy.yml` from
+# the PR's BASE branch — a PR editing this file has no effect on its own
+# review. Full schema and precedence: docs/policy.md
+#
+# Precedence (highest wins): slash command > explicit action input/label >
+# this file's route matching > engine default (quick mode).
+
+version: 1
+
+policies:
+  # Docs-only changes: no agents, no analyzers. Scoped to structurally
+  # doc-only trees (docs/**, language-profiles/**) rather than a bare
+  # '*.md' glob — path matching is "any changed file matches any glob",
+  # so a broad '*.md' would also zero out review on a PR that bundles a
+  # README/CLAUDE.md edit alongside real code changes in the same diff.
+  content:
+    agents: []
+    analyzers: []
+
+  # Full review, gated at merge via `require` below — for release branches,
+  # where we want at least one full-mode pass before merging to main.
+  deep:
+    extends: full
+
+routes:
+  # Release branches first, ahead of the content route below: a release PR
+  # that happens to touch docs/** (e.g. CHANGELOG-style updates) must still
+  # get the deep/required tier, not silently downgrade to the docs tier
+  # because of the any-file-matches-any-glob semantics above. An automatic
+  # push only satisfies `require` if it happens to run at full/deep mode
+  # already; otherwise run `/ai-pr-review review-full` to satisfy it
+  # manually. Pair with a required branch-protection check
+  # (ai-pr-review/policy-gate) on main to actually enforce this — not yet
+  # added, see rollout plan.
+  - when: {head-branch: 'release/*'}
+    policy: deep
+    require: deep
+
+  # Doc-only PRs get the near-zero-cost tier.
+  - when: {paths: ['docs/**', 'language-profiles/**']}
+    policy: content
+
+# No `default:` — everything else falls through to the engine's hard-coded
+# default (quick mode, no restriction), same as before this file existed.
