@@ -57,24 +57,6 @@ row in the table. Example:
 Use judgment for grouping headers: "API Layer", "Data Layer", "Infrastructure", "Tests",
 "Config", "Docs", etc. -- whatever fits the PR's structure.
 
-## Step 4: Generate `## Related Issues & PRs`
-
-If issue-linker output is available in the provided context, list each related issue or
-PR with its identifier, title, and relationship type (e.g., Closes, Fixes, Related,
-Depends on). Format as a bulleted list:
-
-```
-- Closes #123 -- Short title or description
-- Related #456 -- Short title or description
-```
-
-If no issue-linker output is available and no related issues can be identified from the
-commit messages or PR description, write:
-
-```
-No related issues identified.
-```
-
 ## Empty State
 
 If no diff or changed files are provided and the git fallback commands above also return
@@ -97,10 +79,6 @@ Produce exactly these sections in order, with no preamble:
 | File | Change | Summary |
 |------|--------|---------|
 <rows -- grouped with bold headers when >10 files>
-
-## Related Issues & PRs
-
-<bulleted list or "No related issues identified.">
 ```
 
 Output only the sections above. No findings or review feedback.
