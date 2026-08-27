@@ -282,6 +282,14 @@ async def build_review_runtime(
         config.agents,
         len(config.exclude_agents),
     )
+    print(  # TEMP: raw print() diagnostic — bypasses logging config entirely, will remove
+        "AI-PR-REVIEW-DIAG print(): "
+        f"loaded={_policy_file is not None} changed_files={len(_changed_list)} "
+        f"matched_route_policy={_matched_route.policy if _matched_route else None} "
+        f"resolved_policy_name={_policy_name} review_mode={config.review_mode} "
+        f"agents={config.agents!r} exclude_agents_count={len(config.exclude_agents)}",
+        flush=True,
+    )
 
     # 7. Build language-profile router once per run (avoid per-agent disk reads).
     # ProfileRouter parses all detected profiles into classified sections so
