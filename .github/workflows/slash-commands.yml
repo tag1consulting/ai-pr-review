@@ -193,21 +193,21 @@ on:
           workflow identity.
         required: false
 
-permissions:
-  contents: read
-  issues: write
-  pull-requests: write
-  # checks: write is deliberately NOT requested here (issue #678). A
-  # workflow_call reusable workflow that declares a permission the caller's
-  # own explicit `permissions:` block doesn't grant fails the caller's
-  # ENTIRE run at startup ("requesting 'checks: write', but is only
-  # allowed 'checks: none'") -- not a graceful per-job degradation, and not
-  # limited to the slash-commands job itself. post_check_run() is already
-  # fail-soft in code (an ungranted token just logs a warning), so this
-  # reusable workflow only uses whatever `checks` scope the caller happens
-  # to grant. A consumer wanting the require:/merge-gate feature to
-  # actually post opts in by adding `checks: write` to their OWN calling
-  # workflow (see examples/workflows/comment-triggers.yml).
+# Deliberately no `permissions:` block here (issue #686, follow-up to #678).
+# GitHub Actions treats ANY explicit `permissions:` on a workflow_call
+# reusable workflow as a request for exactly those scopes, capping every
+# unlisted scope to `none` -- regardless of what the caller grants. #678's
+# fix (dropping `checks: write` from an otherwise-explicit block here)
+# stopped the startup_failure for callers that don't grant `checks`, but
+# it ALSO capped `checks` to none for callers that DO grant it -- including
+# this repo's own ai-review.yml, which broke the release/* merge-gate's
+# `/ai-pr-review review-full` -> `success` flow (found live testing #686).
+# Declaring no `permissions:` block at all makes this reusable workflow
+# inherit the caller's grant for every scope, whatever it is: a caller
+# without `checks: write` simply doesn't have it available (post_check_run()
+# is fail-soft, logs a warning, no crash); a caller that does grant it
+# gets it. No explicit request from this workflow can ever exceed what the
+# caller grants, so the #678 startup_failure can't recur either way.
 
 jobs:
   handle-command:
