@@ -110,6 +110,10 @@ To make this a real merge gate, add branch protection on the target branch requi
 
 [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) includes this exact `staging-*` → `integration`, `require: deep` route as a working starting point — copy it and add the branch-protection rule above to turn it on.
 
+## Live example
+
+This repo dogfoods its own feature: [`.github/ai-pr-review/policy.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/.github/ai-pr-review/policy.yml) routes docs-only PRs (`docs/**`, `language-profiles/**`) to the near-zero-cost tier, and gates `release/*` branches on a manually-triggered full review before merge — automatic pushes to a release branch stay at `quick`, and `/ai-pr-review review-full` is required to satisfy the merge gate.
+
 ## Verifying a route matched
 
 The token-usage table on the posted review names every agent that actually ran — an empty table (no agent rows) on a route configured with `agents: []` confirms it matched and suppressed the roster as expected. Prefer checking a route's *first* automatic review on a fresh PR when verifying: repeatedly re-triggering `/ai-pr-review rescan` on the same PR can interact with incremental-diff caching in ways that make a single anomalous result hard to interpret in isolation.
