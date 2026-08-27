@@ -557,6 +557,76 @@ class TestPolicyResolution:
         assert set(runtime.config.exclude_analyzers) == ANALYZER_NAMES
 
     @pytest.mark.anyio
+    async def test_policy_agents_empty_still_permits_preflight_agents(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression test for issue #683: a policy's agents: [] must not
+        silently suppress pr-summarizer/issue-linker (separately-dispatched
+        preflight agents that describe the PR, not review its code) — only
+        an explicit exclude-agents naming one of them should do that. cli.py
+        gates both via agent_allowed(name, rc.agents, rc.exclude_agents), so
+        the deny-all set the merge builds for a restricted-empty policy must
+        exempt them.
+        """
+        from ai_pr_review.agents.roster import AGENTS
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="full")
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="content")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(
+                    name="content", review_mode="quick", agents=(), agents_restricted=True
+                ),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        separately_dispatched = {a.name for a in AGENTS if a.separately_dispatched}
+        assert separately_dispatched == {"pr-summarizer", "issue-linker"}
+        assert not separately_dispatched & set(runtime.config.exclude_agents)
+        assert "code-reviewer" in runtime.config.exclude_agents
+
+    @pytest.mark.anyio
+    async def test_policy_agents_empty_explicit_exclude_still_suppresses_pr_summarizer(
+        self, tmp_path: Path
+    ) -> None:
+        """An explicit exclude-agents naming pr-summarizer must still work
+        even while a policy's agents: [] is active (issue #683's fix must
+        not make pr-summarizer unconditionally immune — only immune to the
+        policy-driven deny-all, not to an explicit exclusion)."""
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="full", exclude_agents=("pr-summarizer",))
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="content")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(
+                    name="content", review_mode="quick", agents=(), agents_restricted=True
+                ),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert "pr-summarizer" in runtime.config.exclude_agents
+
+    @pytest.mark.anyio
     async def test_policy_agents_empty_but_not_restricted_means_no_change(
         self, tmp_path: Path
     ) -> None:

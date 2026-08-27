@@ -229,12 +229,20 @@ async def build_review_runtime(
     from ai_pr_review.agents.roster import AGENT_NAMES
     from ai_pr_review.analyzers.bridge import ANALYZER_NAMES
 
+    # A policy's `agents: []` means "run no review/finding agents" (cost
+    # control on trivial changes) -- it must not also silently suppress
+    # separately-dispatched preflight agents (pr-summarizer, issue-linker),
+    # which describe the PR rather than review its code and are wanted
+    # regardless of review depth. An explicit `exclude-agents` naming one of
+    # them still works (issue #683): that flows through `final_deny` in
+    # _merge_allowlist independently of this exemption set.
+    _policy_deny_all_names = AGENT_NAMES - {a.name for a in AGENTS if a.separately_dispatched}
     _final_agents, _final_exclude_agents = _merge_allowlist(
         config.agents,
         config.exclude_agents,
         _resolved_policy.agents if _resolved_policy else (),
         _resolved_policy.agents_restricted if _resolved_policy else False,
-        AGENT_NAMES,
+        _policy_deny_all_names,
     )
     _final_analyzers, _final_exclude_analyzers = _merge_allowlist(
         config.analyzers,
@@ -271,7 +279,7 @@ async def build_review_runtime(
         or config.review_mode == "full"
         or _policy_name == policy_gate_required
     )
-    logger.warning(  # TEMP: bumped to WARNING for one-off diagnostic visibility, will revert to INFO
+    logger.info(
         "policy.yml resolution: loaded=%s changed_files=%d matched_route_policy=%s "
         "resolved_policy_name=%s review_mode=%s agents=%s exclude_agents=%d-names",
         _policy_file is not None,
@@ -281,14 +289,6 @@ async def build_review_runtime(
         config.review_mode,
         config.agents,
         len(config.exclude_agents),
-    )
-    print(  # TEMP: raw print() diagnostic — bypasses logging config entirely, will remove
-        "AI-PR-REVIEW-DIAG print(): "
-        f"loaded={_policy_file is not None} changed_files={len(_changed_list)} "
-        f"matched_route_policy={_matched_route.policy if _matched_route else None} "
-        f"resolved_policy_name={_policy_name} review_mode={config.review_mode} "
-        f"agents={config.agents!r} exclude_agents_count={len(config.exclude_agents)}",
-        flush=True,
     )
 
     # 7. Build language-profile router once per run (avoid per-agent disk reads).
