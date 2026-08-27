@@ -80,7 +80,21 @@ class PolicyFile:
 
 @dataclass(frozen=True)
 class ResolvedPolicy:
-    """A named policy fully resolved through its 'extends' chain."""
+    """A named policy fully resolved through its 'extends' chain.
+
+    ``agents``/``analyzers`` being an empty tuple is ambiguous on its own —
+    it could mean "no restriction" (the built-in quick/full bases) or
+    "explicitly restricted to zero" (a policy declaring ``agents: []``).
+    ``agents_restricted``/``analyzers_restricted`` disambiguates: True
+    means some policy in the extends chain explicitly set that field
+    (regardless of the resulting value), so the caller must not treat an
+    empty ``agents``/``analyzers`` here as "unset" — see
+    ``ai_pr_review.review.runtime.build_review_runtime``'s merge, which
+    translates an empty-but-restricted allow list into an explicit
+    deny-all (an empty allow tuple means "permit everything" everywhere
+    else in the config surface, so it can't carry this meaning on its
+    own).
+    """
 
     name: str
     review_mode: str
@@ -88,6 +102,8 @@ class ResolvedPolicy:
     exclude_agents: tuple[str, ...] = ()
     analyzers: tuple[str, ...] = ()
     exclude_analyzers: tuple[str, ...] = ()
+    agents_restricted: bool = False
+    analyzers_restricted: bool = False
 
 
 def load_policy_file(workspace: str, base_ref: str) -> PolicyFile | None:
@@ -217,13 +233,17 @@ def resolve_policy(policy_file: PolicyFile, policy_name: str) -> ResolvedPolicy:
     exclude_agents: tuple[str, ...] = ()
     analyzers: tuple[str, ...] = ()
     exclude_analyzers: tuple[str, ...] = ()
+    agents_restricted = False
+    analyzers_restricted = False
     for pol in chain:
         if pol.agents is not None:
             agents = pol.agents
+            agents_restricted = True
         if pol.exclude_agents is not None:
             exclude_agents = pol.exclude_agents
         if pol.analyzers is not None:
             analyzers = pol.analyzers
+            analyzers_restricted = True
         if pol.exclude_analyzers is not None:
             exclude_analyzers = pol.exclude_analyzers
 
@@ -234,6 +254,8 @@ def resolve_policy(policy_file: PolicyFile, policy_name: str) -> ResolvedPolicy:
         exclude_agents=exclude_agents,
         analyzers=analyzers,
         exclude_analyzers=exclude_analyzers,
+        agents_restricted=agents_restricted,
+        analyzers_restricted=analyzers_restricted,
     )
 
 

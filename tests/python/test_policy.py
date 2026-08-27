@@ -190,6 +190,63 @@ def test_resolve_policy_child_inherits_unset_field() -> None:
     assert resolved.analyzers == ("ruff",)
 
 
+def test_resolve_policy_builtin_bases_are_not_restricted() -> None:
+    """quick/full are never explicitly restricted — their agents/analyzers
+    tuples are empty because nothing set them, not because a policy
+    explicitly declared `agents: []` (see issue #674)."""
+    pf = PolicyFile(version=1, policies={}, routes=(), default=None)
+    assert resolve_policy(pf, "quick").agents_restricted is False
+    assert resolve_policy(pf, "quick").analyzers_restricted is False
+    assert resolve_policy(pf, "full").agents_restricted is False
+    assert resolve_policy(pf, "full").analyzers_restricted is False
+
+
+def test_resolve_policy_empty_agents_list_sets_restricted_flag() -> None:
+    """A policy explicitly declaring `agents: []` must be distinguishable
+    from one that never touches the field — this is the disambiguation
+    issue #674's fix depends on."""
+    pf = PolicyFile(
+        version=1,
+        policies={"content": PolicyDef(name="content", agents=(), analyzers=())},
+        routes=(),
+        default=None,
+    )
+    resolved = resolve_policy(pf, "content")
+    assert resolved.agents == ()
+    assert resolved.agents_restricted is True
+    assert resolved.analyzers == ()
+    assert resolved.analyzers_restricted is True
+
+
+def test_resolve_policy_nonempty_agents_also_sets_restricted_flag() -> None:
+    pf = PolicyFile(
+        version=1,
+        policies={"lean": PolicyDef(name="lean", agents=("code-reviewer",))},
+        routes=(),
+        default=None,
+    )
+    resolved = resolve_policy(pf, "lean")
+    assert resolved.agents_restricted is True
+
+
+def test_resolve_policy_child_inheriting_unset_agents_is_not_restricted() -> None:
+    """A child that never sets `agents` itself, inheriting the parent's
+    unset (None) field all the way to a built-in base, is not restricted —
+    only an explicit `agents:` key anywhere in the chain sets the flag."""
+    pf = PolicyFile(
+        version=1,
+        policies={
+            "parent": PolicyDef(name="parent", extends="quick"),
+            "child": PolicyDef(name="child", extends="parent"),
+        },
+        routes=(),
+        default=None,
+    )
+    resolved = resolve_policy(pf, "child")
+    assert resolved.agents == ()
+    assert resolved.agents_restricted is False
+
+
 # ---------------------------------------------------------------------------
 # resolve_route
 # ---------------------------------------------------------------------------

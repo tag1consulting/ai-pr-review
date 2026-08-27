@@ -78,6 +78,38 @@ class ReviewRuntime:
     policy_gate_satisfied: bool
 
 
+def _merge_allowlist(
+    config_allow: tuple[str, ...],
+    config_deny: tuple[str, ...],
+    policy_allow: tuple[str, ...],
+    policy_restricted: bool,
+    all_names: frozenset[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Merge an explicit config allow/deny pair with a resolved policy's.
+
+    An empty allow tuple is ambiguous on its own: everywhere else in the
+    config surface (CLI flags, env vars) it means "no restriction," but a
+    policy explicitly declaring e.g. ``agents: []`` means the opposite —
+    run *none*. ``policy_restricted`` (see ``ResolvedPolicy``) disambiguates:
+    when true and the policy's own allow list is empty, that's translated
+    into an explicit deny-all here (``all_names``), since an empty allow
+    tuple can't carry that meaning downstream in ``agent_allowed()`` /
+    ``_analyzer_skip_names()``, which both treat an empty allow list as
+    "permit everything." An explicit config allow list always wins outright
+    (matches the documented precedence: explicit input beats policy.yml). A
+    non-empty policy allow list is unambiguous and used as-is regardless of
+    ``policy_restricted`` — that flag only disambiguates the empty case.
+    """
+    final_deny = config_deny or ()
+    if config_allow:
+        return config_allow, final_deny
+    if policy_allow:
+        return policy_allow, final_deny
+    if policy_restricted:
+        return (), tuple(sorted(set(final_deny) | all_names))
+    return (), final_deny
+
+
 async def build_review_runtime(
     config: ReviewConfig,
     *,
@@ -193,18 +225,41 @@ async def build_review_runtime(
         _policy_name = _matched_route.policy if _matched_route else _policy_file.default
         if _policy_name is not None:
             _resolved_policy = resolve_policy(_policy_file, _policy_name)
+
+    from ai_pr_review.agents.roster import AGENT_NAMES
+    from ai_pr_review.analyzers.bridge import ANALYZER_NAMES
+
+    # A policy's `agents: []` means "run no review/finding agents" (cost
+    # control on trivial changes) -- it must not also silently suppress
+    # separately-dispatched preflight agents (pr-summarizer, issue-linker),
+    # which describe the PR rather than review its code and are wanted
+    # regardless of review depth. An explicit `exclude-agents` naming one of
+    # them still works (issue #683): that flows through `final_deny` in
+    # _merge_allowlist independently of this exemption set.
+    _policy_deny_all_names = AGENT_NAMES - {a.name for a in AGENTS if a.separately_dispatched}
+    _final_agents, _final_exclude_agents = _merge_allowlist(
+        config.agents,
+        config.exclude_agents,
+        _resolved_policy.agents if _resolved_policy else (),
+        _resolved_policy.agents_restricted if _resolved_policy else False,
+        _policy_deny_all_names,
+    )
+    _final_analyzers, _final_exclude_analyzers = _merge_allowlist(
+        config.analyzers,
+        config.exclude_analyzers,
+        _resolved_policy.analyzers if _resolved_policy else (),
+        _resolved_policy.analyzers_restricted if _resolved_policy else False,
+        ANALYZER_NAMES,
+    )
     config = config.model_copy(
         update={
             "review_mode": config.review_mode
             or (_resolved_policy.review_mode if _resolved_policy else "")
             or "quick",
-            "agents": config.agents or (_resolved_policy.agents if _resolved_policy else ()),
-            "exclude_agents": config.exclude_agents
-            or (_resolved_policy.exclude_agents if _resolved_policy else ()),
-            "analyzers": config.analyzers
-            or (_resolved_policy.analyzers if _resolved_policy else ()),
-            "exclude_analyzers": config.exclude_analyzers
-            or (_resolved_policy.exclude_analyzers if _resolved_policy else ()),
+            "agents": _final_agents,
+            "exclude_agents": _final_exclude_agents,
+            "analyzers": _final_analyzers,
+            "exclude_analyzers": _final_exclude_analyzers,
         }
     )
 
@@ -223,6 +278,17 @@ async def build_review_runtime(
         policy_gate_required is None
         or config.review_mode == "full"
         or _policy_name == policy_gate_required
+    )
+    logger.info(
+        "policy.yml resolution: loaded=%s changed_files=%d matched_route_policy=%s "
+        "resolved_policy_name=%s review_mode=%s agents=%s exclude_agents=%d-names",
+        _policy_file is not None,
+        len(_changed_list),
+        _matched_route.policy if _matched_route else None,
+        _policy_name,
+        config.review_mode,
+        config.agents,
+        len(config.exclude_agents),
     )
 
     # 7. Build language-profile router once per run (avoid per-agent disk reads).

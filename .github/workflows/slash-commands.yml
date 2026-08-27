@@ -197,10 +197,17 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  # checks: write is only exercised when a matched .github/ai-pr-review/
-  # policy.yml route sets 'require' (see docs/policy.md) — rescan and
-  # review-full re-post the ai-pr-review/policy-gate check run too.
-  checks: write
+  # checks: write is deliberately NOT requested here (issue #678). A
+  # workflow_call reusable workflow that declares a permission the caller's
+  # own explicit `permissions:` block doesn't grant fails the caller's
+  # ENTIRE run at startup ("requesting 'checks: write', but is only
+  # allowed 'checks: none'") -- not a graceful per-job degradation, and not
+  # limited to the slash-commands job itself. post_check_run() is already
+  # fail-soft in code (an ungranted token just logs a warning), so this
+  # reusable workflow only uses whatever `checks` scope the caller happens
+  # to grant. A consumer wanting the require:/merge-gate feature to
+  # actually post opts in by adding `checks: write` to their OWN calling
+  # workflow (see examples/workflows/comment-triggers.yml).
 
 jobs:
   handle-command:
