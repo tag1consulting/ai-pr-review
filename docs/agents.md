@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Agents & Profiles
-nav_order: 4
+nav_order: 6
 render_with_liquid: false
 ---
 
