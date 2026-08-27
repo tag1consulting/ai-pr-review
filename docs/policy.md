@@ -31,7 +31,7 @@ policies:
     extends: full                # today's full mode, unchanged
 
 routes:
-  - when: {paths: ['src/**', '_data/**']}
+  - when: {paths: ['docs/**', '_data/**']}
     policy: content
   - when: {base-branch: 'staging-*'}
     policy: integration

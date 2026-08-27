@@ -1,8 +1,7 @@
 ---
 layout: default
 title: Learning Loop
-parent: Configuration
-nav_order: 10
+nav_order: 9
 ---
 
 # Learning loop (Capability C)
