@@ -33,7 +33,7 @@ FROM ghcr.io/stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f91
 # hadolint ignore=DL3029
 FROM ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c45a6ea8b58655fd66433d4ca3b1bc631c574a48d120bd19f AS tflint
 # hadolint ignore=DL3029
-FROM ghcr.io/astral-sh/ruff:0.16.4@sha256:f40bbe3987964d8780910e8b110266256a6924224594317932223fbdab67012c AS ruff
+FROM ghcr.io/astral-sh/ruff:0.16.5@sha256:8355b79edf35788aef97ac9b1ff3b758604a5d67963ead617c45c72e1d92871f AS ruff
 
 # ==============================================================================
 # Builder stage — pip packages, composer packages, gh CLI, semgrep rulesets
