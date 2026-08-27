@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Learning Loop
-nav_order: 6
+nav_order: 5
 ---
 
 # Learning loop
