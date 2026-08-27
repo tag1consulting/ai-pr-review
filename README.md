@@ -1,5 +1,7 @@
 # AI PR Review
 
+<!-- test: policy.yml release/* merge-gate flow verification, PR to be closed without merging -->
+
 AI-powered pull request review using multiple LLM agents. Posts a summary comment and inline review findings directly on the PR.
 
 > **[Full documentation](https://tag1consulting.github.io/ai-pr-review)** | [Getting started](https://tag1consulting.github.io/ai-pr-review/getting-started) | [Configuration](https://tag1consulting.github.io/ai-pr-review/configuration) | [Contributing](CONTRIBUTING.md)
