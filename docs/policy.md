@@ -109,3 +109,7 @@ To make this a real merge gate, add branch protection on the target branch requi
 **GitHub only for now.** No GitLab/Bitbucket equivalent is wired yet — `require` is silently a no-op (logged at `info` level) on those providers; routing (`policies`/`routes` without `require`) works identically everywhere.
 
 [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) includes this exact `staging-*` → `integration`, `require: deep` route as a working starting point — copy it and add the branch-protection rule above to turn it on.
+
+## Verifying a route matched
+
+The token-usage table on the posted review names every agent that actually ran — an empty table (no agent rows) on a route configured with `agents: []` confirms it matched and suppressed the roster as expected. Prefer checking a route's *first* automatic review on a fresh PR when verifying: repeatedly re-triggering `/ai-pr-review rescan` on the same PR can interact with incremental-diff caching in ways that make a single anomalous result hard to interpret in isolation.
