@@ -27,9 +27,12 @@
 #
 # A route can set `require: <policy-name>` to post a GitHub check run named
 # ai-pr-review/policy-gate: 'success' once a run at that tier (or full
-# mode) has completed for the current commit, 'neutral' (never 'failure')
-# otherwise — an unmet requirement on an ordinary automatic push is an
-# unactioned manual step, not a defect. Pair with a required
+# mode) has completed for the current commit, 'action_required' (never
+# 'failure') otherwise — an unmet requirement on an ordinary automatic
+# push is an unactioned manual step, not a defect, but it still blocks
+# merge: GitHub treats 'neutral' as satisfying a required status check,
+# so 'action_required' is used instead of 'neutral' to actually gate.
+# Pair with a required
 # branch-protection check on the target branch (Settings -> Branches ->
 # Branch protection rules -> add "ai-pr-review/policy-gate") to actually
 # gate merge. See docs/policy.md#requiring-a-review-tier-before-merge.
