@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-08-27
+
+### Added
+
+- **`.github/ai-pr-review/policy.yml`: repo-local review-policy routing.** Route review depth (which agents/analyzers run, quick vs. full mode) by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo. Named policies (`agents`/`exclude-agents`/`analyzers`/`exclude-analyzers`) extend a built-in base (`quick`, `full`) or another named policy; an ordered `routes` list matches on `paths`/`base-branch`/`head-branch`, falling back to a configurable `default`. Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all, and a malformed file prints one warning and falls back to the engine's hard-coded defaults rather than blocking the review. Loaded from the PR's *base* ref, never the PR head, so a PR can't weaken its own review by editing its own policy file. Requires the `head-ref` action input (now wired into all three provider templates) for `head-branch` routes. See [docs/policy.md](docs/policy.md). (#663, #664)
+- **Merge gate**: a route's `require` field names a policy that must have (at least) run before merge. An automatic push satisfying only a cheaper tier posts an `action_required` `ai-pr-review/policy-gate` check instructing the reviewer to run `/ai-pr-review review-full` (or add the `ai-review-full` label); once a run at the required tier lands for that commit, the check flips to `success`. Add branch protection requiring that check to make it a real gate. GitHub only for now — a no-op on GitLab/Bitbucket. (#665, #672)
+- This repo now dogfoods the feature: docs-only PRs route to a near-zero-cost tier, and `release/*` branches require a manually-triggered full review before merge. (#671)
+
+### Changed
+
+- Ported two small wording improvements from `claude-comprehensive-review`'s equivalent prompts to close drift found during a parity audit: `architecture-reviewer` gained a goroutine/thread-lifetime and resource-cleanup bullet under Scalability and Performance, and its Maintainability bullet now specifies invariants should be "documented with comments"; `edge-case-hunter`'s PHP loose-comparisons bullet now specifies "across types". (#669)
+
+### Fixed
+
+- **`policy.yml`'s `agents: []` / `analyzers: []` (the near-zero-cost tier's intended shape) silently permitted every agent/analyzer to run instead of suppressing them all**, discovered live on a docs-only PR that unexpectedly posted a full review. Fixed in `_merge_allowlist()`. (#674, #677)
+- **`ai-review.yml`'s hardcoded `review-mode` fallback always won over `policy.yml` routing**, so a repo relying on policy-file routing alone never saw its routes take effect. The shipped template now defers to policy resolution instead of a hardcoded `'quick'` default. (#675, #676)
+- **Preflight agents (`pr-summarizer`, `issue-linker`) were caught by a restrictive policy's `agents: []` deny-all**, even though they describe the PR rather than review its code — a docs-only PR routed to the content tier posted zero findings *and* no PR summary at all. These two separately-dispatched agents are now exempt from policy-driven deny-all; an explicit `exclude-agents` entry naming one of them still suppresses it. (#683, #684)
+- **The slash-commands reusable workflow's explicit `permissions:` block capped every unlisted scope to none for every caller, regardless of what the caller granted** — including `checks: write`, needed to (re-)post the merge-gate's `ai-pr-review/policy-gate` check from a `/ai-pr-review review-full` run. GitHub Actions reusable-workflow semantics: any explicit `permissions:` block on `workflow_call` caps all unlisted scopes to none, even when the caller grants more. The block is now removed entirely so the workflow inherits the caller's grants — superseding an earlier, narrower attempt that only dropped `checks: write` from the block's own scope list. **Upgrade note:** the reusable workflow itself no longer caps any scope, so a caller with no explicit `permissions:` block of its own now runs `slash-commands.yml` with whatever default `GITHUB_TOKEN` permissions the repo/org has configured (read/write-all on older repos), not the previously-capped set. Declare an explicit least-privilege `permissions:` block in your own calling workflow — see the shipped [`examples/workflows/comment-triggers.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/comment-triggers.yml) template. (#678, #679, #686, #687)
+- **The merge gate's unmet-requirement check posted a `neutral` conclusion, which GitHub's required-status-check rules treat as satisfying the requirement exactly like `success`** — so branch protection requiring `ai-pr-review/policy-gate` never actually blocked a merge; the gate was advisory only. Caught during v2.5.0 release-prep review (before this behavior shipped to any tagged release). Now posts `action_required` instead, which is excluded from GitHub's pass set (`success`/`neutral`/`skipped`) and genuinely blocks merge until the required tier runs. (#688)
+- Duplicate/contradictory "Related Issues & PRs" heading in `pr-summarizer` output. (#670)
+
 ## [2.4.9] - 2026-08-24
 
 ### Security

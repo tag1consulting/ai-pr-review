@@ -75,7 +75,7 @@ def test_post_check_run_success_posts_correct_payload() -> None:
     }
 
 
-def test_post_check_run_neutral_conclusion() -> None:
+def test_post_check_run_action_required_conclusion() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(201, json={"id": 1})
 
@@ -83,13 +83,13 @@ def test_post_check_run_neutral_conclusion() -> None:
     provider.post_check_run(
         head_sha="abc1234",
         name="ai-pr-review/policy-gate",
-        conclusion="neutral",
+        conclusion="action_required",
         title="'deep' review tier required",
         summary="Comment /ai-pr-review review-full to satisfy it.",
     )
     _, _, body = rec.calls[0]
     assert body is not None
-    assert body["conclusion"] == "neutral"
+    assert body["conclusion"] == "action_required"
 
 
 def test_post_check_run_api_error_returns_false_and_records_error() -> None:

@@ -101,7 +101,7 @@ routes:
 ```
 
 Every automatic push to a PR targeting `staging-*` runs the (cheap) `integration` tier and posts a GitHub check run named `ai-pr-review/policy-gate`:
-- **`neutral`** if only `integration` has run so far — the check summary tells the reviewer to comment `/ai-pr-review review-full` (or add the `ai-review-full` label) to satisfy the requirement. `neutral`, not `failure`, because an unmet requirement on an ordinary automatic push is not itself a defect — it's an unactioned manual step.
+- **`action_required`** if only `integration` has run so far — the check summary tells the reviewer to comment `/ai-pr-review review-full` (or add the `ai-review-full` label) to satisfy the requirement. `action_required`, not `failure`, because an unmet requirement on an ordinary automatic push is not itself a defect — it's an unactioned manual step. It still blocks merge: GitHub's required-status-check pass set is `success`/`neutral`/`skipped` only, so `action_required` is excluded the same as `failure` would be. (An earlier version of this check posted `neutral` for the unmet state — `neutral` is itself in that pass set, so it silently satisfied the requirement instead of blocking it. Fixed in v2.5.0, #688.)
 - **`success`** once a run at the required tier (or full mode, which satisfies any requirement) has completed for the current commit — including a later `/ai-pr-review review-full` run, which re-posts the check for the same SHA and GitHub re-evaluates branch protection automatically.
 
 To make this a real merge gate, add branch protection on the target branch requiring the `ai-pr-review/policy-gate` check (**Settings → Branches → Branch protection rules**). The shipped GitHub templates grant the `checks: write` permission needed to post it.

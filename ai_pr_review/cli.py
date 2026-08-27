@@ -114,8 +114,8 @@ def _post_policy_gate_check_run(runtime: ReviewRuntime) -> None:
 
     Each invocation (the automatic review, or a later `/ai-pr-review
     review-full`) posts its own check run for the current head_sha, so a
-    later run naturally supersedes an earlier `neutral` one in the Checks
-    tab -- no lookup or update of a prior run is needed.
+    later run naturally supersedes an earlier `action_required` one in the
+    Checks tab -- no lookup or update of a prior run is needed.
     """
     if runtime.policy_gate_required is None:
         return
@@ -135,7 +135,10 @@ def _post_policy_gate_check_run(runtime: ReviewRuntime) -> None:
             "required by the matched .github/ai-pr-review/policy.yml route."
         )
     else:
-        conclusion, title = "neutral", f"'{runtime.policy_gate_required}' review tier required"
+        conclusion, title = (
+            "action_required",
+            f"'{runtime.policy_gate_required}' review tier required",
+        )
         summary = (
             f"The matched .github/ai-pr-review/policy.yml route requires the "
             f"'{runtime.policy_gate_required}' review tier before merge, and this "

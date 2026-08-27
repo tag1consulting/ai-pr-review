@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.5.0
+
+**`.github/ai-pr-review/policy.yml` lets a repo route review depth by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo — plus an optional merge gate requiring a review tier before merge.** Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all. This release also fixes six bugs found while building and dogfooding the feature, including a `permissions:` block on the slash-commands workflow that was silently capping every unlisted scope to none regardless of what the caller granted, and a merge-gate check conclusion that GitHub was silently treating as already-satisfied instead of blocking.
+
+See [Features → v2.5.0](features#whats-new-in-v250) for details.
+
 ## What's new in v2.4.9
 
 **Asimov's Three Laws are now stated explicitly in `prompts/_governance.md`, and a new rule ties the learning loop's recorded maintainer verdicts to real suppression behavior.** A follow-up security fix closes an injection path where an attacker-controlled file name could forge a second maintainer verdict inside the trusted feedback block, and a relevance floor keeps verdicts about unrelated files from being injected at all.
@@ -79,12 +85,6 @@ See [Features → v2.4.9](features#whats-new-in-v249) for details.
 **A GitHub review that failed to post as an approval no longer silently posts as a plain comment while still claiming the PR was approved.** The review body is rendered before posting, and when GitHub rejected the approval request, the fallback-to-comment path left that misleading text uncorrected — with no signal anywhere that the approval never actually landed. Fixed with a visible in-body correction, a Checks-tab annotation on the underlying failure, and a workflow log / step summary that now report the event actually posted.
 
 See [Features → v2.4.8](features#whats-new-in-v248) for details.
-
-## What's new in v2.4.7
-
-**Raised the `max_tokens_per_agent` default from 16384 back to 32768.** Claude Sonnet 5's adaptive thinking could exhaust the lower budget on thinking alone, leaving no room for output text. Also fixes the live-model canary's auto-filed issue mislabeling an API quota block as a model-behavior regression, and a bug that made `/ai-pr-review dismiss`/`false-positive`/`wont-fix` fail to locate a finding on a review approved with only Medium/Low findings.
-
-See [Features → v2.4.7](features#whats-new-in-v247) for details.
 
 ## Learn more
 
