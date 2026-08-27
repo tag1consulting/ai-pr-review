@@ -82,7 +82,7 @@ This generalizes cleanly to any branch convention (`hotfix/*`, merges into a spe
 
 ## Requiring `head-ref`
 
-Route matching on `when.head-branch` requires the action to know the PR's head branch name. The `head-ref` action input (optional, defaults to `''`) carries this — the shipped templates for GitHub, GitLab, and Bitbucket all wire it. If you're on an older copy of a template that predates `head-ref`, add it (see [Configuration](configuration.md)) before using `head-branch` routes; `paths` and `base-branch` routes work without it.
+Route matching on `when.head-branch` requires the action to know the PR's head branch name. The `head-ref` action input (optional, defaults to `''`) carries this — the shipped templates for GitHub, GitLab, and Bitbucket all wire it. If you're on an older copy of a template that predates `head-ref`, add it (see [Configuration](configuration)) before using `head-branch` routes; `paths` and `base-branch` routes work without it.
 
 ## Requiring a review tier before merge
 

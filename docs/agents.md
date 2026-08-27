@@ -40,17 +40,23 @@ Full mode also runs **issue-linker** (GitHub-only, full mode): discovers related
 
 ## Controlling which agents run
 
-Use the `agents` (allowlist) and `exclude-agents` (denylist) inputs to control which agents run. Both accept a comma-separated list of the agent names above. Empty (default) means all eligible agents run.
+The `agents` (allowlist) and `exclude-agents` (denylist) settings control which agents run. Both accept a comma-separated list of the agent names above. Empty (default) means all eligible agents run. When `agents` is set, `exclude-agents` is ignored (allowlist takes precedence). Existing gates still apply on top: a tier-2 agent in the allowlist still won't run in quick mode, and a conditionally-triggered agent still won't run if its trigger didn't fire. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected with an error and a suggestion.
 
-```yaml
-# Run only code-reviewer and security-reviewer:
-agents: 'code-reviewer,security-reviewer'
+These can be set in three places, in precedence order (highest wins):
 
-# Run everything except edge-case-hunter and adversarial-general:
-exclude-agents: 'edge-case-hunter,adversarial-general'
-```
+1. **`/ai-pr-review review-full` slash command** — always runs the full roster, ignoring any allowlist/denylist for that one run.
+2. **Action input or repo variable** — set directly in the calling workflow, or via the `AI_AGENTS`/`AI_EXCLUDE_AGENTS` env vars (see [Configuration → Analyzer and agent selection](configuration#analyzer-and-agent-selection)):
 
-When `agents` is set, `exclude-agents` is ignored (allowlist takes precedence). Existing gates still apply on top: a tier-2 agent in the allowlist still won't run in quick mode, and a conditionally-triggered agent still won't run if its trigger didn't fire. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Unknown names are rejected with an error and a suggestion. See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
+   ```yaml
+   - uses: tag1consulting/ai-pr-review@main
+     with:
+       agents: 'code-reviewer,security-reviewer'      # Run only these two
+       # exclude-agents: 'edge-case-hunter,adversarial-general'  # or: run everything except these two
+   ```
+
+3. **`.github/ai-pr-review/policy.yml`** — a named policy's `agents`/`exclude-agents` fields, routed by changed-file path, base branch, or head branch, so different PRs can get different agent rosters without editing the workflow file. See [Policies](policy) for the full schema.
+
+An explicit action input or repo variable always wins over a `policy.yml` route match; a route match wins over the engine's hard-coded default (all eligible agents run). The same three-place precedence applies to the `analyzers`/`exclude-analyzers` allowlist/denylist for static analyzers — see [Static Analyzers → Controlling which analyzers run](static-analyzers#controlling-which-analyzers-run).
 
 ## Severity icons
 
@@ -75,7 +81,7 @@ Findings use shape-distinct icons for accessibility:
 
 ### Routing review depth by branch or path
 
-For anything beyond a single global quick/full choice — e.g. near-zero-cost review for content-only PRs, a full smoke-test review once when features land on a staging branch, quick review on feature branches otherwise — add `.github/ai-pr-review/policy.yml` to your repo. See **[Policies](policy.md)** for the full schema, the precedence chain (an explicit `ai-review-full` label or `review-mode` input always wins over policy routing), and worked examples including a release-branch escalation.
+For anything beyond a single global quick/full choice — e.g. near-zero-cost review for content-only PRs, a full smoke-test review once when features land on a staging branch, quick review on feature branches otherwise — add `.github/ai-pr-review/policy.yml` to your repo. See **[Policies](policy)** for the full schema, the precedence chain (an explicit `ai-review-full` label or `review-mode` input always wins over policy routing), and worked examples including a release-branch escalation.
 
 The `ai-review-full` label and `workflow_dispatch`'s `review_mode` input remain the way to force a one-off full review regardless of any policy file.
 

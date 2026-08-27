@@ -186,7 +186,7 @@ The learning loop (`AI_FEEDBACK_LOOP=true`) stores feedback in a JSONL file on a
 2. Ensure `GH_TOKEN` has `contents:write` on the feedback branch. The branch is created automatically on first write.
 3. Optionally set `feedback-branch` to a custom branch name.
 
-See [Learning loop](learning-loop.md) for the full architecture and retention policy.
+See [Learning loop](learning-loop) for the full architecture and retention policy.
 
 > **GitLab / Bitbucket:** The learning loop is GitHub-only in this release. On other providers, feedback commands are silently no-ops.
 

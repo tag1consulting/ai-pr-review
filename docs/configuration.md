@@ -18,12 +18,12 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `base-url` | No | `''` | Base URL for OpenAI-compatible or bedrock-proxy |
 | `model-standard` | No | Per-provider default | Model for standard agents |
 | `model-premium` | No | Per-provider default | Model for premium agents (full mode) |
-| `review-mode` | No | `''` | `quick` or `full`. Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. See [Policies](policy.md). |
+| `review-mode` | No | `''` | `quick` or `full`. Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. See [Policies](policy). |
 | `review-target` | No | `pr` | `pr` (PR review) or `standalone` (deprecated — emits a runtime warning). Standalone currently only disables merge-commit filtering during diff computation — it does not post findings anywhere (issue-posting was part of the bash engine removed in v2.0.0 and was never reimplemented in Python; formal removal is planned for a future major version; tracked in [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). |
 | `max-diff-lines` | No | `5000` | Max diff lines before skipping review |
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
-| `head-ref` | No | `''` | Head branch name (e.g. `feature/foo`). Optional — only used for head-branch route matching in `.github/ai-pr-review/policy.yml` (see [Policies](policy.md)). |
+| `head-ref` | No | `''` | Head branch name (e.g. `feature/foo`). Optional — only used for head-branch route matching in `.github/ai-pr-review/policy.yml` (see [Policies](policy)). |
 | `head-sha` | **Yes** | — | Head commit SHA |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
@@ -36,9 +36,9 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths (relative to workspace root) to merge into findings. Requires the Python engine. |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff (e.g. `docs/*,*.generated.go`). The `":!"` prefix is added automatically. Entries are split on commas; surrounding whitespace is trimmed and empty entries are dropped, so `docs/*, *.generated.go` is treated the same as `docs/*,*.generated.go`. Requires the Python engine. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | Controls how `exclude-patterns` interacts with the built-in excludes. `append` (default): user patterns are added to the built-in lockfile/vendor excludes. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. Invalid values are rejected with an error. |
-| `analyzers` | No | `''` | Allowlist: comma-separated names of static analyzers to run. When set, only the listed analyzers run and `exclude-analyzers` is ignored. Empty (default): all eligible analyzers run. Unknown names are rejected with an error. Requires the Python engine. See [Static analyzers](static-analyzers.md) for valid names. |
+| `analyzers` | No | `''` | Allowlist: comma-separated names of static analyzers to run. When set, only the listed analyzers run and `exclude-analyzers` is ignored. Empty (default): all eligible analyzers run. Unknown names are rejected with an error. Requires the Python engine. See [Static analyzers](static-analyzers) for valid names. |
 | `exclude-analyzers` | No | `''` | Denylist: comma-separated names of static analyzers to skip. Ignored when `analyzers` is set. Empty (default): no analyzers skipped. Unknown names are rejected with an error. Requires the Python engine. |
-| `agents` | No | `''` | Allowlist: comma-separated names of review agents to run. When set, only the listed agents run and `exclude-agents` is ignored. Existing gates (mode, conditional triggers) still apply on top. Empty (default): all eligible agents run. Unknown names are rejected with an error. Requires the Python engine. See [Agents](agents.md) for valid names. |
+| `agents` | No | `''` | Allowlist: comma-separated names of review agents to run. When set, only the listed agents run and `exclude-agents` is ignored. Existing gates (mode, conditional triggers) still apply on top. Empty (default): all eligible agents run. Unknown names are rejected with an error. Requires the Python engine. See [Agents](agents) for valid names. |
 | `exclude-agents` | No | `''` | Denylist: comma-separated names of review agents to skip. Ignored when `agents` is set. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. Unknown names are rejected with an error. Requires the Python engine. |
 | `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged. LLM-agent findings are never affected. Requires the Python engine. |
 
@@ -50,7 +50,7 @@ These optional variables can be set in **Settings → Secrets and variables → 
 |----------|---------|---------------------|-------------|
 | `AI_REVIEW_API_KEY` | — | `api-key` | **(Secret)** API key for your LLM provider |
 | `AI_REVIEW_PROVIDER` | `anthropic` | `provider` | LLM provider name |
-| `AI_REVIEW_MODE_DEFAULT` | `''` | `review-mode` (main review job) / `review-mode-default` (rescan) | Mode for the automatic review job and `/ai-pr-review rescan` when set. Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. See [Policies](policy.md). |
+| `AI_REVIEW_MODE_DEFAULT` | `''` | `review-mode` (main review job) / `review-mode-default` (rescan) | Mode for the automatic review job and `/ai-pr-review rescan` when set. Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. See [Policies](policy). |
 | `AI_REVIEW_BASE_URL` | `''` | `base-url` | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
 | `AI_REVIEW_MODEL_STANDARD` | Per-provider default | `model-standard` | Override the standard agent model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Per-provider default | `model-premium` | Override the premium agent model ID (full mode only) |
