@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Configuration
-nav_order: 2
+nav_order: 3
+has_children: true
 ---
 
 # Configuration
@@ -74,6 +75,18 @@ To set a variable via the GitHub CLI:
 gh variable set AI_REVIEW_PROVIDER --body "openai" --repo owner/repo
 ```
 
+## Policies
+
+`.github/ai-pr-review/policy.yml` lets a repo route review depth — which agents/analyzers run, quick vs. full mode — by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo or hardcoding one global choice for every PR. Named policies extend a built-in `quick`/`full` base (or another named policy) and override `agents`/`exclude-agents`/`analyzers`/`exclude-analyzers` for that policy only; an ordered `routes` list matches on `paths`/`base-branch`/`head-branch` and falls back to a configurable `default`.
+
+Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all, and a malformed file prints one warning and falls back to the engine's hard-coded defaults rather than blocking the review. The file is loaded from the PR's *base* ref, never the PR head, so a PR can't weaken its own review by editing its own policy file.
+
+A route's `require` field can additionally turn policy routing into a merge gate (GitHub only): an automatic push that only satisfies a cheaper tier posts an `action_required` `ai-pr-review/policy-gate` check until a run at the required tier lands for that commit, at which point it flips to `success`. Add branch protection requiring that check to make it a real gate.
+
+Precedence, highest to lowest: `/ai-pr-review review-full` slash command → explicit action input/repo variable (the `ai-review-full` label, `review-mode`, `agents`/`analyzers`/etc. set to a non-empty value) → `policy.yml` route match → engine default (`quick` mode, no restriction).
+
+See [Policies](policy) for the full schema, worked examples, and the merge-gate walkthrough.
+
 ## Supported VCS providers
 
 Select the VCS provider via the `VCS_PROVIDER` env var (default: `github`). This determines which VCS provider module is used and how findings are posted. `review-target: standalone` is not currently implemented for any provider (see [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)) and is omitted from this table.
@@ -129,7 +142,7 @@ to change them.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_PR_REVIEW_COMPUTE_OUTPUT` | `''` | **Legacy.** Originally the Python compute phase wrote its payload here and the bash post-review scripts read it back. Since v0.9.0, the Python engine handles posting end-to-end and this handoff is no longer used by the action. Setting this still works for tooling that consumes the JSON directly. See [Compute Output Schema](compute-output-schema.md). |
+| `AI_PR_REVIEW_COMPUTE_OUTPUT` | `''` | **Legacy.** Originally the Python compute phase wrote its payload here and the bash post-review scripts read it back. Since v0.9.0, the Python engine handles posting end-to-end and this handoff is no longer used by the action. Setting this still works for tooling that consumes the JSON directly. See [Compute Output Schema](https://github.com/tag1consulting/ai-pr-review/blob/main/docs/compute-output-schema.md) (maintainer-only reference, not on the Pages site). |
 
 ### Opt-in capabilities
 

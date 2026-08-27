@@ -36,3 +36,4 @@ exclude:
   - node_modules
   - vendor
   - architecture-internals.md  # maintainer-only deep reference; intentionally no Jekyll frontmatter
+  - compute-output-schema.md  # legacy compute-output reference; intentionally no Jekyll frontmatter

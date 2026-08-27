@@ -1,8 +1,8 @@
 ---
 layout: default
 title: GitLab Setup
-parent: Getting Started
-nav_order: 3
+parent: Configuration
+nav_order: 5
 render_with_liquid: false
 ---
 

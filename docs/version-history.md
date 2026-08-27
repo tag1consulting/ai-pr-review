@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Version History
-nav_order: 3.5
+nav_order: 7
 has_children: true
 render_with_liquid: false
 ---

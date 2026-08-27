@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Policies
-nav_order: 4.5
+parent: Configuration
+nav_order: 1
 ---
 
 # Policies

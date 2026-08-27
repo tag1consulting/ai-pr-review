@@ -1,10 +1,6 @@
----
-layout: default
-title: Compute Output Schema
-nav_order: 8
----
-
 # Compute Output Schema
+
+> **Maintainer-only reference.** This file is intentionally excluded from the [GitHub Pages site](https://tag1consulting.github.io/ai-pr-review/) — the payload it documents is a legacy handoff format (`AI_PR_REVIEW_COMPUTE_OUTPUT`) that the action itself no longer relies on (see [Configuration → Legacy compatibility](https://tag1consulting.github.io/ai-pr-review/configuration#legacy-compatibility)). Kept here in the repo for tooling that still consumes the JSON directly.
 
 This page describes the JSON payload that the Python engine writes when
 `AI_PR_REVIEW_COMPUTE_OUTPUT` points at a file path.

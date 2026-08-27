@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Bitbucket Setup
-parent: Getting Started
-nav_order: 2
+parent: Configuration
+nav_order: 4
 ---
 
 # Bitbucket Cloud Pipelines setup
