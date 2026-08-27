@@ -841,18 +841,24 @@ class GitHubProvider:
         This is intentionally a create-only, fire-and-forget primitive: each
         invocation (the automatic review, or a later `/ai-pr-review
         review-full`) posts its own check run for the current head_sha, so
-        a later run naturally supersedes an earlier `neutral` one in the
-        Checks tab without needing to look up or update a prior run's ID.
+        a later run naturally supersedes an earlier `action_required` one in
+        the Checks tab without needing to look up or update a prior run's ID.
         Never raises — a failure to post is logged to self._errors and
         must never block or fail the review itself (fail-soft, matching
         every other best-effort posting step in this provider).
 
         `conclusion` must be a valid GitHub check-run conclusion value —
-        this method only ever calls it with "success" or "neutral" (see
-        cli.py's post-review policy-gate step); "failure" is deliberately
-        never used here (see docs/policy.md's rationale: an unmet
-        requirement on the automatic push is not itself a failure, only an
-        unactioned manual step).
+        this method only ever calls it with "success" or "action_required"
+        (see cli.py's post-review policy-gate step). "failure" is
+        deliberately never used here (see docs/policy.md's rationale: an
+        unmet requirement on the automatic push is not itself a failure,
+        only an unactioned manual step) — "action_required" carries that
+        softer meaning while still excluding the check from GitHub's
+        required-status-check pass set (`success`/`neutral`/`skipped`
+        only), so it actually blocks merge like a real gate. A plain
+        "neutral" conclusion was tried first and found to satisfy required
+        status checks the same as "success", silently defeating the gate
+        (see #688) — do not revert to "neutral" here.
         """
         resp = self.client.request(
             "POST",

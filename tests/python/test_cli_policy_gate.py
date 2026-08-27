@@ -78,14 +78,18 @@ def test_satisfied_posts_success() -> None:
     assert "deep" in call["title"]
 
 
-def test_unsatisfied_posts_neutral_not_failure() -> None:
+def test_unsatisfied_posts_action_required_not_neutral() -> None:
+    # "neutral" satisfies GitHub's required-status-check pass set
+    # (success/neutral/skipped) the same as "success" does, which would
+    # silently defeat the merge gate (#688). "action_required" is excluded
+    # from that set, so it still blocks merge.
     provider = _FakeGitHubProvider()
     runtime = _fake_runtime(
         policy_gate_required="deep", policy_gate_satisfied=False, provider=provider
     )
     _post_policy_gate_check_run(runtime)  # type: ignore[arg-type]
     call = provider.recorded.calls[0]
-    assert call["conclusion"] == "neutral"
+    assert call["conclusion"] == "action_required"
     assert "review-full" in call["summary"]
 
 

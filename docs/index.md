@@ -70,7 +70,7 @@ That's it — reviews start firing on the next PR.
 
 ## What's new in v2.5.0
 
-**`.github/ai-pr-review/policy.yml` lets a repo route review depth by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo — plus an optional merge gate requiring a review tier before merge.** Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all. This release also fixes five bugs found while dogfooding the feature on this repo itself, including a `permissions:` block on the slash-commands workflow that was silently capping every unlisted scope to none regardless of what the caller granted.
+**`.github/ai-pr-review/policy.yml` lets a repo route review depth by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo — plus an optional merge gate requiring a review tier before merge.** Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all. This release also fixes six bugs found while building and dogfooding the feature, including a `permissions:` block on the slash-commands workflow that was silently capping every unlisted scope to none regardless of what the caller granted, and a merge-gate check conclusion that GitHub was silently treating as already-satisfied instead of blocking.
 
 See [Features → v2.5.0](features#whats-new-in-v250) for details.
 

@@ -34,7 +34,7 @@ routes:
   # manually with `/ai-pr-review review-full` — this is the actual gate,
   # not a decoration: an automatic push here does NOT satisfy `require`
   # (quick mode's review_mode is 'quick', not 'full'), so it posts
-  # 'neutral' until someone runs review-full. Pair with a required
+  # 'action_required' until someone runs review-full. Pair with a required
   # branch-protection check (ai-pr-review/policy-gate) on main to actually
   # enforce this — not yet added, see rollout plan.
   - when: {head-branch: 'release/*'}
