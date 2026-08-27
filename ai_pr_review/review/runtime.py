@@ -224,6 +224,17 @@ async def build_review_runtime(
         or config.review_mode == "full"
         or _policy_name == policy_gate_required
     )
+    logger.warning(  # TEMP: bumped to WARNING for one-off diagnostic visibility, will revert to INFO
+        "policy.yml resolution: loaded=%s changed_files=%d matched_route_policy=%s "
+        "resolved_policy_name=%s review_mode=%s agents=%s exclude_agents=%d-names",
+        _policy_file is not None,
+        len(_changed_list),
+        _matched_route.policy if _matched_route else None,
+        _policy_name,
+        config.review_mode,
+        config.agents,
+        len(config.exclude_agents),
+    )
 
     # 7. Build language-profile router once per run (avoid per-agent disk reads).
     # ProfileRouter parses all detected profiles into classified sections so
