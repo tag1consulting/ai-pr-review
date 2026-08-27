@@ -246,7 +246,7 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 ## v0.9.1
 
-**Language detection expanded to 23 languages (PR #297).** The action now detects Kotlin, Swift, C#, Scala, Terraform, YAML, SQL, Lua, Perl, plus Drupal PHP extensions (`.module`, `.theme`, `.inc`) and Ruby build files (`.rake`, `.gemspec`). Tree-sitter context enrichment (Capability A) covers all 23 language keys.
+**Language detection expanded to 23 languages (PR #297).** The action now detects Kotlin, Swift, C#, Scala, Terraform, YAML, SQL, Lua, Perl, plus Drupal PHP extensions (`.module`, `.theme`, `.inc`) and Ruby build files (`.rake`, `.gemspec`). Tree-sitter context enrichment covers all 23 language keys.
 
 **PR summarizer and token cost table wired (PR #299).** On first-run reviews, the action automatically posts a PR summary (walkthrough table, type classification, effort estimate) and a collapsible token cost table. Both are fail-soft: if either fails, review continues and a notice is posted rather than silently omitting output. The token cost table is updated on every run (see v0.9.2 above); the PR summary is posted on first run only.
 
@@ -258,18 +258,18 @@ The ID map is embedded as a hidden HTML comment in every review body (`<!-- ai-p
 
 **Three opt-in capability groups (all default off).** See [Configuration → Opt-in capabilities](../configuration#opt-in-capabilities) for the full env-var reference.
 
-**Capability A — Context enrichment** (default: `true` in the container image, `false` for direct-action consumers)
+**Context enrichment** (default: `true` in the container image, `false` for direct-action consumers)
 - Tree-sitter extracts symbol references from diff hunks (23 language keys), with a regex fallback when tree-sitter is unavailable.
 - ripgrep looks up cross-file definitions and ranks by proximity (same-file > same-package > repo-wide).
 - Definitions are token-budget-capped and injected into eligible agent prompts as a `<symbol-context>` block. Reduces hallucinated "should check X" findings.
 
-**Capability B — SARIF 2.1.0 ingestion** (`AI_SARIF_PATHS=a.sarif,b.sarif`)
+**SARIF 2.1.0 ingestion** (`AI_SARIF_PATHS=a.sarif,b.sarif`)
 - Parse external scanner output (CodeQL, Semgrep, Trivy, Bandit, custom) into the existing finding pipeline.
 - Severity mapping: `error → High`, `warning → Medium`, `note/none → Low`. Source tag: `sarif:<driver.name>`. Confidence: 90.
 - Findings flow through the same dedup/suppress/post path as native analyzers. Fail-soft on malformed files.
 - See [`examples/workflows/sarif-codeql.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/sarif-codeql.yml) for a CodeQL + AI review pipeline.
 
-**Capability C — Learning loop** (`AI_FEEDBACK_LOOP=true`, GitHub-only)
+**Learning loop** (`AI_FEEDBACK_LOOP=true`, GitHub-only)
 - New slash commands: `/ai-pr-review false-positive [reason]`, `wont-fix [reason]`, `feedback <text>`, `explain`, `revise <hint>`.
 - Verdicts persist to `.ai-pr-review/learnings.jsonl` on a dedicated `ai-pr-review-bot` branch (auto-bootstrapped on first write).
 - Future reviews see a `<repo-feedback>` block of relevance-ranked recent entries, so repeated false positives get suppressed without further reviewer action.

@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Features
-nav_order: 3
+nav_order: 2
 render_with_liquid: false
 ---
 

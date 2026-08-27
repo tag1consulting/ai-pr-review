@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Git Submodule
-parent: Getting Started
-nav_order: 5
+parent: Configuration
+nav_order: 7
 render_with_liquid: false
 ---
 

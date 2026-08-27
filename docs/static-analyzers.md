@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Static Analyzers
-nav_order: 5
+parent: Configuration
+nav_order: 2
 ---
 
 # Static Analyzers
@@ -12,17 +13,23 @@ The container action ships all analyzer binaries pre-installed. For the direct-a
 
 ## Controlling which analyzers run
 
-Use the `analyzers` (allowlist) and `exclude-analyzers` (denylist) inputs to control which analyzers run. Both accept a comma-separated list of the names in the **Analyzer** column below. Empty (default) means all eligible analyzers run.
+The `analyzers` (allowlist) and `exclude-analyzers` (denylist) settings control which analyzers run. Both accept a comma-separated list of the names in the **Analyzer** column below. Empty (default) means all eligible analyzers run. When `analyzers` is set, `exclude-analyzers` is ignored (allowlist takes precedence). Unknown names are rejected with an error and a suggestion.
 
-```yaml
-# Run only semgrep and trufflehog:
-analyzers: 'semgrep,trufflehog'
+These can be set in three places, in precedence order (highest wins):
 
-# Run everything except checkov and tflint:
-exclude-analyzers: 'checkov,tflint'
-```
+1. **`/ai-pr-review review-full` slash command** — always runs the full roster, ignoring any allowlist/denylist for that one run.
+2. **Action input or repo variable** — set directly in the calling workflow, or via the `AI_ANALYZERS`/`AI_EXCLUDE_ANALYZERS` env vars (see [Configuration → Analyzer and agent selection](configuration#analyzer-and-agent-selection)):
 
-When `analyzers` is set, `exclude-analyzers` is ignored (allowlist takes precedence). Unknown names are rejected with an error and a suggestion. See [configuration.md](configuration.md#analyzer-and-agent-selection) for the env-var equivalents.
+   ```yaml
+   - uses: tag1consulting/ai-pr-review@main
+     with:
+       analyzers: 'semgrep,trufflehog'      # Run only semgrep and trufflehog
+       # exclude-analyzers: 'checkov,tflint'  # or: run everything except checkov and tflint
+   ```
+
+3. **`.github/ai-pr-review/policy.yml`** — a named policy's `analyzers`/`exclude-analyzers` fields, routed by changed-file path, base branch, or head branch, so different PRs can get different analyzer sets without editing the workflow file. See [Policies](policy) for the full schema.
+
+An explicit action input or repo variable always wins over a `policy.yml` route match; a route match wins over the engine's hard-coded default (all eligible analyzers run). The same three-place precedence applies to the `agents`/`exclude-agents` allowlist/denylist for review agents.
 
 ## Category mapping
 
@@ -60,7 +67,7 @@ No configuration is required — the check runs automatically when a manifest fi
 
 To accept a specific CVE (e.g. a library used only in a test fixture), add a suppression rule matching the CVE or GHSA ID. See [Suppression rules](suppression#suppressing-cve-findings) for the schema and a worked example.
 
-## SARIF ingestion (Capability B)
+## SARIF ingestion
 
 In addition to the built-in analyzers, the Python engine can ingest SARIF 2.1.0 output from any external tool (CodeQL, Semgrep Pro, Trivy, Snyk, custom scanners).
 

@@ -1,10 +1,10 @@
 ---
 layout: default
 title: Learning Loop
-nav_order: 9
+nav_order: 6
 ---
 
-# Learning loop (Capability C)
+# Learning loop
 
 The learning loop allows human reviewers to feed signals back to the AI agents by posting slash commands in PR review comment threads. Over time this accumulates repository-specific knowledge that future review runs can draw on.
 

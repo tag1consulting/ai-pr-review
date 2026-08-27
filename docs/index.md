@@ -96,7 +96,7 @@ See [Version History → v2.4.8](version-history/v2.4.8) for details.
 **Opt-in capabilities** — three independent features, all default off, all require the Python engine (the default since v1.0.0):
 
 - [Tree-sitter context enrichment](configuration#opt-in-capabilities) — inject symbol definitions referenced in the diff into agent prompts; reduces hallucinated "should check X" findings
-- [SARIF 2.1.0 ingestion](static-analyzers#sarif-ingestion-capability-b) — merge findings from external scanners (CodeQL, Semgrep, Trivy, Bandit) into the same dedup/post pipeline as native analyzers
+- [SARIF 2.1.0 ingestion](static-analyzers#sarif-ingestion) — merge findings from external scanners (CodeQL, Semgrep, Trivy, Bandit) into the same dedup/post pipeline as native analyzers
 - [Learning loop](learning-loop) — reviewers post `/ai-pr-review false-positive | wont-fix | feedback` to persist verdicts to a dedicated git branch; future reviews see them as a `<repo-feedback>` block
 
 **Reference**

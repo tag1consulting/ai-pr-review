@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Suppression Rules
-nav_order: 6
+parent: Configuration
+nav_order: 3
 ---
 
 # Suppression Rules
