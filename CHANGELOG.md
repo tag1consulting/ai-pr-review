@@ -7,9 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.5.0] - 2026-08-27
 
+### Upgrading
+
+If you already have `.github/workflows/ai-review.yml` (or equivalent) set up from before this release and want to use `policy.yml`'s `head-branch` route matching (e.g. routing by `release/*`, `feature/*`, etc.), you need to add the `head-ref` action input to your workflow — it is not wired automatically just by upgrading the action version:
+
+```yaml
+- uses: tag1consulting/ai-pr-review/container-action@main
+  with:
+    head-ref: ${{ github.event.pull_request.head.ref }}
+    # ...your existing inputs
+```
+
+Without it, `when.head-branch` routes in `.github/ai-pr-review/policy.yml` never match — the action has no way to know the PR's head branch name — and matching PRs silently fall through to the next route or the `default` policy instead of erroring. `paths` and `base-branch` routes are unaffected; they work without `head-ref`.
+
+The shipped GitHub, GitLab, and Bitbucket templates (`examples/workflows/pr-review.yml`, `examples/pipelines/.gitlab-ci.yml`, `examples/pipelines/bitbucket-pipelines.yml`) already wire this for new installs. This only matters if you copied your workflow from an older version of a template and haven't re-synced it since.
+
 ### Added
 
-- **`.github/ai-pr-review/policy.yml`: repo-local review-policy routing.** Route review depth (which agents/analyzers run, quick vs. full mode) by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo. Named policies (`agents`/`exclude-agents`/`analyzers`/`exclude-analyzers`) extend a built-in base (`quick`, `full`) or another named policy; an ordered `routes` list matches on `paths`/`base-branch`/`head-branch`, falling back to a configurable `default`. Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all, and a malformed file prints one warning and falls back to the engine's hard-coded defaults rather than blocking the review. Loaded from the PR's *base* ref, never the PR head, so a PR can't weaken its own review by editing its own policy file. Requires the `head-ref` action input (now wired into all three provider templates) for `head-branch` routes. See [docs/policy.md](docs/policy.md). (#663, #664)
+- **`.github/ai-pr-review/policy.yml`: repo-local review-policy routing.** Route review depth (which agents/analyzers run, quick vs. full mode) by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo. Named policies (`agents`/`exclude-agents`/`analyzers`/`exclude-analyzers`) extend a built-in base (`quick`, `full`) or another named policy; an ordered `routes` list matches on `paths`/`base-branch`/`head-branch`, falling back to a configurable `default`. Fully opt-in and fail-soft: a repo with no `policy.yml` sees no behavior change at all, and a malformed file prints one warning and falls back to the engine's hard-coded defaults rather than blocking the review. Loaded from the PR's *base* ref, never the PR head, so a PR can't weaken its own review by editing its own policy file. Requires the `head-ref` action input (now wired into all three provider templates) for `head-branch` routes — see Upgrading above. See [docs/policy.md](docs/policy.md). (#663, #664)
 - **Merge gate**: a route's `require` field names a policy that must have (at least) run before merge. An automatic push satisfying only a cheaper tier posts an `action_required` `ai-pr-review/policy-gate` check instructing the reviewer to run `/ai-pr-review review-full` (or add the `ai-review-full` label); once a run at the required tier lands for that commit, the check flips to `success`. Add branch protection requiring that check to make it a real gate. GitHub only for now — a no-op on GitLab/Bitbucket. (#665, #672)
 - This repo now dogfoods the feature: docs-only PRs route to a near-zero-cost tier, and `release/*` branches require a manually-triggered full review before merge. (#671)
 
