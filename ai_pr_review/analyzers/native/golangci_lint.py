@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from ai_pr_review.findings.models import Finding
@@ -69,40 +70,55 @@ def _run_golangci_lint(changed_files: ChangedFiles, diff_file: Path) -> list[Fin
 
     patterns = _pkg_patterns(target_files, module_root)
 
-    try:
-        result = subprocess.run(
-            ["golangci-lint", "run", "--out-format=json", "--issues-exit-code=0", *patterns],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-            cwd=str(module_root),
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: golangci-lint timed out after %ss; skipping.", exc.timeout)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: golangci-lint failed to start: %s", exc)
-        return []
+    with tempfile.TemporaryDirectory(prefix="golangci-lint-") as tmpdir:
+        json_path = Path(tmpdir) / "output.json"
+        try:
+            result = subprocess.run(
+                [
+                    "golangci-lint", "run",
+                    f"--output.json.path={json_path}",
+                    "--issues-exit-code=0",
+                    *patterns,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT_SECS,
+                cwd=str(module_root),
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.warning("[ai-pr-review] WARNING: golangci-lint timed out after %ss; skipping.", exc.timeout)
+            return []
+        except OSError as exc:
+            logger.warning("[ai-pr-review] WARNING: golangci-lint failed to start: %s", exc)
+            return []
 
-    if result.returncode not in (0, 1):
-        logger.warning(
-            "[ai-pr-review] WARNING: golangci-lint exited %d; skipping. stderr: %s",
-            result.returncode, result.stderr[:200],
-        )
-        return []
+        if result.returncode not in (0, 1):
+            logger.warning(
+                "[ai-pr-review] WARNING: golangci-lint exited %d; skipping. stderr: %s",
+                result.returncode, result.stderr[:200],
+            )
+            return []
 
-    if not result.stdout.strip():
-        logger.warning(
-            "[ai-pr-review] WARNING: golangci-lint produced no output. stderr: %s",
-            result.stderr[:200],
-        )
-        return []
+        # golangci-lint v2 has no combined "--out-format=json" flag (that v1
+        # flag was removed); JSON must go to an explicit --output.json.path.
+        # Writing to a real file, rather than parsing stdout, also sidesteps
+        # v2's default text summary ("N issues:\n* linter: count") which is
+        # written to stdout ALONGSIDE any format also requested on stdout,
+        # producing invalid trailing-data JSON if the JSON output path were
+        # itself set to "stdout". Verified empirically against golangci-lint
+        # 2.13.1 (the version this image pins) this session.
+        if not json_path.exists() or not json_path.stat().st_size:
+            logger.warning(
+                "[ai-pr-review] WARNING: golangci-lint produced no output. stderr: %s",
+                result.stderr[:200],
+            )
+            return []
 
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("[ai-pr-review] WARNING: golangci-lint produced non-JSON output: %s", exc)
-        return []
+        try:
+            data = json.loads(json_path.read_text())
+        except json.JSONDecodeError as exc:
+            logger.warning("[ai-pr-review] WARNING: golangci-lint produced non-JSON output: %s", exc)
+            return []
 
     if not isinstance(data, dict):
         logger.warning("[ai-pr-review] WARNING: golangci-lint produced unexpected output structure; skipping.")

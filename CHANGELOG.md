@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Four new static analyzers for token-free documentation checking: `docs-api-check` (doc-comment/signature mismatch), `docs-missing-check` (missing docs on newly-added public API, diff-gated), `docs-ref-check` (broken Markdown links and heading anchors), and `docs-drift-check` (doc references to a file the current PR deletes). None can trigger `REQUEST_CHANGES` on their own. See `docs/static-analyzers.md#documentation-checks` and `docs/adr/0001-tree-sitter-not-node-for-doc-mismatch.md` / `docs/adr/0002-hand-rolled-doc-ref-checker-not-lychee.md` for the design rationale.
+
+### Fixed
+
+- `golangci-lint` analyzer produced zero findings on every Go PR: it invoked `--out-format=json`, a flag removed in golangci-lint v2 (the version this image has pinned since the v2.0.0 bash-to-Python rewrite). Switched to `--output.json.path=<file>`, the v2 equivalent.
+- `phpcs` analyzer silently dropped all findings whenever a file's violations were entirely non-fixable, or a mix of fixable and non-fixable: phpcs 4.x redesigned exit codes as a bitmask (0=clean, 1=fixable, 2=non-fixable, 3=both, per PHPCSStandards/PHP_CodeSniffer#184), and the analyzer's exit-code guard still assumed the pre-4.0 scheme where 2 meant a fatal/config error.
+- `phpcs` analyzer's PSR12 fallback path (used when the Drupal coding standard is not installed) now also checks docblock/signature mismatch via `Squiz.Commenting.FunctionComment`, matching the coverage Drupal repos already get via `Drupal.Commenting.FunctionComment`.
+
 ## [2.5.0] - 2026-08-27
 
 ### Upgrading

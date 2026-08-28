@@ -34,6 +34,10 @@ from ai_pr_review.findings.models import Finding
 # by each analyzers/run-*.sh script exactly (using prefix matching).
 _ANALYZER_PREFIXES: tuple[str, ...] = (
     "checkov",
+    "docs-api-check",
+    "docs-drift-check",
+    "docs-missing-check",
+    "docs-ref-check",
     "eslint",
     "golangci-lint",
     "hadolint",

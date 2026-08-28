@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,13 @@ from ai_pr_review.manifest import ChangedFiles
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "golangci"
 
+# golangci-lint v2 removed the combined "--out-format=json" flag; JSON now
+# goes to an explicit --output.json.path (verified against the pinned 2.13.1
+# binary this session — the v1 flag errors with "unknown flag"). The code
+# under test writes to a real temp file and reads it back rather than
+# parsing stdout, so tests simulate the subprocess by writing fixture
+# content to whatever path the code passed via --output.json.path=<path>.
+
 
 def _load_fixture(name: str) -> str:
     return (_FIXTURE_DIR / name).read_text()
@@ -20,6 +28,24 @@ def _load_fixture(name: str) -> str:
 
 def _make_cf(go_files: list[str]) -> ChangedFiles:
     return ChangedFiles(all_files=go_files, go=go_files)
+
+
+def _json_path_writer(content: str | None, returncode: int = 0, stderr: str = "") -> Any:
+    """Build a subprocess.run side_effect that writes *content* to the
+    --output.json.path passed in argv, then returns a matching MagicMock.
+
+    content=None simulates a run that produces no output file at all (e.g.
+    a compile error before any linter ran).
+    """
+
+    def _run(args: list[str], **kwargs: object) -> MagicMock:
+        if content is not None:
+            flag = next(a for a in args if a.startswith("--output.json.path="))
+            json_path = Path(flag.removeprefix("--output.json.path="))
+            json_path.write_text(content)
+        return MagicMock(returncode=returncode, stdout="", stderr=stderr)
+
+    return _run
 
 
 class TestRunGolangciLintGuards:
@@ -59,6 +85,29 @@ class TestRunGolangciLintGuards:
         assert result == []
         assert "go.mod" in caplog.text
 
+    def test_invocation_uses_output_json_path_not_out_format(self, tmp_path: Path) -> None:
+        # golangci-lint v2 removed --out-format entirely (v1-only flag);
+        # JSON output is requested via --output.json.path=<path> instead.
+        # Regression guard for the exact flag this repo's pinned 2.13.1
+        # binary requires.
+        go_mod = tmp_path / "go.mod"
+        go_mod.write_text("module example.com/test\n\ngo 1.21\n")
+        go_file = tmp_path / "main.go"
+        go_file.write_text("package main\n")
+        cf = _make_cf([str(go_file)])
+        with (
+            patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
+            patch(
+                "ai_pr_review.analyzers.native.golangci_lint.subprocess.run",
+                side_effect=_json_path_writer('{"Issues": []}'),
+            ) as mock_run,
+        ):
+            _run_golangci_lint(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        assert any(a.startswith("--output.json.path=") for a in call_args)
+        assert not any(a.startswith("--out-format") for a in call_args)
+        assert "--issues-exit-code=0" in call_args
+
 
 class TestRunGolangciLintFindings:
     def _run_with_fixture(self, fixture_name: str, tmp_path: Path) -> list:
@@ -70,9 +119,8 @@ class TestRunGolangciLintFindings:
         cf = _make_cf([str(go_file)])
         with (
             patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run", side_effect=_json_path_writer(fixture)),
         ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=fixture, stderr="")
             return _run_golangci_lint(cf, Path("/dev/null"))
 
     def test_medium_finding(self, tmp_path: Path) -> None:
@@ -108,10 +156,9 @@ class TestRunGolangciLintFindings:
         cf = _make_cf([str(go_file)])
         with (
             patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run", side_effect=_json_path_writer(fixture)),
             caplog.at_level("WARNING"),
         ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=fixture, stderr="")
             result = _run_golangci_lint(cf, Path("/dev/null"))
         assert result == []
         assert "non-JSON" in caplog.text
@@ -125,10 +172,9 @@ class TestRunGolangciLintFindings:
         cf = _make_cf([str(go_file)])
         with (
             patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run", side_effect=_json_path_writer(fixture)),
             caplog.at_level("WARNING"),
         ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=fixture, stderr="")
             result = _run_golangci_lint(cf, Path("/dev/null"))
         assert result == []
         assert "not a list" in caplog.text
@@ -141,10 +187,12 @@ class TestRunGolangciLintFindings:
         cf = _make_cf([str(go_file)])
         with (
             patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+            patch(
+                "ai_pr_review.analyzers.native.golangci_lint.subprocess.run",
+                side_effect=_json_path_writer(None, stderr="compilation error"),
+            ),
             caplog.at_level("WARNING"),
         ):
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="compilation error")
             findings = _run_golangci_lint(cf, Path("/dev/null"))
         assert findings == []
         assert "no output" in caplog.text
@@ -212,9 +260,11 @@ class TestRunGolangciLintFindings:
             cf = _make_cf([str(go_file)])
             with (
                 patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-                patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+                patch(
+                    "ai_pr_review.analyzers.native.golangci_lint.subprocess.run",
+                    side_effect=_json_path_writer(payload),
+                ),
             ):
-                mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
                 findings = _run_golangci_lint(cf, Path("/dev/null"))
             assert findings[0].severity == "High", f"{linter} should map to High"
 
@@ -236,9 +286,8 @@ class TestRunGolangciLintFindings:
         cf = _make_cf([str(go_file)])
         with (
             patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run", side_effect=_json_path_writer(payload)),
         ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
             findings = _run_golangci_lint(cf, Path("/dev/null"))
         assert len(findings) == 1
 
@@ -260,9 +309,8 @@ class TestRunGolangciLintFindings:
         })
         with (
             patch("ai_pr_review.analyzers.native.golangci_lint.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run") as mock_run,
+            patch("ai_pr_review.analyzers.native.golangci_lint.subprocess.run", side_effect=_json_path_writer(payload)),
         ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
             findings = _run_golangci_lint(cf, Path("/dev/null"))
         assert findings[0].file.endswith("/main.go")
 

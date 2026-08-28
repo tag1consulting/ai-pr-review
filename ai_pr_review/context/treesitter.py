@@ -105,6 +105,25 @@ def _strip_diff_markers(hunk: str) -> tuple[str, dict[int, int]]:
     return "\n".join(src_lines), line_map
 
 
+def _attr_or_call(obj: object, name: str, default: object) -> object:
+    """Read an attribute that may be a property OR a method.
+
+    tree-sitter-language-pack 1.x exposes everything as methods (.kind(),
+    .byte_range(), .start_point()) while older releases used properties.
+    Support both so we don't have to ship two implementations. Module-level
+    (not nested in extract_symbol_refs) so other tree-sitter consumers in
+    this package, such as analyzers/native/docs_comments.py, can share the
+    same version-compatibility shim rather than duplicating it.
+    """
+    val = getattr(obj, name, default)
+    if callable(val) and not isinstance(val, type):
+        try:
+            return val()
+        except TypeError:
+            return default
+    return val
+
+
 def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     """Extract symbol references from *diff_hunk* for the given *language*.
 
@@ -147,25 +166,23 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         return []
     src_bytes = src.encode()
 
-    # tree-sitter-language-pack 1.x parser accepts str (and exposes parse_bytes
-    # for the bytes variant).  Earlier 0.x took bytes via parse().  Try the
-    # current API first, fall back to the old one.
+    # tree-sitter-language-pack's get_parser() has returned different Parser
+    # implementations across releases: some accept only bytes via parse()
+    # (the real tree_sitter.Parser, current as of 1.15.x), others accept only
+    # str (an intermediate native wrapper, e.g. 1.8.x). Try bytes first since
+    # that matches the currently pinned range's real behavior, fall back to
+    # str for older/alternate pack versions.
     try:
-        tree = parser.parse(src)
+        tree = parser.parse(src_bytes)
     except (TypeError, AttributeError) as primary_exc:
         # Don't lose the primary mismatch detail — operators debugging an
         # API skew need to see which signature was tried first.
         logger.debug(
-            "tree-sitter: parser.parse(str) raised %s (%s); trying bytes fallback",
+            "tree-sitter: parser.parse(bytes) raised %s (%s); trying str fallback",
             type(primary_exc).__name__, primary_exc,
         )
         try:
-            # 0.x API only accepted bytes; the 1.x type stubs say str.
-            # The runtime fallback is intentional for backward compat.
-            # The dual error-code list is needed because CI's mypy lint
-            # job doesn't install the [context] extra, so parser.parse
-            # is untyped (Any) and the arg-type ignore is unused there.
-            tree = parser.parse(src_bytes)  # type: ignore[arg-type,unused-ignore]
+            tree = parser.parse(src)  # type: ignore[call-overload]
         except Exception as exc:
             logger.warning(
                 "[ai-pr-review] WARNING: tree-sitter: parse error for language %r: %s", language, exc,
@@ -177,21 +194,6 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
 
     refs: list[SymbolRef] = []
     seen: set[str] = set()
-
-    def _attr_or_call(obj: object, name: str, default: object) -> object:
-        """Read an attribute that may be a property OR a method.
-
-        tree-sitter-language-pack 1.x exposes everything as methods (.kind(),
-        .byte_range(), .start_point()) while older releases used properties.
-        Support both so we don't have to ship two implementations.
-        """
-        val = getattr(obj, name, default)
-        if callable(val) and not isinstance(val, type):
-            try:
-                return val()
-            except TypeError:
-                return default
-        return val
 
     def _node_text(node: object) -> str:
         """Extract identifier text from a node by slicing the source bytes.

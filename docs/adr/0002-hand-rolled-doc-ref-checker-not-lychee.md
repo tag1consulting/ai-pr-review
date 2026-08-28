@@ -1,0 +1,7 @@
+# Documentation reference checking is hand-rolled, not lychee
+
+We needed offline (no network) dead-relative-link and broken-heading-anchor detection for changed Markdown files. `lychee` is the best offline-capable link/anchor checker available and fits this repo's existing single-binary `COPY --from` pattern, but we hand-rolled a small resolver instead.
+
+`lychee --fallback-extensions` resolves via Rust's `PathBuf::set_extension`, which *replaces* a target's existing extension rather than appending to it. Verified live against this repo: `docs/version-history.md` links to `version-history/v2.5.0` (no extension, by design, since Jekyll serves it at that permalink). `lychee` would probe `version-history/v2.5.md` (replacing `.0`), which does not exist, and report the link broken, even though `version-history/v2.5.0.md` is present on disk. This is an open, unreleased-fix upstream bug ([lycheeverse/lychee#2274](https://github.com/lycheeverse/lychee/issues/2274)) that misfires on the majority link shape in this repo's own docs (~30 version-history links), not an edge case we could exclude around.
+
+**Consequences:** we own anchor-slug generation (GitHub-style kebab casing, plus registering explicit kramdown `{#custom-id}` headings, since this repo uses one at `docs/slash-commands.md:39`) and extension-candidate resolution ourselves, rather than inheriting lychee's. Worth revisiting once #2274 ships a fix upstream. The append-vs-replace bug is the only blocker, not lychee's design generally.

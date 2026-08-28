@@ -41,59 +41,81 @@ Create `ai_pr_review/analyzers/native/yourtool.py`. Follow the pattern of an exi
 
 ```python
 from __future__ import annotations
+
+import logging
+import shutil
 import subprocess
 from pathlib import Path
-from ai_pr_review.models import Finding
 
-def run(changed_files: list[str], workspace: str) -> list[Finding]:
-    matching = [f for f in changed_files if f.endswith((".ext1", ".ext2"))]
+from ai_pr_review.findings.models import Finding
+from ai_pr_review.manifest import ChangedFiles
+
+logger = logging.getLogger(__name__)
+
+_CONFIDENCE = 90
+_SOURCE = "yourtool"
+
+
+def _run_yourtool(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
+    matching = [f for f in changed_files.source if Path(f).is_file() and f.endswith((".ext1", ".ext2"))]
     if not matching:
         return []
+
+    if not shutil.which("yourtool"):
+        logger.warning("[ai-pr-review] WARNING: yourtool not found; skipping.")
+        return []
+
     result = subprocess.run(
-        ["yourtool", "--json"] + matching,
-        capture_output=True, text=True, cwd=workspace,
+        ["yourtool", "--json", *matching],
+        capture_output=True, text=True, cwd=".", timeout=120,
     )
-    findings = []
+    findings: list[Finding] = []
     for item in _parse(result.stdout):
         findings.append(Finding(
             severity=_severity(item),
-            confidence=90,
+            confidence=_CONFIDENCE,
             file=item["file"],
             line=item.get("line"),
             finding=item["message"],
-            source="yourtool",
+            source=_SOURCE,
+            category="lint",
         ))
     return findings
 ```
 
-Key rules:
-- Accept `changed_files: list[str]` and `workspace: str`; return `list[Finding]`
-- Filter to relevant file extensions early
-- Return `[]` and log a warning if the binary is missing (`shutil.which`)
-- Hard-code the `source` field to your tool name
-- Match the severity mapping used by existing analyzers: `"Critical"` (90 confidence) → `"High"` → `"Medium"` → `"Low"` (50 confidence), following the patterns in `ai_pr_review/analyzers/native/`
+Key rules (see any file in `ai_pr_review/analyzers/native/` for the full pattern, e.g. `ruff.py`):
+- Signature is exactly `(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]` — this is the `NativeAnalyzerFn` type alias in `bridge.py`. `ChangedFiles` (from `ai_pr_review/manifest.py`) is the pre-categorized, typed set of changed files; filter to the relevant typed list (`changed_files.python`, `changed_files.go`, `changed_files.source`, etc.) rather than re-deriving file types yourself.
+- `Finding` comes from `ai_pr_review.findings.models`, not `ai_pr_review.models` (no such module exists).
+- Return `[]` and log a `logger.warning("[ai-pr-review] WARNING: ...")` if the binary is missing (`shutil.which`), on a `subprocess.TimeoutExpired`, on an `OSError`, or on any other failure to run — every guard rail fails soft, never raises.
+- Wrap each `Finding(...)` construction in its own `try/except (ValueError, TypeError)` so one malformed item doesn't drop the whole run.
+- Hard-code the `source` field to your tool name as a module-level `_SOURCE` constant.
+- Match the severity mapping used by existing analyzers: `"Critical"` → `"High"` → `"Medium"` → `"Low"`, with a module-level `_CONFIDENCE` constant (see the table in `docs/static-analyzers.md` for the range other analyzers use, roughly 80-95 by tool maturity).
 
 ### 2. Register in the bridge
 
-In `ai_pr_review/analyzers/bridge.py`, import your function and add it to the `_ANALYZERS` table:
+In `ai_pr_review/analyzers/bridge.py`, import your function and add an `AnalyzerSpec` entry to the `_ANALYZERS` list:
 
 ```python
-from ai_pr_review.analyzers.native import yourtool as _yourtool
+from ai_pr_review.analyzers.native.yourtool import _run_yourtool
 # ...
-_ANALYZERS = {
+_ANALYZERS: list[AnalyzerSpec] = [
     # ... existing entries ...
-    "yourtool": _yourtool.run,
-}
+    AnalyzerSpec("yourtool", ["source"], _run_yourtool),
+]
 ```
+
+`AnalyzerSpec`'s second field is `required_file_types`: a list of `ChangedFiles` attribute names (e.g. `["python"]`, `["go"]`) that gates eligibility — the analyzer only runs when at least one of those lists is non-empty. Pass `[]` to always run (like `semgrep`/`trufflehog`/`docs-drift-check`). `ANALYZER_NAMES` (used by the `analyzers`/`exclude-analyzers` allowlist validation) derives automatically from this list — no separate registration needed there.
+
+**Also add your analyzer's name to `_ANALYZER_PREFIXES` in `ai_pr_review/findings/scope.py`.** This is a second, easy-to-miss registration site: without it, your analyzer's findings are never diff-scoped, never rolled up, and never counted as corroborating an LLM agent's finding on the same issue.
 
 ### 3. Add Python tests
 
-Create `tests/python/test_analyzer_yourtool.py` with fixture-based tests. See `tests/python/test_analyzer_shellcheck.py` for the pattern.
+Create `tests/python/test_analyzer_yourtool.py` with fixture-based tests. See `tests/python/test_analyzer_ruff.py` for the pattern: a `_make_cf()` helper building a `ChangedFiles` instance, module-qualified `patch("ai_pr_review.analyzers.native.yourtool.shutil.which", ...)` and `.subprocess.run` mocks (never invoke the real binary in unit tests), guard-rail tests (binary absent, timeout, bad exit code, malformed output) grouped separately from finding-content tests, and bridge-integration tests at the tail confirming `run_analyzers` dispatches to your `native_fn` and skips it when no eligible files are present.
 
 ### 4. Update documentation
 
-- Add a row to the analyzer table in `CLAUDE.md` (mock env var table)
-- Add a row to the analyzer table in `README.md` and `docs/static-analyzers.md`
+- Add a row to the analyzer table in `docs/static-analyzers.md` and the analyzer-count/module map in `CLAUDE.md`
+- Add your analyzer's name to both valid-name lists in `action.yml` (`analyzers` and `exclude-analyzers` input descriptions)
 - If bundled in the container, add the install step to `Dockerfile`
 
 ## Adding an agent

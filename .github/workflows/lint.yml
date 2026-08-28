@@ -34,7 +34,7 @@ jobs:
 
       - name: Install package and dev dependencies
         run: |
-          pip install --quiet ".[dev]" || pip install --quiet -e . pytest ruff mypy pydantic httpx click
+          pip install --quiet ".[dev,context]" || pip install --quiet -e . pytest ruff mypy pydantic httpx click
 
       - name: ruff check
         if: matrix.python-version == '3.14'
