@@ -390,7 +390,12 @@ def _parse_file(path: Path, grammar: str) -> tuple[object, bytes] | None:
         tree = parser.parse(src)
     except (TypeError, AttributeError):
         try:
-            tree = parser.parse(src_bytes)  # type: ignore[arg-type]
+            # Dual error-code list: CI's mypy job doesn't install the
+            # optional tree-sitter-language-pack extra, so parser.parse is
+            # untyped (Any) there and the arg-type ignore is unused in that
+            # environment — same reasoning as context/treesitter.py's
+            # identical fallback.
+            tree = parser.parse(src_bytes)  # type: ignore[arg-type,unused-ignore]
         except Exception as exc:
             logger.warning("[ai-pr-review] WARNING: tree-sitter parse error for %s: %s", path, exc)
             return None

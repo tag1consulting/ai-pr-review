@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,18 @@ from ai_pr_review.analyzers.native.docs_comments import (
 )
 from ai_pr_review.diff.linemap import LineRef
 from ai_pr_review.manifest import ChangedFiles
+
+# tree-sitter-language-pack is an optional dependency (the [context] extra);
+# CI's lint/test workflow installs only [dev], never [context] (verified
+# this session against .github/workflows/lint.yml), so classes exercising
+# real tree-sitter parsing must skip rather than fail when it is absent.
+# Mirrors test_context_treesitter.py's existing accommodation for the same
+# optional dependency, extended here because these tests (unlike that
+# file's) assert specific parsed content rather than just "returns a list".
+_HAS_TREE_SITTER = importlib.util.find_spec("tree_sitter_language_pack") is not None
+_requires_tree_sitter = pytest.mark.skipif(
+    not _HAS_TREE_SITTER, reason="tree-sitter-language-pack not installed (optional [context] extra)"
+)
 
 
 def _make_cf(**kwargs: list[str]) -> ChangedFiles:
@@ -53,6 +66,7 @@ class TestDocParamNames:
         assert _doc_param_names("Just a description, no tags.") == set()
 
 
+@_requires_tree_sitter
 class TestTreeSitterApiFindingsJavaScript:
     def _write(self, tmp_path: Path, content: str, name: str = "sample.js") -> str:
         f = tmp_path / name
@@ -162,6 +176,7 @@ class Foo {
         _tree_sitter_api_findings(f)  # must not raise
 
 
+@_requires_tree_sitter
 class TestTreeSitterApiFindingsOtherLanguages:
     def test_typescript_wrapped_parameters(self, tmp_path: Path) -> None:
         f = tmp_path / "sample.ts"
@@ -290,6 +305,7 @@ class Sample {
         assert _tree_sitter_api_findings(str(f)) == []
 
 
+@_requires_tree_sitter
 class TestTreeSitterMissingFindings:
     def test_new_undocumented_public_function_flagged(self, tmp_path: Path) -> None:
         f = tmp_path / "sample.js"
