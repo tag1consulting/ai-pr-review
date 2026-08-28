@@ -37,3 +37,4 @@ exclude:
   - vendor
   - architecture-internals.md  # maintainer-only deep reference; intentionally no Jekyll frontmatter
   - compute-output-schema.md  # legacy compute-output reference; intentionally no Jekyll frontmatter
+  - adr  # architecture decision records; maintainer-only, intentionally no Jekyll frontmatter

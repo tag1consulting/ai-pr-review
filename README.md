@@ -68,7 +68,7 @@ On every PR push, this action:
 1. Computes the diff (full on first run, incremental on subsequent pushes)
 2. Detects languages from changed file extensions
 3. Runs a roster of AI review agents against the diff
-4. Runs deterministic checks on changed files: shellcheck, CVE lookups ([OSV.dev](https://osv.dev/)), semgrep SAST, trufflehog secret scanning, ruff (Python), golangci-lint (Go), hadolint (Dockerfiles), checkov (Terraform/K8s/IaC), phpcs (PHP/Drupal), eslint (JS/TS), phpstan (PHP static analysis), kube-linter (Kubernetes), and tflint (Terraform)
+4. Runs deterministic checks on changed files: shellcheck, CVE lookups ([OSV.dev](https://osv.dev/)), semgrep SAST, trufflehog secret scanning, ruff (Python), golangci-lint (Go), hadolint (Dockerfiles), checkov (Terraform/K8s/IaC), phpcs (PHP/Drupal), eslint (JS/TS), phpstan (PHP static analysis), kube-linter (Kubernetes), tflint (Terraform), and four documentation checks: doc-comment/signature mismatch, missing docs on new public API, broken Markdown links/anchors, and stale references to deleted files
 5. Posts a summary comment (first run only) and a review with inline findings
 6. Auto-resolves stale bot threads and dismisses superseded reviews
 
@@ -256,7 +256,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `sarif-paths` | No | `''` | Comma-separated SARIF 2.1.0 file paths to merge into findings. |
 | `exclude-patterns` | No | `''` | Comma-separated git pathspec glob patterns to exclude from the diff before the LLM reads them (e.g. `docs/*,*.generated.go`). Reduces token cost on repos with large generated or vendored trees. The `":!"` prefix is added automatically. See `exclude-patterns-mode`. |
 | `exclude-patterns-mode` | No | `append` | How `exclude-patterns` interacts with the built-in excludes (lockfiles, `vendor/`, `node_modules/`). `append` (default): user patterns are added after the built-ins. `replace`: only user patterns are used; built-in excludes are dropped. `replace` with an empty list falls back to the built-ins with a warning. |
-| `analyzers` | No | `''` | Allowlist: comma-separated analyzer names to run. When set, only these analyzers run. Valid names: `shellcheck`, `trufflehog`, `semgrep`, `ruff`, `golangci-lint`, `hadolint`, `checkov`, `phpcs`, `phpstan`, `eslint`, `kube-linter`, `tflint`, `cve-check`. Empty (default): all eligible analyzers run. |
+| `analyzers` | No | `''` | Allowlist: comma-separated analyzer names to run. When set, only these analyzers run. Valid names: `shellcheck`, `trufflehog`, `semgrep`, `ruff`, `golangci-lint`, `hadolint`, `checkov`, `phpcs`, `phpstan`, `eslint`, `kube-linter`, `tflint`, `cve-check`, `docs-api-check`, `docs-missing-check`, `docs-ref-check`, `docs-drift-check`. Empty (default): all eligible analyzers run. |
 | `exclude-analyzers` | No | `''` | Denylist: comma-separated analyzer names to skip. Ignored when `analyzers` is set. Empty (default): no analyzers skipped. |
 | `agents` | No | `''` | Allowlist: comma-separated agent names to run. When set, only these agents run (existing gates still apply). Valid names: `pr-summarizer`, `code-reviewer`, `silent-failure-hunter`, `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general`, `issue-linker`. Empty (default): all eligible agents run. |
 | `exclude-agents` | No | `''` | Denylist: comma-separated agent names to skip. Ignored when `agents` is set. Note: excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. |

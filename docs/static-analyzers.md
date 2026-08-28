@@ -49,6 +49,20 @@ In addition to severity, every analyzer maps its findings onto the same 11-value
 | **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; runs at level `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist` | 85 | `phpstan` |
 | **kube-linter** | `.yaml`, `.yml`, `.json` with `apiVersion:` + `kind:` headers | All findings→Medium (reliability-focused: missing probes, resource limits, etc.) | 85 | `kube-linter` |
 | **tflint** | `.tf`, `.tfvars` | `error`→High, `warning`→Medium, `notice`→Low; runs per Terraform module directory | 90 | `tflint` |
+| **docs-api-check** | Python + `@param`-family languages (JS/TS, Java, Kotlin, C#, Ruby, C++, Scala) | A documented parameter not in the signature, or vice versa, always→Medium | 90 (Python, via ruff) / 80 (tree-sitter engine) | `docs-api-check` |
+| **docs-missing-check** | Python, Go, + the same `@param`-family languages | A newly-added public function/method with no doc comment, diff-gated to added lines only, always→Low | 90 (Python) / 80 (Go, tree-sitter engine) | `docs-missing-check` |
+| **docs-ref-check** | Changed `.md` files | A broken relative link or heading anchor, always→Medium | 80 | `docs-ref-check` |
+| **docs-drift-check** | Any file (runs unconditionally, like semgrep/trufflehog) | A doc reference to a file this PR deletes, always→Low | 80 | `docs-drift-check` |
+
+## Documentation checks
+
+Four analyzers catch documentation mismatch and drift for zero LLM tokens. None can block a PR on their own (`docs-api-check` and `docs-ref-check` are Medium; `docs-missing-check` and `docs-drift-check` are Low, and Medium/Low both resolve to `APPROVE`).
+
+- **`docs-api-check`** compares a function's documented parameters against its actual signature. Python uses the already-installed `ruff` binary with `--isolated` (so results never depend on the consumer's own ruff config); every other supported language uses a shared tree-sitter traversal (JSDoc, JavaDoc, KDoc, YARD, Doxygen, and C# XML doc comment styles are all recognized). A function with a destructured or rest parameter is skipped entirely rather than guessed at.
+- **`docs-missing-check`** flags a newly-added public function or method with no doc comment at all, diff-gated to symbols genuinely added in the current diff (not pre-existing undocumented code). Go is checked via a dedicated `golangci-lint --enable-only=godoclint` invocation with `require-doc` explicitly enabled (that rule is opt-in even when the linter itself is on).
+- **`docs-ref-check`** and **`docs-drift-check`** are pure-Python, offline, no network calls ever: broken relative links/heading anchors in changed Markdown, and doc references to a file the current PR deletes, respectively.
+
+PHP is deliberately excluded from `docs-api-check`/`docs-missing-check` — `phpcs` already covers doc-comment mismatch on both the Drupal and PSR12 paths (see the `phpcs` row above). See `docs/adr/0001-tree-sitter-not-node-for-doc-mismatch.md` and `docs/adr/0002-hand-rolled-doc-ref-checker-not-lychee.md` in the repo for why these are hand-rolled rather than built on an existing tool.
 
 ## Dependency vulnerability check
 
