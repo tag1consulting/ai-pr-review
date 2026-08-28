@@ -166,25 +166,23 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         return []
     src_bytes = src.encode()
 
-    # tree-sitter-language-pack 1.x parser accepts str (and exposes parse_bytes
-    # for the bytes variant).  Earlier 0.x took bytes via parse().  Try the
-    # current API first, fall back to the old one.
+    # tree-sitter-language-pack's get_parser() has returned different Parser
+    # implementations across releases: some accept only bytes via parse()
+    # (the real tree_sitter.Parser, current as of 1.15.x), others accept only
+    # str (an intermediate native wrapper, e.g. 1.8.x). Try bytes first since
+    # that matches the currently pinned range's real behavior, fall back to
+    # str for older/alternate pack versions.
     try:
-        tree = parser.parse(src)
+        tree = parser.parse(src_bytes)
     except (TypeError, AttributeError) as primary_exc:
         # Don't lose the primary mismatch detail — operators debugging an
         # API skew need to see which signature was tried first.
         logger.debug(
-            "tree-sitter: parser.parse(str) raised %s (%s); trying bytes fallback",
+            "tree-sitter: parser.parse(bytes) raised %s (%s); trying str fallback",
             type(primary_exc).__name__, primary_exc,
         )
         try:
-            # 0.x API only accepted bytes; the 1.x type stubs say str.
-            # The runtime fallback is intentional for backward compat.
-            # The dual error-code list is needed because CI's mypy lint
-            # job doesn't install the [context] extra, so parser.parse
-            # is untyped (Any) and the arg-type ignore is unused there.
-            tree = parser.parse(src_bytes)  # type: ignore[arg-type,unused-ignore]
+            tree = parser.parse(src)  # type: ignore[call-overload]
         except Exception as exc:
             logger.warning(
                 "[ai-pr-review] WARNING: tree-sitter: parse error for language %r: %s", language, exc,

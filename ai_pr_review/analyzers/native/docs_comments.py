@@ -386,16 +386,15 @@ def _parse_file(path: Path, grammar: str) -> tuple[object, bytes] | None:
         logger.warning("[ai-pr-review] WARNING: could not read %s: %s", path, exc)
         return None
     src_bytes = src.encode()
+    # See context/treesitter.py's identical fallback: get_parser()'s Parser
+    # has accepted bytes-only or str-only depending on the pack version. Try
+    # bytes first since that matches the currently pinned range's real
+    # behavior, fall back to str for older/alternate pack versions.
     try:
-        tree = parser.parse(src)
+        tree = parser.parse(src_bytes)
     except (TypeError, AttributeError):
         try:
-            # Dual error-code list: CI's mypy job doesn't install the
-            # optional tree-sitter-language-pack extra, so parser.parse is
-            # untyped (Any) there and the arg-type ignore is unused in that
-            # environment — same reasoning as context/treesitter.py's
-            # identical fallback.
-            tree = parser.parse(src_bytes)  # type: ignore[arg-type,unused-ignore]
+            tree = parser.parse(src)  # type: ignore[call-overload]
         except Exception as exc:
             logger.warning("[ai-pr-review] WARNING: tree-sitter parse error for %s: %s", path, exc)
             return None
