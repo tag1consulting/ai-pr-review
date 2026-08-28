@@ -62,7 +62,7 @@ v2.4.1 and earlier, back to v0.7.0. See [Version History](../version-history) fo
 
 **Skip-path crash fixed.** The skip path (invoked when the diff is empty or the PR is in draft mode) constructed a `DispatchContext` using `config.model_standard` before `resolve_models()` had been called, leaving `model_standard` empty and causing a crash on any skip-eligible PR. Fixed in `cli.py` by passing `config.resolve_models()` to `_orchestrate_skip()`.
 
-**Judge-pass token usage now visible in the token table.** The judge LLM call now appears as a `judge-pass` row in the token table (see [Token usage table](../features#token-usage-table)), with its input and output token counts included in the Total row. The row appears only when the judge actually ran (non-empty input and at least one token consumed).
+**Judge-pass token usage now visible in the token table.** The judge LLM call now appears as a `judge-pass` row in the token table (see [Token usage table](../features#token-usage)), with its input and output token counts included in the Total row. The row appears only when the judge actually ran (non-empty input and at least one token consumed).
 
 ## v2.1.0
 
