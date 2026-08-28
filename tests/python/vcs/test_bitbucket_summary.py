@@ -200,6 +200,31 @@ def test_post_summary_updates_existing() -> None:
     assert "/comments/55" in put_call[1]
 
 
+def test_post_summary_finds_existing_hidden_form_comment() -> None:
+    """_list_summary_comments' filter must recognize a comment already in
+    hidden form (#699) — otherwise post_summary stops finding its own prior
+    comment and starts creating duplicates on every run."""
+    existing = {
+        "id": 55,
+        "content": {"raw": f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=01d4ead4ee)\nold"},
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([existing]))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_summary("## new", _VALID_SHA)
+    assert result.updated is True
+    assert result.created is False
+    assert result.comment_id == 55
+    put_call = next(c for c in rec.calls if c[0] == "PUT")
+    assert "/comments/55" in put_call[1]
+
+
 def test_post_summary_deletes_duplicates() -> None:
     deletes: list[str] = []
     items = [
@@ -322,6 +347,31 @@ def test_advance_sha_watermark_updates_existing() -> None:
     assert prov.advance_sha_watermark(_VALID_SHA) is True
     put = next(c for c in rec.calls if c[0] == "PUT")
     assert _VALID_SHA in put[2]["content"]["raw"]
+
+
+def test_advance_sha_watermark_preserves_hidden_marker_format() -> None:
+    """Every summary comment created after #699 is in hidden form
+    (_post_summary_impl always calls build_summary_marker(hidden=True)), so
+    the very next watermark advance against that comment must not regress it
+    back to a visible `<!-- -->` comment."""
+    existing = {
+        "id": 7,
+        "content": {"raw": f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=01d4ead4ee)\nb"},
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([existing]))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 7})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    assert prov.advance_sha_watermark(_VALID_SHA) is True
+    put = next(c for c in rec.calls if c[0] == "PUT")
+    raw = put[2]["content"]["raw"]
+    assert f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha={_VALID_SHA})" in raw
+    assert "<!--" not in raw
 
 
 def test_advance_sha_watermark_no_existing() -> None:
