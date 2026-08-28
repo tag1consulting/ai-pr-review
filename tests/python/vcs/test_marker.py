@@ -6,11 +6,17 @@ import pytest
 
 from ai_pr_review.vcs.marker import (
     INLINE_MARKER,
+    INLINE_MARKER_HIDDEN,
+    SKIP_MARKER,
+    SKIP_MARKER_HIDDEN,
+    SUMMARY_MARKER_HIDDEN_PREFIX,
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
+    append_skip_marker,
     build_summary_marker,
     extract_summary_sha,
     has_inline_marker,
+    has_skip_marker,
     has_summary_marker,
     replace_summary_sha,
 )
@@ -266,3 +272,131 @@ def test_inline_marker_constant() -> None:
 
 def test_summary_marker_prefix_constant() -> None:
     assert SUMMARY_MARKER_PREFIX == "<!-- ai-pr-review-summary"
+
+
+# ---------------------------------------------------------------------------
+# Hidden (reference-link) marker form — Bitbucket's renderer HTML-escapes
+# raw `<!-- -->` comments instead of hiding them (#699); these call sites use
+# the `[//]: # (...)` form instead, which all three providers render as
+# nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_hidden_marker_constants() -> None:
+    assert INLINE_MARKER_HIDDEN == "[//]: # (ai-pr-review-inline)"
+    assert SKIP_MARKER_HIDDEN == "[//]: # (ai-pr-review-skip)"
+    assert SUMMARY_MARKER_HIDDEN_PREFIX == "[//]: # (ai-pr-review-summary"
+
+
+def test_build_summary_marker_hidden_with_valid_sha() -> None:
+    marker = build_summary_marker(_VALID_SHA, hidden=True)
+    assert marker == f"[//]: # (ai-pr-review-summary sha={_VALID_SHA})"
+
+
+def test_build_summary_marker_hidden_without_sha() -> None:
+    marker = build_summary_marker("not-a-sha", hidden=True)
+    assert marker == "[//]: # (ai-pr-review-summary)"
+
+
+def test_has_summary_marker_detects_hidden_form() -> None:
+    assert has_summary_marker("[//]: # (ai-pr-review-summary sha=abc1234)") is True
+    assert has_summary_marker("[//]: # (ai-pr-review-summary)") is True
+
+
+def test_extract_summary_sha_hidden_form() -> None:
+    body = f"[//]: # (ai-pr-review-summary sha={_VALID_SHA})\n\n## Summary"
+    assert extract_summary_sha(body) == _VALID_SHA
+
+
+def test_extract_summary_sha_round_trips_hidden_build_result() -> None:
+    marker = build_summary_marker(_VALID_SHA, hidden=True)
+    body = f"{marker}\n\nbody content"
+    assert extract_summary_sha(body) == _VALID_SHA
+
+
+def test_replace_summary_sha_preserves_hidden_format() -> None:
+    """The format-preserving branch is the crux of #699: a watermark advance
+    against an already-hidden-form comment must not regress it back to a
+    visible `<!-- -->` comment."""
+    body = "[//]: # (ai-pr-review-summary sha=abc1234)\n\n## Summary body"
+    result = replace_summary_sha(body, "def5678")
+    assert result == "[//]: # (ai-pr-review-summary sha=def5678)\n\n## Summary body"
+    assert "<!--" not in result
+
+
+def test_replace_summary_sha_preserves_html_comment_format() -> None:
+    """Sibling of the above: the HTML-comment branch (GitHub/GitLab, and any
+    not-yet-regenerated Bitbucket comment) must not switch to hidden form."""
+    body = "<!-- ai-pr-review-summary sha=abc1234 -->\n\n## Summary body"
+    result = replace_summary_sha(body, "def5678")
+    assert result == "<!-- ai-pr-review-summary sha=def5678 -->\n\n## Summary body"
+    assert "[//]" not in result
+
+
+def test_replace_summary_sha_hidden_marker_without_sha_field_adds_sha() -> None:
+    body = "[//]: # (ai-pr-review-summary)\nbody"
+    result = replace_summary_sha(body, "def5678")
+    assert result == "[//]: # (ai-pr-review-summary sha=def5678)\nbody"
+
+
+def test_has_inline_marker_detects_hidden_form() -> None:
+    assert has_inline_marker(f"comment text\n{INLINE_MARKER_HIDDEN}") is True
+
+
+def test_has_skip_marker_detects_hidden_form() -> None:
+    assert has_skip_marker(f"comment text\n{SKIP_MARKER_HIDDEN}") is True
+
+
+def test_has_skip_marker_detects_html_comment_form() -> None:
+    assert has_skip_marker(f"comment text\n{SKIP_MARKER}") is True
+
+
+def test_append_inline_marker_hidden_form() -> None:
+    result = append_inline_marker("body", marker=INLINE_MARKER_HIDDEN)
+    assert INLINE_MARKER_HIDDEN in result
+    assert INLINE_MARKER not in result.replace(INLINE_MARKER_HIDDEN, "")
+
+
+def test_append_inline_marker_hidden_form_is_idempotent() -> None:
+    once = append_inline_marker("body", marker=INLINE_MARKER_HIDDEN)
+    twice = append_inline_marker(once, marker=INLINE_MARKER_HIDDEN)
+    assert once == twice
+    assert twice.count(INLINE_MARKER_HIDDEN) == 1
+
+
+def test_append_inline_marker_cross_form_is_noop() -> None:
+    """A body already carrying the old HTML-comment marker must not also
+    gain the hidden-form marker — has_inline_marker() gates on either form."""
+    body = append_inline_marker("body")  # old HTML-comment form
+    result = append_inline_marker(body, marker=INLINE_MARKER_HIDDEN)
+    assert result == body
+    assert INLINE_MARKER_HIDDEN not in result
+
+
+def test_append_skip_marker_hidden_forms() -> None:
+    result = append_skip_marker(
+        "skipped", inline_marker=INLINE_MARKER_HIDDEN, skip_marker=SKIP_MARKER_HIDDEN
+    )
+    assert INLINE_MARKER_HIDDEN in result
+    assert SKIP_MARKER_HIDDEN in result
+    assert INLINE_MARKER not in result
+    assert SKIP_MARKER not in result
+
+
+def test_append_skip_marker_hidden_forms_idempotent() -> None:
+    once = append_skip_marker(
+        "skipped", inline_marker=INLINE_MARKER_HIDDEN, skip_marker=SKIP_MARKER_HIDDEN
+    )
+    twice = append_skip_marker(
+        once, inline_marker=INLINE_MARKER_HIDDEN, skip_marker=SKIP_MARKER_HIDDEN
+    )
+    assert once == twice
+    assert twice.count(INLINE_MARKER_HIDDEN) == 1
+    assert twice.count(SKIP_MARKER_HIDDEN) == 1
+
+
+def test_append_skip_marker_defaults_unchanged() -> None:
+    """Default (no kwargs) behavior — used by GitHub/GitLab — is untouched."""
+    result = append_skip_marker("skipped")
+    assert INLINE_MARKER in result
+    assert SKIP_MARKER in result

@@ -8,7 +8,7 @@ import httpx
 
 from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import SUMMARY_MARKER_PREFIX
+from ai_pr_review.vcs.marker import SUMMARY_MARKER_HIDDEN_PREFIX, SUMMARY_MARKER_PREFIX
 
 
 def _make_provider(
@@ -77,6 +77,30 @@ def test_resolve_stale_deletes_duplicates_keeping_first() -> None:
     result = prov.resolve_stale()
     assert result.threads_resolved == 2
     assert sorted(deletes) == [98, 99]
+
+
+def test_resolve_stale_deletes_duplicates_mixed_marker_formats() -> None:
+    """A comment stamped with the hidden form (#699) must still be recognized
+    as ours by the marker-gated dedup, whether it's the kept or deleted one."""
+    items = [
+        _comment(100, f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=abc1234)\nlatest"),
+        _comment(99, f"{SUMMARY_MARKER_PREFIX} sha=cafe1234 -->\nmiddle (legacy form)"),
+    ]
+    deletes: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values(items))
+        if req.method == "DELETE":
+            cid = int(str(req.url).rsplit("/", 1)[-1])
+            deletes.append(cid)
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.threads_resolved == 1
+    assert deletes == [99]
 
 
 def test_resolve_stale_skips_non_markered_comments() -> None:

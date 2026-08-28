@@ -9,8 +9,20 @@ import httpx
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, SUMMARY_MARKER_PREFIX
+from ai_pr_review.vcs.marker import INLINE_MARKER_HIDDEN, SUMMARY_MARKER_PREFIX
 from ai_pr_review.vcs.protocol import DiffContext
+
+
+def _assert_hidden_markers_well_separated(body: str) -> None:
+    """A `[//]: # (...)` reference-link marker cannot interrupt a paragraph
+    per CommonMark — see test_bitbucket_summary.py's copy of this helper for
+    the full rationale (#699 code review)."""
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if not line.startswith("[//]:"):
+            continue
+        ok = i == 0 or lines[i - 1] == "" or lines[i - 1].startswith("[//]:")
+        assert ok, f"hidden marker on line {i} not properly separated: {body!r}"
 
 
 def _make_provider(
@@ -104,8 +116,12 @@ def test_post_findings_appends_into_existing_comment() -> None:
     assert "**Overall Risk:** High" in raw
     assert "SQLi via string concat" in raw
     assert "parameterize" in raw
-    # Inline marker tagged on the body too
-    assert INLINE_MARKER in raw
+    # Inline marker tagged on the body too — hidden form (#699): Bitbucket's
+    # renderer doesn't hide raw HTML comments the way GitHub/GitLab do.
+    assert INLINE_MARKER_HIDDEN in raw
+    # The rendered body ends in an italic footer paragraph followed by the
+    # marker — the exact shape flagged as risky in #699's code review.
+    _assert_hidden_markers_well_separated(raw)
 
 
 def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:

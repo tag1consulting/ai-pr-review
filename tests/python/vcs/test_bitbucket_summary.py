@@ -9,13 +9,35 @@ import httpx
 
 from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, SKIP_MARKER, SUMMARY_MARKER_PREFIX
+from ai_pr_review.vcs.marker import (
+    INLINE_MARKER,
+    INLINE_MARKER_HIDDEN,
+    SKIP_MARKER,
+    SKIP_MARKER_HIDDEN,
+    SUMMARY_MARKER_HIDDEN_PREFIX,
+    SUMMARY_MARKER_PREFIX,
+)
 from ai_pr_review.vcs.protocol import VcsProvider
 
 
 @dataclass
 class _Recorder:
     calls: list[tuple[str, str, dict | None]] = field(default_factory=list)
+
+
+def _assert_hidden_markers_well_separated(body: str) -> None:
+    """A `[//]: # (...)` reference-link marker cannot interrupt a paragraph
+    per CommonMark — it renders as literal text unless it is the first line
+    of the body, or is immediately preceded by a blank line or another such
+    marker line. Bitbucket's own renderer doesn't enforce this (verified: it
+    hides the marker either way), but composed bodies should stay correct
+    for any CommonMark-compliant renderer."""
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if not line.startswith("[//]:"):
+            continue
+        ok = i == 0 or lines[i - 1] == "" or lines[i - 1].startswith("[//]:")
+        assert ok, f"hidden marker on line {i} not properly separated: {body!r}"
 
 
 def _make_provider(
@@ -165,7 +187,10 @@ def test_post_summary_creates_when_none_exists() -> None:
     assert result.comment_id == 99
     payload = rec.calls[-1][2]
     raw = payload["content"]["raw"]
-    assert SUMMARY_MARKER_PREFIX in raw
+    # Hidden form (#699): Bitbucket's renderer doesn't hide raw HTML comments
+    # the way GitHub/GitLab do, so freshly-composed markers use the
+    # reference-link form instead.
+    assert SUMMARY_MARKER_HIDDEN_PREFIX in raw
     assert _VALID_SHA in raw
 
 
@@ -185,6 +210,31 @@ def test_post_summary_updates_existing() -> None:
     prov, rec = _make_provider(handler)
     result = prov.post_summary("## new", _VALID_SHA)
     assert result.updated is True
+    assert result.comment_id == 55
+    put_call = next(c for c in rec.calls if c[0] == "PUT")
+    assert "/comments/55" in put_call[1]
+
+
+def test_post_summary_finds_existing_hidden_form_comment() -> None:
+    """_list_summary_comments' filter must recognize a comment already in
+    hidden form (#699) — otherwise post_summary stops finding its own prior
+    comment and starts creating duplicates on every run."""
+    existing = {
+        "id": 55,
+        "content": {"raw": f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=01d4ead4ee)\nold"},
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([existing]))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_summary("## new", _VALID_SHA)
+    assert result.updated is True
+    assert result.created is False
     assert result.comment_id == 55
     put_call = next(c for c in rec.calls if c[0] == "PUT")
     assert "/comments/55" in put_call[1]
@@ -242,9 +292,14 @@ def test_post_skip_comment_creates_when_none_exist() -> None:
     assert result.created is True
     post_call = next(c for c in rec.calls if c[0] == "POST")
     raw = post_call[2]["content"]["raw"]
-    assert INLINE_MARKER in raw
-    assert SKIP_MARKER in raw
+    # Hidden form (#699), see test_post_summary_creates_when_none_exists.
+    assert INLINE_MARKER_HIDDEN in raw
+    assert SKIP_MARKER_HIDDEN in raw
     assert "No diff." in raw
+    # The composed body is a paragraph followed by two hidden markers — the
+    # exact shape flagged as risky in #699's code review (a `[//]: # (...)`
+    # line cannot interrupt a paragraph on a CommonMark-strict renderer).
+    _assert_hidden_markers_well_separated(raw)
 
 
 def test_post_skip_comment_upserts_existing() -> None:
@@ -311,6 +366,31 @@ def test_advance_sha_watermark_updates_existing() -> None:
     assert prov.advance_sha_watermark(_VALID_SHA) is True
     put = next(c for c in rec.calls if c[0] == "PUT")
     assert _VALID_SHA in put[2]["content"]["raw"]
+
+
+def test_advance_sha_watermark_preserves_hidden_marker_format() -> None:
+    """Every summary comment created after #699 is in hidden form
+    (_post_summary_impl always calls build_summary_marker(hidden=True)), so
+    the very next watermark advance against that comment must not regress it
+    back to a visible `<!-- -->` comment."""
+    existing = {
+        "id": 7,
+        "content": {"raw": f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=01d4ead4ee)\nb"},
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([existing]))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 7})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    assert prov.advance_sha_watermark(_VALID_SHA) is True
+    put = next(c for c in rec.calls if c[0] == "PUT")
+    raw = put[2]["content"]["raw"]
+    assert f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha={_VALID_SHA})" in raw
+    assert "<!--" not in raw
 
 
 def test_advance_sha_watermark_no_existing() -> None:
