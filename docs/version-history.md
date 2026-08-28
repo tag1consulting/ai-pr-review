@@ -12,6 +12,7 @@ What changed in each release, newest first. The 10 most recent versions each hav
 
 | Version | Highlights |
 |---------|-----------|
+| [v2.6.0](version-history/v2.6.0) | Four documentation-checking static analyzers; `golangci-lint`/`phpcs` fixes |
 | [v2.5.0](version-history/v2.5.0) | `policy.yml` review-depth routing + merge gate; 6 dogfooding bug fixes |
 | [v2.4.9](version-history/v2.4.9) | Asimov's Three Laws stated explicitly in governance; feedback-injection security fix |
 | [v2.4.8](version-history/v2.4.8) | Silent `APPROVE`→`COMMENT` review degrade fixed |
@@ -21,8 +22,7 @@ What changed in each release, newest first. The 10 most recent versions each hav
 | [v2.4.4](version-history/v2.4.4) | Slash-command reviews post as `github-actions[bot]`, not the PAT owner |
 | [v2.4.3](version-history/v2.4.3) | `pr-number`/`issue-number` split-input false positive fixed |
 | [v2.4.2](version-history/v2.4.2) | `false-positive`/`wont-fix` dismiss the owning review; auto-approve on full resolution |
-| [v2.4.1](version-history/v2.4.1) | Sonnet 5 `max_tokens` crash fix; live-API model canary added |
 
-See [Older releases](version-history/archive) for v2.4.0 and earlier, back to v0.7.0.
+See [Older releases](version-history/archive) for v2.4.1 and earlier, back to v0.7.0.
 
 For the underlying commit-level changelog, see [CHANGELOG.md](https://github.com/tag1consulting/ai-pr-review/blob/main/CHANGELOG.md) on GitHub.
