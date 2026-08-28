@@ -9,7 +9,14 @@ import httpx
 
 from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, SKIP_MARKER, SUMMARY_MARKER_PREFIX
+from ai_pr_review.vcs.marker import (
+    INLINE_MARKER,
+    INLINE_MARKER_HIDDEN,
+    SKIP_MARKER,
+    SKIP_MARKER_HIDDEN,
+    SUMMARY_MARKER_HIDDEN_PREFIX,
+    SUMMARY_MARKER_PREFIX,
+)
 from ai_pr_review.vcs.protocol import VcsProvider
 
 
@@ -165,7 +172,10 @@ def test_post_summary_creates_when_none_exists() -> None:
     assert result.comment_id == 99
     payload = rec.calls[-1][2]
     raw = payload["content"]["raw"]
-    assert SUMMARY_MARKER_PREFIX in raw
+    # Hidden form (#699): Bitbucket's renderer doesn't hide raw HTML comments
+    # the way GitHub/GitLab do, so freshly-composed markers use the
+    # reference-link form instead.
+    assert SUMMARY_MARKER_HIDDEN_PREFIX in raw
     assert _VALID_SHA in raw
 
 
@@ -242,8 +252,9 @@ def test_post_skip_comment_creates_when_none_exist() -> None:
     assert result.created is True
     post_call = next(c for c in rec.calls if c[0] == "POST")
     raw = post_call[2]["content"]["raw"]
-    assert INLINE_MARKER in raw
-    assert SKIP_MARKER in raw
+    # Hidden form (#699), see test_post_summary_creates_when_none_exists.
+    assert INLINE_MARKER_HIDDEN in raw
+    assert SKIP_MARKER_HIDDEN in raw
     assert "No diff." in raw
 
 

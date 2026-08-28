@@ -20,20 +20,32 @@ from typing import Final
 _log = logging.getLogger(__name__)
 
 INLINE_MARKER: Final[str] = "<!-- ai-pr-review-inline -->"
+# Bitbucket's comment renderer HTML-escapes raw `<!-- -->` comments instead of
+# hiding them (#699), so its call sites use this reference-link-definition
+# form instead — a no-op link definition that GitHub, GitLab, and Bitbucket
+# all render as nothing.
+INLINE_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-inline)"
 SUMMARY_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-summary"
+SUMMARY_MARKER_HIDDEN_PREFIX: Final[str] = "[//]: # (ai-pr-review-summary"
 ID_MAP_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-id-map:"
 # Skip comments get their own marker so _list_skip_comments() can find them
 # independently of _list_summary_comments(). INLINE_MARKER is also appended
 # (for backward-compat stale-cleanup), but SKIP_MARKER is the upsert anchor.
 SKIP_MARKER: Final[str] = "<!-- ai-pr-review-skip -->"
+SKIP_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-skip)"
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
-# Matches a summary marker with optional sha= field, e.g.:
+# Matches a summary marker with optional sha= field, in either delimiter
+# style, e.g.:
 #   <!-- ai-pr-review-summary -->
 #   <!-- ai-pr-review-summary sha=abc1234 -->
+#   [//]: # (ai-pr-review-summary)
+#   [//]: # (ai-pr-review-summary sha=abc1234)
 _SUMMARY_MARKER_RE = re.compile(
-    r"<!-- ai-pr-review-summary(?:\s+sha=(?P<sha>[0-9a-f]+))?\s*-->"
+    r"(?:<!--\s*|\[//\]:\s*#\s*\()"
+    r"ai-pr-review-summary(?:\s+sha=(?P<sha>[0-9a-f]+))?"
+    r"\s*(?:-->|\))"
 )
 
 
@@ -41,8 +53,16 @@ def _is_valid_sha(sha: str) -> bool:
     return bool(_SHA_PATTERN.match(sha))
 
 
-def build_summary_marker(head_sha: str) -> str:
-    """Produce the summary marker, embedding head_sha when valid."""
+def build_summary_marker(head_sha: str, *, hidden: bool = False) -> str:
+    """Produce the summary marker, embedding head_sha when valid.
+
+    Pass ``hidden=True`` (Bitbucket) to emit the reference-link-definition
+    form, which Bitbucket's renderer actually hides — see INLINE_MARKER_HIDDEN.
+    """
+    if hidden:
+        if _is_valid_sha(head_sha):
+            return f"[//]: # (ai-pr-review-summary sha={head_sha})"
+        return "[//]: # (ai-pr-review-summary)"
     if _is_valid_sha(head_sha):
         return f"<!-- ai-pr-review-summary sha={head_sha} -->"
     return "<!-- ai-pr-review-summary -->"
@@ -80,8 +100,8 @@ def extract_summary_sha(body: str, context_hint: str = "") -> str | None:
 
 
 def has_inline_marker(body: str) -> bool:
-    """Case-sensitive check for the inline ownership marker."""
-    return INLINE_MARKER in body
+    """Case-sensitive check for the inline ownership marker (either form)."""
+    return INLINE_MARKER in body or INLINE_MARKER_HIDDEN in body
 
 
 def has_summary_marker(body: str) -> bool:
@@ -139,34 +159,46 @@ def extract_id_map(body: str) -> dict[str, int]:
     return {}
 
 
-def append_inline_marker(body: str) -> str:
-    """Append INLINE_MARKER to body (idempotent)."""
+def append_inline_marker(body: str, *, marker: str = INLINE_MARKER) -> str:
+    """Append an inline marker to body (idempotent re: either marker form).
+
+    Pass ``marker=INLINE_MARKER_HIDDEN`` (Bitbucket) to append the hidden
+    (reference-link) form instead of the default HTML-comment form.
+    """
     if has_inline_marker(body):
         return body
     if not body:
-        return INLINE_MARKER
+        return marker
     separator = "" if body.endswith("\n") else "\n"
-    return f"{body}{separator}{INLINE_MARKER}"
+    return f"{body}{separator}{marker}"
 
 
 def has_skip_marker(body: str) -> bool:
-    """Case-sensitive check for the skip ownership marker."""
-    return SKIP_MARKER in body
+    """Case-sensitive check for the skip ownership marker (either form)."""
+    return SKIP_MARKER in body or SKIP_MARKER_HIDDEN in body
 
 
-def append_skip_marker(body: str) -> str:
-    """Append SKIP_MARKER (and INLINE_MARKER) to body (idempotent).
+def append_skip_marker(
+    body: str,
+    *,
+    inline_marker: str = INLINE_MARKER,
+    skip_marker: str = SKIP_MARKER,
+) -> str:
+    """Append a skip marker (and an inline marker) to body (idempotent).
 
     Both markers are appended so that:
     - SKIP_MARKER serves as the upsert anchor for _list_skip_comments().
     - INLINE_MARKER preserves backward-compat with the stale-cleanup path
       which gates on INLINE_MARKER.
+
+    Pass ``inline_marker=INLINE_MARKER_HIDDEN, skip_marker=SKIP_MARKER_HIDDEN``
+    (Bitbucket) to append the hidden (reference-link) forms instead.
     """
     if not has_inline_marker(body):
         separator = "" if body.endswith("\n") else "\n"
-        body = f"{body}{separator}{INLINE_MARKER}"
+        body = f"{body}{separator}{inline_marker}"
     if not has_skip_marker(body):
-        body = f"{body}\n{SKIP_MARKER}"
+        body = f"{body}\n{skip_marker}"
     return body
 
 
@@ -193,7 +225,8 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
             file=sys.stderr,
         )
         return body
-    if not _SUMMARY_MARKER_RE.search(body):
+    match = _SUMMARY_MARKER_RE.search(body)
+    if not match:
         hint = context_hint or body[:80].replace("\n", " ")
         print(
             f"WARNING: replace_summary_sha called on body with no summary marker "
@@ -201,5 +234,10 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
             file=sys.stderr,
         )
         return body
-    replacement = f"<!-- ai-pr-review-summary sha={new_sha} -->"
+    # Preserve whichever delimiter style is already in the body (HTML-comment
+    # vs. the hidden reference-link form) rather than forcing a conversion.
+    if match.group(0).lstrip().startswith("[//]"):
+        replacement = f"[//]: # (ai-pr-review-summary sha={new_sha})"
+    else:
+        replacement = f"<!-- ai-pr-review-summary sha={new_sha} -->"
     return _SUMMARY_MARKER_RE.sub(replacement, body, count=1)

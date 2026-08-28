@@ -9,7 +9,7 @@ import httpx
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, SUMMARY_MARKER_PREFIX
+from ai_pr_review.vcs.marker import INLINE_MARKER_HIDDEN, SUMMARY_MARKER_PREFIX
 from ai_pr_review.vcs.protocol import DiffContext
 
 
@@ -104,8 +104,9 @@ def test_post_findings_appends_into_existing_comment() -> None:
     assert "**Overall Risk:** High" in raw
     assert "SQLi via string concat" in raw
     assert "parameterize" in raw
-    # Inline marker tagged on the body too
-    assert INLINE_MARKER in raw
+    # Inline marker tagged on the body too — hidden form (#699): Bitbucket's
+    # renderer doesn't hide raw HTML comments the way GitHub/GitLab do.
+    assert INLINE_MARKER_HIDDEN in raw
 
 
 def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:

@@ -35,6 +35,9 @@ from ai_pr_review.vcs._body import (
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
+    INLINE_MARKER_HIDDEN,
+    SKIP_MARKER_HIDDEN,
+    SUMMARY_MARKER_HIDDEN_PREFIX,
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
     append_skip_marker,
@@ -127,7 +130,7 @@ class BitbucketProvider:
             data = resp.json() or {}
             for item in data.get("values") or []:
                 body = ((item.get("content") or {}).get("raw")) or ""
-                if SUMMARY_MARKER_PREFIX in body:
+                if SUMMARY_MARKER_PREFIX in body or SUMMARY_MARKER_HIDDEN_PREFIX in body:
                     results.append(item)
             next_url = data.get("next")
             if not isinstance(next_url, str) or not next_url:
@@ -220,7 +223,10 @@ class BitbucketProvider:
             token_table=token_table,
             agent_prompt=agent_prompt,
         )
-        body = append_inline_marker(truncate_body(body, limit=_MAX_BITBUCKET_BODY_SIZE))
+        body = append_inline_marker(
+            truncate_body(body, limit=_MAX_BITBUCKET_BODY_SIZE),
+            marker=INLINE_MARKER_HIDDEN,
+        )
 
         resp = self.client.request(
             "PUT", self._comment_url(keep_id), json_body={"content": {"raw": body}}
@@ -466,7 +472,7 @@ def _post_summary_impl(
             comment_id=None, created=False, updated=False, error="empty summary body"
         )
 
-    marker = build_summary_marker(head_sha)
+    marker = build_summary_marker(head_sha, hidden=True)
     truncated = truncate_body(summary_body, limit=_MAX_BITBUCKET_BODY_SIZE)
     body = (
         f"{marker}\n{truncated}\n\n---\n"
@@ -530,7 +536,9 @@ def _list_skip_comments_bb(provider: BitbucketProvider) -> list[dict[str, Any]]:
 
 def _post_skip_impl(provider: BitbucketProvider, reason: str) -> SummaryResult:
     raw = append_skip_marker(
-        f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
+        f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}",
+        inline_marker=INLINE_MARKER_HIDDEN,
+        skip_marker=SKIP_MARKER_HIDDEN,
     )
     existing = _list_skip_comments_bb(provider)
     if existing:
