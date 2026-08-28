@@ -16,8 +16,10 @@ annotations are not currently available on the Bitbucket path.
 ## What works
 
 - Summary comment upsert (single comment per PR, updated on each run)
-- Incremental-diff SHA watermark (the same HTML-comment marker trick used on
-  GitHub)
+- Incremental-diff SHA watermark (a hidden reference-link marker — Bitbucket's
+  renderer shows an HTML comment as literal text instead of hiding it, unlike
+  GitHub/GitLab, so Bitbucket uses a different marker form; see [Version
+  History → v2.6.1](version-history/v2.6.1))
 - All existing AI agents and static analyzers (same container image, same
   review logic)
 - Provider-auto retry on transient Bitbucket API errors (408/429/500-504)

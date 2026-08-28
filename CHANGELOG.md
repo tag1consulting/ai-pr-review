@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-08-28
+
+### Fixed
+
+- Bitbucket's PR-comment renderer HTML-escapes raw `<!-- -->` comments instead of hiding them like GitHub and GitLab do, so the `ai-pr-review-summary`/`ai-pr-review-inline`/`ai-pr-review-skip` ownership and watermark markers were rendering as visible literal text at the top or bottom of every Bitbucket review comment (with the summary marker's embedded commit SHA autolinked). Bitbucket now emits these markers as a `[//]: # (...)` reference-link definition instead, which all three providers render as nothing; marker parsing recognizes both forms so already-posted Bitbucket comments are unaffected. GitHub and GitLab are unchanged.
+
 ## [2.6.0] - 2026-08-28
 
 ### Added
