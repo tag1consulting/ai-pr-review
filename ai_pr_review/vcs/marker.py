@@ -42,10 +42,13 @@ _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 #   <!-- ai-pr-review-summary sha=abc1234 -->
 #   [//]: # (ai-pr-review-summary)
 #   [//]: # (ai-pr-review-summary sha=abc1234)
+# Each delimiter style is a fully self-contained alternative (own open+close,
+# own sha group) rather than mixing-and-matching open/close independently —
+# that would let a malformed body like "<!-- ai-pr-review-summary)" match.
+# [ \t] (not \s) keeps a match from spanning multiple lines.
 _SUMMARY_MARKER_RE = re.compile(
-    r"(?:<!--\s*|\[//\]:\s*#\s*\()"
-    r"ai-pr-review-summary(?:\s+sha=(?P<sha>[0-9a-f]+))?"
-    r"\s*(?:-->|\))"
+    r"<!--[ \t]*ai-pr-review-summary(?:[ \t]+sha=(?P<sha>[0-9a-f]+))?[ \t]*-->"
+    r"|\[//\]:[ \t]*#[ \t]*\(ai-pr-review-summary(?:[ \t]+sha=(?P<sha2>[0-9a-f]+))?[ \t]*\)"
 )
 
 
@@ -85,7 +88,7 @@ def extract_summary_sha(body: str, context_hint: str = "") -> str | None:
     match = _SUMMARY_MARKER_RE.search(body)
     if not match:
         return None
-    sha = match.group("sha")
+    sha = match.group("sha") or match.group("sha2")
     if not sha:
         return None
     if not _is_valid_sha(sha):
@@ -159,6 +162,24 @@ def extract_id_map(body: str) -> dict[str, int]:
     return {}
 
 
+def _hidden_marker_separator(body: str) -> str:
+    """Separator to append a `[//]: # (...)` reference-link marker after.
+
+    Per CommonMark, a link reference definition cannot interrupt a paragraph
+    — appended right after a paragraph line with a single newline, it
+    becomes a lazy continuation line and renders as literal text (unlike an
+    HTML comment, which has no such restriction). It needs a preceding blank
+    line. Bitbucket's own renderer does not enforce this rule (verified: it
+    hides the marker either way), but this keeps the hidden-marker form
+    correct for any CommonMark-compliant renderer that might reuse it.
+    """
+    if body.endswith("\n\n") or not body:
+        return ""
+    if body.endswith("\n"):
+        return "\n"
+    return "\n\n"
+
+
 def append_inline_marker(body: str, *, marker: str = INLINE_MARKER) -> str:
     """Append an inline marker to body (idempotent re: either marker form).
 
@@ -169,7 +190,10 @@ def append_inline_marker(body: str, *, marker: str = INLINE_MARKER) -> str:
         return body
     if not body:
         return marker
-    separator = "" if body.endswith("\n") else "\n"
+    if marker.startswith("[//]"):
+        separator = _hidden_marker_separator(body)
+    else:
+        separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}{marker}"
 
 
@@ -195,7 +219,10 @@ def append_skip_marker(
     (Bitbucket) to append the hidden (reference-link) forms instead.
     """
     if not has_inline_marker(body):
-        separator = "" if body.endswith("\n") else "\n"
+        if inline_marker.startswith("[//]"):
+            separator = _hidden_marker_separator(body)
+        else:
+            separator = "" if body.endswith("\n") else "\n"
         body = f"{body}{separator}{inline_marker}"
     if not has_skip_marker(body):
         body = f"{body}\n{skip_marker}"
@@ -236,7 +263,9 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
         return body
     # Preserve whichever delimiter style is already in the body (HTML-comment
     # vs. the hidden reference-link form) rather than forcing a conversion.
-    if match.group(0).lstrip().startswith("[//]"):
+    # The two alternatives are now fully self-contained (own open+close), so
+    # checking the matched text's own prefix is exact.
+    if match.group(0).startswith("[//]"):
         replacement = f"[//]: # (ai-pr-review-summary sha={new_sha})"
     else:
         replacement = f"<!-- ai-pr-review-summary sha={new_sha} -->"

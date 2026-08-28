@@ -25,6 +25,21 @@ class _Recorder:
     calls: list[tuple[str, str, dict | None]] = field(default_factory=list)
 
 
+def _assert_hidden_markers_well_separated(body: str) -> None:
+    """A `[//]: # (...)` reference-link marker cannot interrupt a paragraph
+    per CommonMark — it renders as literal text unless it is the first line
+    of the body, or is immediately preceded by a blank line or another such
+    marker line. Bitbucket's own renderer doesn't enforce this (verified: it
+    hides the marker either way), but composed bodies should stay correct
+    for any CommonMark-compliant renderer."""
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if not line.startswith("[//]:"):
+            continue
+        ok = i == 0 or lines[i - 1] == "" or lines[i - 1].startswith("[//]:")
+        assert ok, f"hidden marker on line {i} not properly separated: {body!r}"
+
+
 def _make_provider(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> tuple[BitbucketProvider, _Recorder]:
@@ -281,6 +296,10 @@ def test_post_skip_comment_creates_when_none_exist() -> None:
     assert INLINE_MARKER_HIDDEN in raw
     assert SKIP_MARKER_HIDDEN in raw
     assert "No diff." in raw
+    # The composed body is a paragraph followed by two hidden markers — the
+    # exact shape flagged as risky in #699's code review (a `[//]: # (...)`
+    # line cannot interrupt a paragraph on a CommonMark-strict renderer).
+    _assert_hidden_markers_well_separated(raw)
 
 
 def test_post_skip_comment_upserts_existing() -> None:
