@@ -105,6 +105,25 @@ def _strip_diff_markers(hunk: str) -> tuple[str, dict[int, int]]:
     return "\n".join(src_lines), line_map
 
 
+def _attr_or_call(obj: object, name: str, default: object) -> object:
+    """Read an attribute that may be a property OR a method.
+
+    tree-sitter-language-pack 1.x exposes everything as methods (.kind(),
+    .byte_range(), .start_point()) while older releases used properties.
+    Support both so we don't have to ship two implementations. Module-level
+    (not nested in extract_symbol_refs) so other tree-sitter consumers in
+    this package, such as analyzers/native/docs_comments.py, can share the
+    same version-compatibility shim rather than duplicating it.
+    """
+    val = getattr(obj, name, default)
+    if callable(val) and not isinstance(val, type):
+        try:
+            return val()
+        except TypeError:
+            return default
+    return val
+
+
 def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     """Extract symbol references from *diff_hunk* for the given *language*.
 
@@ -177,21 +196,6 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
 
     refs: list[SymbolRef] = []
     seen: set[str] = set()
-
-    def _attr_or_call(obj: object, name: str, default: object) -> object:
-        """Read an attribute that may be a property OR a method.
-
-        tree-sitter-language-pack 1.x exposes everything as methods (.kind(),
-        .byte_range(), .start_point()) while older releases used properties.
-        Support both so we don't have to ship two implementations.
-        """
-        val = getattr(obj, name, default)
-        if callable(val) and not isinstance(val, type):
-            try:
-                return val()
-            except TypeError:
-                return default
-        return val
 
     def _node_text(node: object) -> str:
         """Extract identifier text from a node by slicing the source bytes.
