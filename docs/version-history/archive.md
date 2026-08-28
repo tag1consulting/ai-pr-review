@@ -2,13 +2,21 @@
 layout: default
 title: Older releases
 parent: Version History
-nav_order: 11
+nav_order: 12
 render_with_liquid: false
 ---
 
 # Older releases
 
-v2.4.0 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.4.1 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.4.1
+
+**Fixed a crash on demanding diffs: Claude Sonnet 5's adaptive thinking could exhaust `max_tokens` before producing any text**, taking down `code-reviewer` and `silent-failure-hunter` with no review output at all. Sonnet 5's thinking effort is now capped via `output_config: {"effort": "low"}` on affected models.
+
+**Live-API model canary added.** A new scheduled workflow runs the real dispatch path against a genuinely demanding diff for every model with a live API key configured, asserting each call completes with `stop_reason: end_turn` rather than a silent truncation. Catches the next model-behavior surprise before it reaches production.
+
+**Telemetry schema v3.** Per-agent telemetry events now include `stop_reason` and `thinking_tokens`. Consumers reading the telemetry sink should account for the schema version bump from v2.
 
 ## v2.4.0
 
