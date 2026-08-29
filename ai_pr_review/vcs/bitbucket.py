@@ -18,6 +18,7 @@ Provider differences from GitHub/GitLab:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -308,6 +309,36 @@ def _comment_body(item: dict[str, Any]) -> str:
     return ((item.get("content") or {}).get("raw")) or ""
 
 
+# reporting.py's build_token_table_accordion() wraps the token-cost table in
+# raw <details>/<summary> for GitHub/GitLab's native collapsible rendering.
+# Bitbucket has neither: it escapes the tags to literal text, and — because
+# the wrapper's closing </details> immediately follows the table with no
+# blank line — its markdown table parser then absorbs that line (and
+# whatever comes after it, up to the next real blank line) as spurious
+# trailing table rows, corrupting the table and swallowing the footer that
+# follows it in _render_combined_body (#703).
+_DETAILS_WRAPPER_RE = re.compile(r"\A<details>\n<summary>(.*?)</summary>\n\n(.*)\n</details>\Z", re.DOTALL)
+
+
+def _strip_details_wrapper(token_table_md: str) -> str:
+    """Convert a reporting.py accordion string to Bitbucket-safe markdown.
+
+    Replaces the <details>/<summary> wrapper with a plain bold heading, and
+    always returns a string ending in a newline: _render_combined_body joins
+    parts with "\\n", so a single trailing newline here becomes a real blank
+    line at the join point, keeping whatever follows out of the table.
+
+    Falls back to returning the input unchanged if it doesn't match the
+    expected wrapper shape (e.g. already-plain text) rather than mangling
+    something this function doesn't recognize.
+    """
+    match = _DETAILS_WRAPPER_RE.match(token_table_md)
+    if not match:
+        return token_table_md
+    heading, table = match.group(1), match.group(2)
+    return f"**{heading}**\n\n{table}\n"
+
+
 def _render_combined_body(
     *,
     existing_body: str,
@@ -449,7 +480,7 @@ def _render_combined_body(
     if findings_block:
         parts.append(findings_block)
     if token_table:
-        parts.append(token_table)
+        parts.append(_strip_details_wrapper(token_table))
     if agent_prompt and findings:
         parts.append(agent_prompt)
     parts.append(

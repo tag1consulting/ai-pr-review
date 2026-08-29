@@ -7,7 +7,7 @@ from collections.abc import Callable
 import httpx
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
+from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider, _strip_details_wrapper
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import INLINE_MARKER_HIDDEN, SUMMARY_MARKER_PREFIX
 from ai_pr_review.vcs.protocol import DiffContext
@@ -337,3 +337,112 @@ def test_post_findings_put_failure_returns_error() -> None:
     )
     assert not result.ok
     assert "HTTP 422" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# #703: reporting.py's <details>/<summary> accordion wrapper isn't rendered
+# on Bitbucket, and — because its closing </details> immediately follows the
+# table with no blank line — Bitbucket's markdown table parser absorbs it
+# (and everything after it, up to the next real blank line) as spurious
+# trailing table rows, corrupting the table and swallowing the footer.
+# ---------------------------------------------------------------------------
+
+_SAMPLE_ACCORDION = (
+    "<details>\n<summary>Token usage by agent</summary>\n\n"
+    "| Agent | Model | Input | Output | Total | Est. Cost |\n"
+    "|-------|-------|------:|-------:|------:|----------:|\n"
+    "| code-reviewer | Sonnet 5 | 1 | 37 | 38 | $0.0415 |\n"
+    "| **Total** | | **1** | **37** | **38** | **$0.0415** |"
+    "\n</details>"
+)
+
+
+def test_strip_details_wrapper_removes_tags_and_keeps_table() -> None:
+    result = _strip_details_wrapper(_SAMPLE_ACCORDION)
+    assert "<details>" not in result
+    assert "<summary>" not in result
+    assert "</details>" not in result
+    assert result.startswith("**Token usage by agent**\n\n")
+    assert "| code-reviewer | Sonnet 5 |" in result
+
+
+def test_strip_details_wrapper_ends_with_trailing_newline() -> None:
+    """A trailing newline here becomes a real blank line at the
+    "\\n".join() call site in _render_combined_body — without it, whatever
+    follows the table collapses back into the exact corruption this
+    function exists to prevent."""
+    result = _strip_details_wrapper(_SAMPLE_ACCORDION)
+    assert result.endswith("$0.0415** |\n")
+    assert not result.endswith("\n\n")  # exactly one trailing newline, not two
+
+
+def test_strip_details_wrapper_passes_through_unrecognized_input() -> None:
+    """Anything not shaped like reporting.py's accordion (already-plain
+    text, or empty) is returned unchanged rather than mangled."""
+    assert _strip_details_wrapper("") == ""
+    assert _strip_details_wrapper("**Already plain**\n\n| a | b |") == "**Already plain**\n\n| a | b |"
+
+
+def test_post_findings_token_table_has_no_details_tags_and_separates_footer() -> None:
+    """End-to-end via the real build_token_table_accordion() output (not a
+    hand-built fixture) so the regex in _strip_details_wrapper is exercised
+    against reporting.py's actual current format, guarding against silent
+    drift between the two."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+    from ai_pr_review.review.reporting import build_token_table_accordion
+
+    ar = AgentResult(
+        name="code-reviewer",
+        output="findings output",
+        token_log=TokenUsage(input=1, output=37, cache_creation=0, cache_read=0, model="claude-sonnet-5"),
+        truncated=False,
+    )
+    sample_pricing = [
+        {
+            "patterns": ["claude-sonnet-5"],
+            "display_name": "Sonnet 5",
+            "input_rate": 3000000,
+            "output_rate": 15000000,
+            "cache_write_rate": 3750000,
+            "cache_read_rate": 300000,
+        }
+    ]
+    with patch("ai_pr_review.pricing.load_pricing", return_value=sample_pricing):
+        token_table = build_token_table_accordion([ar], None, Path("."))
+    assert "<details>" in token_table  # sanity: fixture actually needs stripping
+
+    captured: list[dict] = []
+    existing = _existing_summary(comment_id=99)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json={"values": [existing]})
+        if req.method == "PUT":
+            import json
+
+            captured.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 99})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [Finding(severity="Low", confidence=60, finding="minor style nit")]
+    result = prov.post_findings(
+        findings,
+        DiffContext(diff_text="", head_sha=_HEAD),
+        event="COMMENT",
+        token_table=token_table,
+    )
+    assert result.ok
+    raw = captured[0]["content"]["raw"]
+
+    assert "<details>" not in raw
+    assert "<summary>" not in raw
+    assert "</details>" not in raw
+    assert "**Token usage by agent**" in raw
+    # The footer must be a real blank line away from the table's last row,
+    # not glued to it — otherwise Bitbucket's parser folds it into the table
+    # as a garbled trailing row (the exact bug in #703's live repro).
+    assert "\n\n---\n*AI Review — generated by" in raw
