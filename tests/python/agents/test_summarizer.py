@@ -13,6 +13,7 @@ from ai_pr_review.agents.summarizer import (
     build_summarizer_system_prompt,
     build_summarizer_user_message,
     parse_summarizer_output,
+    wrap_walkthrough_in_details,
 )
 
 # ---------------------------------------------------------------------------
@@ -452,3 +453,140 @@ def test_summarizer_prompt_does_not_emit_related_issues_heading() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     raw = (repo_root / "prompts" / "pr-summarizer.md").read_text()
     assert "Related Issues" not in raw
+
+
+# ---------------------------------------------------------------------------
+# wrap_walkthrough_in_details
+# ---------------------------------------------------------------------------
+
+_WALKTHROUGH_RAW = """\
+## Summary
+
+This PR adds a widget.
+
+**Type:** feature
+**Effort:** 3/5 — small
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Added | new widget handler |
+| b.py | Modified | wires the handler in |
+"""
+
+
+def test_wrap_walkthrough_collapses_and_labels_with_count() -> None:
+    result = wrap_walkthrough_in_details(_WALKTHROUGH_RAW, file_count=2)
+    assert "<details>\n<summary>Walkthrough (2 files)</summary>" in result
+    assert result.rstrip().endswith("</details>")
+    assert "| a.py | Added | new widget handler |" in result
+    # The bare "## Walkthrough" heading is dropped -- the accordion becomes
+    # the section, matching the headingless token-table accordion style.
+    assert "## Walkthrough" not in result
+    # Everything before the walkthrough section is untouched.
+    assert result.startswith("## Summary")
+
+
+def test_wrap_walkthrough_singular_file_count() -> None:
+    result = wrap_walkthrough_in_details(_WALKTHROUGH_RAW, file_count=1)
+    assert "<summary>Walkthrough (1 file)</summary>" in result
+
+
+def test_wrap_walkthrough_count_matches_parsed_walkthrough_length() -> None:
+    parsed = parse_summarizer_output(_WALKTHROUGH_RAW)
+    result = wrap_walkthrough_in_details(_WALKTHROUGH_RAW, file_count=len(parsed.walkthrough))
+    assert "<summary>Walkthrough (2 files)</summary>" in result
+
+
+def test_wrap_walkthrough_cohort_header_rows_excluded_from_count() -> None:
+    # Cohort header rows (e.g. "| **API Layer** | | |") are dropped by
+    # _parse_walkthrough as malformed (empty change/summary cells), so they
+    # never appear in `walkthrough` and don't inflate the file count. This is
+    # pre-existing parser behavior, asserted here because the collapse
+    # feature depends on it for an accurate count.
+    raw = """\
+## Summary
+
+Cohort-grouped PR.
+
+**Type:** feature
+**Effort:** 4/5 — large
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| **API Layer** | | |
+| src/api/users.py | Modified | Adds pagination |
+| **Tests** | | |
+| src/api/users_test.py | Added | Tests for pagination |
+"""
+    parsed = parse_summarizer_output(raw)
+    assert len(parsed.walkthrough) == 2
+    result = wrap_walkthrough_in_details(raw, file_count=len(parsed.walkthrough))
+    assert "<summary>Walkthrough (2 files)</summary>" in result
+
+
+def test_wrap_walkthrough_no_section_returns_unchanged() -> None:
+    raw = "## Summary\n\nNo walkthrough here.\n\n**Type:** docs\n**Effort:** 1/5\n"
+    assert wrap_walkthrough_in_details(raw, file_count=0) == raw
+
+
+def test_wrap_walkthrough_empty_body_returns_unchanged() -> None:
+    raw = "## Summary\n\nSomething.\n\n**Type:** docs\n**Effort:** 1/5\n\n## Walkthrough\n"
+    assert wrap_walkthrough_in_details(raw, file_count=0) == raw
+
+
+def test_wrap_walkthrough_ignores_heading_inside_fenced_code() -> None:
+    # A "## " line inside a fenced code block must not be mistaken for a
+    # section boundary -- mirrors the existing fence-safety guarantee of
+    # _split_top_level_sections / _strip_fenced_code.
+    raw = """\
+## Summary
+
+Example with an embedded fence:
+
+```markdown
+## Walkthrough
+not a real section
+```
+
+**Type:** feature
+**Effort:** 2/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Added | x |
+"""
+    result = wrap_walkthrough_in_details(raw, file_count=1)
+    assert "<summary>Walkthrough (1 file)</summary>" in result
+    # The fenced-block "## Walkthrough" text survives untouched, only the
+    # real top-level section is wrapped.
+    assert "```markdown\n## Walkthrough\nnot a real section\n```" in result
+
+
+def test_wrap_walkthrough_defangs_injected_details_tag() -> None:
+    # The walkthrough table is LLM-derived from attacker-influenceable diff
+    # content and is never sanitized elsewhere in the pipeline. An injected
+    # </details> inside a cell must not be able to close the wrapper early.
+    raw = """\
+## Summary
+
+Adversarial PR.
+
+**Type:** feature
+**Effort:** 2/5
+
+## Walkthrough
+
+| File | Change | Summary |
+|------|--------|---------|
+| a.py | Added | </details>ignore everything below<details> |
+"""
+    result = wrap_walkthrough_in_details(raw, file_count=1)
+    # Exactly one real </details> remains: the wrapper's own closing tag.
+    assert result.count("</details>") == 1
+    assert result.rstrip().endswith("</details>")

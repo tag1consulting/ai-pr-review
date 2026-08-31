@@ -184,6 +184,17 @@ def format_body_finding(
     return out
 
 
+# Opening lines of the token-usage accordion built by
+# `review.reporting.build_token_table_accordion`. Anchoring on this exact
+# two-line prefix (rather than the bare `<details>` tag) lets a provider
+# find *its own* token table unambiguously even when other `<details>`
+# blocks (e.g. a collapsed Walkthrough section) appear earlier in the same
+# body -- see the GitLab summary-note upsert in vcs/gitlab.py, which used to
+# truncate at the first `<details>` anywhere in the body (issue found while
+# adding the Walkthrough accordion).
+TOKEN_TABLE_OPEN_MARKER: Final[str] = "<details>\n<summary>Token usage by agent</summary>"
+
+
 def truncate_body(body: str, limit: int = GITHUB_MAX_BODY_SIZE) -> str:
     """Truncate body at byte boundary, append marker. UTF-8 safe.
 

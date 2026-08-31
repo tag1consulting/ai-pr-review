@@ -110,11 +110,9 @@ def build_token_table_accordion(
         )
         return ""
 
-    return (
-        "<details>\n<summary>Token usage by agent</summary>\n\n"
-        + table
-        + "\n</details>"
-    )
+    from ai_pr_review.vcs._body import TOKEN_TABLE_OPEN_MARKER
+
+    return TOKEN_TABLE_OPEN_MARKER + "\n\n" + table + "\n</details>"
 
 
 def write_step_summary(

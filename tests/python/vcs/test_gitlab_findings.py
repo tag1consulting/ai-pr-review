@@ -295,6 +295,55 @@ def test_post_findings_token_table_strips_old_accordion() -> None:
     assert "new" in new_body
 
 
+def test_post_findings_token_table_preserves_collapsed_walkthrough() -> None:
+    """A <details>-wrapped Walkthrough accordion earlier in the summary note
+    must survive a token-table append.
+
+    Regression guard: appending the token table used to truncate the summary
+    note body at the first bare "<details>" found anywhere in it, to avoid
+    doubling a *previous run's* token-table accordion. With a collapsed
+    Walkthrough section (also a <details> block) appearing before the token
+    table, that heuristic matched the Walkthrough's opening tag instead and
+    silently deleted the walkthrough -- and everything after it -- on every
+    token-table append. The fix anchors on the token table's own opening
+    marker instead of the bare tag.
+    """
+    import json
+
+    walkthrough = (
+        "<details>\n<summary>Walkthrough (2 files)</summary>\n\n"
+        "| File | Change | Summary |\n|------|--------|---------|\n"
+        "| a.py | Added | x |\n| b.py | Modified | y |\n</details>"
+    )
+    stored = f"{_SUMMARY_MARKER}\n## PR Summary\n\n{walkthrough}"
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": stored}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    token_table = "<details>\n<summary>Token usage by agent</summary>\n\ncost table\n</details>"
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        token_table=token_table,
+    )
+
+    assert put_bodies, "PUT must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "Walkthrough (2 files)" in new_body, "walkthrough must survive the token-table append"
+    assert "a.py" in new_body and "b.py" in new_body
+    assert token_table in new_body
+
+
 def test_post_findings_token_table_no_summary_note_skips_put() -> None:
     """When no summary note exists, no PUT is issued."""
     put_calls: list[str] = []
