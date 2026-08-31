@@ -223,6 +223,7 @@ jobs:
   #   /ai-pr-review help       — post the command list as a reply
   #   /ai-pr-review false-positive [F<n>] [reason]  — record a false-positive verdict
   #   /ai-pr-review wont-fix [F<n>] [reason]        — record a "won't fix" verdict
+  #   /ai-pr-review fixed [F<n>] [sha]              — mark a finding fixed (no learning-loop write, no auto-approve)
   #   /ai-pr-review feedback <text>                 — store free-form feedback
   slash-commands:
     if: >-
