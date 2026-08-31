@@ -46,6 +46,7 @@ PRs are not available on GitLab MRs.
 | `/ai-pr-review review-full` | Set `AI_REVIEW_MODE=full` as a CI/CD variable (persists for all future runs until changed back). |
 | `/ai-pr-review skip` | Add `[skip ci]` to a commit message, or set a CI/CD variable `SKIP_AI_REVIEW=true` and add a `rules:` condition to the pipeline job. |
 | `/ai-pr-review dismiss` | Resolve individual discussion threads manually in the GitLab UI. |
+| `/ai-pr-review fixed` | Resolve the discussion thread manually in the GitLab UI once the fix is committed; there's no equivalent for citing the fixing commit. |
 
 For more advanced automation, GitLab supports
 [pipeline triggers via API](https://docs.gitlab.com/ee/ci/triggers/) and

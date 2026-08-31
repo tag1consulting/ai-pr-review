@@ -609,6 +609,100 @@ def test_approve_allowed_defaults_false_no_approval(monkeypatch) -> None:
     assert "approved" not in result.stdout
 
 
+# ---------------------------------------------------------------------------
+# "fixed" command: never auto-approves, echoes the commit SHA bare
+# ---------------------------------------------------------------------------
+
+
+def test_fixed_never_approves_even_with_approve_allowed_true(monkeypatch) -> None:
+    """Regression guard for the central design decision behind `fixed`: it
+    must never trigger the PR-wide auto-approve escalation, even when the
+    calling workflow passes --approve-allowed true (as it would for an
+    OWNER/MEMBER actor on dismiss/false-positive/wont-fix). A `fixed` claim
+    is not a maintainer verdict on the finding -- approval should come from
+    the next review cycle re-running against the new commit, not from this
+    command. This is the same fixture as
+    test_approve_allowed_flag_triggers_pr_approval, with only the command
+    changed, to prove the CLI-level override (not just a default) is what's
+    doing the work."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200, json=[{"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}}]
+            )
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError("fixed must never submit an APPROVE review")
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, _base_args(55, review_id=41, command="fixed") + ["--approve-allowed", "true"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "the PR has been approved" not in result.stdout
+    # The asymmetry (unlike dismiss/false-positive/wont-fix, fixed doesn't
+    # auto-approve) is stated explicitly rather than left for the reader to infer.
+    assert "not auto-approved" in result.stdout
+
+
+def test_fixed_echoes_bare_commit_sha_in_reply(monkeypatch) -> None:
+    """The optional commit SHA is parsed from --comment-body (not a separate
+    flag -- see cli.py's dismiss-inline docstring) and echoed bare (no
+    backticks) so GitHub auto-links it to the commit."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, command="fixed")
+        + ["--comment-body", "/ai-pr-review fixed abc1234def fixed in the refactor"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "abc1234def" in result.stdout
+    assert "`abc1234def`" not in result.stdout  # bare, not a code span -- must autolink
+
+
 def test_approve_allowed_explicit_false_string_env_var_no_approval(monkeypatch) -> None:
     """The workflow passes SLASH_APPROVE_ALLOWED as the literal string
     "false" for a COLLABORATOR-level actor (GitHub Actions' `contains(...)`

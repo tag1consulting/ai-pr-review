@@ -237,6 +237,27 @@ def _not_found_reply(actor: str, finding_id: int, had_errors: bool) -> str:
     return f"@{actor} could not find finding **F{finding_id}** on this pull request."
 
 
+# "fixed" reply wording — see SlashCommand.is_feedback_command's docstring for
+# why "fixed" is neither a feedback-store verdict nor auto-approving, unlike
+# dismiss/false-positive/wont-fix.
+_FIXED_NO_APPROVE_NOTE = (
+    " The review will re-run on the new commit, so findings are not "
+    "auto-approved for a `fixed` claim."
+)
+
+
+def _sha_citation(commit_sha: str) -> str:
+    """Render " in <sha>" for the reply, or "" if no SHA was supplied.
+
+    Emitted bare (no backticks/code-span) so GitHub auto-links the SHA to its
+    commit. The SHA is never validated against the repo -- an unknown or
+    mistyped SHA simply renders as plain text; it plays no role in thread
+    resolution or dismissal, both of which are driven by the finding ID or
+    comment ID alone.
+    """
+    return f" in {commit_sha}" if commit_sha else ""
+
+
 def _dismiss_if_all_resolved(
     provider: GitHubProvider,
     threads: Sequence[dict[str, Any]],
@@ -449,14 +470,17 @@ def dismiss_by_finding_id(
     actor: str,
     command: str,
     approve_allowed: bool = False,
+    commit_sha: str = "",
 ) -> DismissResult:
-    """Handle `/ai-pr-review dismiss|false-positive|wont-fix F<n>` from a
-    top-level PR comment (no parent review comment to reply to).
+    """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed F<n>` from
+    a top-level PR comment (no parent review comment to reply to).
 
     BODY findings: no thread to resolve or review to dismiss (there is no
-    single GraphQL thread backing a body-level finding); the caller is
-    expected to record a feedback-store entry so the finding is suppressed on
-    the next re-run.
+    single GraphQL thread backing a body-level finding). For
+    dismiss/false-positive/wont-fix, the caller is expected to record a
+    feedback-store entry so the finding is suppressed on the next re-run; for
+    `fixed` the caller must NOT do this (see SlashCommand.is_feedback_command)
+    and the reply below says so honestly rather than claiming suppression.
 
     INLINE findings: resolve the thread carrying `**[F<n>]**` gated by our own
     inline marker (never touch another bot's or human's thread), then dismiss
@@ -464,7 +488,15 @@ def dismiss_by_finding_id(
     When `approve_allowed` (issue #590's tighter trust gate, decided by the
     caller from the actor's author association), also checks whether this
     resolution cleared the *last* active finding PR-wide across all bot
-    CHANGES_REQUESTED reviews, and if so submits a fresh APPROVE review.
+    CHANGES_REQUESTED reviews, and if so submits a fresh APPROVE review. The
+    caller must pass `approve_allowed=False` unconditionally for `command=
+    "fixed"` -- a fix claim is not a maintainer verdict and should not trigger
+    auto-approval; see cli.py's `dismiss`/`dismiss-inline` commands, which
+    enforce this override regardless of the actor's association.
+
+    `commit_sha` (only meaningful for `command="fixed"`) is echoed bare in
+    the reply so GitHub auto-links it to the commit; it is never validated
+    against the repo and plays no role in resolution or dismissal.
 
     UNKNOWN: no action, reply says so.
     """
@@ -489,6 +521,23 @@ def dismiss_by_finding_id(
 
     if classified.location is FindingLocation.BODY:
         errors.extend(provider._errors[errors_before:])
+        if command == "fixed":
+            # No thread exists for a body-level finding, and "fixed" must
+            # never write a feedback-store entry (it isn't a verdict on
+            # whether the finding was valid) -- so there's nothing to
+            # resolve, dismiss, or record. feedback_source/file/rule_id are
+            # deliberately left empty so cli.py's is_body_finding check
+            # doesn't route this into the feedback-store persistence path.
+            return DismissResult(
+                reply=(
+                    f"@{actor} marked **F{finding_id}** as `fixed`"
+                    f"{_sha_citation(commit_sha)}. There is no review thread for a "
+                    "body-level finding to resolve; it will be re-evaluated on the "
+                    "next review run."
+                ),
+                active_body_ids=tuple(list_active_body_ids(bodies)),
+                errors=tuple(errors),
+            )
         return DismissResult(
             reply=(
                 f"@{actor} marked **F{finding_id}** as `{command}`. "
@@ -584,15 +633,24 @@ def dismiss_by_finding_id(
             errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
+    sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
     if resolved and pr_approved:
         reply = (
-            f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread; "
-            "all findings are now resolved, so the PR has been approved."
+            f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation} and resolved "
+            "the thread; all findings are now resolved, so the PR has been approved."
         )
     elif resolved:
-        reply = f"@{actor} marked **F{finding_id}** as `{command}` and resolved the thread."
+        reply = (
+            f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation} "
+            "and resolved the thread."
+        )
+        if command == "fixed":
+            reply += _FIXED_NO_APPROVE_NOTE
     else:
-        reply = f"@{actor} marked **F{finding_id}** as `{command}`, but could not resolve the thread; see errors."
+        reply = (
+            f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation}, "
+            "but could not resolve the thread; see errors."
+        )
     return DismissResult(
         reply=reply,
         thread_resolved=resolved,
@@ -754,9 +812,10 @@ def dismiss_inline_reply(
     actor: str,
     command: str,
     approve_allowed: bool = False,
+    commit_sha: str = "",
 ) -> DismissResult:
-    """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a
-    reply to an inline review comment (`pull_request_review_comment` event).
+    """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed` posted as
+    a reply to an inline review comment (`pull_request_review_comment` event).
 
     The review targeted for dismissal is the one owning the resolved thread
     (`pullRequestReview.databaseId` of that thread's first comment) — this
@@ -769,6 +828,13 @@ def dismiss_inline_reply(
     CHANGES_REQUESTED review on the PR, a fresh APPROVE review is submitted
     after dismissing the now-clear review(s). This scope is intentionally
     wider than the per-review dismiss above — see `_approve_if_pr_fully_resolved`.
+    The caller must pass `approve_allowed=False` unconditionally for
+    `command="fixed"` — a fix claim is not a maintainer verdict; see cli.py's
+    `dismiss-inline` command, which enforces this override.
+
+    `commit_sha` (only meaningful for `command="fixed"`) is echoed bare in
+    the reply so GitHub auto-links it to the commit; it is never validated
+    against the repo and plays no role in resolution or dismissal.
     """
     errors_before = len(provider._errors)
     errors: list[str] = []
@@ -844,15 +910,21 @@ def dismiss_inline_reply(
             errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
+    sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
     if resolved and pr_approved:
         reply = (
-            f"@{actor} marked as `{command}` and resolved the thread; "
+            f"@{actor} marked as `{command}`{sha_citation} and resolved the thread; "
             "all findings are now resolved, so the PR has been approved."
         )
     elif resolved:
-        reply = f"@{actor} marked as `{command}` and resolved the thread."
+        reply = f"@{actor} marked as `{command}`{sha_citation} and resolved the thread."
+        if command == "fixed":
+            reply += _FIXED_NO_APPROVE_NOTE
     else:
-        reply = f"@{actor} marked as `{command}`, but could not resolve the thread; see errors."
+        reply = (
+            f"@{actor} marked as `{command}`{sha_citation}, "
+            "but could not resolve the thread; see errors."
+        )
     return DismissResult(
         reply=reply,
         thread_resolved=resolved,

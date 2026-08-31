@@ -41,7 +41,7 @@ jobs:
 That's it — reviews start firing on the next PR.
 
 **Going further:**
-- [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`) — now built into the unified `pr-review.yml` template, no separate file needed
+- [Slash commands](#slash-commands) — `/ai-pr-review rescan`, `review-full`, `dismiss`, `fixed`, and learning-loop commands (`false-positive`, `wont-fix`, `feedback`) — now built into the unified `pr-review.yml` template, no separate file needed
 - [Opt-in capabilities](#opt-in-capabilities) — tree-sitter symbol-context enrichment (default on in the container image), SARIF 2.1.0 ingestion (CodeQL/Semgrep/Trivy), and the learning loop.
 - [Installation](#installation) — full-mode agents, provider configuration, [`examples/workflows/pr-review.yml`](examples/workflows/pr-review.yml) for the complete repo-variable pattern used by internal consumers
 
@@ -222,6 +222,7 @@ Once `ai-pr-review.yml` is merged to your default branch, users with write acces
 | `/ai-pr-review dismiss [F<n>]` | Mark a finding a false positive. Reply on the inline comment thread, **or** post `dismiss F<n>` as a top-level comment using the `[F<n>]` ID shown on either an inline or body-level finding. Either way the matching inline thread is resolved, and the `CHANGES_REQUESTED` review is dismissed once every thread is resolved. If that clears the last active finding PR-wide and the actor is OWNER/MEMBER, the PR is also approved — see [Auto-approve on clear](docs/slash-commands.md#auto-approve-on-clear). |
 | `/ai-pr-review false-positive [reason]` | Persist a false-positive verdict. Post as a reply on the AI's inline finding (recommended — resolves the thread and dismisses the owning review on success, same mechanics as `dismiss`) **or** as a top-level PR comment. Requires `enable-feedback-loop: 'true'`. OWNER/MEMBER only. |
 | `/ai-pr-review wont-fix [reason]` | Persist a "won't fix / by design" verdict. Same posting rules and dismissal mechanics as `false-positive` (review-thread reply preferred). |
+| `/ai-pr-review fixed [F<n>] [sha]` | Mark a finding as fixed in code — the opposite claim from `dismiss`/`false-positive`/`wont-fix`. Same resolution/dismissal mechanics as `dismiss`, but never triggers the auto-approve escalation (a fix claim isn't a verified fix) and never writes to the feedback store (it isn't a verdict the finding was wrong). The optional commit SHA is echoed bare in the reply so GitHub auto-links it; it's never validated. |
 | `/ai-pr-review feedback <text>` | Persist free-form feedback for future review runs to consider. |
 | `/ai-pr-review explain` | Ask the agent for a longer explanation (stub for now — replies with a canned message). |
 | `/ai-pr-review revise <hint>` | Ask the agent to revise its verdict with a hint (stub for now). |
