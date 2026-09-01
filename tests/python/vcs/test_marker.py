@@ -13,7 +13,9 @@ from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
     append_skip_marker,
+    build_id_map_marker,
     build_summary_marker,
+    extract_id_map,
     extract_summary_sha,
     has_inline_marker,
     has_skip_marker,
@@ -400,3 +402,78 @@ def test_append_skip_marker_defaults_unchanged() -> None:
     result = append_skip_marker("skipped")
     assert INLINE_MARKER in result
     assert SKIP_MARKER in result
+
+
+# ---------------------------------------------------------------------------
+# build_id_map_marker / extract_id_map — default (GitHub/GitLab) form
+# ---------------------------------------------------------------------------
+
+
+def test_build_id_map_marker_default_is_html_comment() -> None:
+    """hidden=False (the default, unchanged for GitHub/GitLab) still emits
+    the raw HTML comment -- this must not regress when hidden=True is added
+    for Bitbucket."""
+    marker = build_id_map_marker({"a|b.py|1|deadbeef1234": 1})
+    assert marker.startswith("<!-- ai-pr-review-id-map: ")
+    assert marker.endswith(" -->")
+    assert extract_id_map(marker) == {"a|b.py|1|deadbeef1234": 1}
+
+
+def test_extract_id_map_no_marker_returns_empty() -> None:
+    assert extract_id_map("no marker here") == {}
+
+
+def test_extract_id_map_corrupt_html_comment_returns_empty() -> None:
+    assert extract_id_map("<!-- ai-pr-review-id-map: {not json} -->") == {}
+
+
+# ---------------------------------------------------------------------------
+# build_id_map_marker / extract_id_map — hidden form (Bitbucket, #<issue>)
+# ---------------------------------------------------------------------------
+
+
+def test_build_id_map_marker_hidden_is_reference_link_form() -> None:
+    marker = build_id_map_marker({"a|b.py|1|deadbeef1234": 1}, hidden=True)
+    assert marker.startswith("[//]: # (ai-pr-review-id-map:")
+    assert marker.endswith(")")
+    # No raw HTML comment syntax at all -- Bitbucket's renderer would show it
+    # as literal text (#699).
+    assert "<!--" not in marker
+
+
+def test_id_map_marker_hidden_round_trips() -> None:
+    id_map = {"code-reviewer|src/app.py|42|abc123def456": 1, "phpcs|b.py|9|111122223333": 2}
+    marker = build_id_map_marker(id_map, hidden=True)
+    assert extract_id_map(marker) == id_map
+
+
+def test_id_map_marker_hidden_survives_a_path_containing_parens() -> None:
+    """The whole reason for base64-encoding the hidden form: a fingerprint
+    embeds the finding's file path verbatim, and a path containing `)` would
+    otherwise prematurely close the `[//]: # (...)` reference-link
+    definition, corrupting the marker and leaking JSON into the visible
+    comment."""
+    id_map = {"code-reviewer|src/utils (copy).py|3|abc123def456": 7}
+    marker = build_id_map_marker(id_map, hidden=True)
+    # Exactly one closing paren -- the one that closes the link definition
+    # itself, not one smuggled in from the payload.
+    assert marker.count(")") == 1
+    assert extract_id_map(marker) == id_map
+
+
+def test_extract_id_map_hidden_corrupt_base64_returns_empty() -> None:
+    assert extract_id_map("[//]: # (ai-pr-review-id-map:not-valid-base64!!!)") == {}
+
+
+def test_extract_id_map_prefers_html_comment_over_hidden_form() -> None:
+    """If a body somehow carries both forms (shouldn't happen in practice,
+    since a given provider always emits exactly one), the plain HTML-comment
+    form takes priority -- matching the order the two regexes are tried."""
+    html_map = {"x|y.py|1|aaaaaaaaaaaa": 1}
+    hidden_map = {"x|y.py|1|bbbbbbbbbbbb": 2}
+    body = (
+        build_id_map_marker(html_map)
+        + "\n"
+        + build_id_map_marker(hidden_map, hidden=True)
+    )
+    assert extract_id_map(body) == html_map

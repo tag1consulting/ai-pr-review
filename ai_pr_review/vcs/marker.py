@@ -11,6 +11,7 @@ are still recognized by the Python engine.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -116,35 +117,73 @@ _ID_MAP_MARKER_RE = re.compile(
     r"<!-- ai-pr-review-id-map: (\{[^}]*\}) -->"
 )
 
+# Bitbucket-only hidden form (#699: Bitbucket's renderer shows raw `<!-- -->`
+# comments as literal text instead of hiding them). The payload is base64
+# rather than raw JSON: a fingerprint embeds the finding's file path
+# verbatim (`_finding_ids.fingerprint`), and a path containing `)` would
+# otherwise prematurely close the `[//]: # (...)` reference-link definition,
+# corrupting the marker and leaking JSON fragments into the visible comment.
+ID_MAP_MARKER_HIDDEN_PREFIX: Final[str] = "[//]: # (ai-pr-review-id-map:"
+_ID_MAP_MARKER_HIDDEN_RE = re.compile(
+    r"\[//\]:[ \t]*#[ \t]*\(ai-pr-review-id-map:([A-Za-z0-9+/=]+)\)"
+)
 
-def build_id_map_marker(id_map: dict[str, int]) -> str:
-    """Produce a hidden HTML comment embedding the finding ID map.
 
-    The marker is machine-readable and invisible to users.  It is embedded
-    in the review body so the ID map can be reconstructed from a single
-    REST call to list reviews — no per-thread fetching required.
+def build_id_map_marker(id_map: dict[str, int], *, hidden: bool = False) -> str:
+    """Produce a marker embedding the finding ID map.
 
-    Format: ``<!-- ai-pr-review-id-map: {"<fingerprint>": <id>, ...} -->``
+    The marker is machine-readable and (in the default form) invisible to
+    users.  It is embedded in the review body so the ID map can be
+    reconstructed from a single REST call to list reviews — no per-thread
+    fetching required.
+
+    Default format: ``<!-- ai-pr-review-id-map: {"<fingerprint>": <id>, ...} -->``
+
+    Pass ``hidden=True`` (Bitbucket) to emit the reference-link-definition
+    form instead, with the JSON payload base64-encoded (see module-level note
+    above for why raw JSON isn't safe to embed there).
     """
     payload = json.dumps(id_map, separators=(",", ":"), sort_keys=True)
+    if hidden:
+        encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        return f"{ID_MAP_MARKER_HIDDEN_PREFIX}{encoded})"
     return f"<!-- ai-pr-review-id-map: {payload} -->"
 
 
 def extract_id_map(body: str) -> dict[str, int]:
     """Extract the finding ID map from a review body.
 
-    Returns an empty dict when no marker is present. Logs a warning and
-    returns an empty dict when a marker is present but the JSON is malformed,
-    so callers can distinguish "no marker" from "corrupt marker" via the log.
+    Checks both marker forms (default HTML-comment, and the Bitbucket-only
+    hidden/base64 form — see ``build_id_map_marker``). Returns an empty dict
+    when no marker is present. Logs a warning and returns an empty dict when
+    a marker is present but its payload is unparseable, so callers can
+    distinguish "no marker" from "corrupt marker" via the log.
 
     Accepts both integer and whole-number float JSON values (e.g. ``1.0``)
     to tolerate serializer rounding.
     """
+    payload_raw: str | None = None
     match = _ID_MAP_MARKER_RE.search(body)
-    if not match:
+    if match:
+        payload_raw = match.group(1)
+    else:
+        hidden_match = _ID_MAP_MARKER_HIDDEN_RE.search(body)
+        if hidden_match:
+            try:
+                payload_raw = base64.b64decode(
+                    hidden_match.group(1), validate=True
+                ).decode("utf-8")
+            except (ValueError, UnicodeDecodeError) as exc:
+                _log.warning(
+                    "ai-pr-review: hidden id-map marker present but "
+                    "undecodable: %s", exc,
+                )
+                return {}
+
+    if payload_raw is None:
         return {}
     try:
-        data = json.loads(match.group(1))
+        data = json.loads(payload_raw)
         if isinstance(data, dict):
             result: dict[str, int] = {}
             for k, v in data.items():
@@ -157,7 +196,7 @@ def extract_id_map(body: str) -> dict[str, int]:
         _log.warning(
             "ai-pr-review: id-map marker present but unparseable: %s — raw: %.200s",
             exc,
-            match.group(1),
+            payload_raw,
         )
     return {}
 

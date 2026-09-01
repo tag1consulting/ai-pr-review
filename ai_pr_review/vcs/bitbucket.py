@@ -18,14 +18,16 @@ Provider differences from GitHub/GitLab:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
+from urllib.parse import quote
 
 import httpx
 
-from ai_pr_review.findings.models import Finding
+from ai_pr_review.findings.models import Finding, Severity
 from ai_pr_review.vcs._body import (
     compute_headline,
     format_body_finding,
@@ -33,6 +35,7 @@ from ai_pr_review.vcs._body import (
     severity_icon,
     truncate_body,
 )
+from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
@@ -40,9 +43,12 @@ from ai_pr_review.vcs.marker import (
     SKIP_MARKER_HIDDEN,
     SUMMARY_MARKER_HIDDEN_PREFIX,
     SUMMARY_MARKER_PREFIX,
+    _hidden_marker_separator,
     append_inline_marker,
     append_skip_marker,
+    build_id_map_marker,
     build_summary_marker,
+    extract_id_map,
     extract_summary_sha,
     has_skip_marker,
     replace_summary_sha,
@@ -55,7 +61,20 @@ from ai_pr_review.vcs.protocol import (
     SummaryResult,
 )
 
+_log = logging.getLogger(__name__)
+
 _MAX_BITBUCKET_BODY_SIZE: Final[int] = 32_000
+# Mirrors github.py's floor: never let the id-map marker crowd the visible
+# body down to nothing -- if it would, drop the marker for this cycle instead
+# (F-ID stability degrades gracefully rather than the review going blank).
+_MIN_BODY_BYTES: Final[int] = 4_096
+
+_SEVERITY_RANK: Final[dict[Severity, int]] = {
+    "Critical": 0,
+    "High": 1,
+    "Medium": 2,
+    "Low": 3,
+}
 
 
 @dataclass(frozen=True)
@@ -216,6 +235,16 @@ class BitbucketProvider:
         keep_id = int(keep["id"])
         existing_body = _comment_body(keep)
 
+        # Stable F-IDs and a "new since last review" signal, mirroring
+        # GitHub's assemble_id_map/fingerprint machinery -- Bitbucket already
+        # fetched existing_body above, so it's reused directly as the sole
+        # prior body rather than issuing a second lookup via
+        # get_summary_body() (same data, one fewer HTTP round-trip).
+        prior_id_map = extract_id_map(existing_body) if existing_body else {}
+        id_map = assemble_id_map(
+            [existing_body] if existing_body else [], list(findings)
+        )
+
         body = _render_combined_body(
             existing_body=existing_body,
             findings=findings,
@@ -223,11 +252,67 @@ class BitbucketProvider:
             failed_agents=failed_agents,
             token_table=token_table,
             agent_prompt=agent_prompt,
+            id_map=id_map,
+            prior_id_map=prior_id_map,
+            workspace=self.config.workspace,
+            repo_slug=self.config.repo_slug,
+            head_sha=diff.head_sha,
         )
+
+        # Embed the ID map as a hidden marker so the next run (and the
+        # dismiss workflow, once Bitbucket gets one) can reconstruct
+        # fingerprint -> F-ID associations without re-parsing rendered bullet
+        # text. Reserve its bytes before truncating -- same ordering as
+        # github.py's post_findings -- so a near-the-limit body doesn't
+        # silently drop the marker and renumber every F-ID next cycle.
+        id_map_marker = ""
+        try:
+            id_map_marker = build_id_map_marker(id_map, hidden=True)
+        except Exception as exc:  # noqa: BLE001
+            # Logged (not just appended to self._errors): orchestrate.py never
+            # reads this provider's _errors list for a normal review run (only
+            # slash/dismiss.py's command handlers do), and this failure must
+            # not set FindingsResult.error either -- the comment itself still
+            # posts fine below, just without F-ID stability for this cycle,
+            # and orchestrate.py gates watermark-advance/stale-cleanup on
+            # .ok/.error (#493) -- failing that gate over a cosmetic marker
+            # loss would force an unnecessary full re-diff next cycle, a worse
+            # outcome than the degraded F-IDs this is actually about. Mirrors
+            # github.py's identical failure-class handling.
+            _log.warning("bitbucket: failed to build id-map marker: %s", exc)
+            self._errors.append(f"post_findings: failed to build id-map marker: {exc}")
+        marker_bytes = len(id_map_marker.encode("utf-8")) if id_map_marker else 0
+        # +2, not +1: the separator that will actually be prepended below is
+        # `_hidden_marker_separator(body)`, and at this call site `body` (the
+        # freshly-appended INLINE_MARKER_HIDDEN form) never ends in a
+        # newline, so that separator is always the 2-byte "\n\n" -- never the
+        # 1-byte "\n" case that function also supports for other callers.
+        marker_reserve = marker_bytes + 2 if id_map_marker else 0
+        if id_map_marker and marker_reserve > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES:
+            _log.warning(
+                "bitbucket: id-map marker (%d bytes) too large to fit in "
+                "comment body for %s/%s PR #%s; omitting marker for this "
+                "cycle -- F-ID stability may degrade",
+                marker_bytes,
+                self.config.workspace, self.config.repo_slug, self.config.pr_id,
+            )
+            self._errors.append(
+                f"post_findings: id-map marker ({marker_bytes} bytes) too large "
+                "to fit in comment body; omitting for this cycle"
+            )
+            id_map_marker = ""
+            marker_reserve = 0
+        truncate_limit = max(0, _MAX_BITBUCKET_BODY_SIZE - marker_reserve)
         body = append_inline_marker(
-            truncate_body(body, limit=_MAX_BITBUCKET_BODY_SIZE),
+            truncate_body(body, limit=truncate_limit),
             marker=INLINE_MARKER_HIDDEN,
         )
+        if id_map_marker:
+            # `[//]: # (...)` cannot interrupt a paragraph per CommonMark
+            # (see marker.py's _hidden_marker_separator docstring) — a bare
+            # "\n" after the footer's italic line would risk it rendering as
+            # literal text on a stricter renderer than Bitbucket's own.
+            body += _hidden_marker_separator(body) + id_map_marker
 
         resp = self.client.request(
             "PUT", self._comment_url(keep_id), json_body={"content": {"raw": body}}
@@ -339,6 +424,26 @@ def _strip_details_wrapper(token_table_md: str) -> str:
     return f"**{heading}**\n\n{table}\n"
 
 
+def _blob_link(
+    *, workspace: str, repo_slug: str, head_sha: str, file: str, line: int | None
+) -> str:
+    """Build a Bitbucket Cloud source-browser URL, anchored to a line.
+
+    Per Atlassian's documented URI template (``src/{commitish}/{filepath}
+    #{fileline}``), the line-anchor segment is the file's *basename* plus the
+    line number, joined by a dash — NOT the full path (verified 2026-09-01
+    against https://support.atlassian.com/bitbucket-cloud/docs/hyperlink
+    -to-source-code-in-bitbucket/; a `#lines-N` scheme, closer to GitHub's,
+    would have silently produced a dead anchor).
+    """
+    quoted_path = "/".join(quote(seg) for seg in file.split("/"))
+    url = f"https://bitbucket.org/{workspace}/{repo_slug}/src/{head_sha}/{quoted_path}"
+    if line is not None:
+        basename = quote(file.rsplit("/", 1)[-1])
+        url += f"#{basename}-{line}"
+    return url
+
+
 def _render_combined_body(
     *,
     existing_body: str,
@@ -347,6 +452,11 @@ def _render_combined_body(
     failed_agents: Sequence[str],
     token_table: str,
     agent_prompt: str,
+    id_map: dict[str, int],
+    prior_id_map: dict[str, int],
+    workspace: str,
+    repo_slug: str,
+    head_sha: str,
 ) -> str:
     """Render the combined summary+findings body for Bitbucket.
 
@@ -362,10 +472,47 @@ def _render_combined_body(
     to already agree with classify_review_outcome (no exclusion bug) but
     over-counted analyzer out-of-diff findings relative to GitHub — this
     fix brings the two providers into agreement.
+
+    ``id_map``/``prior_id_map`` carry stable F-IDs and the "new since the
+    prior review" signal (see module docstring / decisions #17-18 in the
+    PR-comment-clutter plan): Bitbucket rebuilds the whole findings list on
+    every run rather than only notifying on genuinely-new ones the way
+    GitHub does, so findings are sorted new-first then by severity, and a
+    finding absent from ``prior_id_map`` is flagged inline. ``prior_id_map``
+    is empty both on a genuine first run and whenever no marker could be
+    parsed from ``existing_body`` — in either case nothing is flagged new,
+    since an all-new list on the very first render would carry no signal.
     """
     headline = compute_headline(findings, failed_agents)
     finding_total = headline.count
     risk = headline.risk
+
+    has_prior_id_map = bool(prior_id_map)
+
+    def _is_new(f: Finding) -> bool:
+        return has_prior_id_map and fingerprint(f) not in prior_id_map
+
+    sorted_findings = sorted(
+        findings,
+        key=lambda f: (0 if _is_new(f) else 1, _SEVERITY_RANK.get(f.severity, 99)),
+    )
+
+    def _render_bullet(f: Finding) -> str:
+        loc_note = ""
+        if f.file:
+            url = _blob_link(
+                workspace=workspace, repo_slug=repo_slug, head_sha=head_sha,
+                file=f.file, line=f.line,
+            )
+            loc_note = f" [↗]({url})"
+        bullet = format_body_finding(
+            f, location_note=loc_note, finding_id=id_map.get(fingerprint(f))
+        )
+        if _is_new(f):
+            # Prepend after the leading "- " so the line still opens with a
+            # valid Markdown list marker.
+            bullet = f"- 🆕 {bullet[2:]}"
+        return bullet
 
     # Heading + summary block.
     #
@@ -414,7 +561,7 @@ def _render_combined_body(
             "— findings below are pre-existing issues on unchanged lines."
         )
         findings_block = "### Findings (informational)\n" + join_findings(
-            format_body_finding(f) for f in findings
+            _render_bullet(f) for f in sorted_findings
         )
     elif event == "APPROVE":
         heading = "## AI Review: Approved"
@@ -425,7 +572,7 @@ def _render_combined_body(
             "findings are informational only."
         )
         findings_block = "### Findings (informational)\n" + join_findings(
-            format_body_finding(f) for f in findings
+            _render_bullet(f) for f in sorted_findings
         )
     elif finding_total == 0:
         # Reachable for event == "COMMENT" with a non-empty, all-out_of_diff
@@ -438,7 +585,7 @@ def _render_combined_body(
             "**Findings:** 0 in the diff"
         )
         findings_block = "### Findings\n" + join_findings(
-            format_body_finding(f) for f in findings
+            _render_bullet(f) for f in sorted_findings
         )
     else:
         heading = "## AI Review Findings"
@@ -447,38 +594,30 @@ def _render_combined_body(
             f"**Findings:** {finding_total}"
         )
         findings_block = "### Findings\n" + join_findings(
-            format_body_finding(f) for f in findings
+            _render_bullet(f) for f in sorted_findings
         )
 
-    # Preserve the marker line + the user-supplied summary text from the
-    # existing comment by stripping the heading-onward part. The marker line
-    # is the first line of the existing body; everything after it up to the
-    # bash-style "---" footer is the original summary.
+    # Preserve the marker line + the walkthrough/summary text from the
+    # existing comment. The marker line is always the first line of the
+    # existing body. `_extract_walkthrough` isolates only the true
+    # walkthrough content -- see its docstring for why a naive "everything
+    # after the heading" extraction re-nests the whole prior comment on
+    # every incremental run (the bug this fixes).
     head_lines = existing_body.split("\n", 1)
     marker_line = head_lines[0] if head_lines else ""
-    original_summary_text = ""
-    if len(head_lines) > 1:
-        rest = head_lines[1]
-        # Strip footer if present
-        if "\n---\n*AI Review" in rest:
-            rest = rest.split("\n---\n*AI Review", 1)[0]
-        original_summary_text = rest.strip()
+    original_summary_text = _extract_walkthrough(existing_body)
 
-    pr_summary_block = ""
-    if original_summary_text:
-        # Drop any prior "## AI Review*" heading so we don't duplicate it
-        lines = [
-            ln for ln in original_summary_text.split("\n") if not ln.startswith("## AI Review")
-        ]
-        original_summary_text = "\n".join(lines).strip()
-        if original_summary_text:
-            pr_summary_block = f"\n### Summary\n{original_summary_text}\n"
+    pr_summary_block = f"\n### Summary\n{original_summary_text}\n" if original_summary_text else ""
 
+    # Findings before the walkthrough: if the body is truncated at the byte
+    # limit, the actionable content survives and the walkthrough is what
+    # gets cut, not the other way around (findings used to sit after a
+    # potentially-large walkthrough table and could be silently guillotined).
     parts: list[str] = [marker_line, heading, "", summary_block]
-    if pr_summary_block:
-        parts.append(pr_summary_block)
     if findings_block:
         parts.append(findings_block)
+    if pr_summary_block:
+        parts.append(pr_summary_block)
     if token_table:
         parts.append(_strip_details_wrapper(token_table))
     if agent_prompt and findings:
@@ -488,6 +627,77 @@ def _render_combined_body(
         "[ai-pr-review](https://github.com/tag1consulting/ai-pr-review)*"
     )
     return "\n".join(parts)
+
+
+# Section-boundary needles `_extract_walkthrough` cuts the carried-forward
+# walkthrough text at. All four can legitimately follow the "### Summary"
+# heading in a body this function itself rendered: "### Findings" and
+# "### Findings (informational)" (findings_block; both variants start with
+# the shorter needle), the token table in either its Bitbucket-stripped bold
+# form or (defensively) the raw <details> form if _strip_details_wrapper ever
+# fails to match, and the agent-prompt <details> block (unused by any current
+# caller -- see ai_pr_review/vcs/protocol.py -- but cheap to guard against a
+# future one).
+_WALKTHROUGH_BOUNDARIES: Final[tuple[str, ...]] = (
+    "\n### Findings",
+    "\n**Token usage by agent**",
+    "\n<details>\n<summary>Token usage by agent</summary>",
+    "\n<details>\n<summary>🤖 Prompt for AI agents</summary>",
+)
+
+
+def _extract_walkthrough(existing_body: str) -> str:
+    """Return only the walkthrough/summary text carried forward from a prior
+    rendered comment, discarding findings, token table, and agent-prompt
+    content that may also be present.
+
+    On the very first cycle, `existing_body` was written by `post_summary`
+    alone and contains nothing but the marker line and the raw pr-summarizer
+    output (no "## AI Review" heading has ever been rendered yet) -- the
+    whole thing, footer-stripped, IS the walkthrough.
+
+    On every later cycle, `existing_body` is whatever `_render_combined_body`
+    rendered last time, which always carries a "## AI Review*" heading. If
+    that render also had a non-empty walkthrough, it lives under its own
+    "### Summary" heading (written by this same function, below); this
+    function must extract ONLY that subsection, stopping at whichever
+    section boundary comes next. Falling back to "everything after the
+    heading" here is exactly the bug this exists to prevent: on an
+    incremental run (pr-summarizer skipped, so `post_summary` is a no-op),
+    `existing_body` is the FULL prior render -- findings, token table, and
+    all -- and treating all of that as "the walkthrough" nests the entire
+    previous comment inside the new one, every push.
+    """
+    head_lines = existing_body.split("\n", 1)
+    if len(head_lines) < 2:
+        return ""
+    rest = head_lines[1]
+    if "\n---\n*AI Review" in rest:
+        rest = rest.split("\n---\n*AI Review", 1)[0]
+
+    if not rest.startswith("## AI Review"):
+        # Anchored to the start of `rest`, not "appears anywhere" -- a
+        # walkthrough carried forward from a genuine first run could contain
+        # an LLM-authored line that happens to start with "## AI Review"
+        # further down (steerable by the diff content it summarizes); only
+        # the very first line reliably indicates a prior post_findings
+        # render, since that heading is always what `_render_combined_body`
+        # writes immediately after the marker line.
+        return rest.strip()
+
+    if "\n### Summary\n" not in rest:
+        # A prior render exists but its walkthrough was empty -- propagate
+        # that emptiness rather than swallowing the findings/token-table
+        # content that actually follows the heading in this body.
+        return ""
+    rest = rest.split("\n### Summary\n", 1)[1]
+    cut = min(
+        (idx for idx in (rest.find(b) for b in _WALKTHROUGH_BOUNDARIES) if idx != -1),
+        default=-1,
+    )
+    if cut != -1:
+        rest = rest[:cut]
+    return rest.strip()
 
 
 # ---------------------------------------------------------------------------

@@ -73,10 +73,21 @@ _LOCATION_RE = re.compile(r"\*\(at `([^`]+)`")
 # locatable by `/ai-pr-review dismiss|false-positive|wont-fix F<n>`). Shared
 # here so the two scanners cannot drift out of sync again over a future
 # fourth heading.
+#
+# The bare "### Findings" heading covers Bitbucket's REQUEST_CHANGES/COMMENT
+# rendering (`vcs/bitbucket.py`'s `_render_combined_body`, most common case —
+# distinct from its own "### Findings (informational)" branch, already
+# covered above) and GitHub's degraded plain-comment fallback (`github.py`'s
+# `_render_fallback_body`, "### Findings (inline anchoring unavailable)").
+# Without it, this fallback scanner can never recover fingerprint -> F-ID
+# associations from either body shape when the machine-readable marker is
+# absent or corrupt, silently renumbering every F-ID from 1 on the next
+# render.
 BODY_SECTION_START_MARKERS: Final[tuple[str, ...]] = (
     "### Findings not attached to specific lines",
     "Out-of-diff analyzer findings",
     "### Findings (informational)",
+    "### Findings",
 )
 
 
