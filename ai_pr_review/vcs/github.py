@@ -820,6 +820,24 @@ class GitHubProvider:
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]
 
+    def update_review_body(self, review_id: int, body: str) -> tuple[bool, int, str]:
+        """PUT a new body onto an existing review. Returns (ok, status, body_snippet).
+
+        `PUT /pulls/{n}/reviews/{id}` can only ever change a review's body
+        text, never its `state`/event (confirmed against GitHub's REST docs
+        -- the only way to change state is the separate submit-events
+        endpoint, which does not accept a body). Thin primitive, same shape
+        as `dismiss_review`: no policy about *which* review to update or
+        *when* -- that belongs to the caller (the canonical-review reuse
+        path in `post_findings`).
+        """
+        resp = self.client.request(
+            "PUT",
+            self._review_url(review_id),
+            json_body={"body": body},
+        )
+        return resp.status_code < 400, resp.status_code, resp.text[:200]
+
     def get_review_state(self, review_id: int) -> str | None:
         """Fetch a single review's current `state` (e.g. `CHANGES_REQUESTED`,
         `DISMISSED`, `APPROVED`, `COMMENTED`).
