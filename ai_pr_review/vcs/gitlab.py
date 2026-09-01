@@ -25,6 +25,7 @@ import httpx
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import (
+    TOKEN_TABLE_OPEN_MARKER,
     format_source_tag,
     sanitize_display_text,
     severity_icon,
@@ -495,7 +496,12 @@ class GitLabProvider:
                 keep = existing_notes[0]
                 old_body = keep.get("body") or ""
                 # Avoid doubling if a previous run already appended the table.
-                details_idx = old_body.find("<details>")
+                # Anchor on the token table's own opening marker, not the bare
+                # `<details>` tag: a collapsed Walkthrough accordion can also
+                # appear in this body, and truncating at *its* `<details>`
+                # would silently delete the walkthrough (and everything after
+                # it) on every token-table append.
+                details_idx = old_body.find(TOKEN_TABLE_OPEN_MARKER)
                 base_body = old_body[:details_idx].rstrip() if details_idx != -1 else old_body.rstrip()
                 new_body = base_body + "\n\n" + token_table
                 try:

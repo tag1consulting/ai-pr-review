@@ -354,6 +354,71 @@ class TestScriptDir:
         assert captured[0].script_dir == expected
 
 
+class TestSummarizerCollapseWalkthroughGate:
+    """_run_summarizer's collapse_walkthrough kwarg must be provider-gated.
+
+    Bitbucket Cloud renders no HTML at all (issue #703), so a collapsed
+    <details> Walkthrough would leak as literal text and corrupt the summary
+    comment there. GitHub/GitLab render it fine.
+    """
+
+    def _make_provider_mock(self) -> MagicMock:
+        from ai_pr_review.vcs.protocol import VcsProvider
+
+        provider = MagicMock(spec=VcsProvider)
+        provider.get_last_reviewed_sha.return_value = None
+        return provider
+
+    def _fake_run_review_factory(self) -> AsyncMock:
+        async def _fake(**_kwargs: object) -> object:
+            result = MagicMock()
+            result.ok = True
+            result.skipped = False
+            result.findings = []
+            result.failed_agents = []
+            result.outcome = MagicMock()
+            result.outcome.event = "COMMENT"
+            result.judge_input_tokens = 0
+            result.judge_output_tokens = 0
+            result.judge_cache_creation_tokens = 0
+            result.judge_cache_read_tokens = 0
+            result.judge_model = ""
+            return result
+
+        return AsyncMock(side_effect=_fake)
+
+    def _run_and_capture_collapse_flag(self, *, vcs_provider: str) -> bool | None:
+        import anyio
+
+        summarizer_mock = AsyncMock(return_value="")
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch(
+                "ai_pr_review.review.runtime.provider_from_env",
+                return_value=self._make_provider_mock(),
+            ),
+            patch("ai_pr_review.orchestrate.run_review", new=self._fake_run_review_factory()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.agents.roster.AGENTS", []),
+            patch("ai_pr_review.cli._run_summarizer", new=summarizer_mock),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            anyio.run(_run_review_async, _make_config(vcs_provider=vcs_provider))
+
+        assert summarizer_mock.await_args is not None, "_run_summarizer was not called"
+        return summarizer_mock.await_args.kwargs.get("collapse_walkthrough")
+
+    def test_bitbucket_disables_collapse(self) -> None:
+        assert self._run_and_capture_collapse_flag(vcs_provider="bitbucket") is False
+
+    def test_github_enables_collapse(self) -> None:
+        assert self._run_and_capture_collapse_flag(vcs_provider="github") is True
+
+    def test_gitlab_enables_collapse(self) -> None:
+        assert self._run_and_capture_collapse_flag(vcs_provider="gitlab") is True
+
+
 class TestParseChangedFilesPayload:
     """parse_changed_files_payload normalisation and warning."""
 

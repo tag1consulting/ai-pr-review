@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from ai_pr_review.vcs._body import sanitize_display_text
+
 WalkthroughChange = Literal["Added", "Modified", "Deleted", "Renamed"]
 PRType = Literal["feature", "bugfix", "refactor", "docs", "config", "test", "mixed"]
 _VALID_CHANGES: frozenset[str] = frozenset({"Added", "Modified", "Deleted", "Renamed"})
@@ -338,3 +340,69 @@ def _parse_walkthrough(
             "walkthrough-rows-dropped",
         )
     return tuple(rows)
+
+
+# ---------------------------------------------------------------------------
+# Walkthrough collapse (GitHub/GitLab only -- see cli.py's provider gate)
+# ---------------------------------------------------------------------------
+
+def _find_section_span(raw: str, name: str) -> tuple[int, int] | None:
+    """Return the (start, end) char offsets of a top-level `## <name>` section.
+
+    The span runs from the start of the heading line through the character
+    before the next top-level heading, or through the end of `raw` if it's
+    the last section. Matching is done on a fenced-code-masked copy (via
+    `_strip_fenced_code`) so a `## ` line inside a code fence can't be
+    mistaken for a section boundary, but the returned offsets index into the
+    original `raw` string. Returns None if no section named `name` (matched
+    case-insensitively) is found.
+    """
+    masked = _strip_fenced_code(raw)
+    matches = list(_SECTION_HEADING.finditer(masked))
+    for idx, match in enumerate(matches):
+        if match.group("name").strip().lower() != name:
+            continue
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(raw)
+        return start, end
+    return None
+
+
+def wrap_walkthrough_in_details(markdown: str, *, file_count: int) -> str:
+    """Wrap the `## Walkthrough` section in a collapsed `<details>` accordion.
+
+    Applied as a deterministic post-process on the raw LLM output rather than
+    as a prompt instruction: LLM compliance emitting literal `<details>` tags
+    isn't guaranteed and would be unverifiable. Returns `markdown` unchanged
+    when no `## Walkthrough` heading is present (e.g. a `NONE` or degraded
+    summarizer response) or the section has no table content.
+
+    The `## Walkthrough` heading itself is dropped -- the accordion's
+    `<summary>` becomes the section label, matching the headingless style of
+    the existing token-usage accordion (`review/reporting.py`'s
+    `build_token_table_accordion`).
+
+    The walkthrough table is LLM-derived from attacker-influenceable diff
+    content (file paths, commit messages), and unlike finding/remediation
+    text it is never run through `sanitize_display_text` elsewhere in the
+    pipeline. An injected `</details>` inside a table cell could close the
+    wrapper early and push content out of the collapsed section, so the
+    table content is defanged with that same function before wrapping. This
+    is an integrity concern (hiding review content from a human reader), not
+    XSS -- the VCS renderers already strip scripts and event handlers.
+    """
+    span = _find_section_span(markdown, "walkthrough")
+    if span is None:
+        return markdown
+    start, end = span
+    _heading, _, rest = markdown[start:end].partition("\n")
+    table_body = sanitize_display_text(rest.strip())
+    if not table_body:
+        return markdown
+    plural = "" if file_count == 1 else "s"
+    trailer = "\n\n" if end < len(markdown) else "\n"
+    accordion = (
+        f"<details>\n<summary>Walkthrough ({file_count} file{plural})</summary>\n\n"
+        f"{table_body}\n</details>{trailer}"
+    )
+    return markdown[:start] + accordion + markdown[end:]

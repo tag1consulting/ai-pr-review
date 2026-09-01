@@ -32,6 +32,7 @@ async def run_summarizer(
     model: str,
     temperature: float = 0.3,
     llm_call: Callable[[LLMRequest], Awaitable[LLMResponse]],
+    collapse_walkthrough: bool = False,
 ) -> str:
     """Run the pr-summarizer agent and return its formatted markdown output.
 
@@ -39,7 +40,14 @@ async def run_summarizer(
     walkthrough table) rather than SummarizerOutput.summary_md, because
     summary_md contains only the text before the **Type:** line — returning it
     alone would drop the walkthrough table.
-    parse_summarizer_output() is called for validation only (not to reformat).
+    parse_summarizer_output() is called for validation (and, when
+    collapse_walkthrough is set, to get the file count for free — its
+    typed WalkthroughRow tuple is otherwise discarded).
+
+    collapse_walkthrough: when True, wraps the `## Walkthrough` section in a
+    collapsed `<details>` accordion via `wrap_walkthrough_in_details`. Callers
+    must gate this on the VCS provider — Bitbucket Cloud renders no HTML at
+    all (issue #703), so it must stay False there. See cli.py's provider gate.
 
     Fail-soft: on any error logs a WARNING and returns _SUMMARIZER_FAILURE_NOTICE
     so the PR comment communicates the partial failure rather than silently
@@ -51,6 +59,7 @@ async def run_summarizer(
         build_summarizer_system_prompt,
         build_summarizer_user_message,
         parse_summarizer_output,
+        wrap_walkthrough_in_details,
     )
     from ai_pr_review.llm.base import LLMRequest
 
@@ -91,7 +100,11 @@ async def run_summarizer(
         )
         response: LLMResponse = await llm_call(request)
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
-        parse_summarizer_output(response.text)
+        parsed = parse_summarizer_output(response.text)
+        if collapse_walkthrough:
+            return wrap_walkthrough_in_details(
+                response.text, file_count=len(parsed.walkthrough)
+            )
         return response.text
     except Exception as exc:
         logger.warning(
