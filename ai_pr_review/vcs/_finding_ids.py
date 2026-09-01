@@ -206,6 +206,33 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
     return fp_to_id
 
 
+def fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | None:
+    """Reverse-lookup a stable F<n> ID to its fingerprint.
+
+    Reuses `_parse_existing_ids` (the same authoritative fingerprint -> ID
+    parser `assemble_id_map` itself is built on) rather than re-deriving a
+    fingerprint -> ID map independently, so this can never disagree with
+    what `assemble_id_map` would compute from the same bodies. IDs are
+    permanent once assigned (`assemble_id_map` never reassigns one), so any
+    body recent enough to have seen this finding carries the mapping -- no
+    need to specifically target the canonical review's body. Returns `None`
+    if the ID was never assigned an entry the fast (marker) or fallback
+    (bullet-scan) path can recover -- most commonly a legacy pre-marker
+    review whose inline findings were never in bullet form to begin with.
+
+    Factored out of `ai_pr_review.slash.dismiss._fingerprint_for_finding_id`
+    (which now delegates here) so `ai_pr_review.vcs._canonical` can reuse the
+    same reverse lookup for legacy inline-thread fallback without importing
+    from `ai_pr_review.slash.dismiss` (which imports `vcs.github`, and
+    `vcs.github` needs to import `vcs._canonical` -- importing the other way
+    would create a cycle).
+    """
+    for fp, fid in _parse_existing_ids(bodies).items():
+        if fid == finding_id:
+            return fp
+    return None
+
+
 def assemble_id_map(
     prior_bodies: Sequence[str],
     current_findings: Sequence[Finding],

@@ -30,7 +30,7 @@ from ai_pr_review.vcs._finding_ids import (
     _LOCATION_RE,
     _SOURCE_RE,
     BODY_SECTION_START_MARKERS,
-    _parse_existing_ids,
+    fingerprint_for_finding_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.marker import extract_id_map, extract_verdicts, upsert_verdicts_marker
@@ -198,23 +198,13 @@ def list_active_body_ids(bodies: Sequence[str]) -> list[int]:
 def _fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | None:
     """Reverse-lookup a stable F<n> ID to its fingerprint.
 
-    Reuses `_parse_existing_ids` (the same authoritative fingerprint -> ID
-    parser `assemble_id_map` itself is built on) rather than only checking
-    the id-map marker directly -- that parser already handles both the
-    marker fast-path and the pre-marker bullet-scan fallback for older
-    reviews, and this must never silently diverge from it.
-
-    IDs are permanent once assigned (`assemble_id_map` never reassigns one),
-    so any body recent enough to have seen this finding carries the mapping
-    -- no need to specifically target the canonical review's body. Returns
-    `None` if the ID was never assigned an entry (e.g. it genuinely doesn't
-    exist), in which case verdict recording is skipped entirely (see
-    `_record_verdict`) rather than guessing.
+    Thin wrapper over `ai_pr_review.vcs._finding_ids.fingerprint_for_finding_id`
+    (factored out there so `ai_pr_review.vcs._canonical` can reuse the exact
+    same lookup for legacy-thread fallback without this module's own
+    `vcs.github` import creating a cycle). Kept here, still private, since
+    every existing call site in this module refers to it by this name.
     """
-    for fp, fid in _parse_existing_ids(bodies).items():
-        if fid == finding_id:
-            return fp
-    return None
+    return fingerprint_for_finding_id(bodies, finding_id)
 
 
 def _record_verdict(

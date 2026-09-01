@@ -75,14 +75,30 @@ def _deduplicate(findings: list[Finding]) -> list[Finding]:
     return result
 
 
+def categories_compatible(a: str | None, b: str) -> bool:
+    """Are two categories compatible for clustering/cross-run matching?
+
+    `"other"` (the default for findings with no categorization signal) and
+    `None` (an unrecoverable category — e.g. a legacy inline comment posted
+    before the per-comment metadata marker existed) are both wildcards, not a
+    deliberate "this is genuinely different" signal: treating either as
+    blocking causes false-negative matches. Two known, distinct real
+    categories are never compatible. Shared by the within-run proximity
+    clustering below and the cross-run fuzzy match in
+    `ai_pr_review.vcs._canonical` — both need the identical wildcard
+    semantics so a `secret` finding can never be silently matched against an
+    incompatible `injection` finding just because one side's category could
+    not be determined.
+    """
+    if a is None or a == "other":
+        return True
+    if b == "other":
+        return True
+    return a == b
+
+
 def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
     """Can `f` join `cluster` without introducing a second, conflicting real category?
-
-    "other" is a wildcard, not a real category: it's the default for findings
-    with no categorization signal at all (every native-analyzer finding today,
-    per #579's pre-state), not a deliberate "this is genuinely different"
-    signal. Treating it as blocking would cause false-negative dedup and break
-    analyzer+agent corroboration in _collapse_cluster.
 
     Compatibility is checked against the cluster's established real category
     (the first non-"other" category seen so far), not just the tail finding.
@@ -91,10 +107,8 @@ def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
     within PROXIMITY_LINES of their neighbor), silently dropping one of them
     when the cluster collapses.
     """
-    if f.category == "other":
-        return True
     established = next((m.category for m in cluster if m.category != "other"), None)
-    return established is None or established == f.category
+    return categories_compatible(established, f.category)
 
 
 def _dedup_file(findings: list[Finding]) -> list[Finding]:
