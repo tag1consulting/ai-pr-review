@@ -343,6 +343,24 @@ def test_blob_link_with_line() -> None:
     )
 
 
+def test_blob_link_strips_leading_slash_to_avoid_double_slash() -> None:
+    """Regression: docs-api-check was observed live emitting an absolute
+    container path (`/workspace/ai_pr_review/vcs/github.py`) as
+    Finding.file instead of a repo-relative one -- Finding.file carries no
+    documented "always relative" contract. Un-stripped, the leading "/"
+    survives as an empty first path segment, producing a malformed
+    double-slash URL (`.../blob/{sha}//workspace/...`). Stripping only the
+    leading slash (not the "workspace" segment specifically, which would be
+    a container-runtime-coupled assumption) at least guarantees a
+    syntactically valid URL -- it may still point at the wrong repo
+    location for a genuinely absolute path, which is the analyzer's bug to
+    fix, tracked separately."""
+    assert _blob_link(
+        owner="o", repo="r", head_sha=_VALID_SHA,
+        file="/workspace/ai_pr_review/vcs/github.py", line=1122,
+    ) == f"https://github.com/o/r/blob/{_VALID_SHA}/workspace/ai_pr_review/vcs/github.py#L1122"
+
+
 def test_blob_link_without_line() -> None:
     assert (
         _blob_link(owner="o", repo="r", head_sha=_VALID_SHA, file="app.py", line=None)

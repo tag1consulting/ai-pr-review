@@ -61,8 +61,17 @@ def _blob_link(*, owner: str, repo: str, head_sha: str, file: str, line: int | N
     body-level finding (confirmed live: an existing inline comment's
     `html_url` is `.../pull/{n}#discussion_r{comment_id}`, not a path-hash
     scheme) -- the blob permalink is the only always-constructible target.
+
+    `Finding.file` carries no documented "always repo-relative" contract,
+    and at least one static analyzer has been observed emitting an absolute
+    container path (e.g. `/workspace/ai_pr_review/vcs/github.py`) instead --
+    a leading "/" would otherwise survive into `quoted_path` as an empty
+    first segment, producing a double-slash URL. Stripped here defensively;
+    the resulting link may still point at the wrong location for a
+    genuinely absolute path (that's the analyzer's bug to fix, tracked
+    separately), but it is at least never malformed.
     """
-    quoted_path = "/".join(quote(seg) for seg in file.split("/"))
+    quoted_path = "/".join(quote(seg) for seg in file.lstrip("/").split("/"))
     url = f"https://github.com/{owner}/{repo}/blob/{head_sha}/{quoted_path}"
     if line is not None:
         url += f"#L{line}"
