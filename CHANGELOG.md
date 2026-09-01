@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Canonical-review reuse (GitHub)**: rerunning the review no longer always posts a new review object. A fully quiet rerun updates the existing review's body in place; a still-open finding is updated (with a reply on severity escalation) rather than reposted; a `fixed` finding that recurs gets a reply and its thread reopened; a `dismiss`/`false-positive`/`wont-fix`'d finding is never reposted, even a fuzzy-matched nearby one of a compatible category and no higher severity. Only a genuinely new finding — or one severe enough (High/Critical) to require visibility regardless of diff anchoring — triggers a fresh review, and the prior blocking review is dismissed only once none of its own findings are still open. See [docs/features.md](docs/features.md#quiet-reruns-github). GitHub-only; GitLab/Bitbucket parity tracked in issue #710.
+
+### Fixed
+
+- The review body's inline-ownership marker was appended after the byte-truncation step with no size reserve of its own, letting a rendered GitHub review body exceed the provider's 65,536-byte limit by the marker's length. The truncation reserve now accounts for the inline-ownership, id-map, and verdicts markers together.
+- `_record_verdict` (the `/ai-pr-review dismiss`/`false-positive`/`wont-fix`/`fixed` verdict-recording path) now seeds its verdicts map from every prior bot review, not just the canonical review's own body — a marker-less review becoming canonical (e.g. the PR-wide auto-approve path's human-facing message) could previously erase every earlier verdict the next time one was recorded.
+
 ## [2.6.1] - 2026-08-28
 
 ### Fixed

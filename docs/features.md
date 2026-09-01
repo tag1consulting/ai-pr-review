@@ -48,6 +48,21 @@ If the watermark cannot be found (e.g., the summary comment was deleted), the ac
 
 To force a full-PR diff for a single run, add the **`ai-review-rescan`** label to the PR. The watermark still advances normally afterward, so subsequent pushes resume incremental review — re-add the label if you want another full rescan.
 
+## Quiet reruns (GitHub)
+
+Rerunning the review on a PR no longer always creates a new top-level review object. Each run classifies its findings against the bot's most-recently-posted review (the "canonical" review, whichever state it's in — dismissed or not) and its existing threads:
+
+- **Nothing new** (identical findings, no verdict changes): the canonical review's body is updated in place (`PUT`). No new Conversation-tab entry.
+- **A still-open finding reworded or unchanged**: its comment is updated in place, silently.
+- **A still-open finding's severity increases**: its comment is updated in place, plus a reply on that thread noting the escalation. Still no new review.
+- **A finding marked `/ai-pr-review fixed` reappears unchanged**: a reply explains it recurred and the thread is reopened. No new review.
+- **A finding marked `/ai-pr-review dismiss`/`false-positive`/`wont-fix`**: never reposted, permanently — including a similar finding nearby, as long as it's a compatible category and no more severe than what was dismissed.
+- **A genuinely new finding** (or one severe enough — High/Critical — that it must be visible even without a diff anchor): a fresh review is posted, carrying only the new finding(s). The prior blocking (`CHANGES_REQUESTED`) review is dismissed only once none of its own findings are still open — it is never dismissed out from under an active finding.
+
+This is GitHub-only for now; GitLab and Bitbucket still post fresh review content on every run (tracked as a parity gap, issue #710).
+
+**Concurrency note**: if two runs land on the same PR close together (rapid pushes with no `concurrency:` group configured), there's a narrow window where one run's write to the canonical review can be superseded by the other's. The action re-checks the canonical review's state immediately before writing and falls back to posting a fresh review if anything changed underneath it, but this narrows the window rather than eliminating it — configure a GitHub Actions `concurrency:` group keyed on the PR number if your repo pushes frequently enough for this to matter.
+
 ## Resilience
 
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.

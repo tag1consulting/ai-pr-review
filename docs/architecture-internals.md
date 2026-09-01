@@ -52,6 +52,25 @@ The VCS provider keeps at most one summary comment on the PR/MR by cleaning up d
 
 To force a full-PR diff for a single run, add the `ai-review-rescan` label to the PR. The workflow sets `FORCE_FULL_DIFF=true` via the `env:` block, which causes the engine to skip the last-reviewed SHA lookup and fall through to the full `origin/BASE_REF...HEAD_SHA` diff.
 
+## Canonical-review reuse (GitHub)
+
+`ai_pr_review/vcs/_canonical.py` is pure classification logic (no I/O) consumed by `GitHubProvider.post_findings` (`ai_pr_review/vcs/github.py`) to decide whether a rerun can `PUT` the existing "canonical" review's body instead of always `POST`ing a new review object.
+
+**Canonical review**: `select_canonical(reviews)` — the highest-`id` bot review among `list_bot_reviews()`'s output, regardless of state. The same rule is used by `ai_pr_review.slash.dismiss._record_verdict` (the write side), so both sides of the split always agree on which review carries the markers.
+
+**Markers** (`ai_pr_review/vcs/marker.py`):
+- `ai-pr-review-id-map` — fingerprint → stable `F<n>` ID, unchanged by this feature.
+- `ai-pr-review-verdicts` — fingerprint → `"dismissed"` | `"fixed"` | `"recurred"`, written by slash commands (`_record_verdict`) and read by `classify()`. `"recurred"` is a tombstone: written in place of deleting a `"fixed"` entry when that finding reappears, since `merge_verdicts()` unions the marker across *every* prior review body (not just the canonical's own) and a bare delete on the newest body wouldn't remove the key from an older body still in that union.
+- `ai-pr-review-finding` (new) — per-inline-comment, base64-encoded `{fp, cat, sev}`. Category and severity are otherwise unrecoverable from a rendered comment (category is never rendered anywhere; severity is only re-parsable from the `**[Sev]**` header token). Base64-encoded rather than raw JSON because `suggested_code` is interpolated unescaped ahead of it in the same comment body — a raw-JSON marker could be forged or duplicated inside a rendered code fence.
+
+**Per-finding decision** (`classify()`), in order: exact or category/severity-gated fuzzy match against a `"dismissed"` verdict → suppressed forever; exact match against a `"fixed"` verdict → recurred (reply + `unresolveReviewThread`, verdict becomes `"recurred"`); fuzzy `(file, ±3 lines, compatible category)` match against a still-open owned thread → escalate (PATCH + reply) if severity increased, else update (PATCH) — an outdated thread is treated as no match at all, since GitHub already renders it as invisible; otherwise new.
+
+**Posting decision** (`decide_action()`): `PUT` the canonical body when it exists, isn't `DISMISSED`, its state matches this run's event, it carries the review footer (guards against overwriting a human-facing message like `submit_approval`'s), and no `new` finding is inline-eligible or High/Critical severity. Otherwise `POST` a fresh review carrying only the `new` findings; the prior `CHANGES_REQUESTED` review is dismissed first only if it has zero unresolved owned threads (the same gate `_dismiss_stale_reviews` already applies, so the slash-command PR-wide auto-approve check can't be fooled by a dismissed-but-still-active review).
+
+**Concurrency**: immediately before a `PUT`/`PATCH`/dismiss on the canonical review, `post_findings` re-fetches its state/body (`get_review_state_and_body`) and the PR's current head SHA (`get_pr_head_sha`). A mismatch on either falls through to posting a fresh review (state/body changed) or skips the write entirely (head advanced — a newer run already owns the canonical). This narrows, rather than eliminates, the race window; consumers pushing rapidly should still set a GitHub Actions `concurrency:` group keyed on PR number.
+
+GitHub-only; GitLab and Bitbucket still post fresh content every run (tracked in issue #710).
+
 ## Context message variants
 
 Three context variants are assembled and passed selectively to agents:

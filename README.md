@@ -319,6 +319,10 @@ If the watermark cannot be found (e.g., the summary comment was deleted), the ac
 
 To force a full-PR diff for a single run, add the **`ai-review-rescan`** label to the PR. The watermark still advances normally afterward, so subsequent pushes resume incremental review — re-add the label if you want another full rescan.
 
+## Quiet reruns (GitHub)
+
+Rerunning the review no longer always posts a new review object. Each run classifies its findings against the bot's most-recently-posted review and its existing threads: nothing new updates that review's body in place with no new Conversation-tab entry; a still-open finding is updated (and, on a severity increase, gets a reply) without a new review; a `fixed` finding that recurs gets a reply and its thread reopened; a `dismiss`/`false-positive`/`wont-fix`'d finding is never reposted; only a genuinely new (or too-severe-to-hide) finding triggers a fresh review, carrying just that finding — and even then, the prior blocking review is only dismissed once none of its own findings are still open. See [docs/features.md](docs/features.md#quiet-reruns-github) for the full decision table. GitHub-only for now (GitLab/Bitbucket parity tracked in issue #710).
+
 ## Resilience
 
 **Graceful agent failure**: If an agent fails (transient API error, content filter block, etc.), the review continues with the remaining agents and notes which agents were skipped. If all finding agents fail, the review is aborted.
