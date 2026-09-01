@@ -233,6 +233,61 @@ class TestBuildReviewRuntimeFullPath:
 
         assert call_count == 1
 
+    @pytest.mark.anyio
+    async def test_merge_filter_fallback_note_suppressed_on_incremental_run(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: a non-empty summary_prefix on an incremental run made
+        cli.py's summary_text non-empty even though pr-summarizer never ran
+        that cycle, which defeated orchestrate.py's "empty summary_text means
+        incremental, skip post_summary" no-op check -- post_summary would
+        then PUT this one-line note as the ENTIRE summary comment,
+        overwriting the real accumulated walkthrough. The note must be
+        suppressed on incremental runs; the underlying condition (merge-commit
+        filtering fell back) is still real, but has nowhere safe to surface
+        mid-cycle without corrupting the summary comment."""
+        config = _make_config()
+        provider = _make_fake_provider()
+        diff = _make_diff_result(is_incremental=True)
+        diff.fallback_reason = "cherry-pick commit failed during merge-commit filtering"
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.is_incremental is True
+        assert runtime.summary_prefix == "", (
+            f"merge-filter-fallback note must not appear on an incremental "
+            f"run; got: {runtime.summary_prefix!r}"
+        )
+
+    @pytest.mark.anyio
+    async def test_merge_filter_fallback_note_present_on_full_run(
+        self, tmp_path: Path
+    ) -> None:
+        """Sanity check for the same gate in the other direction: a full
+        (non-incremental) run with a fallback reason must still surface the
+        note -- the fix must not suppress it unconditionally."""
+        config = _make_config()
+        provider = _make_fake_provider()
+        diff = _make_diff_result(is_incremental=False)
+        diff.fallback_reason = "cherry-pick commit failed during merge-commit filtering"
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert runtime.is_incremental is False
+        assert "cherry-pick commit failed during merge-commit filtering" in runtime.summary_prefix
+
 
 class TestBuildReviewRuntimeSkip:
     """build_review_runtime() returns SkipPlan when compute says skip."""
