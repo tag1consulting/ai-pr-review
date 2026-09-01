@@ -352,17 +352,21 @@ def extract_verdicts(body: str) -> dict[str, str]:
         return {}
     try:
         data = json.loads(match.group(1))
-        if isinstance(data, dict):
-            return {
-                str(k): str(v) for k, v in data.items() if str(v) in _VALID_VERDICTS
-            }
     except (json.JSONDecodeError, ValueError) as exc:
         _log.warning(
             "ai-pr-review: verdicts marker present but unparseable: %s — raw: %.200s",
             exc,
             match.group(1),
         )
-    return {}
+        return {}
+    if not isinstance(data, dict):
+        _log.warning(
+            "ai-pr-review: verdicts marker present but not a JSON object (got %s) — raw: %.200s",
+            type(data).__name__,
+            match.group(1),
+        )
+        return {}
+    return {str(k): str(v) for k, v in data.items() if str(v) in _VALID_VERDICTS}
 
 
 def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:

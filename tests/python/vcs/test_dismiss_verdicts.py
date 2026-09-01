@@ -16,7 +16,13 @@ from dataclasses import dataclass, field
 import httpx
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.slash.dismiss import dismiss_by_finding_id, dismiss_inline_reply
+from ai_pr_review.slash.dismiss import (
+    FindingLocation,
+    _fingerprint_for_finding_id,
+    classify_finding,
+    dismiss_by_finding_id,
+    dismiss_inline_reply,
+)
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
@@ -208,6 +214,36 @@ def test_verdict_put_failure_does_not_leak_into_dismiss_result_errors(caplog) ->
     assert any("failed to record" in msg for msg in caplog.messages)
 
 
+def test_verdict_put_raising_httpx_error_does_not_crash_dismiss(caplog) -> None:
+    """`update_review_body` doesn't always fail with a tidy non-2xx response --
+    `RecordingClient.request` routes through `retry_transient`, which *raises*
+    on retry exhaustion or a non-transient transport error. `_record_verdict`
+    must swallow that raise too, not just the `ok is False` tuple case, or a
+    network blip on this purely-additive side channel crashes the whole
+    dismiss/fixed command after the primary action already succeeded."""
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and str(req.url).endswith("/reviews/1"):
+            raise httpx.ConnectError("connection reset", request=req)
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+        result = dismiss_by_finding_id(prov, 3, actor="alice", command="dismiss")
+
+    assert result.errors == ()
+    assert result.feedback_source == "phpcs"
+    assert any("failed to record" in msg for msg in caplog.messages)
+
+
 # ---------------------------------------------------------------------------
 # dismiss_inline_reply — verdict recorded from the comment's own F<n> token
 # ---------------------------------------------------------------------------
@@ -279,3 +315,127 @@ def test_dismiss_inline_reply_records_verdict_from_comments_own_fid() -> None:
     puts = _put_bodies(rec, "/reviews/41")
     assert len(puts) == 1
     assert extract_verdicts(puts[0]) == {fingerprint(f): "dismissed"}
+
+
+def test_dismiss_inline_reply_verdict_lookup_list_reviews_raising_is_swallowed(caplog) -> None:
+    """The ad-hoc `list_bot_reviews()` call `dismiss_inline_reply` makes
+    purely to resolve a verdict fingerprint can also raise (same
+    retry_transient behavior as the PUT path) -- confirm the thread still
+    resolves and no exception escapes."""
+    f = _finding("leaked secret", source="security-reviewer", file="config.py", line=3)
+    comment_body = _build_inline_comment_body(f, finding_id=6)
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=77, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        # get_review_state's single-review GET (used by _dismiss_if_all_resolved,
+        # unrelated to verdict recording) must be handled BEFORE the generic
+        # "/reviews" list-endpoint branch below, since "/reviews/41" contains
+        # "/reviews" as a substring. Returning a non-CHANGES_REQUESTED state
+        # makes that call a clean no-op so this test isolates the verdict-lookup
+        # list_bot_reviews() failure specifically.
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "COMMENTED"})
+        if req.method == "GET" and "/reviews" in url:
+            raise httpx.ConnectError("connection reset", request=req)
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+        result = dismiss_inline_reply(prov, 77, None, actor="alice", command="false-positive")
+
+    assert result.thread_resolved is True
+    assert result.errors == ()
+    assert any("verdict lookup failed listing reviews" in msg for msg in caplog.messages)
+
+
+def test_dismiss_inline_reply_verdict_lookup_http_failure_is_logged_not_silently_dropped(caplog) -> None:
+    """A non-2xx (not raised) list_bot_reviews() failure during verdict lookup
+    is truncated from provider._errors (must not surface as a resolve/dismiss
+    error) but must still be logged -- silently deleting the diagnostic with
+    no trace anywhere would make a real permissions/rate-limit problem
+    invisible."""
+    f = _finding("leaked secret", source="security-reviewer", file="config.py", line=3)
+    comment_body = _build_inline_comment_body(f, finding_id=6)
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=77, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        # See the sibling raising-test above for why this branch must precede
+        # the generic "/reviews" check.
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "COMMENTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(403, text="Forbidden")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+        result = dismiss_inline_reply(prov, 77, None, actor="alice", command="false-positive")
+
+    assert result.thread_resolved is True
+    assert result.errors == ()
+    assert any(
+        "verdict lookup list_bot_reviews failed" in msg and "403" in msg
+        for msg in caplog.messages
+    )
+
+
+# ---------------------------------------------------------------------------
+# _fingerprint_for_finding_id vs. classify_finding: documented, safe
+# divergence when the id-map marker is present but incomplete.
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_lookup_safely_diverges_from_classify_when_marker_omits_the_id() -> None:
+    """`classify_finding` unconditionally bullet-scans every body first
+    (`_scan_body_bullets`), so it finds F5 as BODY regardless of the marker.
+    `_fingerprint_for_finding_id` reuses `_parse_existing_ids`, which takes a
+    marker fast-path and skips bullet-scanning entirely whenever a body's
+    id-map marker is non-empty -- even if that marker doesn't happen to
+    include the specific ID being looked up. This is a real, reachable
+    divergence (an id-map marker can in principle omit an id a bullet still
+    carries), but it degrades safely: `_record_verdict` no-ops on a `None`
+    fingerprint rather than guessing, so this locks down that the primary
+    dismiss outcome is completely unaffected even when the two lookups
+    disagree."""
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=5)
+    # Marker is non-empty (triggers the fast-path) but maps a different
+    # fingerprint entirely -- it does not carry F5's fingerprint.
+    incomplete_marker = build_id_map_marker({"other|other.py|1|deadbeefcafe": 9})
+    review_body = (
+        "### Findings not attached to specific lines\n\n"
+        + bullet
+        + "\n"
+        + incomplete_marker
+    )
+
+    assert classify_finding([review_body], 5).location == FindingLocation.BODY
+    assert _fingerprint_for_finding_id([review_body], 5) is None
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT":
+            raise AssertionError("no verdict PUT expected when the fingerprint lookup can't resolve")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 5, actor="alice", command="dismiss")
+
+    assert result.errors == ()
+    assert result.feedback_source == "phpcs"

@@ -23,6 +23,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 from ai_pr_review.vcs._finding_ids import (
     _ID_RE,
     _LOCATION_RE,
@@ -238,6 +240,18 @@ def _record_verdict(
     is that a future review cycle's cross-run classification (per the
     PR-comment-clutter design) won't see this verdict -- degrading to
     "treat as unmatched" for that one finding, not a correctness break.
+
+    The `except httpx.HTTPError` below is load-bearing, not decorative:
+    `provider.update_review_body` routes through `RecordingClient.request` ->
+    `retry_transient`, which *raises* `RetryExhaustedError` (an `httpx.
+    HTTPError` subclass) on retry exhaustion or re-raises the underlying
+    transport exception outright -- it does not always hand back a tidy
+    `(ok, status, snippet)` tuple the way a plain non-2xx response does. Only
+    catching that tuple's `ok is False` case (as an earlier version of this
+    function did) leaves a network blip free to propagate all the way out of
+    `dismiss_by_finding_id`/`dismiss_inline_reply` and crash the CLI command
+    -- after the thread has already been resolved on GitHub -- which is
+    exactly the outcome this function's docstring promises never happens.
     """
     if fingerprint is None:
         return
@@ -251,13 +265,22 @@ def _record_verdict(
     verdicts = extract_verdicts(body)
     verdicts[fingerprint] = verdict
     new_body = upsert_verdicts_marker(body, verdicts)
-    ok, status, snippet = provider.update_review_body(canonical_id, new_body)
+    try:
+        ok, status, snippet = provider.update_review_body(canonical_id, new_body)
+    except httpx.HTTPError as exc:
+        _warn_verdict_failure(
+            f"failed to record '{verdict}' verdict on review {canonical_id}: {exc!r}"
+        )
+        return
     if ok:
         return
-    message = (
+    _warn_verdict_failure(
         f"failed to record '{verdict}' verdict on review {canonical_id}: "
         f"HTTP {status}: {snippet}"
     )
+
+
+def _warn_verdict_failure(message: str) -> None:
     if _os.environ.get("GITHUB_ACTIONS") == "true":
         print(f"::warning::ai-pr-review: {message}", flush=True)
     _log.warning("dismiss: %s", message)
@@ -984,9 +1007,25 @@ def dismiss_inline_reply(
             # provider._errors on failure -- this lookup is purely for the
             # best-effort verdict write below and must not surface as a
             # resolve/dismiss error for a concern it has nothing to do with.
+            # The truncated entries are still logged (not just discarded) so
+            # a genuine access/permission problem with the bot's token isn't
+            # invisible to anyone debugging "verdicts never get recorded."
             _verdict_errors_before = len(provider._errors)
-            reviews_for_verdict = provider.list_bot_reviews()
+            try:
+                reviews_for_verdict = provider.list_bot_reviews()
+            except httpx.HTTPError as exc:
+                # See _record_verdict's docstring: list_bot_reviews() routes
+                # through the same retry_transient() that can raise instead
+                # of returning a tidy failed response.
+                _warn_verdict_failure(f"verdict lookup failed listing reviews: {exc!r}")
+                reviews_for_verdict = []
+            _truncated_verdict_errors = provider._errors[_verdict_errors_before:]
             del provider._errors[_verdict_errors_before:]
+            if _truncated_verdict_errors:
+                _warn_verdict_failure(
+                    "verdict lookup list_bot_reviews failed (not surfaced as a "
+                    "resolve/dismiss error): " + "; ".join(_truncated_verdict_errors)
+                )
             bodies_for_verdict = [r.get("body") or "" for r in reviews_for_verdict]
             fingerprint = _fingerprint_for_finding_id(
                 bodies_for_verdict, int(id_match.group(1))
