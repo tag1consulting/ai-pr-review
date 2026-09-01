@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
+from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _blob_link
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import INLINE_MARKER
 from ai_pr_review.vcs.protocol import DiffContext
@@ -336,6 +336,20 @@ def test_post_findings_ineligible_line_falls_back_to_body() -> None:
     assert f"*(line not in diff)* [↗]({expected_url})" in payload["body"]
 
 
+def test_blob_link_with_line() -> None:
+    assert (
+        _blob_link(owner="o", repo="r", head_sha=_VALID_SHA, file="app.py", line=4)
+        == f"https://github.com/o/r/blob/{_VALID_SHA}/app.py#L4"
+    )
+
+
+def test_blob_link_without_line() -> None:
+    assert (
+        _blob_link(owner="o", repo="r", head_sha=_VALID_SHA, file="app.py", line=None)
+        == f"https://github.com/o/r/blob/{_VALID_SHA}/app.py"
+    )
+
+
 def test_body_finding_location_links_to_github_blob() -> None:
     """Findings that never get an inline anchor (out-of-diff or over
     max_inline) previously rendered a plain-text location with zero
@@ -371,6 +385,73 @@ def test_body_finding_location_links_to_github_blob() -> None:
     # alter it -- `_finding_ids.py`'s fingerprint-truncation literal
     # `text.find(" *(at \`")` depends on that text being undisturbed.
     assert f"*(at `app.py:4` [↗]({expected_url}))*" in payload["body"]
+
+
+def test_body_finding_link_omits_anchor_when_line_is_none() -> None:
+    """A file-level finding (file set, no line) must link to the file
+    without a `#L{line}` anchor -- `_blob_link`'s `if line is not None:`
+    guard must skip it entirely rather than emitting a malformed one."""
+    findings = [
+        Finding(
+            severity="Low", confidence=70, finding="module-level nit",
+            source="code-reviewer", file="app.py", line=None,
+        ),
+    ]
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    prov, rec = _make_provider(_review_post_handler())
+    result = prov.post_findings(findings, diff, event="COMMENT")
+    assert result.ok
+
+    review_call = next(c for c in rec.calls if c[0] == "POST" and "/reviews" in c[1])
+    payload = review_call[2]
+    expected_url = f"https://github.com/o/r/blob/{_VALID_SHA}/app.py"
+    assert f"[↗]({expected_url})" in payload["body"]
+    assert "#L" not in payload["body"].split("[↗]")[1]
+
+
+def test_body_finding_link_url_encodes_path_with_special_characters() -> None:
+    """A file path with a space and parentheses must be percent-encoded in
+    both the path segments -- previously untested beyond a plain alnum path."""
+    from urllib.parse import quote
+
+    findings = [
+        Finding(
+            severity="Low", confidence=70, finding="minor nit",
+            source="code-reviewer", file="a b/file (1).py", line=3,
+        ),
+    ]
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    prov, rec = _make_provider(_review_post_handler())
+    result = prov.post_findings(findings, diff, event="COMMENT")
+    assert result.ok
+
+    review_call = next(c for c in rec.calls if c[0] == "POST" and "/reviews" in c[1])
+    payload = review_call[2]
+    expected_path = "/".join(quote(seg) for seg in ["a b", "file (1).py"])
+    expected_url = f"https://github.com/o/r/blob/{_VALID_SHA}/{expected_path}#L3"
+    assert f"[↗]({expected_url})" in payload["body"]
+
+
+def test_out_of_diff_body_finding_also_gets_blob_link() -> None:
+    """The ood_body rendering loop is a near copy-paste of the in_diff_body
+    one; the out-of-diff <details> section must get the same blob link,
+    not just the "Findings not attached to specific lines" section."""
+    ood = Finding(
+        severity="Low", confidence=80, finding="pre-existing style issue",
+        source="phpcs", file="app.py", line=99, out_of_diff=True,
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    prov, rec = _make_provider(_review_post_handler())
+    result = prov.post_findings([ood], diff, event="COMMENT")
+    assert result.ok
+
+    review_call = next(c for c in rec.calls if c[0] == "POST" and "/reviews" in c[1])
+    payload = review_call[2]
+    expected_url = f"https://github.com/o/r/blob/{_VALID_SHA}/app.py#L99"
+    assert f"[↗]({expected_url})" in payload["body"]
 
 
 def test_post_findings_respects_max_inline_cap() -> None:
