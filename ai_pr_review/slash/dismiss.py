@@ -33,7 +33,7 @@ from ai_pr_review.vcs._finding_ids import (
     fingerprint_for_finding_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
-from ai_pr_review.vcs.marker import extract_id_map, extract_verdicts, upsert_verdicts_marker
+from ai_pr_review.vcs.marker import extract_id_map, upsert_verdicts_marker
 
 if TYPE_CHECKING:
     from ai_pr_review.vcs.github import GitHubProvider
@@ -242,19 +242,31 @@ def _record_verdict(
     `dismiss_by_finding_id`/`dismiss_inline_reply` and crash the CLI command
     -- after the thread has already been resolved on GitHub -- which is
     exactly the outcome this function's docstring promises never happens.
+
+    Seeds the verdicts map from `merge_verdicts(reviews)` -- the union
+    across every prior bot review body -- rather than only the canonical
+    body's own `extract_verdicts`. Reading just the canonical body would
+    silently drop every earlier verdict whenever a marker-less review (e.g.
+    `GitHubProvider.submit_approval`'s human-facing "auto-approved" message,
+    issue #590) becomes canonical between one verdict write and the next.
+    `select_canonical` centralizes the "highest id, any state" rule so this
+    function and the read side (`ai_pr_review.vcs._canonical`, which
+    consumes these verdicts during `post_findings` classification) can never
+    disagree about which review is canonical.
     """
+    from ai_pr_review.vcs._canonical import merge_verdicts, select_canonical
+
     if fingerprint is None:
         return
     if not reviews:
         return
-    canonical = max(reviews, key=lambda r: r.get("id") or 0)
-    canonical_id = canonical.get("id")
-    if not isinstance(canonical_id, int):
+    canonical = select_canonical(reviews)
+    if canonical is None:
         return
-    body = canonical.get("body") or ""
-    verdicts = extract_verdicts(body)
+    canonical_id = canonical.review_id
+    verdicts = merge_verdicts(reviews)
     verdicts[fingerprint] = verdict
-    new_body = upsert_verdicts_marker(body, verdicts)
+    new_body = upsert_verdicts_marker(canonical.body, verdicts)
     try:
         ok, status, snippet = provider.update_review_body(canonical_id, new_body)
     except httpx.HTTPError as exc:

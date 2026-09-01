@@ -38,6 +38,18 @@ def test_cleanup_runs_after_post_summary_and_findings() -> None:
     This test verifies *the orchestration site* honors the order by ensuring a
     caller can observe each step succeed before the next one starts. If an API
     error aborts the sequence, resolve_stale MUST NOT be called.
+
+    Canonical-review reuse means `post_findings` itself now makes a GraphQL
+    call (`fetch_review_threads`, for cross-run classification) *before* it
+    posts -- legitimately, since classification needs to know about open
+    threads before deciding what to post. `resolve_stale` makes its own
+    GraphQL call afterward, as before. Both calls are indistinguishable by
+    request shape in this fixture (same `reviewThreads` query, no threads
+    either time), so the ordering invariant is re-expressed as: exactly one
+    `graphql` call brackets `post_findings` on each side, one from
+    classification (before) and one from `resolve_stale` (after) -- the
+    thing this test actually protects, "stale cleanup runs only after a
+    successful post," still holds.
     """
     order: list[str] = []
 
@@ -91,5 +103,11 @@ def test_cleanup_runs_after_post_summary_and_findings() -> None:
     assert not r3.errors
 
     # Validate ordering
-    assert order.index("post_summary") < order.index("post_findings")
-    assert order.index("post_findings") < order.index("graphql")
+    post_findings_index = order.index("post_findings")
+    assert order.index("post_summary") < post_findings_index
+    graphql_indices = [i for i, event in enumerate(order) if event == "graphql"]
+    assert len(graphql_indices) == 2, (
+        f"expected one graphql call from post_findings classification and one "
+        f"from resolve_stale, got: {order}"
+    )
+    assert graphql_indices[0] < post_findings_index < graphql_indices[1]
