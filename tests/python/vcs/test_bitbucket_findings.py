@@ -622,3 +622,110 @@ def test_body_finding_location_links_to_bitbucket_source_browser() -> None:
     # alter it -- `_finding_ids.py`'s fingerprint-truncation literal
     # `text.find(" *(at \`")` depends on that text being undisturbed.
     assert f"*(at `src/app.py:42` [↗]({expected_url}))*" in raw
+
+
+def test_body_finding_link_omits_anchor_when_line_is_none() -> None:
+    """`_blob_link`'s `if line is not None:` guard must skip the
+    `#basename-line` anchor entirely rather than emitting a malformed one."""
+    finding = Finding(
+        severity="Low", confidence=70, finding="minor nit",
+        source="code-reviewer", file="src/app.py", line=None,
+    )
+    raw = _run_post_findings_cycle(_first_run_body(""), [finding])
+
+    expected_url = f"https://bitbucket.org/ws/repo/src/{_HEAD}/src/app.py"
+    assert f"[↗]({expected_url})" in raw
+    assert "#app.py-" not in raw
+
+
+def test_body_finding_link_url_encodes_path_with_special_characters() -> None:
+    """A file path with a space and parentheses must be percent-encoded in
+    both the path segments and the basename anchor -- previously untested
+    beyond a plain alnum/slash path."""
+    from urllib.parse import quote
+
+    finding = Finding(
+        severity="Low", confidence=70, finding="minor nit",
+        source="code-reviewer", file="a b/file (1).py", line=3,
+    )
+    raw = _run_post_findings_cycle(_first_run_body(""), [finding])
+
+    expected_path = "/".join(quote(seg) for seg in ["a b", "file (1).py"])
+    expected_basename = quote("file (1).py")
+    expected_url = (
+        f"https://bitbucket.org/ws/repo/src/{_HEAD}/{expected_path}#{expected_basename}-3"
+    )
+    assert f"[↗]({expected_url})" in raw
+
+
+def test_incremental_run_with_empty_prior_walkthrough_produces_no_stray_summary() -> None:
+    """The "prior render exists but its walkthrough was empty" branch of
+    `_extract_walkthrough` executes on run2 here (run1 has no `### Summary`
+    section at all), but nothing previously asserted it behaves correctly --
+    only that F-IDs stayed stable across the same two runs. Verify directly
+    that no stray `### Summary` section, and no leaked findings content,
+    appears."""
+    finding = Finding(
+        severity="Medium", confidence=80, finding="unchanged finding",
+        source="code-reviewer", file="a.py", line=5,
+    )
+    run1 = _run_post_findings_cycle(_first_run_body(""), [finding])
+    assert "### Summary" not in run1  # empty walkthrough renders no section at all
+
+    run2 = _run_post_findings_cycle(run1, [finding])
+    assert "### Summary" not in run2, (
+        "an empty prior walkthrough must not leak findings/token-table "
+        f"content into a stray Summary section on the next run: {run2!r}"
+    )
+    assert run2.count("### Findings") == 1
+    assert run2.count("unchanged finding") == 1
+
+
+def test_id_map_marker_dropped_when_too_large_logs_and_records_error(caplog) -> None:
+    """Regression: previously this failure was completely silent -- no log,
+    no recorded error -- even though the comment still posts successfully
+    without F-ID stability for the cycle. `FindingsResult.ok` must stay True
+    (the PUT itself succeeded); orchestrate.py's watermark/stale-cleanup
+    gating on .ok/.error must not fire over a cosmetic marker loss."""
+    import logging
+
+    from ai_pr_review.vcs.marker import ID_MAP_MARKER_HIDDEN_PREFIX
+
+    # A file path long enough that a modest number of findings blows the
+    # base64-encoded id-map marker past _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES.
+    long_path = "src/" + ("a" * 2000) + ".py"
+    findings = [
+        Finding(
+            severity="Low", confidence=60, finding=f"nit {i}",
+            source="code-reviewer", file=long_path, line=i + 1,
+        )
+        for i in range(20)
+    ]
+    captured: list[dict] = []
+    existing_body = _first_run_body("")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200, json={"values": [{"id": 42, "content": {"raw": existing_body}}]}
+            )
+        if req.method == "PUT":
+            import json
+
+            captured.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 42})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.vcs.bitbucket"):
+        result = prov.post_findings(
+            findings, DiffContext(diff_text="", head_sha=_HEAD), event="COMMENT"
+        )
+    assert result.ok, "a dropped id-map marker must not fail the whole post"
+    raw = captured[0]["content"]["raw"]
+
+    assert ID_MAP_MARKER_HIDDEN_PREFIX not in raw, (
+        "marker must be dropped cleanly, not corrupted into a truncated fragment"
+    )
+    assert any("too large" in msg for msg in caplog.messages), "must be logged, not silent"
+    assert any("too large" in e for e in prov._errors), "must be recorded in provider._errors"

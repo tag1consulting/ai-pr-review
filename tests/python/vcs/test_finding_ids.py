@@ -221,6 +221,29 @@ def test_marker_less_approve_path_ids_preserved_across_reviews() -> None:
     assert id_map2[fingerprint(fb)] == 2
 
 
+def test_marker_less_bitbucket_bare_findings_heading_ids_preserved() -> None:
+    """The marker-less fallback bullet scan must also recognize a bare
+    "### Findings" heading (Bitbucket's REQUEST_CHANGES/COMMENT rendering,
+    and GitHub's degraded plain-comment fallback) -- distinct from the
+    "### Findings not attached to specific lines" and "### Findings
+    (informational)" headings already covered. Without it, a Bitbucket
+    comment that lost its id-map marker (dropped for size, or corrupted)
+    would renumber every F-ID from scratch on the next render."""
+    fa = _finding("SQLi risk", source="blind", file="db.py", line=12)
+    fb = _finding("missing null check", source="code-reviewer", file="app.py", line=9)
+
+    id_map1 = assemble_id_map([], [fa, fb])
+    bullets = "\n".join(
+        format_body_finding(f, finding_id=id_map1[fingerprint(f)]) for f in [fa, fb]
+    )
+    body_a = "### Findings\n" + bullets
+    assert id_map1[fingerprint(fa)] == 1
+    assert id_map1[fingerprint(fb)] == 2
+
+    id_map2 = assemble_id_map([body_a], [fb])
+    assert id_map2[fingerprint(fb)] == 2
+
+
 # ---------------------------------------------------------------------------
 # format_body_finding() with finding_id
 # ---------------------------------------------------------------------------

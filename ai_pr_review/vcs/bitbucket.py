@@ -18,6 +18,7 @@ Provider differences from GitHub/GitLab:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -59,6 +60,8 @@ from ai_pr_review.vcs.protocol import (
     StaleResult,
     SummaryResult,
 )
+
+_log = logging.getLogger(__name__)
 
 _MAX_BITBUCKET_BODY_SIZE: Final[int] = 32_000
 # Mirrors github.py's floor: never let the id-map marker crowd the visible
@@ -266,10 +269,37 @@ class BitbucketProvider:
         try:
             id_map_marker = build_id_map_marker(id_map, hidden=True)
         except Exception as exc:  # noqa: BLE001
+            # Logged (not just appended to self._errors): orchestrate.py never
+            # reads this provider's _errors list for a normal review run (only
+            # slash/dismiss.py's command handlers do), and this failure must
+            # not set FindingsResult.error either -- the comment itself still
+            # posts fine below, just without F-ID stability for this cycle,
+            # and orchestrate.py gates watermark-advance/stale-cleanup on
+            # .ok/.error (#493) -- failing that gate over a cosmetic marker
+            # loss would force an unnecessary full re-diff next cycle, a worse
+            # outcome than the degraded F-IDs this is actually about. Mirrors
+            # github.py's identical failure-class handling.
+            _log.warning("bitbucket: failed to build id-map marker: %s", exc)
             self._errors.append(f"post_findings: failed to build id-map marker: {exc}")
         marker_bytes = len(id_map_marker.encode("utf-8")) if id_map_marker else 0
-        marker_reserve = marker_bytes + 1 if id_map_marker else 0
+        # +2, not +1: the separator that will actually be prepended below is
+        # `_hidden_marker_separator(body)`, and at this call site `body` (the
+        # freshly-appended INLINE_MARKER_HIDDEN form) never ends in a
+        # newline, so that separator is always the 2-byte "\n\n" -- never the
+        # 1-byte "\n" case that function also supports for other callers.
+        marker_reserve = marker_bytes + 2 if id_map_marker else 0
         if id_map_marker and marker_reserve > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES:
+            _log.warning(
+                "bitbucket: id-map marker (%d bytes) too large to fit in "
+                "comment body for %s/%s PR #%s; omitting marker for this "
+                "cycle -- F-ID stability may degrade",
+                marker_bytes,
+                self.config.workspace, self.config.repo_slug, self.config.pr_id,
+            )
+            self._errors.append(
+                f"post_findings: id-map marker ({marker_bytes} bytes) too large "
+                "to fit in comment body; omitting for this cycle"
+            )
             id_map_marker = ""
             marker_reserve = 0
         truncate_limit = max(0, _MAX_BITBUCKET_BODY_SIZE - marker_reserve)
