@@ -17,6 +17,8 @@ pytest-verifiable instead of live-PR-verifiable only.
 from __future__ import annotations
 
 import enum
+import logging
+import os as _os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -26,12 +28,15 @@ from ai_pr_review.vcs._finding_ids import (
     _LOCATION_RE,
     _SOURCE_RE,
     BODY_SECTION_START_MARKERS,
+    _parse_existing_ids,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
-from ai_pr_review.vcs.marker import extract_id_map
+from ai_pr_review.vcs.marker import extract_id_map, extract_verdicts, upsert_verdicts_marker
 
 if TYPE_CHECKING:
     from ai_pr_review.vcs.github import GitHubProvider
+
+_log = logging.getLogger(__name__)
 
 
 class FindingLocation(enum.Enum):
@@ -186,6 +191,76 @@ def classify_finding(bodies: Sequence[str], finding_id: int) -> ClassifiedFindin
 def list_active_body_ids(bodies: Sequence[str]) -> list[int]:
     """Return all F<n> IDs currently rendered as body bullets, sorted."""
     return sorted(_scan_body_bullets(bodies).keys())
+
+
+def _fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | None:
+    """Reverse-lookup a stable F<n> ID to its fingerprint.
+
+    Reuses `_parse_existing_ids` (the same authoritative fingerprint -> ID
+    parser `assemble_id_map` itself is built on) rather than only checking
+    the id-map marker directly -- that parser already handles both the
+    marker fast-path and the pre-marker bullet-scan fallback for older
+    reviews, and this must never silently diverge from it.
+
+    IDs are permanent once assigned (`assemble_id_map` never reassigns one),
+    so any body recent enough to have seen this finding carries the mapping
+    -- no need to specifically target the canonical review's body. Returns
+    `None` if the ID was never assigned an entry (e.g. it genuinely doesn't
+    exist), in which case verdict recording is skipped entirely (see
+    `_record_verdict`) rather than guessing.
+    """
+    for fp, fid in _parse_existing_ids(bodies).items():
+        if fid == finding_id:
+            return fp
+    return None
+
+
+def _record_verdict(
+    provider: GitHubProvider,
+    reviews: Sequence[dict[str, Any]],
+    fingerprint: str | None,
+    verdict: str,
+) -> None:
+    """Best-effort: patch the canonical review's verdict marker.
+
+    "Canonical" = the most recently posted bot review (highest `id`) among
+    `reviews`, regardless of its current state -- a dismissed review is
+    still fully visible and still the last thing this bot posted; dismissal
+    doesn't delete or hide it.
+
+    Deliberately swallows every failure into a log line (and a GitHub
+    Actions `::warning::` annotation when running in CI), never raising and
+    never surfacing into the caller's `DismissResult.errors`. This is a new,
+    additive side-channel layered onto an already-working resolve/dismiss/
+    approve flow (Epic 13); a verdict-recording failure must never change
+    whether a thread is reported as resolved, since it changes nothing about
+    the primary outcome. The only downstream effect of a swallowed failure
+    is that a future review cycle's cross-run classification (per the
+    PR-comment-clutter design) won't see this verdict -- degrading to
+    "treat as unmatched" for that one finding, not a correctness break.
+    """
+    if fingerprint is None:
+        return
+    if not reviews:
+        return
+    canonical = max(reviews, key=lambda r: r.get("id") or 0)
+    canonical_id = canonical.get("id")
+    if not isinstance(canonical_id, int):
+        return
+    body = canonical.get("body") or ""
+    verdicts = extract_verdicts(body)
+    verdicts[fingerprint] = verdict
+    new_body = upsert_verdicts_marker(body, verdicts)
+    ok, status, snippet = provider.update_review_body(canonical_id, new_body)
+    if ok:
+        return
+    message = (
+        f"failed to record '{verdict}' verdict on review {canonical_id}: "
+        f"HTTP {status}: {snippet}"
+    )
+    if _os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning::ai-pr-review: {message}", flush=True)
+    _log.warning("dismiss: %s", message)
 
 
 def _first_comment(thread: dict[str, Any]) -> dict[str, Any]:
@@ -521,13 +596,19 @@ def dismiss_by_finding_id(
 
     if classified.location is FindingLocation.BODY:
         errors.extend(provider._errors[errors_before:])
+        fingerprint = _fingerprint_for_finding_id(bodies, finding_id)
         if command == "fixed":
             # No thread exists for a body-level finding, and "fixed" must
             # never write a feedback-store entry (it isn't a verdict on
-            # whether the finding was valid) -- so there's nothing to
-            # resolve, dismiss, or record. feedback_source/file/rule_id are
-            # deliberately left empty so cli.py's is_body_finding check
-            # doesn't route this into the feedback-store persistence path.
+            # whether the finding was valid) -- so there's nothing to resolve
+            # or dismiss. It IS recorded, though: the verdict marker is what
+            # makes "it will be re-evaluated on the next review run" true --
+            # a recurring exact-fingerprint match gets re-surfaced rather
+            # than silently treated as brand new. feedback_source/file/
+            # rule_id are deliberately left empty so cli.py's is_body_finding
+            # check doesn't route this into the feedback-store persistence
+            # path.
+            _record_verdict(provider, reviews, fingerprint, "fixed")
             return DismissResult(
                 reply=(
                     f"@{actor} marked **F{finding_id}** as `fixed`"
@@ -538,6 +619,7 @@ def dismiss_by_finding_id(
                 active_body_ids=tuple(list_active_body_ids(bodies)),
                 errors=tuple(errors),
             )
+        _record_verdict(provider, reviews, fingerprint, "dismissed")
         return DismissResult(
             reply=(
                 f"@{actor} marked **F{finding_id}** as `{command}`. "
@@ -592,6 +674,12 @@ def dismiss_by_finding_id(
     pr_approved = False
     review_id = _thread_review_id(target_thread)
     if resolved:
+        _record_verdict(
+            provider,
+            reviews,
+            _fingerprint_for_finding_id(bodies, finding_id),
+            "fixed" if command == "fixed" else "dismissed",
+        )
         # Try the PR-wide approve path FIRST: it is the sole dismisser for
         # the reviews it clears (it dismisses each CHANGES_REQUESTED review
         # itself before submitting the APPROVE). Running
@@ -878,6 +966,37 @@ def dismiss_inline_reply(
     pr_approved = False
     target_review_id = review_id if review_id is not None else _thread_review_id(target_thread)
     if resolved:
+        # Verdict recording (best-effort, see _record_verdict): this function
+        # doesn't otherwise need the full review list/bodies (dismiss_by_
+        # finding_id already fetches them for its own classification, but a
+        # thread reply identifies the finding directly). Every inline comment
+        # this bot posts embeds its own **[F<n>]** token (assigned to inline
+        # and body findings alike), so it's extracted from the comment's own
+        # text -- cheaply, with no API call -- rather than needing a separate
+        # lookup. Only fetch the review list (needed to locate the canonical
+        # review and reverse-lookup the fingerprint) when there's actually an
+        # F-id to look up; skipping it otherwise avoids an unnecessary extra
+        # API call in the same spirit as the approve_allowed short-circuit
+        # right below.
+        id_match = _ID_RE.search(body)
+        if id_match is not None:
+            # Truncate away whatever list_bot_reviews() appends to
+            # provider._errors on failure -- this lookup is purely for the
+            # best-effort verdict write below and must not surface as a
+            # resolve/dismiss error for a concern it has nothing to do with.
+            _verdict_errors_before = len(provider._errors)
+            reviews_for_verdict = provider.list_bot_reviews()
+            del provider._errors[_verdict_errors_before:]
+            bodies_for_verdict = [r.get("body") or "" for r in reviews_for_verdict]
+            fingerprint = _fingerprint_for_finding_id(
+                bodies_for_verdict, int(id_match.group(1))
+            )
+            _record_verdict(
+                provider,
+                reviews_for_verdict,
+                fingerprint,
+                "fixed" if command == "fixed" else "dismissed",
+            )
         # Try the PR-wide approve path FIRST — see dismiss_by_finding_id's
         # identical ordering comment: _approve_if_pr_fully_resolved must run
         # before _dismiss_if_all_resolved, not after, or the per-review

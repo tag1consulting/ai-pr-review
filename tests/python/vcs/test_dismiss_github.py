@@ -23,9 +23,14 @@ from ai_pr_review.slash.dismiss import (
     resolve_only,
 )
 from ai_pr_review.vcs._body import format_body_finding
+from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, build_id_map_marker
+from ai_pr_review.vcs.marker import (
+    INLINE_MARKER,
+    build_id_map_marker,
+    extract_verdicts,
+)
 
 
 @dataclass
@@ -100,19 +105,28 @@ def _threads_response(nodes: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_dismiss_by_finding_id_body_finding_no_http_side_effects() -> None:
+def test_dismiss_by_finding_id_body_finding_no_thread_or_dismiss_put() -> None:
+    """A BODY finding has no thread to resolve or review to dismiss -- but
+    (new) its verdict IS now recorded via a body-only PUT to the canonical
+    review, since that's the only persistent state a body-level dismiss can
+    leave behind (previously: none at all)."""
     f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
     bullet = format_body_finding(f, finding_id=3)
     review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+    put_bodies: list[dict] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "GET" and "/reviews" in str(req.url):
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
             return httpx.Response(
                 200,
                 json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
             )
-        if req.method == "PUT":
+        if req.method == "PUT" and "/dismissals" in url:
             raise AssertionError("no dismiss PUT expected for a BODY finding")
+        if req.method == "PUT" and url.endswith("/reviews/1"):
+            put_bodies.append(_json.loads(req.content))
+            return httpx.Response(200, json={"id": 1})
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
@@ -123,6 +137,14 @@ def test_dismiss_by_finding_id_body_finding_no_http_side_effects() -> None:
     assert result.errors == ()
     assert result.thread_resolved is False
     assert result.review_dismissed is False
+
+    assert len(put_bodies) == 1
+    assert set(put_bodies[0].keys()) == {"body"}  # never event/state, only body
+    new_body = put_bodies[0]["body"]
+    assert extract_verdicts(new_body) == {fingerprint(f): "dismissed"}
+    # The original bullet must survive the patch -- this is a surgical
+    # upsert, not a re-render of the whole body.
+    assert bullet in new_body
 
 
 def test_dismiss_by_finding_id_unknown_id() -> None:
