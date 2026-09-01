@@ -616,7 +616,7 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     "command_name",
     envvar="SLASH_COMMAND",
     required=True,
-    type=click.Choice(["dismiss", "false-positive", "wont-fix"]),
+    type=click.Choice(["dismiss", "false-positive", "wont-fix", "fixed"]),
     help="Slash command name (defaults to SLASH_COMMAND env var).",
 )
 @click.option(
@@ -631,7 +631,10 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     envvar="SLASH_COMMENT_BODY",
     default="",
     help="Raw top-level comment body, used to extract the feedback reason "
-    "(defaults to SLASH_COMMENT_BODY env var).",
+    "and (for `fixed`) the optional commit SHA (defaults to "
+    "SLASH_COMMENT_BODY env var). Re-parsed here with parse_command() rather "
+    "than adding SHA extraction to the workflow's bash `awk` parser -- "
+    "slash-commands.yml has no test coverage; this does.",
 )
 @click.option(
     "--enable-feedback-loop",
@@ -640,7 +643,8 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     type=bool,
     help="Whether to persist BODY-finding dismissals to the feedback store "
     "(defaults to AI_FEEDBACK_LOOP env var). When false, the finding is "
-    "acknowledged but not recorded for future suppression.",
+    "acknowledged but not recorded for future suppression. Ignored for "
+    "`fixed`, which never writes to the feedback store regardless.",
 )
 @click.option(
     "--approve-allowed",
@@ -653,7 +657,8 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     "decides this from author_association -- OWNER/MEMBER only, a tighter "
     "bar than plain dismiss's OWNER/MEMBER/COLLABORATOR. When false, "
     "dismissal still happens normally; only the extra approve step is "
-    "skipped.",
+    "skipped. Always forced False for `fixed` regardless of this flag -- a "
+    "fix claim is not a maintainer verdict and must not trigger approval.",
 )
 def dismiss(
     finding_id: int | None,
@@ -664,14 +669,18 @@ def dismiss(
     enable_feedback_loop: bool,
     approve_allowed: bool,
 ) -> None:
-    """Handle `/ai-pr-review dismiss|false-positive|wont-fix [F<n>]` posted as
-    a top-level PR comment.
+    """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed [F<n>]`
+    posted as a top-level PR comment.
 
     Classifies F<n> as a BODY or INLINE finding, resolves/dismisses the
     backing review thread when applicable, records a feedback-store entry
     for BODY findings (when the feedback loop is enabled), and prints the
     reply to stdout. GitHub-only: F-IDs and the id-map only exist on the
     GitHub provider.
+
+    `fixed` never writes to the feedback store and never auto-approves,
+    regardless of --enable-feedback-loop / --approve-allowed -- see
+    SlashCommand.is_feedback_command's docstring and dismiss_by_finding_id's.
 
     Also emits a `::notice::reaction=done|confused` line to stderr so the
     calling workflow step can react to the triggering comment without
@@ -682,9 +691,22 @@ def dismiss(
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
     from ai_pr_review.slash.dismiss import dismiss_by_finding_id, list_active_body_ids
-    from ai_pr_review.slash.parser import ParseError, SlashCommand, parse_command
+    from ai_pr_review.slash.parser import SlashCommand, parse_command
 
     os.environ["PR_NUMBER"] = str(pr_number)
+
+    # Parsed once, reused for both the commit_sha extraction below and the
+    # feedback-store entry further down -- avoids parsing comment_body twice.
+    parsed = parse_command(comment_body) if comment_body else None
+    parsed_command = parsed if isinstance(parsed, SlashCommand) else None
+
+    commit_sha = parsed_command.commit_sha if parsed_command is not None else ""
+
+    if command_name == "fixed":
+        # A fix claim is not a maintainer verdict on the finding -- never let
+        # it trigger the PR-wide auto-approve escalation, no matter what the
+        # calling workflow passed.
+        approve_allowed = False
 
     provider = _build_github_provider_or_exit("dismiss")
 
@@ -702,7 +724,12 @@ def dismiss(
         return
 
     result = dismiss_by_finding_id(
-        provider, finding_id, actor=actor, command=command_name, approve_allowed=approve_allowed
+        provider,
+        finding_id,
+        actor=actor,
+        command=command_name,
+        approve_allowed=approve_allowed,
+        commit_sha=commit_sha,
     )
 
     # A genuine miss (UNKNOWN classification, or an INLINE token that could
@@ -728,6 +755,11 @@ def dismiss(
         "dismiss", result.errors, thread_resolved=result.thread_resolved
     )
 
+    # For command_name == "fixed", dismiss_by_finding_id's BODY branch never
+    # populates feedback_source/feedback_file (see its docstring), so
+    # is_body_finding is always False here and the store-write path below is
+    # unreachable for "fixed" -- it never gets a chance to record a verdict
+    # the finding was invalid, which is the whole point of that command.
     is_body_finding = bool(result.feedback_source or result.feedback_file)
     if not is_body_finding:
         click.echo(result.reply)
@@ -740,11 +772,8 @@ def dismiss(
     from ai_pr_review.feedback.store import make_store
     from ai_pr_review.slash.handlers import build_entry
 
-    parsed = parse_command(comment_body) if comment_body else None
-    command_for_entry = (
-        parsed
-        if parsed is not None and not isinstance(parsed, ParseError)
-        else SlashCommand(name=command_name, reason="", raw_body=comment_body, finding_id=finding_id)
+    command_for_entry = parsed_command or SlashCommand(
+        name=command_name, reason="", raw_body=comment_body, finding_id=finding_id
     )
 
     class _DismissConfig:
@@ -803,7 +832,7 @@ def dismiss(
     "command_name",
     envvar="SLASH_COMMAND",
     required=True,
-    type=click.Choice(["dismiss", "false-positive", "wont-fix"]),
+    type=click.Choice(["dismiss", "false-positive", "wont-fix", "fixed"]),
     help="Slash command name (defaults to SLASH_COMMAND env var).",
 )
 @click.option(
@@ -812,6 +841,14 @@ def dismiss(
     required=True,
     type=int,
     help="Pull request number (defaults to SLASH_PR_NUMBER env var).",
+)
+@click.option(
+    "--comment-body",
+    envvar="SLASH_COMMENT_BODY",
+    default="",
+    help="Raw reply-comment body (defaults to SLASH_COMMENT_BODY env var). "
+    "Only used to extract `fixed`'s optional commit SHA via parse_command() "
+    "-- ignored for every other command.",
 )
 @click.option(
     "--approve-allowed",
@@ -824,7 +861,8 @@ def dismiss(
     "decides this from author_association -- OWNER/MEMBER only, a tighter "
     "bar than plain dismiss's OWNER/MEMBER/COLLABORATOR. When false, "
     "dismissal still happens normally; only the extra approve step is "
-    "skipped.",
+    "skipped. Always forced False for `fixed` regardless of this flag -- a "
+    "fix claim is not a maintainer verdict and must not trigger approval.",
 )
 def dismiss_inline(
     parent_comment_id: int,
@@ -832,10 +870,11 @@ def dismiss_inline(
     actor: str,
     command_name: str,
     pr_number: int,
+    comment_body: str,
     approve_allowed: bool,
 ) -> None:
-    """Handle `/ai-pr-review dismiss|false-positive|wont-fix` posted as a reply
-    to an inline review comment (`pull_request_review_comment` event).
+    """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed` posted as
+    a reply to an inline review comment (`pull_request_review_comment` event).
 
     Resolves the review thread owning the parent comment and, if `review_id`
     is given and its own threads are now all resolved, dismisses that review.
@@ -843,13 +882,26 @@ def dismiss_inline(
     stderr so the calling workflow step can react to the triggering comment.
     GitHub-only: inline review threads only exist on the GitHub provider.
 
+    `fixed` never auto-approves regardless of --approve-allowed -- see
+    dismiss_inline_reply's docstring.
+
     Exit codes:
       0 — handled (including "could not find thread" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
     from ai_pr_review.slash.dismiss import dismiss_inline_reply
+    from ai_pr_review.slash.parser import SlashCommand, parse_command
 
     os.environ["PR_NUMBER"] = str(pr_number)
+
+    parsed = parse_command(comment_body) if comment_body else None
+    commit_sha = parsed.commit_sha if isinstance(parsed, SlashCommand) else ""
+
+    if command_name == "fixed":
+        # A fix claim is not a maintainer verdict on the finding -- never let
+        # it trigger the PR-wide auto-approve escalation, no matter what the
+        # calling workflow passed.
+        approve_allowed = False
 
     provider = _build_github_provider_or_exit("dismiss-inline")
 
@@ -860,6 +912,7 @@ def dismiss_inline(
         actor=actor,
         command=command_name,
         approve_allowed=approve_allowed,
+        commit_sha=commit_sha,
     )
 
     acted = bool(result.thread_resolved or result.review_dismissed or result.pr_approved)

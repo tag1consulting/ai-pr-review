@@ -296,5 +296,108 @@ def test_sanitize_nfc_normalizes() -> None:
 # ---------------------------------------------------------------------------
 
 def test_known_commands_contains_all() -> None:
-    expected = {"false-positive", "wont-fix", "explain", "revise", "feedback", "dismiss"}
+    expected = {
+        "false-positive", "wont-fix", "explain", "revise", "feedback", "dismiss", "fixed",
+    }
     assert expected == KNOWN_COMMANDS
+
+
+# ---------------------------------------------------------------------------
+# "fixed" command
+# ---------------------------------------------------------------------------
+
+def test_fixed_no_args() -> None:
+    cmd = parse_command("/ai-pr-review fixed")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.name == "fixed"
+    assert cmd.canonical_name == "fixed"  # not aliased to false-positive
+    assert cmd.finding_id is None
+    assert cmd.commit_sha == ""
+    assert cmd.reason == ""
+
+
+def test_fixed_with_finding_id() -> None:
+    cmd = parse_command("/ai-pr-review fixed F3")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 3
+    assert cmd.commit_sha == ""
+
+
+def test_fixed_with_finding_id_and_sha() -> None:
+    cmd = parse_command("/ai-pr-review fixed F3 abc1234")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 3
+    assert cmd.commit_sha == "abc1234"
+    assert cmd.reason == ""
+
+
+def test_fixed_with_sha_only_no_finding_id() -> None:
+    cmd = parse_command("/ai-pr-review fixed abc1234")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id is None
+    assert cmd.commit_sha == "abc1234"
+
+
+def test_fixed_with_finding_id_sha_and_reason() -> None:
+    cmd = parse_command("/ai-pr-review fixed F3 abc1234 fixed in the refactor")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 3
+    assert cmd.commit_sha == "abc1234"
+    assert cmd.reason == "fixed in the refactor"
+
+
+def test_fixed_sha_normalized_to_lowercase() -> None:
+    cmd = parse_command("/ai-pr-review fixed F3 ABC1234")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.commit_sha == "abc1234"
+
+
+def test_fixed_full_length_sha() -> None:
+    full_sha = "a" * 40
+    cmd = parse_command(f"/ai-pr-review fixed F3 {full_sha}")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.commit_sha == full_sha
+
+
+def test_fixed_short_hex_word_peeled_as_sha() -> None:
+    # Accepted ambiguity: a 7+ char hex-only prose word is indistinguishable
+    # from a SHA and is peeled as one. This only affects reply wording, not
+    # mechanics (thread resolution is driven by finding_id/comment id, never
+    # by commit_sha).
+    cmd = parse_command("/ai-pr-review fixed F3 deadbeef")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.commit_sha == "deadbeef"
+    assert cmd.reason == ""
+
+
+def test_fixed_non_hex_reason_not_peeled_as_sha() -> None:
+    cmd = parse_command("/ai-pr-review fixed F3 refactored the handler")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.commit_sha == ""
+    assert cmd.reason == "refactored the handler"
+
+
+def test_fixed_sha_too_short_not_peeled() -> None:
+    # 6 hex chars is below the 7-char minimum -- treated as reason prose.
+    cmd = parse_command("/ai-pr-review fixed F3 abc123")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.commit_sha == ""
+    assert cmd.reason == "abc123"
+
+
+def test_fixed_is_not_a_feedback_command() -> None:
+    # Central design decision: "fixed" must never write to the learning-loop
+    # store — see is_feedback_command's docstring.
+    cmd = parse_command("/ai-pr-review fixed F3 abc1234")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.is_feedback_command is False
+
+
+def test_other_commands_do_not_peel_sha() -> None:
+    # The SHA peel is scoped to "fixed" only -- dismiss/false-positive/etc.
+    # must keep treating a hex-looking word as ordinary reason text.
+    cmd = parse_command("/ai-pr-review dismiss F3 abc1234")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 3
+    assert cmd.commit_sha == ""
+    assert cmd.reason == "abc1234"

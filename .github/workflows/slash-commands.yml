@@ -11,6 +11,7 @@
 #   /ai-pr-review dismiss                     — reply to a finding to mark it as false positive
 #   /ai-pr-review false-positive [reason]     — record finding as false positive (learning loop)
 #   /ai-pr-review wont-fix [reason]           — record finding as intentional (learning loop)
+#   /ai-pr-review fixed [sha]                 — mark finding as fixed (no learning-loop write, no auto-approve)
 #   /ai-pr-review feedback <text>             — store free-form feedback (learning loop)
 #   /ai-pr-review explain                     — request explanation from the originating agent
 #   /ai-pr-review revise <hint>               — request agent revision with a hint
@@ -232,9 +233,12 @@ jobs:
               echo "command=$command" >> "$GITHUB_OUTPUT"
               echo "valid=true"       >> "$GITHUB_OUTPUT"
               ;;
-            dismiss|false-positive|wont-fix|explain|revise)
+            dismiss|false-positive|wont-fix|fixed|explain|revise)
               # These commands accept an optional F<n> body-finding ID from a
               # top-level PR comment. Handled by dismiss-body-finding job.
+              # "fixed" additionally accepts an optional commit SHA after the
+              # F-ID -- that's parsed in Python (ai_pr_review/slash/parser.py)
+              # from the full comment body already forwarded below, not here.
               echo "command=$command" >> "$GITHUB_OUTPUT"
               echo "valid=true"       >> "$GITHUB_OUTPUT"
               # Extract optional finding ID (e.g. "F3" or "f3") from second token.
@@ -281,6 +285,7 @@ jobs:
           - `/ai-pr-review dismiss F<n>` — dismiss a **body-level** finding by its stable ID (e.g. `/ai-pr-review dismiss F1`); IDs appear in the **`### Findings not attached to specific lines`** section. IDs are stable across review cycles — `F1` always refers to the same finding on this PR.
           - `/ai-pr-review false-positive [F<n>] [reason]` — record finding as false positive in the learning loop; use `F<n>` for body-level findings; a reply on an inline finding also resolves the thread and dismisses/approves like `dismiss`
           - `/ai-pr-review wont-fix [F<n>] [reason]` — record finding as intentional in the learning loop; use `F<n>` for body-level findings; a reply on an inline finding also resolves the thread and dismisses/approves like `dismiss`
+          - `/ai-pr-review fixed [F<n>] [sha]` — mark a finding as fixed in code (the opposite claim from `dismiss`); resolves/dismisses like `dismiss` but never auto-approves and never writes to the learning loop; optional commit SHA is echoed in the reply
           - `/ai-pr-review feedback <text>` — store free-form feedback in the learning loop
           - `/ai-pr-review explain [F<n>]` — request a detailed explanation from the originating agent; use `F<n>` for body-level findings
           - `/ai-pr-review revise [F<n>] <hint>` — request the agent to revise its finding with a hint; use `F<n>` for body-level findings
@@ -443,7 +448,7 @@ jobs:
     if: |
       inputs.event-name == 'issue_comment' &&
       inputs.is-pull-request == 'true' &&
-      contains(fromJSON('["dismiss","false-positive","wont-fix","explain","revise"]'), needs.handle-command.outputs.command) &&
+      contains(fromJSON('["dismiss","false-positive","wont-fix","fixed","explain","revise"]'), needs.handle-command.outputs.command) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
     needs: handle-command
     runs-on: ubuntu-latest
@@ -606,7 +611,7 @@ jobs:
 
       - name: Invoke Python dismiss handler
         id: dismiss
-        if: contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
+        if: contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
         env:
           SLASH_FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
           SLASH_ACTOR: ${{ inputs.actor-login }}
@@ -642,7 +647,7 @@ jobs:
           echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
 
       - name: Post dismiss reply
-        if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
+        if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
@@ -663,7 +668,7 @@ jobs:
           gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body-file "$reply_file"
 
       - name: React — dismiss outcome
-        if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix"]'), needs.handle-command.outputs.command)
+        if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
@@ -734,7 +739,8 @@ jobs:
       inputs.event-name == 'pull_request_review_comment' &&
       (startsWith(inputs.comment-body, '/ai-pr-review dismiss') ||
        startsWith(inputs.comment-body, '/ai-pr-review false-positive') ||
-       startsWith(inputs.comment-body, '/ai-pr-review wont-fix')) &&
+       startsWith(inputs.comment-body, '/ai-pr-review wont-fix') ||
+       startsWith(inputs.comment-body, '/ai-pr-review fixed')) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
     runs-on: ubuntu-latest
     container:
@@ -805,12 +811,17 @@ jobs:
           SLASH_ACTOR: ${{ inputs.actor-login }}
           SLASH_COMMAND: ${{ steps.cmd.outputs.command }}
           SLASH_PR_NUMBER: ${{ inputs.pr-number }}
+          # Only consumed by `fixed`, to parse its optional commit SHA
+          # (ai_pr_review/slash/parser.py); ignored by every other command.
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
           # Auto-approve (issue #590) is a stronger side effect than a single
           # dismiss, so it is gated at the OWNER/MEMBER bar feedback-command
           # already uses for its persistent learning-loop writes -- tighter
           # than this job's own OWNER/MEMBER/COLLABORATOR admission gate
           # above. A COLLABORATOR can still dismiss/false-positive/wont-fix
           # normally; they just never trigger the PR-wide auto-approve.
+          # `dismiss-inline` forces this False for `fixed` regardless of what
+          # we pass here -- a fix claim is not a maintainer verdict.
           SLASH_APPROVE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           GH_TOKEN: ${{ secrets.github-token }}

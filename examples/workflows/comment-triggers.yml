@@ -28,6 +28,9 @@
 #   /ai-pr-review dismiss                 — reply to an INLINE finding to dismiss it
 #   /ai-pr-review dismiss F<n>            — dismiss a BODY-LEVEL finding by its stable ID
 #                                           (e.g. /ai-pr-review dismiss F1)
+#   /ai-pr-review fixed [F<n>] [sha]      — mark a finding fixed in code; same resolve/dismiss
+#                                           mechanics as dismiss, but never auto-approves and
+#                                           never writes to the learning loop
 #   /ai-pr-review help                    — post the command list as a reply
 #
 # Body-level findings (in "### Findings not attached to specific lines") carry stable

@@ -15,8 +15,8 @@ nav_order: 4
 AI PR Review supports commands posted as PR comments. The workflow listens on both `issue_comment` (top-level PR comments) and `pull_request_review_comment` (replies on inline review threads) events.
 
 **Two classes of findings:**
-- **Inline findings** are anchored to a specific diff line. They appear as review-thread comments. Use `/ai-pr-review dismiss` (or `false-positive`, `wont-fix`) as a **reply** on the thread to dismiss them.
-- **Body-level findings** appear in the `### Findings not attached to specific lines` section of the review body. They have no thread to reply to. Each one is labeled with a stable ID like `**[F1]**`. Use `/ai-pr-review dismiss F1` (or `false-positive F1`, `wont-fix F1`) as a **top-level PR comment** to dismiss them.
+- **Inline findings** are anchored to a specific diff line. They appear as review-thread comments. Use `/ai-pr-review dismiss` (or `false-positive`, `wont-fix`, `fixed`) as a **reply** on the thread to dismiss them.
+- **Body-level findings** appear in the `### Findings not attached to specific lines` section of the review body. They have no thread to reply to. Each one is labeled with a stable ID like `**[F1]**`. Use `/ai-pr-review dismiss F1` (or `false-positive F1`, `wont-fix F1`, `fixed F1`) as a **top-level PR comment** to dismiss them.
 
 ## Quick start
 
@@ -147,6 +147,22 @@ When a `dismiss`, `false-positive`, or `wont-fix` reply clears the **last** unre
 This is gated to commenters with `OWNER` or `MEMBER` repository association — one tier stricter than the `OWNER`/`MEMBER`/`COLLABORATOR` bar that dismissal itself uses, matching the trust level the learning-loop commands (`false-positive`/`wont-fix`'s persistent writes) already require. A `COLLABORATOR` can still dismiss/false-positive/wont-fix findings normally; they just never trigger the auto-approve.
 
 The check re-verifies review state immediately before dismissing/approving, so a finding introduced by a concurrent push between the triggering comment and the bot's action will abort the approve.
+
+### `/ai-pr-review fixed [F<n>] [sha] [reason]` {#fixed-command}
+
+Marks a finding as fixed — the opposite claim from `dismiss`/`false-positive`/`wont-fix`: the finding was **correct** and has been addressed in code, not that it was wrong or intentional. Use this instead of `dismiss` when you've actually fixed the issue; `dismiss` would misrepresent the outcome, and `false-positive`/`wont-fix` would additionally teach the learning loop to stop flagging a pattern that was genuinely a bug.
+
+**For inline findings:** Reply on the thread. Resolves the thread and dismisses the owning `CHANGES_REQUESTED` review once all of its threads are resolved — the same mechanics as `dismiss` — but **does not** trigger the [auto-approve escalation](#auto-approve-on-clear) above, regardless of your repository association. A fix claim isn't a verification of the fix; approval should come from the next review run against the new commit, not from this command. The reply says so explicitly.
+
+**For body-level findings:** Top-level PR comment with the finding's stable ID:
+```
+/ai-pr-review fixed F3 a1b2c3d fixed by validating the input length
+```
+Body-level findings have no backing review thread, so there's nothing to resolve — the reply simply acknowledges the command; the finding is re-evaluated on the next review run like any other.
+
+**The optional commit SHA** (`a1b2c3d` above) is echoed bare in the reply so GitHub auto-links it to the commit — a durable pointer to the fix for anyone reading the thread later. It is **not validated** against the repository; a mistyped or unrelated SHA simply renders as plain, unlinked text. It plays no role in resolving the thread or dismissing the review, both of which are driven entirely by the finding ID.
+
+**`fixed` never writes to the learning loop**, even with `AI_FEEDBACK_LOOP=true`. Unlike `false-positive`/`wont-fix`, it makes no claim about whether the pattern is a bug — recording it as a verdict would give the reviewing model no rule to act on and risks being misread as a suppression signal for a finding that was actually correct.
 
 ### `/ai-pr-review feedback <text>`
 

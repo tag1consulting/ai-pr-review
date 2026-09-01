@@ -155,3 +155,23 @@ def test_revise_command_returns_stub_reply() -> None:
     assert reply
     assert "focus on line 42" in reply or "not yet implemented" in reply.lower()
     assert store.appended == []
+
+
+def test_fixed_command_never_writes_to_feedback_store() -> None:
+    """"fixed" is not a feedback-store verdict (see SlashCommand.is_feedback_command)
+    and does not route through handle_command in production -- it rides the
+    dismiss/dismiss-inline CLI path instead (ai_pr_review/slash/dismiss.py).
+    This locks in defense-in-depth: if handle_command ever receives a
+    "fixed" command by accident (e.g. a workflow routing bug), it must fail
+    soft -- no store write, no crash -- rather than silently persisting a
+    suppression-shaped entry the governance prompt has no rule for.
+    """
+    store = _RecordingStore()
+    cmd = SlashCommand(name="fixed", reason="", raw_body="/ai-pr-review fixed F3 abc1234",
+                        finding_id=3, commit_sha="abc1234")
+    assert cmd.is_feedback_command is False
+    entry = build_entry(cmd)
+
+    handle_command(cmd, entry, store)
+
+    assert store.appended == []

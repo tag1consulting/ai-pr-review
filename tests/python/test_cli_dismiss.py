@@ -324,3 +324,72 @@ def test_missing_required_option_fails() -> None:
     result = runner.invoke(cli, ["dismiss", "--command", "dismiss", "--pr-number", "5"], env={})
 
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# "fixed" command on a BODY-level finding
+# ---------------------------------------------------------------------------
+
+
+def test_fixed_body_finding_never_writes_feedback_store(monkeypatch) -> None:
+    """Central regression guard: unlike dismiss/false-positive/wont-fix, a
+    `fixed` verdict on a BODY-level finding must never reach the feedback
+    store, even with --enable-feedback-loop set. Recording it would be read
+    by the governance prompt as a suppression signal for a finding the
+    governance prompt has no rule for -- see
+    SlashCommand.is_feedback_command's docstring."""
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    def _boom(config):
+        raise AssertionError("make_store must not be called for a `fixed` verdict")
+
+    monkeypatch.setattr("ai_pr_review.feedback.store.make_store", _boom)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(3, command="fixed", feedback_loop=True))
+
+    assert result.exit_code == 0, result.output
+    assert "F3" in result.stdout
+    assert "fixed" in result.stdout
+    # Must not claim a suppression verdict was recorded -- that's false for "fixed".
+    assert "suppressed on future review runs" not in result.stdout
+
+
+def test_fixed_body_finding_echoes_bare_sha(monkeypatch) -> None:
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    args = _base_args(3, command="fixed", feedback_loop=False) + [
+        "--comment-body", "/ai-pr-review fixed F3 abc1234def",
+    ]
+    result = runner.invoke(cli, args)
+
+    assert result.exit_code == 0, result.output
+    assert "abc1234def" in result.stdout
+    assert "`abc1234def`" not in result.stdout  # bare, not a code span -- must autolink

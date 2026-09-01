@@ -9,14 +9,16 @@ Parses ``/ai-pr-review <command> [reason]`` comment bodies into typed
   control characters stripped, HTML-escaped, newlines replaced with spaces.
 
 Supported commands:
-  false-positive [reason]   — mark finding as false positive; store feedback
-  wont-fix [reason]         — mark finding as intentional; store feedback
-  explain                   — re-invoke originating agent with detailed explanation
-  revise <hint>             — re-invoke agent with a revision hint
-  feedback <text>           — store free-form feedback
-  dismiss [F<n>] [reason]   — alias for false-positive (backward compat); F<n> targets body-level finding
-  explain [F<n>]            — re-invoke originating agent for explanation; F<n> targets body-level finding
-  revise [F<n>] <hint>      — re-invoke agent with revision hint; F<n> targets body-level finding
+  false-positive [reason]         — mark finding as false positive; store feedback
+  wont-fix [reason]               — mark finding as intentional; store feedback
+  explain                         — re-invoke originating agent with detailed explanation
+  revise <hint>                   — re-invoke agent with a revision hint
+  feedback <text>                 — store free-form feedback
+  dismiss [F<n>] [reason]         — alias for false-positive (backward compat); F<n> targets body-level finding
+  explain [F<n>]                  — re-invoke originating agent for explanation; F<n> targets body-level finding
+  revise [F<n>] <hint>            — re-invoke agent with revision hint; F<n> targets body-level finding
+  fixed [F<n>] [sha] [reason]     — mark finding as fixed (not a suppression verdict; does NOT store feedback);
+                                     optional commit SHA is echoed in the reply, not validated
 
 The ``author_association`` guard (OWNER/MEMBER/COLLABORATOR) is enforced at
 the GitHub Actions workflow level before this parser is called; the parser
@@ -42,8 +44,14 @@ KNOWN_COMMANDS: frozenset[str] = frozenset(
         "revise",
         "feedback",
         "dismiss",  # alias for false-positive
+        "fixed",  # NOT an alias — see SlashCommand.is_feedback_command
     }
 )
+
+# Matches a bare commit SHA (short or full, lowercase or upper). Same shape
+# as vcs.marker's _SHA_PATTERN, duplicated here rather than imported to keep
+# the parser free of a dependency on the vcs package.
+_SHA_RE = re.compile(r"[0-9a-fA-F]{7,40}")
 
 # Secret patterns to reject from reason text (basic; not a full scan)
 _SECRET_PATTERNS: list[re.Pattern[str]] = [
@@ -64,15 +72,35 @@ class SlashCommand:
     # For "dismiss F<n>" — the numeric body-finding ID (e.g. 1 for [F1]).
     # None when no ID was supplied (inline dismiss) or command is not dismiss.
     finding_id: int | None = None
+    # For "fixed [F<n>] <sha>" — the commit SHA, lowercased. Empty string
+    # when none was supplied or the command is not "fixed". Echoed in the
+    # reply for audit-trail purposes only; never validated against the repo
+    # (see slash/dismiss.py) and never used to drive thread resolution.
+    commit_sha: str = ""
 
     @property
     def canonical_name(self) -> str:
-        """Normalize 'dismiss' alias to 'false-positive'."""
+        """Normalize 'dismiss' alias to 'false-positive'.
+
+        "fixed" is deliberately NOT normalized to any existing command: it
+        is neither an alias nor a feedback-store verdict (see
+        is_feedback_command below).
+        """
         return "false-positive" if self.name == "dismiss" else self.name
 
     @property
     def is_feedback_command(self) -> bool:
-        """True for commands that write to the feedback store."""
+        """True for commands that write to the feedback store.
+
+        "fixed" is intentionally excluded. The governance prompt
+        (prompts/_governance.md) tells the model how to interpret exactly
+        three verdict types (false-positive, wont-fix, feedback); an entry
+        with command="fixed" would reach the model with no interpretive
+        rule, and could be misread as a suppression signal for a finding
+        that was actually correct. "fixed" rides the dismiss/resolve path
+        only (ai_pr_review/slash/dismiss.py) and never touches the
+        learning-loop store.
+        """
         return self.canonical_name in ("false-positive", "wont-fix", "feedback")
 
 
@@ -151,15 +179,38 @@ def parse_command(body: str) -> SlashCommand | ParseError | None:
 
     # For feedback/action commands — extract optional F<n> finding ID so
     # body-level findings can be acted on from a top-level PR comment.
-    # Applies to: dismiss, false-positive, wont-fix, explain, revise.
+    # Applies to: dismiss, false-positive, wont-fix, explain, revise, fixed.
     finding_id: int | None = None
-    if command in ("dismiss", "false-positive", "wont-fix", "explain", "revise") and raw_reason:
+    if (
+        command in ("dismiss", "false-positive", "wont-fix", "explain", "revise", "fixed")
+        and raw_reason
+    ):
         # The first word may be a finding ID like "F3" or "f3".
         id_parts = raw_reason.split(None, 1)
         if re.match(r"^[Ff]\d+$", id_parts[0]):
             finding_id = int(id_parts[0][1:])
             raw_reason = id_parts[1] if len(id_parts) > 1 else ""
 
+    # "fixed" additionally accepts an optional commit SHA as the next
+    # positional token, e.g. "/ai-pr-review fixed F3 abc1234 <reason>".
+    # Peeled after the F-ID so the two optional tokens compose the same way
+    # F-ID peeling already works for every other command. A token that
+    # doesn't look like a SHA (e.g. ordinary reason prose) falls through to
+    # `reason` unchanged — see the module docstring for the accepted
+    # ambiguity when a prose word happens to be 7-40 hex characters.
+    commit_sha = ""
+    if command == "fixed" and raw_reason:
+        sha_parts = raw_reason.split(None, 1)
+        if _SHA_RE.fullmatch(sha_parts[0]):
+            commit_sha = sha_parts[0].lower()
+            raw_reason = sha_parts[1] if len(sha_parts) > 1 else ""
+
     reason = _sanitize_reason(raw_reason)
 
-    return SlashCommand(name=command, reason=reason, raw_body=body, finding_id=finding_id)
+    return SlashCommand(
+        name=command,
+        reason=reason,
+        raw_body=body,
+        finding_id=finding_id,
+        commit_sha=commit_sha,
+    )

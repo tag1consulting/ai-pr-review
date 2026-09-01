@@ -86,6 +86,9 @@ The block is token-budget-capped (`AI_FEEDBACK_MAX_TOKENS`, default 2048 tokens)
 | `/ai-pr-review feedback <text>` | `feedback` | Yes |
 | `/ai-pr-review explain` | `explain` | No (stubbed) |
 | `/ai-pr-review revise <hint>` | `revise` | No (stubbed) |
+| `/ai-pr-review fixed [F<n>] [sha]` | `fixed` | **No — deliberately** |
+
+`fixed` is not a verdict on whether a finding was valid, so it never reaches the store: recording `command="fixed"` would give the governance prompt (which interprets exactly `false-positive`/`wont-fix`/`feedback`) no rule to act on, and could be misread as suppression for a pattern that was actually a real bug. It resolves the review thread the same way `dismiss` does — see [Slash commands](slash-commands#fixed-command) — but never touches this store and never triggers the auto-approve escalation.
 
 ## Input sanitization
 
