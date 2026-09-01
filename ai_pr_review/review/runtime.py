@@ -154,9 +154,20 @@ async def build_review_runtime(
     is_incremental = bool(payload.get("is_incremental"))
 
     # 4. Build summary prefix — prepend merge-filter fallback note when present.
+    #
+    # Gated on `not is_incremental`: orchestrate.py treats an empty
+    # summary_text as the signal that this is an incremental run and
+    # post_summary should be a no-op (cli.py builds summary_text starting
+    # from this prefix, and only appends the pr-summarizer's own output when
+    # `not is_incremental`). Ungated, a non-empty prefix on an incremental
+    # run made summary_text non-empty even though pr-summarizer never ran,
+    # which defeated that no-op check and caused post_summary to PUT this
+    # one-line note as the ENTIRE summary comment body -- silently
+    # overwriting the real, previously-accumulated walkthrough with nothing
+    # but a merge-filter warning.
     merge_filter_fallback = str(payload.get("merge_filter_fallback_reason") or "")
     summary_prefix = ""
-    if merge_filter_fallback:
+    if merge_filter_fallback and not is_incremental:
         summary_prefix = (
             f"_Note: merge-commit filtering was skipped ({merge_filter_fallback}); "
             "diff may include upstream changes._\n\n"

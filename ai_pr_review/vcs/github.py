@@ -11,6 +11,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
+from urllib.parse import quote
 
 import httpx
 
@@ -48,6 +49,33 @@ _log = logging.getLogger(__name__)
 _BOT_LOGIN_DEFAULT: Final[str] = "github-actions[bot]"
 
 _GRAPHQL_PATH: Final[str] = "/graphql"
+
+
+def _blob_link(*, owner: str, repo: str, head_sha: str, file: str, line: int | None) -> str:
+    """Build a GitHub blob-permalink URL, optionally anchored to a line.
+
+    Used only for body-level findings, which have no diff-line anchor of
+    their own for a reviewer to click through to (unlike an inline review
+    comment, which GitHub already anchors natively). The documented
+    diff-view anchor format requires a comment ID that doesn't exist for a
+    body-level finding (confirmed live: an existing inline comment's
+    `html_url` is `.../pull/{n}#discussion_r{comment_id}`, not a path-hash
+    scheme) -- the blob permalink is the only always-constructible target.
+
+    `Finding.file` carries no documented "always repo-relative" contract,
+    and at least one static analyzer has been observed emitting an absolute
+    container path (e.g. `/workspace/ai_pr_review/vcs/github.py`) instead --
+    a leading "/" would otherwise survive into `quoted_path` as an empty
+    first segment, producing a double-slash URL. Stripped here defensively;
+    the resulting link may still point at the wrong location for a
+    genuinely absolute path (that's the analyzer's bug to fix, tracked
+    separately), but it is at least never malformed.
+    """
+    quoted_path = "/".join(quote(seg) for seg in file.lstrip("/").split("/"))
+    url = f"https://github.com/{owner}/{repo}/blob/{head_sha}/{quoted_path}"
+    if line is not None:
+        url += f"#L{line}"
+    return url
 
 
 def _parse_next_link(link_header: str) -> str | None:
@@ -451,6 +479,12 @@ class GitHubProvider:
             loc_note = ""
             if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
                 loc_note = " *(line not in diff)*"
+            if f.file:
+                url = _blob_link(
+                    owner=self.config.owner, repo=self.config.repo,
+                    head_sha=diff.head_sha, file=f.file, line=f.line,
+                )
+                loc_note += f" [↗]({url})"
             body_bullets.append(format_body_finding(
                 f,
                 location_note=loc_note,
@@ -460,6 +494,12 @@ class GitHubProvider:
             loc_note = ""
             if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
                 loc_note = " *(line not in diff)*"
+            if f.file:
+                url = _blob_link(
+                    owner=self.config.owner, repo=self.config.repo,
+                    head_sha=diff.head_sha, file=f.file, line=f.line,
+                )
+                loc_note += f" [↗]({url})"
             ood_bullets.append(format_body_finding(
                 f,
                 location_note=loc_note,
