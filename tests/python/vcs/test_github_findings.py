@@ -330,6 +330,47 @@ def test_post_findings_ineligible_line_falls_back_to_body() -> None:
     payload = review_call[2]
     assert payload["comments"] == []
     assert "line not in diff" in payload["body"]
+    # The blob-link note must append after, not replace, the existing
+    # "line not in diff" note.
+    expected_url = f"https://github.com/o/r/blob/{_VALID_SHA}/app.py#L99"
+    assert f"*(line not in diff)* [↗]({expected_url})" in payload["body"]
+
+
+def test_body_finding_location_links_to_github_blob() -> None:
+    """Findings that never get an inline anchor (out-of-diff or over
+    max_inline) previously rendered a plain-text location with zero
+    click-through. Uses GitHub's documented blob-permalink URL.
+
+    Uses max_inline=0 to push an otherwise inline-eligible finding into the
+    body path with a *clean* location (no "line not in diff" note already
+    present) -- an out-of-diff-file finding would always carry that note
+    ahead of the link, which is covered separately."""
+    findings = [
+        Finding(
+            severity="Low",
+            confidence=70,
+            finding="minor nit",
+            source="code-reviewer",
+            file="app.py",
+            line=4,
+        ),
+    ]
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    prov, rec = _make_provider(_review_post_handler())
+    result = prov.post_findings(findings, diff, event="COMMENT", max_inline=0)
+    assert result.ok
+    assert result.inline_posted == 0
+    assert result.body_findings == 1
+
+    review_call = next(c for c in rec.calls if c[0] == "POST" and "/reviews" in c[1])
+    payload = review_call[2]
+    expected_url = f"https://github.com/o/r/blob/{_VALID_SHA}/app.py#L4"
+    assert f"[↗]({expected_url})" in payload["body"]
+    # Must append after the existing backtick-quoted location, never wrap or
+    # alter it -- `_finding_ids.py`'s fingerprint-truncation literal
+    # `text.find(" *(at \`")` depends on that text being undisturbed.
+    assert f"*(at `app.py:4` [↗]({expected_url}))*" in payload["body"]
 
 
 def test_post_findings_respects_max_inline_cap() -> None:
