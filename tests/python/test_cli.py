@@ -180,18 +180,28 @@ class TestComputeCommand:
         }
 
     def test_unknown_ai_var_warns_not_errors(self) -> None:
-        """An unrecognized AI_* variable emits a warning but does not abort."""
+        """An unrecognized AI_* variable emits a warning but does not abort.
+
+        Patches compute_diff out entirely -- this test is about the env-var
+        validation step, not diff computation, and running `compute` in a
+        plain isolated_filesystem() (no real git repo, no origin/<base_ref>)
+        would otherwise hit the #702 GitDiffError fix unrelated to what's
+        being asserted here.
+        """
         runner = CliRunner()
-        with runner.isolated_filesystem():
+        diff = _make_diff_result()
+        with (
+            runner.isolated_filesystem(),
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+        ):
             result = runner.invoke(
                 cli,
                 ["compute"],
                 env={"AI_UNKNOWN_BLAH": "1", "BASE_REF": "main", "HEAD_SHA": "x"},
                 catch_exceptions=False,
             )
-        # Must NOT exit 1 from a ConfigError; exit code may still be non-zero
-        # if the underlying compute step fails (e.g. no git repo), but the
-        # unknown-var check itself no longer aborts.
+        # Must NOT exit 1 from a ConfigError -- the unknown-var check itself
+        # does not abort.
         assert result.exit_code != 1 or "Configuration error" not in result.output
 
     def test_writes_to_output_file(self) -> None:
