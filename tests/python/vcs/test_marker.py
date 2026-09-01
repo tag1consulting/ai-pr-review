@@ -15,12 +15,15 @@ from ai_pr_review.vcs.marker import (
     append_skip_marker,
     build_id_map_marker,
     build_summary_marker,
+    build_verdicts_marker,
     extract_id_map,
     extract_summary_sha,
+    extract_verdicts,
     has_inline_marker,
     has_skip_marker,
     has_summary_marker,
     replace_summary_sha,
+    upsert_verdicts_marker,
 )
 
 _VALID_SHA = "abc123def4567890abc123def4567890abc123de"
@@ -477,3 +480,58 @@ def test_extract_id_map_prefers_html_comment_over_hidden_form() -> None:
         + build_id_map_marker(hidden_map, hidden=True)
     )
     assert extract_id_map(body) == html_map
+
+
+# ---------------------------------------------------------------------------
+# build_verdicts_marker / extract_verdicts / upsert_verdicts_marker
+# ---------------------------------------------------------------------------
+
+
+def test_build_verdicts_marker_round_trips() -> None:
+    verdicts = {"a|b.py|1|abc123def456": "dismissed", "c|d.py|2|def456abc123": "fixed"}
+    marker = build_verdicts_marker(verdicts)
+    assert marker.startswith("<!-- ai-pr-review-verdicts: ")
+    assert marker.endswith(" -->")
+    assert extract_verdicts(marker) == verdicts
+
+
+def test_extract_verdicts_no_marker_returns_empty() -> None:
+    assert extract_verdicts("no marker here") == {}
+
+
+def test_extract_verdicts_corrupt_json_returns_empty() -> None:
+    assert extract_verdicts("<!-- ai-pr-review-verdicts: {not json} -->") == {}
+
+
+def test_extract_verdicts_drops_unknown_verdict_values() -> None:
+    """A future verdict type this version doesn't recognize is dropped
+    individually rather than discarding the whole map."""
+    body = '<!-- ai-pr-review-verdicts: {"a":"dismissed","b":"some-future-verdict"} -->'
+    assert extract_verdicts(body) == {"a": "dismissed"}
+
+
+def test_upsert_verdicts_marker_appends_when_absent() -> None:
+    body = "some review body\n"
+    result = upsert_verdicts_marker(body, {"a|b.py|1|abc123def456": "dismissed"})
+    assert result.startswith(body)
+    assert extract_verdicts(result) == {"a|b.py|1|abc123def456": "dismissed"}
+
+
+def test_upsert_verdicts_marker_appends_with_separator_when_no_trailing_newline() -> None:
+    body = "some review body"
+    result = upsert_verdicts_marker(body, {"a|b.py|1|abc123def456": "dismissed"})
+    assert result.startswith("some review body\n<!-- ai-pr-review-verdicts:")
+
+
+def test_upsert_verdicts_marker_replaces_existing_marker_in_place() -> None:
+    body = "some review body\n" + build_verdicts_marker({"a|b.py|1|abc123def456": "dismissed"})
+    updated = upsert_verdicts_marker(
+        body, {"a|b.py|1|abc123def456": "dismissed", "c|d.py|2|def456abc123": "fixed"}
+    )
+    # Exactly one marker, not two -- a naive append would duplicate it.
+    assert updated.count("ai-pr-review-verdicts:") == 1
+    assert extract_verdicts(updated) == {
+        "a|b.py|1|abc123def456": "dismissed",
+        "c|d.py|2|def456abc123": "fixed",
+    }
+    assert updated.startswith("some review body\n")

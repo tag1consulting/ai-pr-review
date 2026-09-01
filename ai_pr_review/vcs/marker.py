@@ -309,3 +309,77 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
     else:
         replacement = f"<!-- ai-pr-review-summary sha={new_sha} -->"
     return _SUMMARY_MARKER_RE.sub(replacement, body, count=1)
+
+
+# GitHub-only (this mechanism has no GitLab/Bitbucket counterpart yet — see
+# issue #710). Records, per finding fingerprint, which durable verdict a
+# human gave it via a slash command: "dismissed" (dismiss/false-positive/
+# wont-fix — suppress forever) or "fixed" (recur-check: reappearing with the
+# exact same fingerprint is worth re-surfacing, per the PR-comment-clutter
+# design). This can't be read back from GraphQL's `isResolved` state: that
+# flag is set identically by all four commands AND by resolve_stale's
+# routine per-cycle cleanup sweep, so by the next review cycle it no longer
+# distinguishes "resolved because a human said so" from "resolved because a
+# human said this specific thing" from "resolved as part of unrelated
+# housekeeping." Embedded in whichever review is currently canonical,
+# parallel to ID_MAP_MARKER_PREFIX; written by `ai_pr_review.slash.dismiss`
+# at command-handling time via `GitHubProvider.update_review_body`.
+VERDICTS_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-verdicts:"
+_VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
+_VALID_VERDICTS: Final[frozenset[str]] = frozenset({"dismissed", "fixed"})
+
+
+def build_verdicts_marker(verdicts: dict[str, str]) -> str:
+    """Produce a hidden HTML comment embedding the fingerprint -> verdict map.
+
+    Format: ``<!-- ai-pr-review-verdicts: {"<fingerprint>": "dismissed"|"fixed", ...} -->``
+    """
+    payload = json.dumps(verdicts, separators=(",", ":"), sort_keys=True)
+    return f"{VERDICTS_MARKER_PREFIX} {payload} -->"
+
+
+def extract_verdicts(body: str) -> dict[str, str]:
+    """Extract the fingerprint -> verdict map from a review body.
+
+    Returns an empty dict when no marker is present. Logs a warning and
+    returns an empty dict when a marker is present but its JSON is
+    malformed. Entries whose value is not one of the known verdict strings
+    are dropped individually (forward-compatible with a future verdict type
+    this version doesn't recognize, without discarding the whole map).
+    """
+    match = _VERDICTS_MARKER_RE.search(body)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log.warning(
+            "ai-pr-review: verdicts marker present but unparseable: %s — raw: %.200s",
+            exc,
+            match.group(1),
+        )
+        return {}
+    if not isinstance(data, dict):
+        _log.warning(
+            "ai-pr-review: verdicts marker present but not a JSON object (got %s) — raw: %.200s",
+            type(data).__name__,
+            match.group(1),
+        )
+        return {}
+    return {str(k): str(v) for k, v in data.items() if str(v) in _VALID_VERDICTS}
+
+
+def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:
+    """Return `body` with its verdicts marker replaced, or appended if the
+    body doesn't have one yet, carrying `verdicts`.
+
+    Unlike the id-map marker (always freshly appended during a full
+    body re-render in `post_findings`), this marker is surgically patched
+    into an otherwise-unchanged review body by the slash-command dismiss
+    path — so it needs an explicit replace-or-append, not just an append.
+    """
+    new_marker = build_verdicts_marker(verdicts)
+    if _VERDICTS_MARKER_RE.search(body):
+        return _VERDICTS_MARKER_RE.sub(new_marker, body, count=1)
+    separator = "" if body.endswith("\n") else "\n"
+    return f"{body}{separator}{new_marker}"
