@@ -29,9 +29,10 @@
 #                           file paths to merge as findings)
 # Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only — no-op on Bitbucket.
 #
-# `clone.depth: full` is required: the action calls `git fetch origin $BASE_REF`
-# to compute the diff, and the default shallow Pipelines clone does not always
-# include the base branch history.
+# `clone.depth: full` is required: this step's own `git fetch` below needs the
+# base branch history available locally, and the default shallow Pipelines
+# clone does not always include it. Note ai_pr_review itself never fetches —
+# see the step's `git fetch origin "$BASE_REF"` line (issue #702).
 
 image:
   # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.
@@ -61,6 +62,13 @@ pipelines:
       - step:
           name: AI PR Review
           script:
+            # Bitbucket's single-branch PR clone never creates a local
+            # origin/<base_ref> ref, which ai_pr_review's diff computation
+            # requires (it assumes the ref already exists -- see #702).
+            # `safe.directory` avoids git's "dubious ownership" check on the
+            # build image's clone path.
+            - git config --global --add safe.directory "$BITBUCKET_CLONE_DIR"
+            - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH":"refs/remotes/origin/$BITBUCKET_PR_DESTINATION_BRANCH"
             - export VCS_PROVIDER=bitbucket
             - export AI_PROVIDER="${AI_PROVIDER:-anthropic}"
             # Empty (default): defer to .github/ai-pr-review/policy.yml route

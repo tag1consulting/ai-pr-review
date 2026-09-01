@@ -103,12 +103,27 @@ canonical contract. If you write your own pipeline, ensure these are set:
 
 ## `clone.depth: full` is required
 
-The default Bitbucket Pipelines clone is shallow and may not include the base
-branch. If `git fetch origin $BASE_REF --depth=50` fails (e.g. on a shallow clone
-missing the base branch), the script emits a warning and falls back to
-existing local refs; if the base ref is still unreachable it aborts with an
-error. Set `clone.depth: full` at the top of `bitbucket-pipelines.yml`
-(the starter does this) to avoid this.
+`ai_pr_review` never fetches from `origin` itself — it assumes
+`origin/<BASE_REF>` already exists as a local ref (see issue #702). On
+GitHub Actions, `actions/checkout` with `fetch-depth: 0` creates that ref as
+part of its own full clone. Bitbucket Pipelines does a single-branch PR
+clone, so the starter template's own script step fetches the base branch
+explicitly before invoking the tool:
+
+```
+git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH":"refs/remotes/origin/$BITBUCKET_PR_DESTINATION_BRANCH"
+```
+
+That fetch needs the base branch's history to actually be present in the
+clone to succeed, which the default shallow Pipelines clone does not
+guarantee — set `clone.depth: full` at the top of `bitbucket-pipelines.yml`
+(the starter does this) to avoid that.
+
+If `origin/<BASE_REF>` is still missing when the tool runs (e.g. a custom
+pipeline that skips this fetch step), `git diff` against it fails and the
+tool now raises a `GitDiffError` and aborts the pipeline with a non-zero
+exit — it no longer silently reports "no changed files" and skips the
+review without saying why.
 
 ## Security considerations
 
@@ -156,11 +171,12 @@ The API token exists but the user does not have write access to comments.
 Check **Workspace settings → Members** and **Repository settings → User and
 group access**.
 
-### `WARNING: git fetch failed; attempting to proceed with existing local refs.`
+### `ERROR: git diff against 'origin/<ref>...<sha>' failed`
 
-Usually harmless if the base branch is already present in the clone. If the
-review aborts with `ERROR: origin/<ref> is not reachable`, set
-`clone.depth: full` in your pipeline YAML.
+The starter template's `git fetch` step (see "`clone.depth: full` is
+required" above) either didn't run or didn't find the base branch. Confirm
+`clone.depth: full` is set and that `BITBUCKET_PR_DESTINATION_BRANCH` is the
+branch you expect.
 
 ### Nothing posts, review exits 0
 
