@@ -10,6 +10,17 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 
+class GitDiffError(RuntimeError):
+    """A `git diff`/`git diff --stat` subprocess exited non-zero.
+
+    A non-zero exit with empty stdout is otherwise indistinguishable from a
+    genuine "no changes" result -- e.g. when the diff range references
+    `origin/<base_ref>` and that ref was never fetched locally (see issue
+    #702). Left uncaught, that silently produced an empty changed-files list
+    and a "no changed files" skip instead of a visible failure.
+    """
+
+
 @dataclass
 class DiffResult:
     diff_text: str
@@ -66,15 +77,34 @@ def _resolve_excludes(user_patterns: tuple[str, ...], mode: str) -> list[str]:
     return list(_EXCLUDE_PATTERNS) + normalized
 
 
+def _raise_on_git_diff_error(result: subprocess.CompletedProcess[str], range_spec: str) -> None:
+    """Raise GitDiffError if a `git diff` subprocess exited non-zero.
+
+    See GitDiffError's docstring: a silent non-zero exit here is what let
+    issue #702 masquerade as a genuine "no changes" result.
+    """
+    if result.returncode != 0:
+        raise GitDiffError(
+            f"git diff against {range_spec!r} failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+
+
 def _diff_variants(
     git: list[str], range_spec: str, excludes: list[str]
 ) -> tuple[list[str], str, str]:
-    """Run the three git-diff variants (names, stat, full text) for range_spec."""
+    """Run the three git-diff variants (names, stat, full text) for range_spec.
+
+    Raises:
+        GitDiffError: if any of the three subprocesses exits non-zero (e.g.
+            range_spec references a ref that doesn't exist locally).
+    """
     changed_result = subprocess.run(
         git + ["diff", "--name-only", range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
     )
+    _raise_on_git_diff_error(changed_result, range_spec)
     changed_files = [f for f in changed_result.stdout.splitlines() if f]
 
     stat_result = subprocess.run(
@@ -82,6 +112,7 @@ def _diff_variants(
         capture_output=True,
         text=True,
     )
+    _raise_on_git_diff_error(stat_result, range_spec)
     diff_stat = stat_result.stdout.strip().splitlines()[-1] if stat_result.stdout.strip() else ""
 
     diff_result = subprocess.run(
@@ -89,6 +120,7 @@ def _diff_variants(
         capture_output=True,
         text=True,
     )
+    _raise_on_git_diff_error(diff_result, range_spec)
     return changed_files, diff_stat, diff_result.stdout
 
 
@@ -269,6 +301,12 @@ def compute_diff(
             *exclude_patterns* and drops the built-in list. Providing ``"replace"``
             with an empty *exclude_patterns* logs a warning and falls back to the
             built-ins.
+
+    Raises:
+        GitDiffError: if `git diff` against `base_ref` (or the incremental
+            watermark) exits non-zero -- e.g. `origin/<base_ref>` was never
+            fetched locally. Propagates uncaught rather than being reported
+            as an empty, "no changed files" diff.
     """
     excludes = _resolve_excludes(exclude_patterns, exclude_patterns_mode)
     git = ["git", "-C", workspace]
