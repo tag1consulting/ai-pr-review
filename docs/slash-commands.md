@@ -40,14 +40,16 @@ The `slash-commands` job in that template delegates to a [reusable workflow](htt
 
 The starter template uses **two tokens**:
 
-- **`secrets.GH_TOKEN`** (PAT or GitHub App token) — required only for the `dismiss` command's `resolveReviewThread` GraphQL mutation and review-dismissal REST calls.
-- **`secrets.GITHUB_TOKEN`** (the built-in token, auto-available in every repository) — used for all plain comment posts, reactions, reads, label changes, and checkout. These operations post as **`github-actions[bot]`**.
+- **`secrets.GH_TOKEN`** (PAT or GitHub App token) — required only for the `dismiss` command's `resolveReviewThread`/`unresolveReviewThread` GraphQL mutations. Every other write the `dismiss` command makes (dismissing a superseded review, the auto-approve review, replies) runs under `GITHUB_TOKEN` instead, as long as `actions-token` is passed (see below) — it is not routed through the PAT.
+- **`secrets.GITHUB_TOKEN`** (the built-in token, auto-available in every repository) — used for all plain comment posts, reactions, reads, label changes, checkout, and (as of the fix for [#734](https://github.com/tag1consulting/ai-pr-review/issues/734)) every `dismiss`-command write except the two GraphQL mutations above. These operations post as **`github-actions[bot]`**.
 
 **Why a PAT is still needed for `dismiss`:** GitHub restricts `GITHUB_TOKEN` in `pull_request_review_comment`-triggered workflows from calling the `resolveReviewThread` GraphQL mutation. The token technically has `pull-requests: write` permission, but GitHub's integration security model blocks this specific mutation unless the token is a PAT or App token.
 
 **You do not need to add a `GH_TOKEN` secret** if you only use `rescan`, `review-full`, `skip`, `help`, or the learning-loop commands (`false-positive`, `wont-fix`, `feedback`, `explain`, `revise`). Those all run under `GITHUB_TOKEN`. The `dismiss` command will fail without `GH_TOKEN`.
 
-If your `secrets:` block omits `actions-token` entirely (an older two-file setup that hasn't picked up the current templates), the reusable workflow falls back to its own `github.token`, so commands still work. Passing `actions-token: ${{ secrets.GITHUB_TOKEN }}` explicitly is still recommended — it's a clearer statement of intent and matches the current templates.
+**Pass `actions-token` too, not just `github-token`.** If your `secrets:` block sets `github-token` but omits `actions-token`, the reusable workflow's `dismiss`/`dismiss-inline`/`feedback-command` jobs have no `GITHUB_TOKEN` to fall back on for their non-thread-resolution writes and use the PAT for everything in that step instead — which is exactly the `gchaix`-attribution bug #734 fixed. Passing both (as the current templates do) confines the PAT to just the thread-resolution mutation.
+
+**Whichever identity owns the PAT is what GitHub will show as having resolved the conversation** — that one mutation has no bot-attributed alternative. If a maintainer's personal PAT is used, resolved threads will show that maintainer's name, even with `actions-token` configured. Prefer a PAT from a dedicated machine/bot GitHub account over a maintainer's personal account when that matters to your team.
 
 **Create a PAT for `dismiss` support:**
 - Classic PAT: go to Settings → Developer settings → Personal access tokens → Tokens (classic). Grant the `repo` scope.

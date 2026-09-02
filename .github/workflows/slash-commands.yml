@@ -470,6 +470,21 @@ jobs:
             "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes
 
+      - name: List dismiss commands
+        # Scans EVERY line of the comment for dismiss/false-positive/wont-fix/
+        # fixed (issue #733: a single top-level comment -- the workaround for
+        # replying inline -- can carry several verdicts, one per line, and
+        # previously only the first was ever acted on). explain/revise are
+        # deliberately excluded here; they stay first-line-only via the
+        # lookup step below, since they're unimplemented stub replies.
+        id: list
+        if: contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
+        env:
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+        run: |
+          commands_json=$(ai-pr-review list-commands --families false-positive,wont-fix,fixed)
+          echo "commands=${commands_json}" >> "$GITHUB_OUTPUT"
+
       - name: Lookup body finding or list active IDs (explain/revise only)
         # Only explain/revise reach this step now — dismiss/false-positive/wont-fix
         # are handled by the "Invoke Python dismiss handler" step below, which
@@ -622,7 +637,13 @@ jobs:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
           AI_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
+          # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
+          # only (#734); GITHUB_TOKEN below is what every other write in
+          # this command (dismiss_review, submit_approval, replies) is
+          # attributed to, so those show up as the bot instead of the PAT's
+          # owner.
           GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_TOKEN: ${{ secrets.actions-token || github.token }}
           VCS_PROVIDER: 'github'
         run: |
           set +e
@@ -826,7 +847,13 @@ jobs:
           # we pass here -- a fix claim is not a maintainer verdict.
           SLASH_APPROVE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
+          # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
+          # only (#734); GITHUB_TOKEN below is what every other write in
+          # this command (dismiss_review, submit_approval, replies) is
+          # attributed to, so those show up as the bot instead of the PAT's
+          # owner.
           GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_TOKEN: ${{ secrets.actions-token || github.token }}
           VCS_PROVIDER: 'github'
         run: |
           set +e
@@ -1027,7 +1054,12 @@ jobs:
           SLASH_CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
           AI_FEEDBACK_LOOP: 'true'
           GITHUB_REPOSITORY: ${{ inputs.repository }}
+          # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
+          # only (#734); GITHUB_TOKEN below is what every other write in
+          # this command is attributed to, so those show up as the bot
+          # instead of the PAT's owner.
           GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_TOKEN: ${{ secrets.actions-token || github.token }}
           AI_PROVIDER: ${{ inputs.provider }}
           VCS_PROVIDER: 'github'
         run: |
