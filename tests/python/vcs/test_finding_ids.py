@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
-from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
+from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint, known_fingerprints
 from ai_pr_review.vcs.marker import build_id_map_marker, extract_id_map
 
 
@@ -340,3 +340,30 @@ def test_marker_based_map_takes_priority_over_bullet_parse() -> None:
     id_map_reconstructed = assemble_id_map([new_body], [fa, fc])
     assert id_map_reconstructed[fingerprint(fa)] == id_map_old[fingerprint(fa)]  # F1 preserved
     assert id_map_reconstructed[fingerprint(fc)] == id_map_old[fingerprint(fc)]  # F3 preserved (gap at F2)
+
+
+# ---------------------------------------------------------------------------
+# known_fingerprints()
+# ---------------------------------------------------------------------------
+
+
+def test_known_fingerprints_empty_for_no_prior_bodies() -> None:
+    assert known_fingerprints([]) == frozenset()
+
+
+def test_known_fingerprints_includes_marker_based_entries() -> None:
+    f = _finding("some issue")
+    fp = fingerprint(f)
+    marker = build_id_map_marker({fp: 1})
+    body = f"### Findings\n{format_body_finding(f, finding_id=1)}\n{marker}"
+    assert known_fingerprints([body]) == frozenset({fp})
+
+
+def test_known_fingerprints_excludes_a_never_seen_fingerprint() -> None:
+    seen = _finding("seen before")
+    unseen = _finding("never seen")
+    marker = build_id_map_marker({fingerprint(seen): 1})
+    body = f"### Findings\n{format_body_finding(seen, finding_id=1)}\n{marker}"
+    known = known_fingerprints([body])
+    assert fingerprint(seen) in known
+    assert fingerprint(unseen) not in known

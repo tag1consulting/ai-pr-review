@@ -1,8 +1,8 @@
 """Native Python implementation of the eslint analyzer.
 
-Replaces analyzers/run-eslint.sh. Resolves the eslint binary (local
-node_modules or npx), checks for an eslint config file, and converts
-ESLint's JSON output to Finding instances.
+Replaces analyzers/run-eslint.sh. Resolves the eslint binary from $PATH
+only, checks for an eslint config file, and converts ESLint's JSON output
+to Finding instances.
 """
 
 from __future__ import annotations
@@ -33,22 +33,21 @@ _ESLINT_CONFIG_NAMES = (
 
 
 def _find_eslint_bin() -> list[str] | None:
-    """Return the eslint command as a list, or None if not found."""
-    local_bin = Path("./node_modules/.bin/eslint")
-    if local_bin.is_file() and os.access(str(local_bin), os.X_OK):
-        return [str(local_bin)]
-    if shutil.which("npx"):
-        try:
-            result = subprocess.run(
-                ["npx", "--no", "eslint", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode == 0:
-                return ["npx", "eslint"]
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+    """Return the eslint command as a list, or None if not found.
+
+    Deliberately resolves only via $PATH (shutil.which). The workspace is
+    untrusted PR content in the container-action path, so this must never
+    resolve a path relative to the working directory — not directly (e.g.
+    ./node_modules/.bin/eslint) and not via `npx eslint`, which itself
+    checks node_modules/.bin/eslint before consulting the registry and so
+    is equally exploitable unless every invocation pins an exact version
+    (which would add a network dependency this analyzer doesn't otherwise
+    have). A checked-in executable in the analyzed tree would otherwise run
+    with the review container's secrets (#738).
+    """
+    eslint_path = shutil.which("eslint")
+    if eslint_path:
+        return [eslint_path]
     return None
 
 

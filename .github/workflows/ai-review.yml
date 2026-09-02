@@ -69,11 +69,18 @@ jobs:
       pull-requests: none
       issues: none
     steps:
+      # actions/checkout@v7 refuses to check out fork PR head code under
+      # pull_request_target unless explicitly opted in (added upstream in
+      # actions/checkout#2454, checkout v7.0.0). This job is deliberately
+      # designed for that scenario: persist-credentials is disabled below,
+      # and it only runs static analyzers (ruff/hadolint/semgrep) that never
+      # execute the analyzed code, with permissions dropped to contents:read.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
 
       - name: Create results dir
         run: mkdir -p sarif-results
@@ -173,12 +180,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Check out the PR head commit for diff content, but with persist-credentials
-      # disabled so the fork cannot abuse the GITHUB_TOKEN.
+      # disabled so the fork cannot abuse the GITHUB_TOKEN. allow-unsafe-pr-checkout
+      # opts back into actions/checkout@v7's fork-PR-under-pull_request_target block
+      # (actions/checkout#2454); the container-action restore step immediately below
+      # is the mitigation that makes this safe (a fork can't substitute action.yml).
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
 
       # Restore trusted container-action from the base branch so a fork PR
       # cannot substitute a malicious action.yml.

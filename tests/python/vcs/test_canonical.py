@@ -391,7 +391,7 @@ def test_classify_resolved_non_fixed_thread_is_not_a_fuzzy_open_match() -> None:
 def _thread_node(
     *,
     body: str,
-    author: str = "github-actions[bot]",
+    author: str = "github-actions",
     thread_id: str = "th1",
     comment_id: int = 100,
     review_id: int = 10,
@@ -430,7 +430,7 @@ def test_parse_prior_thread_reads_meta_marker() -> None:
     body = f"🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->\n{marker}"
     node = _thread_node(body=body)
 
-    thread = parse_prior_thread(node, bot_login="github-actions[bot]")
+    thread = parse_prior_thread(node, bot_login="github-actions")
     assert thread is not None
     assert thread.fingerprint == fp
     assert thread.category == "secret"
@@ -441,14 +441,14 @@ def test_parse_prior_thread_reads_meta_marker() -> None:
 
 def test_parse_prior_thread_not_owned_by_us_returns_none() -> None:
     node = _thread_node(body="some comment", author="someone-else")
-    assert parse_prior_thread(node, bot_login="github-actions[bot]") is None
+    assert parse_prior_thread(node, bot_login="github-actions") is None
 
 
 def test_parse_prior_thread_legacy_falls_back_to_header_severity() -> None:
     body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
     node = _thread_node(body=body)
 
-    thread = parse_prior_thread(node, bot_login="github-actions[bot]")
+    thread = parse_prior_thread(node, bot_login="github-actions")
     assert thread is not None
     assert thread.severity == "High"
     assert thread.category is None
@@ -465,7 +465,7 @@ def test_parse_prior_thread_legacy_recovers_fingerprint_via_id_map_bodies() -> N
     node = _thread_node(body=body)
 
     thread = parse_prior_thread(
-        node, bot_login="github-actions[bot]", id_map_bodies=[id_map_body]
+        node, bot_login="github-actions", id_map_bodies=[id_map_body]
     )
     assert thread is not None
     assert thread.fingerprint == fp
@@ -478,35 +478,47 @@ def test_parse_prior_thread_no_comments_returns_none() -> None:
         "path": "app.py", "line": 10, "originalLine": None, "startLine": None,
         "comments": {"nodes": []},
     }
-    assert parse_prior_thread(node, bot_login="github-actions[bot]") is None
+    assert parse_prior_thread(node, bot_login="github-actions") is None
 
 
 def test_parse_prior_thread_falls_back_to_original_line_when_line_absent() -> None:
     body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
     node = _thread_node(body=body, line=None, original_line=7)
-    thread = parse_prior_thread(node, bot_login="github-actions[bot]")
+    thread = parse_prior_thread(node, bot_login="github-actions")
     assert thread is not None
     assert thread.line == 7
 
 
-def test_parse_prior_thread_recognizes_graphql_style_login_when_bot_login_none() -> None:
+def test_parse_prior_thread_recognizes_graphql_style_login_when_normalized() -> None:
     """GitHub's GraphQL API reports the bot's login without the REST-style
     "[bot]" suffix (verified live against a real thread). GitHubProvider
-    passes bot_login=None to parse_prior_thread for exactly this reason --
-    this test locks that in."""
+    passes graphql_bot_login(self.config.bot_login) (issue #717's fix) --
+    which strips that suffix -- to parse_prior_thread for exactly this
+    reason; this test locks that in with the exact normalized value the
+    call site produces."""
     body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
     node = _thread_node(body=body, author="github-actions")
-    assert parse_prior_thread(node, bot_login=None) is not None
+    assert parse_prior_thread(node, bot_login="github-actions") is not None
 
 
 def test_parse_prior_thread_rest_style_bot_login_rejects_graphql_login() -> None:
-    """Documents the exact bug this PR fixed at the GitHubProvider call
-    site: comparing a GraphQL-sourced "github-actions" author against the
+    """Documents the exact bug fixed by issue #717: comparing a
+    GraphQL-sourced "github-actions" author against the raw, un-normalized
     REST-style "github-actions[bot]" constant makes every real thread look
-    unowned. This is why the call site must pass bot_login=None instead."""
+    unowned. This is why the call site normalizes via graphql_bot_login()
+    before comparing, rather than passing the raw constant."""
     body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
     node = _thread_node(body=body, author="github-actions")
     assert parse_prior_thread(node, bot_login="github-actions[bot]") is None
+
+
+def test_parse_prior_thread_normalized_login_still_rejects_different_bot() -> None:
+    """Defense in depth is preserved by normalization, not lost: a
+    different bot's GraphQL login (also suffix-less) must still fail to
+    match our normalized bot_login."""
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    node = _thread_node(body=body, author="other-automation-bot")
+    assert parse_prior_thread(node, bot_login="github-actions") is None
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +584,44 @@ def test_decide_action_new_high_severity_body_level_still_posts() -> None:
     classified = [classify(_finding(severity="High"), verdicts={}, all_threads=[])]
     action = decide_action(
         canonical, event="REQUEST_CHANGES", classified=classified, any_new_inline_eligible=False
+    )
+    assert action == "post"
+
+
+def test_decide_action_new_high_severity_known_fingerprint_puts() -> None:
+    """Issue #719: a persistent body-level High/Critical finding whose exact
+    fingerprint is already visible in the canonical's own prior body (a
+    known fingerprint) is not genuinely new information to a human -- the
+    PUT still renders it in the body every time, so it should not force a
+    fresh review on every single rerun."""
+    f = _finding(severity="High")
+    fp = fingerprint(f)
+    canonical = CanonicalReview(review_id=1, state="CHANGES_REQUESTED", body=_FOOTER_BODY)
+    classified = [classify(f, verdicts={}, all_threads=[])]
+    action = decide_action(
+        canonical,
+        event="REQUEST_CHANGES",
+        classified=classified,
+        any_new_inline_eligible=False,
+        known_fingerprints=frozenset({fp}),
+    )
+    assert action == "put"
+
+
+def test_decide_action_new_high_severity_unknown_fingerprint_still_posts() -> None:
+    """A different High/Critical finding (not in known_fingerprints) must
+    still force post even when the canonical carries some other known
+    fingerprint -- the exemption is per-fingerprint, not a blanket pass."""
+    f = _finding(severity="High")
+    other_fp = fingerprint(_finding("a different finding entirely", severity="Low"))
+    canonical = CanonicalReview(review_id=1, state="CHANGES_REQUESTED", body=_FOOTER_BODY)
+    classified = [classify(f, verdicts={}, all_threads=[])]
+    action = decide_action(
+        canonical,
+        event="REQUEST_CHANGES",
+        classified=classified,
+        any_new_inline_eligible=False,
+        known_fingerprints=frozenset({other_fp}),
     )
     assert action == "post"
 

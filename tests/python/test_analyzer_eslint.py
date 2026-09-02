@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ai_pr_review.analyzers.native.eslint import _has_eslint_config, _run_eslint
+from ai_pr_review.analyzers.native.eslint import (
+    _find_eslint_bin,
+    _has_eslint_config,
+    _run_eslint,
+)
 from ai_pr_review.manifest import ChangedFiles
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "eslint"
@@ -20,6 +24,44 @@ def _load_fixture(name: str) -> str:
 
 def _make_cf(js_files: list[str]) -> ChangedFiles:
     return ChangedFiles(all_files=js_files, js_ts=js_files)
+
+
+class TestFindEslintBinNeverExecutesWorkspaceContent:
+    """Regression tests for #738: the workspace is untrusted PR content in
+    the container-action path, so eslint resolution must never touch a path
+    relative to the current working directory."""
+
+    def test_ignores_local_node_modules_bin(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        local_bin = tmp_path / "node_modules" / ".bin" / "eslint"
+        local_bin.parent.mkdir(parents=True)
+        local_bin.write_text("#!/bin/bash\necho pwned\n")
+        local_bin.chmod(0o755)
+        with patch("ai_pr_review.analyzers.native.eslint.shutil.which", return_value=None):
+            assert _find_eslint_bin() is None
+
+    def test_never_invokes_npx(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # npx itself resolves ./node_modules/.bin/eslint before consulting the
+        # registry, so it is not a safe fallback — confirm it is never called.
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("ai_pr_review.analyzers.native.eslint.shutil.which", return_value=None) as mock_which,
+            patch("ai_pr_review.analyzers.native.eslint.subprocess.run") as mock_run,
+        ):
+            result = _find_eslint_bin()
+        assert result is None
+        mock_run.assert_not_called()
+        mock_which.assert_called_once_with("eslint")
+
+    def test_resolves_only_via_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        with patch(
+            "ai_pr_review.analyzers.native.eslint.shutil.which",
+            return_value="/usr/local/bin/eslint",
+        ):
+            assert _find_eslint_bin() == ["/usr/local/bin/eslint"]
 
 
 class TestHasEslintConfig:

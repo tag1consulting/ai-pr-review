@@ -105,6 +105,23 @@ def fingerprint(f: Finding) -> str:
     return f"{source}|{file_}|{line}|{text_hash}"
 
 
+def known_fingerprints(prior_bodies: Sequence[str]) -> frozenset[str]:
+    """Return the set of fingerprints already visible in some prior review
+    body (id-map marker fast path, or bullet-scan fallback for pre-marker
+    reviews).
+
+    A pure presence/membership test -- unlike `_fingerprint_for_finding_id`
+    (a reverse ID->fingerprint lookup) this makes no claim about which
+    render bucket (inline/in-diff-body/out-of-diff) a fingerprint came from,
+    only that it was rendered somewhere before. Used by
+    `ai_pr_review.vcs._canonical.decide_action` to tell a genuinely new
+    finding apart from a persistent one that's already visible in the
+    canonical review's own body and therefore doesn't need a fresh POST
+    just to stay visible (issue #719).
+    """
+    return frozenset(_parse_existing_ids(prior_bodies))
+
+
 def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
     """Scan prior review bodies and return a fingerprint → ID mapping.
 
