@@ -1067,7 +1067,9 @@ def feedback_context(
             first_line = comment_body.splitlines()[0] if comment_body else ""
             tokens = first_line.split()
             fid_token = tokens[2] if len(tokens) > 2 else ""
-            match = re.fullmatch(r"[Ff](\d{1,6})", fid_token)
+            # Accept the bracketed form ("[F1]") shown in review bodies, same
+            # as ai_pr_review.slash.parser._FID_RE (issue #735).
+            match = re.fullmatch(r"\[?[Ff](\d{1,6})\]?", fid_token)
             if match:
                 bodies = [r.get("body") or "" for r in provider.list_bot_reviews()]
                 context = context_from_body_finding_id(bodies, int(match.group(1)))

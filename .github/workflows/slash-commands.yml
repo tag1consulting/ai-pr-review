@@ -241,10 +241,12 @@ jobs:
               # from the full comment body already forwarded below, not here.
               echo "command=$command" >> "$GITHUB_OUTPUT"
               echo "valid=true"       >> "$GITHUB_OUTPUT"
-              # Extract optional finding ID (e.g. "F3" or "f3") from second token.
-              # Validate strictly: must be F followed by 1-6 digits only (caps at F999999).
+              # Extract optional finding ID (e.g. "F3", "f3", or the bracketed
+              # "[F3]" shown in review bodies — issue #735) from second token.
+              # Validate strictly: must be F followed by 1-6 digits only (caps at F999999),
+              # with optional surrounding square brackets.
               second_token=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $3}')
-              if echo "$second_token" | grep -qiE '^F[0-9]{1,6}$'; then
+              if echo "$second_token" | grep -qiE '^\[?F[0-9]{1,6}\]?$'; then
                 finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
                 echo "finding_id=${finding_num}" >> "$GITHUB_OUTPUT"
               else
