@@ -85,6 +85,11 @@ class _FakeProvider:
             inline_posted=len(findings),
             body_findings=0,
             event=event,  # type: ignore[arg-type]
+            # skipped=True is only ever a real outcome alongside
+            # reused_review=True (a PUT that turned out to be a no-op) --
+            # FindingsResult.__post_init__ enforces this invariant, so the
+            # fixture must set both together to model a realistic skip.
+            reused_review=self.findings_skipped,
             skipped=self.findings_skipped,
         )
 

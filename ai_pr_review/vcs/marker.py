@@ -448,7 +448,12 @@ def _valid_categories() -> frozenset[str]:
     return frozenset(CATEGORIES)
 
 
-_VALID_SEVERITIES: Final[frozenset[str]] = frozenset({"Critical", "High", "Medium", "Low"})
+def _valid_severities() -> frozenset[str]:
+    from typing import get_args
+
+    from ai_pr_review.findings.models import Severity
+
+    return frozenset(get_args(Severity))
 
 
 def build_inline_meta_marker(*, fingerprint: str, category: str, severity: str) -> str:
@@ -500,5 +505,5 @@ def extract_inline_meta(body: str) -> InlineMeta | None:
     cat = data.get("cat")
     cat = cat if isinstance(cat, str) and cat in _valid_categories() else None
     sev = data.get("sev")
-    sev = sev if isinstance(sev, str) and sev in _VALID_SEVERITIES else None
+    sev = sev if isinstance(sev, str) and sev in _valid_severities() else None
     return InlineMeta(fp=fp, cat=cat, sev=sev)

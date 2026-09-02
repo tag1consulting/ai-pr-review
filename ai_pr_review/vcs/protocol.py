@@ -92,6 +92,19 @@ class FindingsResult:
     # backward past what the newer, actually-successful run already set.
     skipped: bool = False
 
+    def __post_init__(self) -> None:
+        """`skipped=True` only ever means "the PUT of the canonical review
+        was abandoned" -- it is meaningless, and never set, on any other
+        outcome. Enforcing that here (rather than trusting every future
+        construction site to remember it) turns a future caller mistake
+        (constructing `skipped=True` alongside a fresh POST, which would
+        wrongly tell orchestrate.py's watermark/stale-cleanup logic to skip
+        work that a real post actually requires) into an immediate error
+        instead of a silent, hard-to-trace behavioral bug.
+        """
+        if self.skipped and not self.reused_review:
+            raise ValueError("FindingsResult.skipped=True requires reused_review=True")
+
     @property
     def ok(self) -> bool:
         return self.error is None

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.protocol import StaleResult, SummaryResult, VcsProvider
+from ai_pr_review.vcs.protocol import FindingsResult, StaleResult, SummaryResult, VcsProvider
 
 
 def test_github_provider_satisfies_vcs_provider_protocol() -> None:
@@ -52,3 +52,54 @@ def test_stale_result_errors_is_tuple() -> None:
     assert default.threads_resolved == 0
     assert default.reviews_dismissed == 0
     assert default.threads_skipped_no_marker == 0
+
+
+# ---------------------------------------------------------------------------
+# FindingsResult -- canonical-review-reuse counters (GitHub-only; default to
+# 0/False so GitLab/Bitbucket, which never set them, still construct a valid
+# FindingsResult).
+# ---------------------------------------------------------------------------
+
+
+def test_findings_result_canonical_reuse_fields_default_to_zero_and_false() -> None:
+    """A provider that never sets the canonical-reuse counters (GitLab,
+    Bitbucket) must still get a valid, unambiguous FindingsResult -- these
+    fields must not be required constructor args."""
+    result = FindingsResult(
+        review_id=1, inline_posted=0, body_findings=0, event="COMMENT"
+    )
+    assert result.inline_updated == 0
+    assert result.suppressed == 0
+    assert result.replies_posted == 0
+    assert result.reused_review is False
+    assert result.skipped is False
+    assert result.ok is True
+
+
+def test_findings_result_ok_false_on_error_even_when_reused() -> None:
+    result = FindingsResult(
+        review_id=1,
+        inline_posted=0,
+        body_findings=0,
+        event="COMMENT",
+        reused_review=True,
+        error="boom",
+    )
+    assert result.ok is False
+
+
+def test_findings_result_skipped_true_only_meaningful_alongside_reused_review() -> None:
+    """`skipped=True` means the PUT was abandoned because a newer run's head
+    had already advanced past this run's diff -- no write happened at all.
+    Documented invariant: only possible alongside reused_review=True."""
+    result = FindingsResult(
+        review_id=10,
+        inline_posted=0,
+        body_findings=0,
+        event="REQUEST_CHANGES",
+        reused_review=True,
+        skipped=True,
+    )
+    assert result.skipped is True
+    assert result.reused_review is True
+    assert result.ok is True

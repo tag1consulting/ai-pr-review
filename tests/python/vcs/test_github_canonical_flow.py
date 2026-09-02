@@ -379,6 +379,8 @@ def test_escalated_finding_patches_and_replies_no_new_review() -> None:
 
     assert result.ok
     assert result.reused_review is True
+    assert result.inline_updated == 1
+    assert result.replies_posted == 1
     patches = [c for c in rec.calls if c[0] == "PATCH" and c[1].endswith("/pulls/comments/1")]
     replies = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/comments/1/replies")]
     posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
@@ -442,6 +444,7 @@ def test_recurred_finding_replies_and_unresolves_thread() -> None:
     )
 
     assert result.ok
+    assert result.replies_posted == 1
     replies = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/comments/1/replies")]
     unresolves = [
         c for c in rec.calls
@@ -652,6 +655,15 @@ def test_dismissed_finding_is_suppressed_not_reposted() -> None:
 
 
 def test_put_falls_back_to_post_when_canonical_changed_concurrently() -> None:
+    """Regression note: this test previously passed `event="APPROVE"` against
+    a `CHANGES_REQUESTED` canonical -- decide_action's event/state-mismatch
+    check (`_EVENT_FOR_STATE.get(canonical.state) != event`) forces `"post"`
+    on its own for that combination, before `_try_put_canonical` (and thus
+    the mocked GET /reviews/10 concurrent-write detection this test exists
+    to cover) is ever reached. `rec.calls` proves GET /reviews/10 was never
+    even called under the old setup. `event` now matches the canonical's
+    state (REQUEST_CHANGES <-> CHANGES_REQUESTED) so decide_action actually
+    reaches "put" and this test exercises what its name claims."""
     canonical_body = _footer_body()
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -683,9 +695,74 @@ def test_put_falls_back_to_post_when_canonical_changed_concurrently() -> None:
     result = prov.post_findings(
         [],
         DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
-        event="APPROVE",
+        event="REQUEST_CHANGES",
     )
     assert result.ok
+    assert result.reused_review is False
+    assert result.review_id == 30
+    rechecks = [c for c in rec.calls if c[0] == "GET" and c[1].endswith("/reviews/10")]
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    assert len(rechecks) == 1
+    assert len(posts) == 1
+    assert puts == []
+
+
+def test_put_falls_back_to_post_when_recheck_fetch_fails() -> None:
+    """Distinct from the concurrent-write case above: here the re-fetch
+    itself fails at the HTTP level (GET /reviews/{id} errors), so
+    get_review_state_and_body returns None rather than a changed
+    state/body. _try_put_canonical's contract is "None means don't trust
+    this write" -- must fall back to posting a fresh review, not raise or
+    silently skip."""
+    canonical_body = _footer_body()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([])
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(500, text="internal error")
+        # Both of these would let a "trust the original canonical
+        # state/body when the re-fetch fails" regression sail through as a
+        # successful PUT instead of falling back to POST -- present so this
+        # test actually discriminates between the two behaviors rather than
+        # having both fall through to the same POST via an unrelated 404.
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 30, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+    assert result.ok
+    assert result.reused_review is False
+    assert result.review_id == 30
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    assert len(posts) == 1
+    assert puts == []
 
 
 def test_head_sha_advanced_skips_canonical_write() -> None:
@@ -835,3 +912,62 @@ def test_dismiss_superseded_review_only_after_replacement_confirmed_posted() -> 
 
     assert result.degraded_to_comment is True
     assert result.event != "REQUEST_CHANGES"
+
+
+def test_escalate_patch_failure_does_not_count_updated_or_send_notification() -> None:
+    """`_apply_thread_update` only returns True (and `post_findings` only
+    counts `inline_updated`/sends the escalation reply) when the PATCH
+    actually landed -- documented in `_apply_thread_update`'s own docstring:
+    a failed PATCH leaves the comment showing the old content/severity, so a
+    reply claiming "severity escalated" would itself be a silent-failure
+    risk. This locks that behavior in against a regression that always
+    counts/notifies regardless of the PATCH outcome."""
+    old_finding = _finding("weak validation", severity="Low", line=5, category="other")
+    existing_comment_body = _build_inline_comment_body(old_finding)
+    canonical_body = _footer_body()
+    escalated_finding = _finding("weak validation", severity="Critical", line=5, category="other")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=existing_comment_body, line=5,
+                )]
+            )
+        if req.method == "PATCH" and url.endswith("/pulls/comments/1"):
+            return httpx.Response(500, text="internal error")
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [escalated_finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    assert result.inline_updated == 0
+    replies = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/comments/1/replies")]
+    assert replies == []
