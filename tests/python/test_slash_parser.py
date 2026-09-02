@@ -77,6 +77,30 @@ def test_dismiss_with_finding_id_lowercase() -> None:
     assert cmd.finding_id == 7
 
 
+def test_dismiss_with_bracketed_finding_id() -> None:
+    # Review bodies render finding IDs as "**[F1]**" (see vcs/_finding_ids.py);
+    # a user copying that token verbatim types "[F1]" rather than "F1" — this
+    # must resolve to the same finding_id, not fall through to free-text
+    # reason (issue #735).
+    cmd = parse_command("/ai-pr-review dismiss [F1]")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 1
+    assert cmd.reason == ""
+
+
+def test_dismiss_with_bracketed_finding_id_lowercase() -> None:
+    cmd = parse_command("/ai-pr-review dismiss [f7]")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 7
+
+
+def test_dismiss_with_bracketed_finding_id_and_reason() -> None:
+    cmd = parse_command("/ai-pr-review dismiss [F1] this is a false positive")
+    assert isinstance(cmd, SlashCommand)
+    assert cmd.finding_id == 1
+    assert cmd.reason == "this is a false positive"
+
+
 def test_dismiss_with_finding_id_and_reason() -> None:
     cmd = parse_command("/ai-pr-review dismiss F1 this is a false positive")
     assert isinstance(cmd, SlashCommand)
