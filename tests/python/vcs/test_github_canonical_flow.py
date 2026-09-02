@@ -460,6 +460,74 @@ def test_recurred_finding_replies_and_unresolves_thread() -> None:
     assert extract_verdicts(puts[0][2]["body"])[fp] == "recurred"
 
 
+def test_reopened_recurrence_thread_protects_canonical_from_dismissal() -> None:
+    """A recurrence reopens th1 on canonical review 10 via unresolveReviewThread.
+    The same run also has a brand-new Critical finding, which forces
+    decide_action to "post". Without syncing the in-memory `all_threads`
+    snapshot after the reopen succeeds, _has_unresolved_owned_threads would
+    still see th1's pre-side-effect is_resolved=True and wrongly let review
+    10 be dismissed with a thread this very run just reopened sitting on it
+    -- invisible to the slash-command PR-wide auto-approve check, which only
+    counts unresolved threads on reviews whose *current* state is
+    CHANGES_REQUESTED."""
+    recurred = _finding("leaked key", severity="High", line=5, source="code-reviewer", category="secret")
+    fp = fingerprint(recurred)
+    resolved_comment_body = _build_inline_comment_body(recurred)
+    canonical_body = _footer_body() + "\n" + build_verdicts_marker({fp: "fixed"})
+    new_finding = _finding("brand new critical issue", severity="Critical", line=30)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "unresolveReviewThread"):
+            return httpx.Response(200, json={"data": {"unresolveReviewThread": {"thread": {"id": "th1", "isResolved": False}}}})
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=resolved_comment_body, line=5, is_resolved=True,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/comments/1/replies"):
+            return httpx.Response(201, json={"id": 2})
+        if req.method in ("PUT", "POST") and "/dismissals" in url:
+            raise AssertionError(
+                "must not dismiss review 10 -- th1 was just reopened on it "
+                "this run and is therefore still unresolved"
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [recurred, new_finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    assert result.review_id == 20
+    unresolves = [
+        c for c in rec.calls if c[0] == "POST" and c[1].endswith("/graphql") and c[2]
+        and "unresolveReviewThread" in (c[2].get("query") or "")
+    ]
+    assert len(unresolves) == 1
+
+
 # ---------------------------------------------------------------------------
 # Dismissed verdict: suppressed, nothing posted for it
 # ---------------------------------------------------------------------------
