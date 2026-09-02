@@ -128,14 +128,25 @@ class GitHubConfig:
     # to @main who hits a bug in the reuse path without waiting for a
     # version pin or a revert. Set via AI_CANONICAL_REUSE=false.
     canonical_reuse: bool = True
+    # Optional elevated token (a PAT or GitHub App token), distinct from
+    # `token`, reserved for the two GraphQL mutations GitHub refuses to run
+    # under the default Actions token from a comment-triggered workflow:
+    # `resolveReviewThread`/`unresolveReviewThread` (issue #734). When unset,
+    # `GitHubProvider` falls back to `token` for those calls too, matching
+    # pre-#734 single-token behavior. Keeping this separate from `token`
+    # means every *other* write (dismissing a superseded review, the
+    # auto-approve review, replies, reactions) is attributed to the bot
+    # identity that owns `token` instead of whichever identity owns the PAT.
+    elevated_token: str | None = None
 
 
-def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
-    """Build a RecordingClient preconfigured for GitHub API calls."""
+def _build_http_client(
+    *, token: str, base_url: str, retry: RetryPolicy | None
+) -> RecordingClient:
     http = httpx.Client(
-        base_url=config.base_url,
+        base_url=base_url,
         headers={
-            "Authorization": f"Bearer {config.token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -145,6 +156,27 @@ def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> Reco
         http=http,
         recorder=TapeRecorder.from_env(provider="github"),
         retry_policy=retry or RetryPolicy(),
+    )
+
+
+def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
+    """Build a RecordingClient preconfigured for GitHub API calls."""
+    return _build_http_client(token=config.token, base_url=config.base_url, retry=retry)
+
+
+def build_elevated_client(
+    config: GitHubConfig, retry: RetryPolicy | None = None
+) -> RecordingClient | None:
+    """Build the elevated-token client for `resolve_thread`/`unresolve_thread`.
+
+    Returns `None` when `config.elevated_token` is unset -- callers should
+    treat that as "use the regular client for thread resolution too" (see
+    `GitHubProvider._thread_client`).
+    """
+    if not config.elevated_token:
+        return None
+    return _build_http_client(
+        token=config.elevated_token, base_url=config.base_url, retry=retry
     )
 
 
@@ -187,6 +219,10 @@ class GitHubProvider:
 
     config: GitHubConfig
     client: RecordingClient
+    # Elevated-token client for resolve_thread/unresolve_thread only (#734).
+    # None means "no separate elevated token configured" -- _thread_client()
+    # falls back to `client`, matching pre-#734 behavior.
+    elevated_client: RecordingClient | None = None
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
     # Thread ids post_findings PATCHed (update/escalate) or successfully
     # reopened (recurred) during its most recent call, in this same process.
@@ -1452,12 +1488,23 @@ class GitHubProvider:
                 break
         return threads
 
+    def _thread_client(self) -> RecordingClient:
+        """Client for the resolveReviewThread/unresolveReviewThread mutations.
+
+        These are the only two calls this provider makes that GitHub refuses
+        to run under the default Actions token from a comment-triggered
+        workflow, hence the separate elevated token (#734). Every other
+        write stays on `self.client` so it's attributed to that token's
+        identity rather than the elevated one.
+        """
+        return self.elevated_client or self.client
+
     def resolve_thread(self, thread_id: str) -> tuple[bool, int, str]:
         mutation = (
             "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
         )
-        resp = self.client.request(
+        resp = self._thread_client().request(
             "POST",
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
@@ -1569,7 +1616,7 @@ class GitHubProvider:
             "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
         )
-        resp = self.client.request(
+        resp = self._thread_client().request(
             "POST",
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
