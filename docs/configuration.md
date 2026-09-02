@@ -253,6 +253,12 @@ These variables configure the logging system. Set them in your workflow `env:` b
 
 Secret masking is always active: API keys, tokens, and other credentials from `ReviewConfig` are redacted from log output regardless of log format or level.
 
+### GitHub-specific variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_BOT_USERNAME` | `github-actions[bot]` | Login that owns this bot's prior reviews/comments, for both the review-selection filter and thread-ownership checks. Set this if your reviews post under a different identity than the default GitHub Actions bot — a custom GitHub App, or (as in this project's own e2e test harness) a personal-access-token-authenticated account. Mirrors `GITLAB_BOT_USERNAME` below. |
+
 ### Bitbucket-specific variables
 
 | Variable | Default | Description |
