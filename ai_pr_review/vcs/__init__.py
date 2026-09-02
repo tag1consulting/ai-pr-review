@@ -25,6 +25,9 @@ from ai_pr_review.vcs.github import (
 from ai_pr_review.vcs.github import (
     build_client as build_github_client,
 )
+from ai_pr_review.vcs.github import (
+    build_elevated_client as build_github_elevated_client,
+)
 from ai_pr_review.vcs.gitlab import (
     GitLabConfig,
     GitLabProvider,
@@ -102,12 +105,25 @@ def _build_github_from_env() -> GitHubProvider:
     Required: GH_TOKEN (or GITHUB_TOKEN), GITHUB_REPOSITORY (owner/repo), PR_NUMBER.
     Optional: GITHUB_API_URL (defaults to https://api.github.com), GITHUB_BOT_USERNAME
     (defaults to GitHubConfig's own "github-actions[bot]" default).
+
+    Token split (#734): when BOTH `GITHUB_TOKEN` and `GH_TOKEN` are set and
+    differ, `GITHUB_TOKEN` becomes the provider's primary token (used for
+    every write except thread resolution) and `GH_TOKEN` becomes the
+    elevated token reserved for `resolve_thread`/`unresolve_thread` --
+    GitHub blocks the `resolveReviewThread` GraphQL mutation under the
+    default Actions token from a comment-triggered workflow, so a PAT/App
+    token is unavoidable for that one call. When only one of the two is
+    set (today's single-token consumers), that token is used for
+    everything, matching pre-#734 behavior exactly.
     """
-    token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    github_token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    gh_token = (os.environ.get("GH_TOKEN") or "").strip()
+    token = github_token or gh_token
     if not token:
         raise ProviderConfigError(
             "GH_TOKEN (or GITHUB_TOKEN) is required for VCS_PROVIDER=github"
         )
+    elevated_token = gh_token if gh_token and gh_token != token else None
     repo = _require_env("GITHUB_REPOSITORY")
     if "/" not in repo:
         raise ProviderConfigError(
@@ -140,10 +156,14 @@ def _build_github_from_env() -> GitHubProvider:
     bot_login = os.environ.get("GITHUB_BOT_USERNAME", "").strip()
     config = GitHubConfig(
         owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url,
-        canonical_reuse=canonical_reuse,
+        canonical_reuse=canonical_reuse, elevated_token=elevated_token,
         **({"bot_login": bot_login} if bot_login else {}),
     )
-    return GitHubProvider(config=config, client=build_github_client(config))
+    return GitHubProvider(
+        config=config,
+        client=build_github_client(config),
+        elevated_client=build_github_elevated_client(config),
+    )
 
 
 def _build_gitlab_from_env() -> GitLabProvider:

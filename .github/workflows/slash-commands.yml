@@ -211,6 +211,58 @@ on:
 # caller grants, so the #678 startup_failure can't recur either way.
 
 jobs:
+  # ── Authorization gate ──────────────────────────────────────────────────────
+  # github.event.comment.author_association is UNRELIABLE on
+  # pull_request_review_comment webhooks: GitHub delivers a non-member value
+  # (observed: a confirmed org MEMBER comes through such that the caller's
+  # `contains(["OWNER","MEMBER","COLLABORATOR"], author_association)` gate is
+  # false). Result: every inline-reply command (feedback / false-positive /
+  # wont-fix / dismiss on a finding thread) is silently skipped. See #732.
+  #
+  # Verify the commenter's standing via the API instead. The two jobs that can
+  # fire on review comments (feedback-command, dismiss-finding) gate on these
+  # outputs rather than inputs.comment-author-association. The issue_comment-only
+  # jobs (handle-command, dismiss-body-finding) keep trusting the event field,
+  # which is reliable for that event type.
+  authorize:
+    if: startsWith(inputs.comment-body, '/ai-pr-review')
+    runs-on: ubuntu-latest
+    outputs:
+      is_member: ${{ steps.check.outputs.is_member }}   # OWNER/MEMBER equivalent
+      is_collab: ${{ steps.check.outputs.is_collab }}   # + COLLABORATOR (write/admin)
+    steps:
+      - name: Resolve commenter standing via API
+        id: check
+        env:
+          # PAT: org read is required to see PRIVATE membership; the built-in
+          # GITHUB_TOKEN cannot. github-token is already `required: true` and is
+          # needed by the dismiss/feedback side-effects, so it is always present.
+          GH_TOKEN: ${{ secrets.github-token }}
+          ORG: ${{ inputs.repository-owner }}
+          REPO: ${{ inputs.repository }}
+          ACTOR: ${{ inputs.actor-login }}
+        run: |
+          set -uo pipefail
+          is_member=false
+          is_collab=false
+          if [ -z "${ACTOR}" ]; then
+            echo "::warning::authorize: empty actor-login; denying (stale caller?)"
+          # OWNER/MEMBER equivalent: organization membership (204 = member).
+          elif gh api "orgs/${ORG}/members/${ACTOR}" --silent 2>/dev/null; then
+            is_member=true
+            is_collab=true
+          else
+            # COLLABORATOR equivalent: write or admin permission on the repo.
+            perm=$(gh api "repos/${REPO}/collaborators/${ACTOR}/permission" \
+                     --jq '.permission' 2>/dev/null || echo none)
+            case "${perm}" in
+              write|admin) is_collab=true ;;
+            esac
+          fi
+          echo "is_member=${is_member}" >> "$GITHUB_OUTPUT"
+          echo "is_collab=${is_collab}" >> "$GITHUB_OUTPUT"
+          echo "authorize: actor=${ACTOR} member=${is_member} collab=${is_collab}"
+
   handle-command:
     if: |
       inputs.event-name == 'issue_comment' &&
@@ -649,7 +701,13 @@ jobs:
           SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
           AI_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
+          # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
+          # only (#734); GITHUB_TOKEN below is what every other write in
+          # this command (dismiss_review, submit_approval, replies) is
+          # attributed to, so those show up as the bot instead of the PAT's
+          # owner.
           GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_TOKEN: ${{ secrets.actions-token || github.token }}
           VCS_PROVIDER: 'github'
           COMMANDS_JSON: ${{ steps.list.outputs.commands }}
         run: |
@@ -799,13 +857,17 @@ jobs:
   # (issue #590) -- see the "Invoke Python dismiss-inline handler" step.
   # ---------------------------------------------------------------------------
   dismiss-finding:
+    needs: authorize
+    # Fires on inline review-thread replies. author_association is unreliable on
+    # pull_request_review_comment (see the authorize job / #732), so trust the
+    # API-verified collaborator standing instead of inputs.comment-author-association.
     if: |
       inputs.event-name == 'pull_request_review_comment' &&
       (startsWith(inputs.comment-body, '/ai-pr-review dismiss') ||
        startsWith(inputs.comment-body, '/ai-pr-review false-positive') ||
        startsWith(inputs.comment-body, '/ai-pr-review wont-fix') ||
        startsWith(inputs.comment-body, '/ai-pr-review fixed')) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), inputs.comment-author-association)
+      needs.authorize.outputs.is_collab == 'true'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}
@@ -888,7 +950,13 @@ jobs:
           # we pass here -- a fix claim is not a maintainer verdict.
           SLASH_APPROVE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
+          # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
+          # only (#734); GITHUB_TOKEN below is what every other write in
+          # this command (dismiss_review, submit_approval, replies) is
+          # attributed to, so those show up as the bot instead of the PAT's
+          # owner.
           GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_TOKEN: ${{ secrets.actions-token || github.token }}
           VCS_PROVIDER: 'github'
         run: |
           set +e
@@ -997,10 +1065,14 @@ jobs:
     #   - pull_request_review_comment (replies on inline review threads)
     # because the natural UX for `/ai-pr-review false-positive` is to reply
     # on the AI's finding comment.  See #290.
+    needs: authorize
+    # OWNER/MEMBER-only is enforced via API membership (needs.authorize.outputs.is_member)
+    # rather than inputs.comment-author-association, which is unreliable on
+    # pull_request_review_comment events and silently dropped inline replies. See #732.
     if: |
       inputs.enable-feedback-loop == 'true' &&
       startsWith(inputs.comment-body, '/ai-pr-review') &&
-      contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) &&
+      needs.authorize.outputs.is_member == 'true' &&
       (inputs.event-name == 'pull_request_review_comment' ||
        (inputs.event-name == 'issue_comment' && inputs.is-pull-request == 'true'))
     runs-on: ubuntu-latest
@@ -1103,7 +1175,12 @@ jobs:
           SLASH_CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
           AI_FEEDBACK_LOOP: 'true'
           GITHUB_REPOSITORY: ${{ inputs.repository }}
+          # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
+          # only (#734); GITHUB_TOKEN below is what every other write in
+          # this command is attributed to, so those show up as the bot
+          # instead of the PAT's owner.
           GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_TOKEN: ${{ secrets.actions-token || github.token }}
           AI_PROVIDER: ${{ inputs.provider }}
           VCS_PROVIDER: 'github'
         run: |

@@ -120,6 +120,72 @@ def test_github_bot_login_blank_override_keeps_default(monkeypatch: pytest.Monke
     assert prov.config.bot_login == "github-actions[bot]"
 
 
+# ---------------------------------------------------------------------------
+# Token split (#734): resolveReviewThread/unresolveReviewThread need a PAT,
+# but every other GitHub write should stay on GITHUB_TOKEN so it's
+# attributed to the bot rather than the PAT's owner.
+# ---------------------------------------------------------------------------
+
+
+def test_github_single_token_env_no_elevated_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only GH_TOKEN set (today's single-token consumers): no separate
+    elevated client is built, matching pre-#734 single-token behavior."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "pat-value")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.elevated_token is None
+    assert prov.elevated_client is None
+
+
+def test_github_only_github_token_env_no_elevated_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "bot-value")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.elevated_token is None
+    assert prov.elevated_client is None
+
+
+def test_github_both_tokens_set_splits_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both set and distinct: GITHUB_TOKEN becomes the primary (bot) token,
+    GH_TOKEN becomes the elevated (PAT) token used only for thread
+    resolution."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "bot-value")
+    monkeypatch.setenv("GH_TOKEN", "pat-value")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.token == "bot-value"
+    assert prov.config.elevated_token == "pat-value"
+    assert prov.elevated_client is not None
+    assert prov.elevated_client is not prov.client
+
+
+def test_github_both_tokens_identical_no_elevated_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both set but identical (a consumer that mirrors the same secret into
+    both env vars): no separate client is worth building."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "same-value")
+    monkeypatch.setenv("GH_TOKEN", "same-value")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.elevated_token is None
+    assert prov.elevated_client is None
+
+
 def test_explicit_github(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_provider_envs(monkeypatch)
     monkeypatch.setenv("VCS_PROVIDER", "GitHub")  # case-insensitive

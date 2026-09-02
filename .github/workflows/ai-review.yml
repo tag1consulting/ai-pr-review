@@ -323,14 +323,20 @@ jobs:
   # Fires only on issue_comment and pull_request_review_comment events.
   # All pull_request_target / workflow_dispatch jobs above are skipped on those events.
   slash-commands:
+    # author_association is unreliable on pull_request_review_comment webhooks
+    # (see #732), so it gates only the issue_comment path; review comments pass
+    # through to slash-commands.yml's `authorize` job, which verifies via API.
     if: >-
       startsWith(github.event.comment.body, '/ai-pr-review') &&
-      contains(
-        fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-        github.event.comment.author_association
-      ) &&
-      (github.event_name == 'pull_request_review_comment' ||
-       (github.event_name == 'issue_comment' && github.event.issue.pull_request))
+      (
+        github.event_name == 'pull_request_review_comment' ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request &&
+         contains(
+           fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+           github.event.comment.author_association
+         ))
+      )
     uses: ./.github/workflows/slash-commands.yml
     with:
       event-name: ${{ github.event_name }}

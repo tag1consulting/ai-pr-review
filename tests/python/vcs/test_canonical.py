@@ -8,6 +8,8 @@ decide_action's put-vs-post gate.
 
 from __future__ import annotations
 
+import pytest
+
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._canonical import (
     CanonicalReview,
@@ -64,6 +66,7 @@ def _thread(
     category: str | None = "other",
     fp: str | None = None,
     finding_id: int | None = None,
+    prior_fingerprints: frozenset[str] = frozenset(),
 ) -> PriorThread:
     return PriorThread(
         thread_id=thread_id,
@@ -78,6 +81,7 @@ def _thread(
         category=category,
         fingerprint=fp,
         finding_id=finding_id,
+        prior_fingerprints=prior_fingerprints,
     )
 
 
@@ -236,6 +240,81 @@ def test_classify_fuzzy_dismissed_match_unrecoverable_severity_never_suppresses(
     assert result.kind == "new"
 
 
+def test_classify_fuzzy_dismissed_match_body_level_finding_never_matches() -> None:
+    """A body-level finding (no line, e.g. can't be anchored to a diff line)
+    has nothing for a fuzzy location match to compare against -- it must
+    fall through to "new" even when a dismissed verdict sits in the exact
+    same file, never raise trying to compare against a None `.line`."""
+    dismissed = _finding("nit", file="app.py", line=10, severity="Low", category="lint")
+    dismissed_fp = fingerprint(dismissed)
+    thread = _thread(fp=dismissed_fp, severity="Low", category="lint", is_resolved=True)
+    body_level_finding = _finding(
+        "no location info", file="app.py", line=None, severity="Low", category="lint"
+    )
+
+    result = classify(
+        body_level_finding, verdicts={dismissed_fp: "dismissed"}, all_threads=[thread]
+    )
+    assert result.kind == "new"
+
+
+def test_classify_fuzzy_dismissed_match_different_file_does_not_suppress() -> None:
+    """Same line number, same category/severity, but a different file --
+    fuzzy dismissed matching is scoped per-file and must not cross files."""
+    dismissed = _finding("nit", file="app.py", line=10, severity="Low", category="lint")
+    dismissed_fp = fingerprint(dismissed)
+    thread = _thread(fp=dismissed_fp, severity="Low", category="lint", is_resolved=True)
+    new_finding = _finding("similar nit elsewhere", file="other.py", line=10, severity="Low", category="lint")
+
+    result = classify(
+        new_finding, verdicts={dismissed_fp: "dismissed"}, all_threads=[thread]
+    )
+    assert result.kind == "new"
+
+
+def test_classify_fuzzy_dismissed_match_beyond_proximity_window_does_not_suppress() -> None:
+    """A dismissed verdict outside PROXIMITY_LINES of the new finding must
+    not suppress it, even with identical file/category/severity -- mirrors
+    test_classify_beyond_proximity_window_does_not_match, which covers the
+    same proximity gate for the still-open-thread fuzzy match, not this
+    dismissed-verdict fuzzy match."""
+    dismissed = _finding("nit", file="app.py", line=10, severity="Low", category="lint")
+    dismissed_fp = fingerprint(dismissed)
+    thread = _thread(fp=dismissed_fp, severity="Low", category="lint", is_resolved=True)
+    new_finding = _finding("similar nit far away", file="app.py", line=20, severity="Low", category="lint")
+
+    result = classify(
+        new_finding, verdicts={dismissed_fp: "dismissed"}, all_threads=[thread]
+    )
+    assert result.kind == "new"
+
+
+def test_classify_fuzzy_dismissed_match_finds_thread_via_prior_fingerprint() -> None:
+    """#720 regression: a fuzzy "update" match PATCHes a thread's comment in
+    place, replacing its metadata marker's fingerprint with the reworded
+    finding's exact one while the verdict recorded by a since-dismissed
+    reply is still keyed against the *old* fingerprint. Without
+    `prior_fingerprints`, `_find_thread_by_fingerprint(all_threads, old_fp)`
+    would come back `None` (the thread's own `.fingerprint` is now `new_fp`),
+    `d_severity` would be unrecoverable, and the dismissed finding would
+    repost as "new" -- exactly the failure this thread's own comment history
+    is supposed to prevent."""
+    old_fp = "code-reviewer|app.py|10|deadbeef0000"
+    thread = _thread(
+        path="app.py",
+        line=11,
+        severity="Low",
+        category="lint",
+        fp="new-fingerprint-after-reword",
+        prior_fingerprints=frozenset({old_fp}),
+        is_resolved=True,
+    )
+    reworded = _finding("similar nit, reworded", file="app.py", line=11, severity="Low", category="lint")
+
+    result = classify(reworded, verdicts={old_fp: "dismissed"}, all_threads=[thread])
+    assert result.kind == "suppressed"
+
+
 def test_classify_exact_fixed_match_is_recurred_with_thread() -> None:
     f = _finding(file="app.py", line=10, severity="High")
     fp = fingerprint(f)
@@ -288,6 +367,30 @@ def test_classify_open_thread_escalated_severity_is_escalate() -> None:
     assert result.thread is thread
 
 
+def test_classify_open_thread_multiple_candidates_prefers_closest_line() -> None:
+    """Two open threads both fall within PROXIMITY_LINES of the new finding
+    -- the closer one (by line distance) must win, not the first one in
+    `all_threads` order."""
+    far_thread = _thread(thread_id="far", path="app.py", line=8, comment_id=1, severity="Medium", category="other")
+    close_thread = _thread(thread_id="close", path="app.py", line=10, comment_id=2, severity="Medium", category="other")
+    f = _finding(file="app.py", line=11, severity="Medium", category="other")
+    # far_thread listed first so a naive "first match wins" implementation
+    # would pick the wrong one.
+    result = classify(f, verdicts={}, all_threads=[far_thread, close_thread])
+    assert result.thread is close_thread
+
+
+def test_classify_open_thread_equidistant_candidates_prefers_oldest_comment() -> None:
+    """Two open threads tie on line distance -- the older comment (lower
+    comment_id) wins, per _fuzzy_open_match's documented tie-break."""
+    newer_thread = _thread(thread_id="newer", path="app.py", line=9, comment_id=99, severity="Medium", category="other")
+    older_thread = _thread(thread_id="older", path="app.py", line=13, comment_id=1, severity="Medium", category="other")
+    f = _finding(file="app.py", line=11, severity="Medium", category="other")
+    # Both threads are exactly 2 lines away from line 11.
+    result = classify(f, verdicts={}, all_threads=[newer_thread, older_thread])
+    assert result.thread is older_thread
+
+
 def test_classify_outdated_thread_match_reclassifies_as_new() -> None:
     thread = _thread(path="app.py", line=10, severity="Low", is_outdated=True)
     f = _finding(file="app.py", line=11, severity="Critical")
@@ -303,11 +406,69 @@ def test_classify_incompatible_category_does_not_match_open_thread() -> None:
     assert result.kind == "new"
 
 
+def test_classify_legacy_thread_with_unrecoverable_category_matches_any_category() -> None:
+    """A legacy thread posted before the per-comment metadata marker existed
+    has category=None (never rendered anywhere, permanently unrecoverable --
+    see PriorThread's docstring). categories_compatible treats None as a
+    wildcard, so this thread must still fuzzy-match a new finding regardless
+    of that finding's own category -- unlike a *known*, different category,
+    which correctly blocks the match (see the incompatible-category test
+    above)."""
+    thread = _thread(path="app.py", line=10, severity="Medium", category=None)
+    f = _finding(file="app.py", line=11, severity="Medium", category="secret")
+    result = classify(f, verdicts={}, all_threads=[thread])
+    assert result.kind == "update"
+    assert result.thread is thread
+
+
 def test_classify_beyond_proximity_window_does_not_match() -> None:
     thread = _thread(path="app.py", line=10, severity="Medium")
     f = _finding(file="app.py", line=20, severity="Medium")
     result = classify(f, verdicts={}, all_threads=[thread])
     assert result.kind == "new"
+
+
+# ---------------------------------------------------------------------------
+# Classified -- invariant enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_classified_update_without_thread_raises() -> None:
+    """"update"/"escalate" exist to PATCH/reply on a specific prior thread --
+    constructing one without a thread to act on is a caller bug, not a valid
+    state, and must fail loudly rather than silently propagate a None where
+    every real call site treats `thread` as guaranteed present."""
+    with pytest.raises(ValueError, match="update"):
+        Classified(_finding(), "update", None)
+
+
+def test_classified_escalate_without_thread_raises() -> None:
+    with pytest.raises(ValueError, match="escalate"):
+        Classified(_finding(), "escalate", None)
+
+
+def test_classified_new_with_thread_raises() -> None:
+    """"new" means genuinely new information with no existing thread to
+    associate it with -- a non-None thread here would be silently ignored by
+    every real consumer (post_findings only reads `.thread` for
+    update/escalate/recurred), masking a caller bug."""
+    thread = _thread()
+    with pytest.raises(ValueError, match="new"):
+        Classified(_finding(), "new", thread)
+
+
+def test_classified_suppressed_with_thread_raises() -> None:
+    thread = _thread()
+    with pytest.raises(ValueError, match="suppressed"):
+        Classified(_finding(), "suppressed", thread)
+
+
+def test_classified_recurred_allows_either_thread_or_none() -> None:
+    """The one classification exempt from the invariant: a recurrence can be
+    body-level (no thread, nothing to reopen) or thread-anchored (the
+    original inline comment still exists)."""
+    Classified(_finding(), "recurred", None)
+    Classified(_finding(), "recurred", _thread())
 
 
 def test_dedupe_thread_claims_keeps_highest_severity_demotes_rest_to_new() -> None:
@@ -332,6 +493,28 @@ def test_dedupe_thread_claims_keeps_highest_severity_demotes_rest_to_new() -> No
     assert kept[0].kind == "escalate"
     assert len(demoted) == 1
     assert demoted[0].finding is low
+    assert demoted[0].kind == "new"
+
+
+def test_dedupe_thread_claims_tie_in_severity_keeps_earlier_claim() -> None:
+    """Docstring contract: "ties broken by keeping the earlier one." Two
+    same-severity claims on the same thread must not both flip to "new" (nor
+    both survive, which would double-PATCH) -- the first (lower index) wins
+    and the second is demoted."""
+    thread = _thread(thread_id="shared", line=100, severity="Low")
+    first = _finding("first claim", line=99, severity="Critical")
+    second = _finding("second claim", line=101, severity="Critical")
+    classified = [
+        Classified(first, "escalate", thread),
+        Classified(second, "escalate", thread),
+    ]
+    result = dedupe_thread_claims(classified)
+    kept = [c for c in result if c.thread is not None]
+    demoted = [c for c in result if c.thread is None]
+    assert len(kept) == 1
+    assert kept[0].finding is first
+    assert len(demoted) == 1
+    assert demoted[0].finding is second
     assert demoted[0].kind == "new"
 
 
@@ -414,6 +597,22 @@ def test_parse_prior_thread_reads_meta_marker() -> None:
 def test_parse_prior_thread_not_owned_by_us_returns_none() -> None:
     node = _thread_node(body="some comment", author="someone-else")
     assert parse_prior_thread(node, bot_login="github-actions") is None
+
+
+def test_parse_prior_thread_non_int_comment_database_id_returns_none() -> None:
+    """Defensive type-narrowing: a malformed/unexpected GraphQL response
+    shape (databaseId missing or not an int) must degrade to "unrecognized
+    thread" rather than propagate a wrong-typed comment_id downstream."""
+    node = _thread_node(body="🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->")
+    node["comments"]["nodes"][0]["databaseId"] = None
+    assert parse_prior_thread(node, bot_login="github-actions[bot]") is None
+
+
+def test_parse_prior_thread_non_str_thread_id_returns_none() -> None:
+    """Same defensive guard for the thread-level `id` field."""
+    node = _thread_node(body="🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->")
+    node["id"] = 12345
+    assert parse_prior_thread(node, bot_login="github-actions[bot]") is None
 
 
 def test_parse_prior_thread_legacy_falls_back_to_header_severity() -> None:

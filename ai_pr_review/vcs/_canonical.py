@@ -28,6 +28,16 @@ sources feed `classify()`:
   `**[Sev]**` header re-parsing for severity and an id-map reverse lookup
   for fingerprint; their category is permanently unrecoverable (`None`,
   treated as a wildcard by `categories_compatible`).
+
+A verdict is keyed to whatever fingerprint was current at the moment a
+human ran the slash command -- but a fuzzy "update"/"escalate" match can
+PATCH a thread's comment afterwards, replacing its metadata marker's
+fingerprint while the visible `**[F<n>]**` token (and the verdict already
+recorded against the old fingerprint) stay put (#720). `PriorThread.
+prior_fingerprints` carries every fingerprint a thread's comment has ever
+been rendered with, and `_find_thread_by_fingerprint` checks it alongside
+the thread's current fingerprint, so a dismissed/fixed verdict recorded
+before the drift still resolves back to the same thread afterwards.
 """
 
 from __future__ import annotations
@@ -188,6 +198,15 @@ class PriorThread:
     category: str | None
     fingerprint: str | None
     finding_id: int | None
+    # #720 fix: every fingerprint this thread's comment has ever carried,
+    # oldest first, populated from the per-comment metadata marker's `pfp`
+    # field (see `marker.InlineMeta.prior_fps`'s docstring for why this
+    # exists). Empty for a thread that has never been through the fuzzy
+    # "update"/"escalate" PATCH path, and always empty for a legacy thread
+    # with no metadata marker at all. `_find_thread_by_fingerprint` checks
+    # this alongside `fingerprint` so a verdict recorded against a
+    # since-superseded fingerprint can still locate the thread.
+    prior_fingerprints: frozenset[str] = frozenset()
 
 
 def parse_prior_thread(
@@ -233,6 +252,7 @@ def parse_prior_thread(
     fp = meta.fp if meta else None
     category = meta.cat if meta else None
     severity = meta.sev if meta else None
+    prior_fingerprints = frozenset(meta.prior_fps) if meta else frozenset()
 
     if severity is None:
         first_line = body.splitlines()[0] if body else ""
@@ -274,6 +294,7 @@ def parse_prior_thread(
         category=category,
         fingerprint=fp,
         finding_id=finding_id,
+        prior_fingerprints=prior_fingerprints,
     )
 
 
@@ -282,16 +303,50 @@ Kind = Literal["new", "suppressed", "recurred", "update", "escalate"]
 
 @dataclass(frozen=True)
 class Classified:
+    """A finding paired with its classification and (when applicable) the
+    prior thread that classification refers to.
+
+    Invariant, enforced below rather than left to caller convention: `kind`
+    "update"/"escalate" always refers to an existing thread (that's the
+    whole point of those two classifications -- there's nothing to PATCH or
+    reply to otherwise) and must carry a non-`None` `thread`; `kind`
+    "new"/"suppressed" never refers to one and must carry `None`. `kind`
+    "recurred" is the one classification that legitimately goes either way
+    (a thread when the original inline comment still exists, `None` for a
+    body-level recurrence with no comment to reopen) and is intentionally
+    excluded from this check.
+    """
+
     finding: Finding
     kind: Kind
     thread: PriorThread | None
+
+    def __post_init__(self) -> None:
+        if self.kind in ("update", "escalate") and self.thread is None:
+            raise ValueError(
+                f"Classified(kind={self.kind!r}) requires a non-None thread"
+            )
+        if self.kind in ("new", "suppressed") and self.thread is not None:
+            raise ValueError(
+                f"Classified(kind={self.kind!r}) must not carry a thread"
+            )
 
 
 def _find_thread_by_fingerprint(
     threads: Sequence[PriorThread], fp: str
 ) -> PriorThread | None:
+    """Locate the thread currently or ever carrying fingerprint `fp`.
+
+    Checks `t.prior_fingerprints` alongside `t.fingerprint` (#720 fix): a
+    fuzzy "update"/"escalate" match PATCHes a thread's comment in place,
+    replacing its metadata marker's fingerprint with the new finding's exact
+    one while `**[F<n>]**` stays the same. A verdict recorded against
+    whichever fingerprint was current at the time (e.g. a dismiss reply read
+    against the not-yet-drifted comment) must still resolve back to this
+    same thread once its fingerprint has moved on.
+    """
     for t in threads:
-        if t.fingerprint == fp:
+        if t.fingerprint == fp or fp in t.prior_fingerprints:
             return t
     return None
 

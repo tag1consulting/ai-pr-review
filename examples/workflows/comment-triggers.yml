@@ -86,15 +86,21 @@ permissions:
 
 jobs:
   slash-commands:
-    # Gate: only fire on /ai-pr-review comments from authorized users on PRs
+    # Gate: only fire on /ai-pr-review comments on PRs. author_association is
+    # unreliable on pull_request_review_comment webhooks (see #732), so it gates
+    # only the issue_comment path (where it's reliable); review comments pass
+    # through to the reusable workflow's `authorize` job, which verifies via API.
     if: >-
       startsWith(github.event.comment.body, '/ai-pr-review') &&
-      contains(
-        fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-        github.event.comment.author_association
-      ) &&
-      (github.event_name == 'pull_request_review_comment' ||
-       (github.event_name == 'issue_comment' && github.event.issue.pull_request))
+      (
+        github.event_name == 'pull_request_review_comment' ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request &&
+         contains(
+           fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+           github.event.comment.author_association
+         ))
+      )
     uses: tag1consulting/ai-pr-review/.github/workflows/slash-commands.yml@main
     with:
       event-name: ${{ github.event_name }}

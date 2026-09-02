@@ -128,14 +128,25 @@ class GitHubConfig:
     # to @main who hits a bug in the reuse path without waiting for a
     # version pin or a revert. Set via AI_CANONICAL_REUSE=false.
     canonical_reuse: bool = True
+    # Optional elevated token (a PAT or GitHub App token), distinct from
+    # `token`, reserved for the two GraphQL mutations GitHub refuses to run
+    # under the default Actions token from a comment-triggered workflow:
+    # `resolveReviewThread`/`unresolveReviewThread` (issue #734). When unset,
+    # `GitHubProvider` falls back to `token` for those calls too, matching
+    # pre-#734 single-token behavior. Keeping this separate from `token`
+    # means every *other* write (dismissing a superseded review, the
+    # auto-approve review, replies, reactions) is attributed to the bot
+    # identity that owns `token` instead of whichever identity owns the PAT.
+    elevated_token: str | None = None
 
 
-def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
-    """Build a RecordingClient preconfigured for GitHub API calls."""
+def _build_http_client(
+    *, token: str, base_url: str, retry: RetryPolicy | None
+) -> RecordingClient:
     http = httpx.Client(
-        base_url=config.base_url,
+        base_url=base_url,
         headers={
-            "Authorization": f"Bearer {config.token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -145,6 +156,27 @@ def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> Reco
         http=http,
         recorder=TapeRecorder.from_env(provider="github"),
         retry_policy=retry or RetryPolicy(),
+    )
+
+
+def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
+    """Build a RecordingClient preconfigured for GitHub API calls."""
+    return _build_http_client(token=config.token, base_url=config.base_url, retry=retry)
+
+
+def build_elevated_client(
+    config: GitHubConfig, retry: RetryPolicy | None = None
+) -> RecordingClient | None:
+    """Build the elevated-token client for `resolve_thread`/`unresolve_thread`.
+
+    Returns `None` when `config.elevated_token` is unset -- callers should
+    treat that as "use the regular client for thread resolution too" (see
+    `GitHubProvider._thread_client`).
+    """
+    if not config.elevated_token:
+        return None
+    return _build_http_client(
+        token=config.elevated_token, base_url=config.base_url, retry=retry
     )
 
 
@@ -187,6 +219,10 @@ class GitHubProvider:
 
     config: GitHubConfig
     client: RecordingClient
+    # Elevated-token client for resolve_thread/unresolve_thread only (#734).
+    # None means "no separate elevated token configured" -- _thread_client()
+    # falls back to `client`, matching pre-#734 behavior.
+    elevated_client: RecordingClient | None = None
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
     # Thread ids post_findings PATCHed (update/escalate) or successfully
     # reopened (recurred) during its most recent call, in this same process.
@@ -609,6 +645,7 @@ class GitHubProvider:
         """
         from ai_pr_review.vcs._finding_ids import fingerprint
 
+
         inline_updated = 0
         replies_posted = 0
         suppressed_count = 0
@@ -737,6 +774,24 @@ class GitHubProvider:
         classified = dedupe_thread_claims(
             [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
         )
+
+        # #720 fix, part 2: a fuzzy "update"/"escalate" match keeps the
+        # matched thread's visible **[F<n>]** token (thread.finding_id is
+        # passed to _apply_thread_update below, never reassigned), but
+        # id_map above was assembled before classification ran and has no
+        # idea a thread claimed this finding -- it already minted a brand
+        # new id for the finding's (possibly just-changed) fingerprint,
+        # which is never rendered anywhere a human sees it. Re-point that
+        # fingerprint at the thread's existing id instead, so this run's
+        # id-map marker (and any future dismiss.py reverse F-id lookup that
+        # reads it) agrees with what the comment actually shows.
+        for c in classified:
+            if (
+                c.kind in ("update", "escalate")
+                and c.thread is not None
+                and c.thread.finding_id is not None
+            ):
+                id_map[fingerprint(c.finding)] = c.thread.finding_id
 
         effects = self._apply_classification_side_effects(
             classified,
@@ -1259,6 +1314,8 @@ class GitHubProvider:
         drift) or an outdated thread would otherwise offer a one-click apply
         against the wrong lines, or fail to apply at all.
         """
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
         thread = classified.thread
         if thread is None:
             return False
@@ -1268,10 +1325,25 @@ class GitHubProvider:
             and thread.line == classified.finding.line
             and thread.start_line == classified.finding.start_line
         )
+        # #720 fix: carry the thread's current fingerprint (and anything it
+        # already carried forward) into the new marker as a "prior"
+        # fingerprint, unless this finding's fingerprint didn't actually
+        # change (a re-detection of literally the same finding, harmless to
+        # skip). A dismiss/false-positive/wont-fix/fixed verdict recorded
+        # against the fingerprint this PATCH is about to replace must still
+        # be able to locate this thread afterwards --
+        # `_canonical._find_thread_by_fingerprint` checks these alongside
+        # the new fingerprint.
+        new_fp = fingerprint(classified.finding)
+        carried_forward = set(thread.prior_fingerprints)
+        if thread.fingerprint is not None and thread.fingerprint != new_fp:
+            carried_forward.add(thread.fingerprint)
+        carried_forward.discard(new_fp)
         new_body = _build_inline_comment_body(
             classified.finding,
             finding_id=thread.finding_id,
             include_suggestion_fence=include_fence,
+            prior_fingerprints=sorted(carried_forward),
         )
         ok, status, snippet = self.update_review_comment(thread.comment_id, new_body)
         if not ok:
@@ -1452,12 +1524,23 @@ class GitHubProvider:
                 break
         return threads
 
+    def _thread_client(self) -> RecordingClient:
+        """Client for the resolveReviewThread/unresolveReviewThread mutations.
+
+        These are the only two calls this provider makes that GitHub refuses
+        to run under the default Actions token from a comment-triggered
+        workflow, hence the separate elevated token (#734). Every other
+        write stays on `self.client` so it's attributed to that token's
+        identity rather than the elevated one.
+        """
+        return self.elevated_client or self.client
+
     def resolve_thread(self, thread_id: str) -> tuple[bool, int, str]:
         mutation = (
             "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
         )
-        resp = self.client.request(
+        resp = self._thread_client().request(
             "POST",
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
@@ -1569,7 +1652,7 @@ class GitHubProvider:
             "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
         )
-        resp = self.client.request(
+        resp = self._thread_client().request(
             "POST",
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
@@ -1931,7 +2014,11 @@ def _render_review_body(
 
 
 def _build_inline_comment_body(
-    f: Finding, *, finding_id: int | None = None, include_suggestion_fence: bool = True
+    f: Finding,
+    *,
+    finding_id: int | None = None,
+    include_suggestion_fence: bool = True,
+    prior_fingerprints: Sequence[str] = (),
 ) -> str:
     """Render the markdown body for a GitHub inline review comment.
 
@@ -1952,6 +2039,14 @@ def _build_inline_comment_body(
         either silently fail to offer the one-click apply or offer it
         against the wrong lines. The proposed code still renders, just as a
         plain fence without the one-click affordance.
+    prior_fingerprints:
+        Fingerprints this same comment was previously rendered with (#720
+        fix). Only ever non-empty when `_apply_thread_update` is
+        re-rendering an existing comment whose fingerprint is about to
+        change -- carries the superseded fingerprint(s) forward into the new
+        marker so a verdict recorded against one of them can still locate
+        this thread later (`_canonical._find_thread_by_fingerprint`). Empty
+        for a first-time render, which keeps the marker's pre-#720 shape.
     """
     from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
     from ai_pr_review.vcs._finding_ids import fingerprint
@@ -1975,7 +2070,10 @@ def _build_inline_comment_body(
     # base64-encoded.
     body = append_inline_marker(body)
     meta_marker = build_inline_meta_marker(
-        fingerprint=fingerprint(f), category=f.category, severity=f.severity
+        fingerprint=fingerprint(f),
+        category=f.category,
+        severity=f.severity,
+        prior_fingerprints=prior_fingerprints,
     )
     return f"{body}\n{meta_marker}"
 
