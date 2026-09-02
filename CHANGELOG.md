@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed comment update was still counted as successful and still triggered an escalation reply claiming a change that didn't land.
 - A thread reopened by a recurrence reply could still be dismissed alongside its review in the same run, because the dismiss-safety check read a snapshot taken before the reopen.
 - `_try_put_canonical` returning early because a newer run's push had already advanced the PR's head was indistinguishable from an actual write, which could let the SHA watermark advance to a stale commit. `FindingsResult` now carries a `skipped` flag and `orchestrate.py` no longer advances the watermark when it's set.
+- Canonical-review reuse's `decide_action` forced a fresh review on every single rerun for any PR with a persistent out-of-diff High/Critical finding, or with more inline-eligible findings than `max-inline` allows — exactly the noisiest PRs the feature exists to quiet down. A finding whose exact fingerprint is already visible in a prior review body no longer forces a fresh review on its own, and `any_new_inline_eligible` is now computed from which findings actually landed an inline comment rather than raw eligibility.
 
 ## [2.6.1] - 2026-08-28
 

@@ -560,6 +560,44 @@ def test_decide_action_new_high_severity_body_level_still_posts() -> None:
     assert action == "post"
 
 
+def test_decide_action_new_high_severity_known_fingerprint_puts() -> None:
+    """Issue #719: a persistent body-level High/Critical finding whose exact
+    fingerprint is already visible in the canonical's own prior body (a
+    known fingerprint) is not genuinely new information to a human -- the
+    PUT still renders it in the body every time, so it should not force a
+    fresh review on every single rerun."""
+    f = _finding(severity="High")
+    fp = fingerprint(f)
+    canonical = CanonicalReview(review_id=1, state="CHANGES_REQUESTED", body=_FOOTER_BODY)
+    classified = [classify(f, verdicts={}, all_threads=[])]
+    action = decide_action(
+        canonical,
+        event="REQUEST_CHANGES",
+        classified=classified,
+        any_new_inline_eligible=False,
+        known_fingerprints=frozenset({fp}),
+    )
+    assert action == "put"
+
+
+def test_decide_action_new_high_severity_unknown_fingerprint_still_posts() -> None:
+    """A different High/Critical finding (not in known_fingerprints) must
+    still force post even when the canonical carries some other known
+    fingerprint -- the exemption is per-fingerprint, not a blanket pass."""
+    f = _finding(severity="High")
+    other_fp = fingerprint(_finding("a different finding entirely", severity="Low"))
+    canonical = CanonicalReview(review_id=1, state="CHANGES_REQUESTED", body=_FOOTER_BODY)
+    classified = [classify(f, verdicts={}, all_threads=[])]
+    action = decide_action(
+        canonical,
+        event="REQUEST_CHANGES",
+        classified=classified,
+        any_new_inline_eligible=False,
+        known_fingerprints=frozenset({other_fp}),
+    )
+    assert action == "post"
+
+
 def test_decide_action_new_low_severity_body_level_puts() -> None:
     canonical = CanonicalReview(review_id=1, state="CHANGES_REQUESTED", body=_FOOTER_BODY)
     classified = [classify(_finding(severity="Low"), verdicts={}, all_threads=[])]
