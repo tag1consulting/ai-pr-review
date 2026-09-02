@@ -456,7 +456,11 @@ class GitHubProvider:
             parse_prior_thread,
             select_canonical,
         )
-        from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
+        from ai_pr_review.vcs._finding_ids import (
+            assemble_id_map,
+            fingerprint,
+            known_fingerprints,
+        )
 
         _added, _new_file = parse_diff_sets(diff.diff_text)
         eligible_new = {(lr.file, lr.line) for lr in _added}
@@ -496,6 +500,7 @@ class GitHubProvider:
             if ID_MAP_MARKER_PREFIX in r["body"] or "**[F" in r["body"]
         ]
         id_map = assemble_id_map(prior_bodies, list(findings))
+        prior_known_fps = known_fingerprints(prior_bodies)
 
         canonical: CanonicalReview | None
         verdicts: dict[str, str]
@@ -614,8 +619,36 @@ class GitHubProvider:
             if c.kind == "new" or (c.kind == "recurred" and c.thread is None)
         ]
 
+        # partition_findings/_build_inline_comment_payload run before
+        # decide_action (not after, as in the original draft) so
+        # any_new_inline_eligible reflects which findings actually landed an
+        # inline comment, not just which were eligible in principle. Raw
+        # eligibility (is_inline_eligible) also counts a finding that
+        # `max_inline` bumped to the body, or whose payload build failed, as
+        # if it got an inline slot -- which would force a fresh POST for a
+        # PR simply over the inline cap even when nothing about it actually
+        # changed (issue #719).
+        inline_candidates, body_findings = partition_findings(
+            render_findings, eligible_new=eligible_new, max_inline=max_inline
+        )
+        inline_comments: list[dict[str, Any]] = []
+        actually_inline_fps: set[str] = set()
+        for f in inline_candidates:
+            payload = _build_inline_comment_payload(
+                f,
+                eligible_new=eligible_new,
+                eligible_context=eligible_ctx,
+                enable_suggestions=enable_suggestions,
+                finding_id=id_map.get(fingerprint(f)),
+            )
+            if payload is not None:
+                inline_comments.append(payload)
+                actually_inline_fps.add(fingerprint(f))
+            else:
+                body_findings.append(f)
+
         any_new_inline_eligible = any(
-            c.kind == "new" and is_inline_eligible(c.finding, eligible_new)
+            c.kind == "new" and fingerprint(c.finding) in actually_inline_fps
             for c in classified
         )
         action = decide_action(
@@ -623,6 +656,7 @@ class GitHubProvider:
             event=event,
             classified=classified,
             any_new_inline_eligible=any_new_inline_eligible,
+            known_fingerprints=prior_known_fps,
         )
         _log.info(
             "github: canonical-review decision=%s (canonical=%s, canonical_state=%s, "
@@ -639,23 +673,6 @@ class GitHubProvider:
                 for c in classified
             ),
         )
-
-        inline_candidates, body_findings = partition_findings(
-            render_findings, eligible_new=eligible_new, max_inline=max_inline
-        )
-        inline_comments: list[dict[str, Any]] = []
-        for f in inline_candidates:
-            payload = _build_inline_comment_payload(
-                f,
-                eligible_new=eligible_new,
-                eligible_context=eligible_ctx,
-                enable_suggestions=enable_suggestions,
-                finding_id=id_map.get(fingerprint(f)),
-            )
-            if payload is not None:
-                inline_comments.append(payload)
-            else:
-                body_findings.append(f)
 
         in_diff_body, ood_body = split_body_findings(body_findings)
         body_bullets: list[str] = []
