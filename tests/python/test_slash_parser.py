@@ -7,6 +7,7 @@ from ai_pr_review.slash.parser import (
     SlashCommand,
     _sanitize_reason,
     parse_command,
+    parse_commands,
 )
 
 # ---------------------------------------------------------------------------
@@ -178,6 +179,55 @@ def test_multiline_body_only_first_line() -> None:
     cmd = parse_command(body)
     assert isinstance(cmd, SlashCommand)
     assert cmd.reason == "good"
+
+
+# ---------------------------------------------------------------------------
+# parse_commands (plural) — issue #733
+# ---------------------------------------------------------------------------
+
+def test_parse_commands_returns_one_entry_per_line() -> None:
+    body = "/ai-pr-review dismiss F1\n/ai-pr-review wont-fix F2 not a bug\n/ai-pr-review dismiss F3"
+    results = parse_commands(body)
+    assert len(results) == 3
+    assert all(isinstance(r, SlashCommand) for r in results)
+    assert [r.finding_id for r in results] == [1, 2, 3]  # type: ignore[union-attr]
+    assert results[1].reason == "not a bug"  # type: ignore[union-attr]
+
+
+def test_parse_commands_skips_non_command_lines() -> None:
+    body = "some preamble\n/ai-pr-review dismiss F1\nsome trailing text\n/ai-pr-review dismiss F2"
+    results = parse_commands(body)
+    assert len(results) == 2
+    assert [r.finding_id for r in results] == [1, 2]  # type: ignore[union-attr]
+
+
+def test_parse_commands_each_entry_raw_body_is_its_own_line() -> None:
+    body = "/ai-pr-review dismiss F1\n/ai-pr-review wont-fix F2 reason here"
+    results = parse_commands(body)
+    assert results[0].raw_body == "/ai-pr-review dismiss F1"  # type: ignore[union-attr]
+    assert results[1].raw_body == "/ai-pr-review wont-fix F2 reason here"  # type: ignore[union-attr]
+
+
+def test_parse_commands_includes_parse_errors() -> None:
+    body = "/ai-pr-review dismiss F1\n/ai-pr-review bogus-command"
+    results = parse_commands(body)
+    assert len(results) == 2
+    assert isinstance(results[0], SlashCommand)
+    assert isinstance(results[1], ParseError)
+
+
+def test_parse_commands_empty_body() -> None:
+    assert parse_commands("") == []
+
+
+def test_parse_commands_no_qualifying_lines() -> None:
+    assert parse_commands("just some regular PR comment\nwith no commands") == []
+
+
+def test_parse_commands_tolerates_leading_whitespace() -> None:
+    body = "  /ai-pr-review dismiss F1  \n  /ai-pr-review dismiss F2"
+    results = parse_commands(body)
+    assert len(results) == 2
 
 
 def test_raw_body_preserved() -> None:
