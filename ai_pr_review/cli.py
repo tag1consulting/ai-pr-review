@@ -564,6 +564,51 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
         click.echo(reply)
 
 
+@cli.command("list-commands")
+@click.option(
+    "--comment-body",
+    envvar="SLASH_COMMENT_BODY",
+    default="",
+    help="Raw comment body to scan for commands (defaults to SLASH_COMMENT_BODY env var).",
+)
+@click.option(
+    "--families",
+    required=True,
+    help="Comma-separated canonical command names to include, e.g. "
+    "'false-positive,wont-fix,fixed'. A command's canonical name normalizes "
+    "the 'dismiss' alias to 'false-positive' (see SlashCommand.canonical_name), "
+    "so 'false-positive' also matches lines typed as 'dismiss'.",
+)
+def list_commands(comment_body: str, families: str) -> None:
+    """List every command line in a comment body matching one of --families.
+
+    Prints a single JSON array to stdout: ``[{"command": "...", "finding_id":
+    N_or_null, "line": "..."}, ...]`` -- one entry per qualifying line, in the
+    order they appear. ``command`` is the literal token the user typed (e.g.
+    "dismiss", not its canonical "false-positive"), suitable for passing
+    straight back as `--command` to the `dismiss` subcommand. ``line`` is
+    that single source line verbatim, suitable for passing as `--comment-body`
+    so a re-parse of just that line extracts the right reason/finding-id/sha.
+
+    Lines that don't start with the `/ai-pr-review` prefix, that fail to
+    parse, or whose canonical command isn't in --families are silently
+    omitted -- one malformed or unrelated line must never block its siblings
+    (issue #733: a single comment can carry several independent commands).
+    Never exits non-zero; an empty or absent body prints `[]`.
+    """
+    from ai_pr_review.slash.parser import SlashCommand, parse_commands
+
+    wanted = {f.strip() for f in families.split(",") if f.strip()}
+    entries = []
+    for parsed in parse_commands(comment_body) if comment_body else []:
+        if not isinstance(parsed, SlashCommand):
+            continue
+        if parsed.canonical_name not in wanted:
+            continue
+        entries.append({"command": parsed.name, "finding_id": parsed.finding_id, "line": parsed.raw_body})
+    click.echo(json.dumps(entries))
+
+
 def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     """Build a `GitHubProvider` from env, or exit(1) with a `<label>: ...` message.
 

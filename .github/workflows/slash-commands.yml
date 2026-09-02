@@ -470,6 +470,26 @@ jobs:
             "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes
 
+      - name: List dismiss commands
+        # Scans EVERY line of the comment for dismiss/false-positive/wont-fix/
+        # fixed (issue #733: a single top-level comment -- the workaround for
+        # replying inline -- can carry several verdicts, one per line, and
+        # previously only the first was ever acted on). explain/revise are
+        # deliberately excluded here; they stay first-line-only via the
+        # lookup step below, since they're unimplemented stub replies.
+        #
+        # Unconditional (not gated on needs.handle-command.outputs.command):
+        # that output only reflects LINE ONE, but a dismiss-family command
+        # can appear on any line -- e.g. "explain F1" on line one followed by
+        # "dismiss F2" on line two. list-commands harmlessly prints "[]" when
+        # nothing qualifies.
+        id: list
+        env:
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+        run: |
+          commands_json=$(ai-pr-review list-commands --families false-positive,wont-fix,fixed)
+          echo "commands=${commands_json}" >> "$GITHUB_OUTPUT"
+
       - name: Lookup body finding or list active IDs (explain/revise only)
         # Only explain/revise reach this step now — dismiss/false-positive/wont-fix
         # are handled by the "Invoke Python dismiss handler" step below, which
@@ -612,44 +632,86 @@ jobs:
           echo "valid=true" >> "$GITHUB_OUTPUT"
 
       - name: Invoke Python dismiss handler
+        # Loops over every line steps.list found (issue #733) instead of the
+        # single command/finding-id handle-command derived from line 1 only.
+        # Each iteration is one unmodified `ai-pr-review dismiss` invocation
+        # -- same CLI contract as before, a single line at a time -- with
+        # only that line's own text passed as --comment-body, so its own
+        # reason/commit-sha (for `fixed`) is parsed correctly rather than
+        # re-parsing line 1 on every iteration. Replies are concatenated into
+        # one combined comment; the reaction is "done" if any line acted,
+        # matching the prior single-command semantics of "confused only when
+        # nothing happened".
         id: dismiss
-        if: contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
+        if: steps.list.outputs.commands != '' && steps.list.outputs.commands != '[]'
         env:
-          SLASH_FINDING_ID: ${{ needs.handle-command.outputs.finding_id }}
           SLASH_ACTOR: ${{ inputs.actor-login }}
-          SLASH_COMMAND: ${{ needs.handle-command.outputs.command }}
           SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
-          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
           AI_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           GH_TOKEN: ${{ secrets.github-token }}
           VCS_PROVIDER: 'github'
+          COMMANDS_JSON: ${{ steps.list.outputs.commands }}
         run: |
           set +e
-          reply=$(ai-pr-review dismiss 2>/tmp/dismiss-stderr)
-          exit_code=$?
-          stderr_content=$(cat /tmp/dismiss-stderr)
-          if [[ -n "$stderr_content" ]]; then
-            echo "$stderr_content" >&2
+          replies=()
+          any_done="false"
+          hard_failure=""
+          line_count=0
+          failure_count=0
+          while IFS= read -r entry; do
+            line_count=$((line_count + 1))
+            cmd=$(jq -r '.command' <<<"$entry")
+            fid=$(jq -r '.finding_id // empty' <<<"$entry")
+            line=$(jq -r '.line' <<<"$entry")
+            args=(dismiss --command "$cmd" --comment-body "$line")
+            if [[ -n "$fid" ]]; then
+              args+=(--finding-id "$fid")
+            fi
+            reply=$(ai-pr-review "${args[@]}" 2>/tmp/dismiss-stderr-part)
+            exit_code=$?
+            stderr_content=$(cat /tmp/dismiss-stderr-part)
+            if [[ -n "$stderr_content" ]]; then
+              echo "$stderr_content" >&2
+            fi
+            if [[ $exit_code -ne 0 ]]; then
+              echo "::error::dismiss handler exited $exit_code for line: $line"
+              hard_failure="$exit_code"
+              failure_count=$((failure_count + 1))
+              # Surface the failure in the posted reply too, not just the
+              # Actions log -- otherwise a commenter sees replies for the
+              # lines that worked and a "done" reaction, with nothing
+              # indicating one of their commands silently failed to run.
+              replies+=("\`${line}\` — internal error while processing this line (exit ${exit_code}). Please retry or check the workflow run log.")
+              continue
+            fi
+            # Default to confused: if the handler exits 0 without ever
+            # emitting the marker, treat this line as not-acted rather than
+            # silently reporting success.
+            if grep -q '^::notice::reaction=done$' /tmp/dismiss-stderr-part; then
+              any_done="true"
+            fi
+            replies+=("$reply")
+          done < <(jq -c '.[]' <<<"$COMMANDS_JSON")
+          rm -f /tmp/dismiss-stderr-part
+
+          if [[ -n "$hard_failure" && "$failure_count" -eq "$line_count" ]]; then
+            echo "::error::dismiss handler failed for every line in this comment"
+            exit "$hard_failure"
           fi
-          if [[ $exit_code -ne 0 ]]; then
-            echo "::error::dismiss handler exited $exit_code"
-            exit $exit_code
-          fi
-          # Default to confused: if the handler exits 0 without ever emitting
-          # the marker (e.g. a code path added later that forgets to), this
-          # fails visibly as a wrong reaction rather than silently reporting
-          # success.
+
+          combined=$(printf '%s\n\n---\n\n' "${replies[@]}")
+          combined="${combined%$'\n\n---'}"
           reaction="confused"
-          if grep -q '^::notice::reaction=done$' /tmp/dismiss-stderr; then
+          if [[ "$any_done" == "true" ]]; then
             reaction="done"
           fi
           echo "reaction=${reaction}" >> "$GITHUB_OUTPUT"
-          encoded=$(printf '%s' "$reply" | base64 -w0)
+          encoded=$(printf '%s' "$combined" | base64 -w0)
           echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
 
       - name: Post dismiss reply
-        if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
+        if: steps.dismiss.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
@@ -670,7 +732,7 @@ jobs:
           gh pr comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body-file "$reply_file"
 
       - name: React — dismiss outcome
-        if: steps.dismiss.outcome == 'success' && contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), needs.handle-command.outputs.command)
+        if: steps.dismiss.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
@@ -993,7 +1055,17 @@ jobs:
         # context fields. For the review-thread-reply path, a
         # context_missing_reason is also exported so the reply step can
         # prepend a transparency note.
+        #
+        # Review-thread only (is_review_comment == 'true'): a
+        # pull_request_review_comment reply is inherently about ONE parent
+        # finding, so single-context extraction is still correct there. The
+        # top-level (issue_comment) path now does its own per-line context
+        # lookup in the "List feedback commands" / "Invoke Python slash
+        # handler (loop, top-level)" steps below (issue #733: multiple
+        # feedback verdicts, each naming a different F<n>, can appear in one
+        # comment).
         id: context
+        if: steps.endpoints.outputs.is_review_comment == 'true'
         env:
           # actions-token, not github-token: this step only performs plain
           # REST GETs (fetch_review_comment, list_bot_reviews) — no
@@ -1013,7 +1085,11 @@ jobs:
         run: ai-pr-review feedback-context >> "$GITHUB_OUTPUT"
 
       - name: Invoke Python slash handler
+        # Review-thread only — see the "Extract finding context" step above
+        # for why the top-level path (issue_comment) now runs its own loop
+        # instead of this single-shot invocation.
         id: handler
+        if: steps.endpoints.outputs.is_review_comment == 'true'
         env:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
           # Prefer wrapper-supplied context (legacy), else the context
@@ -1054,6 +1130,100 @@ jobs:
           fi
           # Encode reply so it survives multiline GITHUB_OUTPUT
           encoded=$(printf '%s' "$reply" | base64 -w0)
+          echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
+          echo "is_command=true" >> "$GITHUB_OUTPUT"
+
+      - name: List feedback commands
+        # Top-level only (issue #733): scans EVERY line of the comment for
+        # false-positive/wont-fix/feedback, so a single top-level comment
+        # posting several verdicts (each possibly naming a different F<n>)
+        # gets every line persisted, not just the first. "dismiss" (alias
+        # for false-positive) and "fixed" are covered/excluded exactly as
+        # `SlashCommand.is_feedback_command` defines: "fixed" must never
+        # reach the feedback store (see that property's docstring).
+        id: list
+        if: steps.endpoints.outputs.is_review_comment == 'false'
+        env:
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+        run: |
+          commands_json=$(ai-pr-review list-commands --families false-positive,wont-fix,feedback)
+          echo "commands=${commands_json}" >> "$GITHUB_OUTPUT"
+
+      - name: Invoke Python slash handler (loop, top-level)
+        # One `ai-pr-review feedback-context` + `ai-pr-review slash` pair per
+        # qualifying line -- each pair unmodified from the review-thread
+        # path's single-shot calls above, just fed that one line instead of
+        # the whole comment body, so each line's own F<n> context and
+        # reason are looked up and persisted independently. Replies are
+        # concatenated into one combined comment.
+        id: handler_multi
+        if: steps.list.outputs.commands != '' && steps.list.outputs.commands != '[]'
+        env:
+          SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
+          ACTIONS_GH_TOKEN: ${{ secrets.actions-token || github.token }}
+          PAT_GH_TOKEN: ${{ secrets.github-token }}
+          GITHUB_REPOSITORY: ${{ inputs.repository }}
+          AI_PROVIDER: ${{ inputs.provider }}
+          VCS_PROVIDER: 'github'
+          COMMANDS_JSON: ${{ steps.list.outputs.commands }}
+        run: |
+          set +e
+          replies=()
+          hard_failure=""
+          attempted_count=0
+          failure_count=0
+          while IFS= read -r entry; do
+            line=$(jq -r '.line' <<<"$entry")
+            ctx=$(GH_TOKEN="$ACTIONS_GH_TOKEN" SLASH_PR_NUMBER="$SLASH_PR_NUMBER" \
+              SLASH_IS_REVIEW_COMMENT=false SLASH_COMMENT_BODY="$line" \
+              ai-pr-review feedback-context)
+            source=$(grep '^source='  <<<"$ctx" | cut -d= -f2-)
+            file=$(grep '^file='      <<<"$ctx" | cut -d= -f2-)
+            rule_id=$(grep '^rule_id=' <<<"$ctx" | cut -d= -f2-)
+            reply=$(GH_TOKEN="$PAT_GH_TOKEN" SLASH_COMMENT_BODY="$line" \
+              SLASH_SOURCE="$source" SLASH_FILE="$file" SLASH_RULE_ID="$rule_id" \
+              AI_FEEDBACK_LOOP=true \
+              ai-pr-review slash 2>/tmp/slash-stderr-part)
+            exit_code=$?
+            stderr_content=$(cat /tmp/slash-stderr-part)
+            if [[ -n "$stderr_content" ]]; then
+              echo "$stderr_content" >&2
+            fi
+            if [[ $exit_code -eq 2 ]]; then
+              # list-commands already filtered to feedback-family lines, so
+              # this should never happen -- defensive, not a real failure.
+              echo "::notice::not a recognized command for line: $line"
+              continue
+            fi
+            attempted_count=$((attempted_count + 1))
+            if [[ $exit_code -ne 0 ]]; then
+              echo "::error::slash handler exited $exit_code for line: $line"
+              hard_failure="$exit_code"
+              failure_count=$((failure_count + 1))
+              # Surface the failure in the posted reply too, not just the
+              # Actions log -- otherwise the commenter sees replies for the
+              # lines that worked with nothing indicating one silently failed.
+              replies+=("\`${line}\` — internal error while processing this line (exit ${exit_code}). Please retry or check the workflow run log.")
+              continue
+            fi
+            if [[ -n "$reply" ]]; then
+              replies+=("$reply")
+            fi
+          done < <(jq -c '.[]' <<<"$COMMANDS_JSON")
+          rm -f /tmp/slash-stderr-part
+
+          if [[ -n "$hard_failure" && "$failure_count" -eq "$attempted_count" && "$attempted_count" -gt 0 ]]; then
+            echo "::error::slash handler failed for every line in this comment"
+            exit "$hard_failure"
+          fi
+
+          if [[ ${#replies[@]} -eq 0 ]]; then
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          combined=$(printf '%s\n\n---\n\n' "${replies[@]}")
+          combined="${combined%$'\n\n---'}"
+          encoded=$(printf '%s' "$combined" | base64 -w0)
           echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
           echo "is_command=true" >> "$GITHUB_OUTPUT"
 
@@ -1103,15 +1273,15 @@ jobs:
 
       - name: Post reply (top-level)
         # When triggered from an issue_comment (top-level PR comment),
-        # post the reply as a sibling top-level comment.
-        if: |
-          steps.handler.outputs.is_command == 'true' &&
-          steps.endpoints.outputs.is_review_comment == 'false'
+        # post the reply as a sibling top-level comment. Source is
+        # handler_multi now (issue #733's per-line loop), not handler --
+        # the latter's step is gated to review-thread only, above.
+        if: steps.handler_multi.outputs.is_command == 'true'
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
-          REPLY_B64: ${{ steps.handler.outputs.reply_b64 }}
+          REPLY_B64: ${{ steps.handler_multi.outputs.reply_b64 }}
         run: |
           # Write reply to a temp file and use --body-file so the body content
           # never becomes part of the gh command line. Defense-in-depth: the
@@ -1150,7 +1320,9 @@ jobs:
       # dismiss-finding no longer needs duplicating here.
 
       - name: React — done
-        if: steps.handler.outputs.is_command == 'true' && success()
+        if: |
+          (steps.handler.outputs.is_command == 'true' || steps.handler_multi.outputs.is_command == 'true') &&
+          success()
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
           REPOSITORY: ${{ inputs.repository }}

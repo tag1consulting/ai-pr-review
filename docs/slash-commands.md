@@ -18,6 +18,16 @@ AI PR Review supports commands posted as PR comments. The workflow listens on bo
 - **Inline findings** are anchored to a specific diff line. They appear as review-thread comments. Use `/ai-pr-review dismiss` (or `false-positive`, `wont-fix`, `fixed`) as a **reply** on the thread to dismiss them.
 - **Body-level findings** appear in the `### Findings not attached to specific lines` section of the review body. They have no thread to reply to. Each one is labeled with a stable ID like `**[F1]**`. Use `/ai-pr-review dismiss F1` (or `false-positive F1`, `wont-fix F1`, `fixed F1`) as a **top-level PR comment** to dismiss them.
 
+**Multiple commands in one top-level comment:** `dismiss`, `false-positive`, `wont-fix`, `fixed`, and `feedback` can each be posted several times in a single top-level PR comment, one command per line — every line is acted on, not just the first:
+
+```
+/ai-pr-review dismiss F1
+/ai-pr-review wont-fix F2 documented via JSDoc, not the shortcode param block
+/ai-pr-review fixed F3 abc1234
+```
+
+The bot posts one combined reply covering every line. This does **not** apply to replies on an inline review-comment thread (those are inherently about the one finding you're replying to) or to `explain`/`revise` (currently unimplemented stubs) — those commands still only look at the first line of the comment.
+
 ## Quick start
 
 ### 1. Use the unified workflow template

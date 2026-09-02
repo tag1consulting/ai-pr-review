@@ -23,6 +23,11 @@ Supported commands:
 ``F<n>`` tokens also accept the bracketed form ``[F<n>]`` shown in review
 bodies (e.g. ``**[F1]**``) — see ``_FID_RE``.
 
+``parse_command`` only ever looks at the first line of the body it is given.
+``parse_commands`` (plural) scans every line for the ``/ai-pr-review`` prefix
+and parses each one independently, for callers that need to act on more than
+one command posted in a single comment (issue #733).
+
 The ``author_association`` guard (OWNER/MEMBER/COLLABORATOR) is enforced at
 the GitHub Actions workflow level before this parser is called; the parser
 trusts the caller's pre-filtering.
@@ -226,3 +231,33 @@ def parse_command(body: str) -> SlashCommand | ParseError | None:
         finding_id=finding_id,
         commit_sha=commit_sha,
     )
+
+
+def parse_commands(body: str) -> list[SlashCommand | ParseError]:
+    """Parse every ``/ai-pr-review`` line in *body*, not just the first.
+
+    A single top-level PR comment can carry several commands, one per line
+    (e.g. the top-level-comment workaround for replying to individual inline
+    findings — issue #733). ``parse_command`` deliberately only looks at the
+    first line (see its docstring and ``test_multiline_body_only_first_line``)
+    because most callers re-parse a comment body already known to carry
+    exactly one command. This function is for the opposite case: callers that
+    need to discover and act on *all* of them.
+
+    Each qualifying line (one starting with the ``/ai-pr-review`` prefix,
+    after stripping surrounding whitespace) is parsed independently by
+    feeding just that line to ``parse_command`` -- so each returned
+    ``SlashCommand.raw_body`` is that single line, not the whole comment.
+    Lines that don't start with the prefix are skipped entirely (not even
+    reported as errors), matching ``parse_command``'s ``None`` return for a
+    non-command body.
+    """
+    results: list[SlashCommand | ParseError] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith(_PREFIX):
+            continue
+        parsed = parse_command(line)
+        if parsed is not None:
+            results.append(parsed)
+    return results
