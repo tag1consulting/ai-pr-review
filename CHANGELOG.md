@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A thread reopened by a recurrence reply could still be dismissed alongside its review in the same run, because the dismiss-safety check read a snapshot taken before the reopen.
 - `_try_put_canonical` returning early because a newer run's push had already advanced the PR's head was indistinguishable from an actual write, which could let the SHA watermark advance to a stale commit. `FindingsResult` now carries a `skipped` flag and `orchestrate.py` no longer advances the watermark when it's set.
 
+### Changed
+
+- `GitHubProvider.list_bot_reviews()` and `_list_prior_bot_reviews()` (the write- and read-side sources feeding canonical-review selection) now share a single paginated walk over `GET /pulls/{n}/reviews` (`_list_reviews_paginated`), parameterized by an error-handling `strict` flag and an optional state filter. The two independently hand-written walks had drifted into inconsistent contracts; sharing the pagination and bot-login-filtering mechanics removes the risk of them drifting further apart from an ordinary implementation bug. The two contracts remain deliberately different (see `docs/architecture-internals.md#canonical-review-reuse-github`) — no observable behavior changed for either method's callers.
+
 ## [2.6.1] - 2026-08-28
 
 ### Fixed

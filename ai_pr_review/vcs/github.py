@@ -55,6 +55,16 @@ _BOT_LOGIN_DEFAULT: Final[str] = "github-actions[bot]"
 
 _GRAPHQL_PATH: Final[str] = "/graphql"
 
+# Review states `_list_prior_bot_reviews()` keeps -- every state a review can
+# be submitted in except PENDING (a draft review with no visible body; our
+# own reviews are always created with an explicit `event`, so the bot itself
+# never leaves one PENDING). Excluding it is a deliberate narrowing for the
+# canonical-review-reuse read path specifically -- see `_list_reviews_paginated`'s
+# docstring for why `list_bot_reviews()` does not apply this same filter.
+_CANONICAL_REVIEW_STATES: Final[frozenset[str]] = frozenset(
+    {"CHANGES_REQUESTED", "COMMENTED", "APPROVED", "DISMISSED"}
+)
+
 
 def _blob_link(*, owner: str, repo: str, head_sha: str, file: str, line: int | None) -> str:
     """Build a GitHub blob-permalink URL, optionally anchored to a line.
@@ -225,24 +235,52 @@ class GitHubProvider:
     # Prior bot reviews — id/state/body reconstruction for ID-map assembly
     # and canonical-review-reuse classification
     # ------------------------------------------------------------------
-    def _list_prior_bot_reviews(self) -> list[dict[str, Any]]:
-        """Return `{"id", "state", "body"}` for every prior bot review,
-        paginated. On any HTTP error mid-pagination, returns `[]` rather
-        than partial results (the same #550/#553 guarantee the now-removed
-        `_list_prior_bot_review_bodies` always had) -- distinct from
-        `list_bot_reviews`, which appends to `self._errors` and keeps
-        whatever it collected so far; that method has its own existing
-        callers (`_record_verdict`) with that partial-result contract
-        already baked in, so this is a separate method rather than a change
-        to it (see `select_canonical`'s docstring for the resulting
-        write/read discrepancy this leaves open).
+    def _list_reviews_paginated(
+        self, *, strict: bool, states: frozenset[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Shared paginated walk over `GET /pulls/{n}/reviews`, filtered to
+        reviews authored by our own bot login.
 
-        Feeds both the body-finding ID-map assembler in `post_findings`
-        (filtering for `ID_MAP_MARKER_PREFIX`/`"**[F"` inline, replacing the
-        old dedicated method) and the canonical-review-reuse classification
-        path (`ai_pr_review.vcs._canonical.select_canonical`/
-        `merge_verdicts`, which need every prior review's id/state/body, not
-        just the id-map-bearing subset).
+        This is the single walk `list_bot_reviews()` and
+        `_list_prior_bot_reviews()` both go through -- collapsing what used
+        to be two independently-maintained copies of the same pagination
+        loop (issue found during PR #716's comprehensive review: the two
+        had drifted into inconsistent error-handling and state-filtering
+        contracts, risking `ai_pr_review.vcs._canonical.select_canonical`
+        picking a *different* canonical review on the write side
+        (`_record_verdict`, fed from `list_bot_reviews()`) than on the read
+        side (`post_findings`'s classification, fed from
+        `_list_prior_bot_reviews()`) purely because of a pagination-bug
+        divergence, not a deliberate difference). The two callers still
+        legitimately need different data -- see the `strict`/`states`
+        parameters below -- but now express that difference as two
+        parameters to one method instead of two hand-written loops that
+        could each independently acquire new bugs.
+
+        strict:
+            `True` (the `_list_prior_bot_reviews()` / canonical-review-reuse
+            read path): on any HTTP error mid-pagination, returns `[]`
+            rather than partial results, and logs only via `_log.warning`
+            (never `self._errors`) -- this is the #550/#553 guarantee the
+            now-removed `_list_prior_bot_review_bodies` always had.
+            `post_findings` treats a failed fetch as "nothing to reuse yet"
+            (every finding classifies `new`, exactly today's
+            pre-canonical-reuse behavior) and must not surface a transient
+            listing failure as a hard `FindingsResult` error.
+
+            `False` (every `list_bot_reviews()` caller: `_dismiss_stale_reviews`,
+            and `ai_pr_review.slash.dismiss`'s classification and
+            verdict-recording call sites): appends to `self._errors` and
+            returns whatever was collected so far on an HTTP error (partial
+            results) -- these callers have long-standing partial-result
+            tolerance built into their own error handling.
+
+        states:
+            Optional set of review `state` values to keep (e.g. excluding
+            `PENDING`, which `list_bot_reviews()` deliberately does not
+            filter -- see that method's docstring for why). `None` (the
+            default) keeps every state, matching `list_bot_reviews()`'s
+            long-standing contract.
         """
         c = self.config
         reviews: list[dict[str, Any]] = []
@@ -251,26 +289,51 @@ class GitHubProvider:
         while url:
             resp = self.client.request("GET", url, params=params)
             if resp.status_code >= 400:
-                _log.warning(
-                    "github: could not list reviews: HTTP %d", resp.status_code
+                if strict:
+                    _log.warning(
+                        "github: could not list reviews: HTTP %d", resp.status_code
+                    )
+                    return []
+                self._errors.append(
+                    f"list reviews: HTTP {resp.status_code}: {resp.text[:200]}"
                 )
-                return []
+                return reviews
             for review in resp.json() or []:
                 if (review.get("user") or {}).get("login") != c.bot_login:
                     continue
-                if review.get("state") not in (
-                    "CHANGES_REQUESTED", "COMMENTED", "APPROVED", "DISMISSED"
-                ):
+                if states is not None and review.get("state") not in states:
                     continue
-                rid = review.get("id")
-                if not isinstance(rid, int):
-                    continue
-                reviews.append(
-                    {"id": rid, "state": review.get("state") or "", "body": review.get("body") or ""}
-                )
+                reviews.append(review)
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None
         return reviews
+
+    def _list_prior_bot_reviews(self) -> list[dict[str, Any]]:
+        """Return `{"id", "state", "body"}` for every prior bot review, in
+        the non-`PENDING` states (see `_CANONICAL_REVIEW_STATES`), via the
+        shared `_list_reviews_paginated(strict=True, ...)` walk -- returns
+        `[]` rather than partial results on any HTTP error mid-pagination
+        (see that method's docstring for why).
+
+        Feeds both the body-finding ID-map assembler in `post_findings`
+        (filtering for `ID_MAP_MARKER_PREFIX`/`"**[F"` inline, replacing the
+        old dedicated method) and the canonical-review-reuse classification
+        path (`ai_pr_review.vcs._canonical.select_canonical`/
+        `merge_verdicts`, which need every prior review's id/state/body, not
+        just the id-map-bearing subset).
+        """
+        reviews = self._list_reviews_paginated(
+            strict=True, states=_CANONICAL_REVIEW_STATES
+        )
+        result: list[dict[str, Any]] = []
+        for review in reviews:
+            rid = review.get("id")
+            if not isinstance(rid, int):
+                continue
+            result.append(
+                {"id": rid, "state": review.get("state") or "", "body": review.get("body") or ""}
+            )
+        return result
 
     # ------------------------------------------------------------------
     # get_last_reviewed_sha
@@ -1589,32 +1652,23 @@ class GitHubProvider:
         }
 
     def list_bot_reviews(self) -> list[dict[str, Any]]:
-        """Return all reviews authored by our bot login, paginated.
+        """Return all reviews authored by our bot login, paginated, in
+        every state (including `PENDING`) via the shared
+        `_list_reviews_paginated(strict=False, states=None)` walk.
 
-        Factored out of `_dismiss_stale_reviews`, which used to inline this
-        same paginated `/pulls/{n}/reviews` walk. `_list_prior_bot_review_bodies`
-        is intentionally left as its own walk (not rebased on this method): it
-        returns `[]` on a mid-pagination HTTP error rather than partial results,
-        a #550/#553 guarantee this method does not preserve (it appends to
-        `self._errors` and returns whatever it collected so far instead).
+        Originally factored out of `_dismiss_stale_reviews`, which used to
+        inline this same paginated `/pulls/{n}/reviews` walk; now also the
+        write-side source for `ai_pr_review.slash.dismiss`'s classification
+        (`dismiss_by_finding_id` needs every prior review's body, regardless
+        of state, to scan for `**[F<n>]**` tokens) and verdict-recording
+        (`_record_verdict`, via `select_canonical`/`merge_verdicts`) call
+        sites. On a mid-pagination HTTP error, appends to `self._errors` and
+        returns whatever it collected so far (partial results) -- distinct
+        from `_list_prior_bot_reviews()`'s `strict=True`, empty-on-error
+        contract; see `_list_reviews_paginated`'s docstring for why both
+        behaviors are legitimate for their respective callers.
         """
-        c = self.config
-        reviews: list[dict[str, Any]] = []
-        url: str | None = self._reviews_url()
-        params: dict[str, Any] | None = {"per_page": 100}
-        while url:
-            resp = self.client.request("GET", url, params=params)
-            if resp.status_code >= 400:
-                self._errors.append(
-                    f"list reviews: HTTP {resp.status_code}: {resp.text[:200]}"
-                )
-                return reviews
-            for review in resp.json() or []:
-                if (review.get("user") or {}).get("login") == c.bot_login:
-                    reviews.append(review)
-            url = _parse_next_link(resp.headers.get("link", ""))
-            params = None
-        return reviews
+        return self._list_reviews_paginated(strict=False, states=None)
 
     def _dismiss_stale_reviews(
         self,
