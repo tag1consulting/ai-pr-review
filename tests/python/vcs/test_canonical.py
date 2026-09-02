@@ -64,6 +64,7 @@ def _thread(
     category: str | None = "other",
     fp: str | None = None,
     finding_id: int | None = None,
+    prior_fingerprints: frozenset[str] = frozenset(),
 ) -> PriorThread:
     return PriorThread(
         thread_id=thread_id,
@@ -78,6 +79,7 @@ def _thread(
         category=category,
         fingerprint=fp,
         finding_id=finding_id,
+        prior_fingerprints=prior_fingerprints,
     )
 
 
@@ -234,6 +236,32 @@ def test_classify_fuzzy_dismissed_match_unrecoverable_severity_never_suppresses(
 
     result = classify(new_finding, verdicts={dismissed_fp: "dismissed"}, all_threads=[])
     assert result.kind == "new"
+
+
+def test_classify_fuzzy_dismissed_match_finds_thread_via_prior_fingerprint() -> None:
+    """#720 regression: a fuzzy "update" match PATCHes a thread's comment in
+    place, replacing its metadata marker's fingerprint with the reworded
+    finding's exact one while the verdict recorded by a since-dismissed
+    reply is still keyed against the *old* fingerprint. Without
+    `prior_fingerprints`, `_find_thread_by_fingerprint(all_threads, old_fp)`
+    would come back `None` (the thread's own `.fingerprint` is now `new_fp`),
+    `d_severity` would be unrecoverable, and the dismissed finding would
+    repost as "new" -- exactly the failure this thread's own comment history
+    is supposed to prevent."""
+    old_fp = "code-reviewer|app.py|10|deadbeef0000"
+    thread = _thread(
+        path="app.py",
+        line=11,
+        severity="Low",
+        category="lint",
+        fp="new-fingerprint-after-reword",
+        prior_fingerprints=frozenset({old_fp}),
+        is_resolved=True,
+    )
+    reworded = _finding("similar nit, reworded", file="app.py", line=11, severity="Low", category="lint")
+
+    result = classify(reworded, verdicts={old_fp: "dismissed"}, all_threads=[thread])
+    assert result.kind == "suppressed"
 
 
 def test_classify_exact_fixed_match_is_recurred_with_thread() -> None:

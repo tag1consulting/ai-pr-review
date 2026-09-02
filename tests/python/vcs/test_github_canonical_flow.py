@@ -17,7 +17,7 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import build_verdicts_marker
+from ai_pr_review.vcs.marker import build_verdicts_marker, upsert_verdicts_marker
 from ai_pr_review.vcs.protocol import DiffContext
 
 _VALID_SHA = "abc1234def5678abc1234def5678abc1234def56"
@@ -850,6 +850,102 @@ def test_dismissed_finding_is_suppressed_not_reposted() -> None:
 
     assert result.ok
     assert result.suppressed == 1
+
+
+def test_dismissed_finding_stays_suppressed_after_fuzzy_update_drift() -> None:
+    """#720 regression: a fuzzy "update" match PATCHes an open thread's
+    comment in place, replacing its private metadata marker's fingerprint
+    with the reworded finding's exact one while the visible **[F<n>]**
+    token stays put. If a human then dismisses that thread, dismiss.py
+    records the verdict against whatever fingerprint was current *at dismiss
+    time* -- per #720's own narrative, that can be the finding's original
+    (now-superseded) fingerprint. The next run must still suppress the same
+    (still-reworded) finding rather than reposting it as "new" just because
+    the thread's own marker has moved on to a different fingerprint than the
+    one recorded in the verdicts map.
+    """
+    old_finding = _finding("SQL built via string concatenation", severity="Medium", line=5)
+    old_fp = fingerprint(old_finding)
+    original_comment_body = _build_inline_comment_body(old_finding, finding_id=3)
+
+    # Reworded -- fingerprint changes -- but same file/severity/category and
+    # within PROXIMITY_LINES, so classify() fuzzy-matches it to th1 as an
+    # "update" rather than "new".
+    reworded_finding = _finding(
+        "SQL query concatenates untrusted input", severity="Medium", line=6
+    )
+    reworded_fp = fingerprint(reworded_finding)
+    assert reworded_fp != old_fp
+
+    state = {"canonical_body": _footer_body(), "comment_body": original_comment_body, "resolved": False}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": state["canonical_body"],
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=state["comment_body"], line=5, is_resolved=state["resolved"],
+                )]
+            )
+        if req.method == "PATCH" and url.endswith("/pulls/comments/1"):
+            state["comment_body"] = (body or {}).get("body", state["comment_body"])
+            return httpx.Response(200, json={"id": 1})
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": state["canonical_body"]})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            state["canonical_body"] = (body or {}).get("body", state["canonical_body"])
+            return httpx.Response(200, json={"id": 10})
+        if req.method == "POST" and "/pulls/1/comments" in url:
+            raise AssertionError(
+                "an update-classified finding must be PATCHed in place, "
+                "never reposted as a brand new comment"
+            )
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+
+    # Run 1: the reworded finding fuzzy-matches th1 as "update" -- PATCHes
+    # the comment in place. Its metadata marker now carries reworded_fp, not
+    # old_fp, but the visible F3 token is untouched.
+    result1 = prov.post_findings(
+        [reworded_finding], DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA), event="REQUEST_CHANGES",
+    )
+    assert result1.ok
+    patches = [c for c in rec.calls if c[0] == "PATCH" and c[1].endswith("/pulls/comments/1")]
+    assert len(patches) == 1
+
+    # Simulate dismiss.py: a human replies `/ai-pr-review dismiss` on that
+    # thread, reads the still-visible F3 token, and records a "dismissed"
+    # verdict -- against the finding's original fingerprint, per #720's own
+    # narrative of what the reverse F-id lookup can return. dismiss.py also
+    # always resolves the underlying GraphQL thread.
+    state["canonical_body"] = upsert_verdicts_marker(state["canonical_body"], {old_fp: "dismissed"})
+    state["resolved"] = True
+
+    # Run 2: same reworded finding, unchanged. Must be suppressed, not
+    # reposted as "new".
+    result2 = prov.post_findings(
+        [reworded_finding], DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA), event="REQUEST_CHANGES",
+    )
+    assert result2.ok
+    assert result2.suppressed == 1
 
 
 # ---------------------------------------------------------------------------

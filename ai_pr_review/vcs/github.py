@@ -609,6 +609,7 @@ class GitHubProvider:
         """
         from ai_pr_review.vcs._finding_ids import fingerprint
 
+
         inline_updated = 0
         replies_posted = 0
         suppressed_count = 0
@@ -737,6 +738,24 @@ class GitHubProvider:
         classified = dedupe_thread_claims(
             [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
         )
+
+        # #720 fix, part 2: a fuzzy "update"/"escalate" match keeps the
+        # matched thread's visible **[F<n>]** token (thread.finding_id is
+        # passed to _apply_thread_update below, never reassigned), but
+        # id_map above was assembled before classification ran and has no
+        # idea a thread claimed this finding -- it already minted a brand
+        # new id for the finding's (possibly just-changed) fingerprint,
+        # which is never rendered anywhere a human sees it. Re-point that
+        # fingerprint at the thread's existing id instead, so this run's
+        # id-map marker (and any future dismiss.py reverse F-id lookup that
+        # reads it) agrees with what the comment actually shows.
+        for c in classified:
+            if (
+                c.kind in ("update", "escalate")
+                and c.thread is not None
+                and c.thread.finding_id is not None
+            ):
+                id_map[fingerprint(c.finding)] = c.thread.finding_id
 
         effects = self._apply_classification_side_effects(
             classified,
@@ -1259,6 +1278,8 @@ class GitHubProvider:
         drift) or an outdated thread would otherwise offer a one-click apply
         against the wrong lines, or fail to apply at all.
         """
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
         thread = classified.thread
         if thread is None:
             return False
@@ -1268,10 +1289,25 @@ class GitHubProvider:
             and thread.line == classified.finding.line
             and thread.start_line == classified.finding.start_line
         )
+        # #720 fix: carry the thread's current fingerprint (and anything it
+        # already carried forward) into the new marker as a "prior"
+        # fingerprint, unless this finding's fingerprint didn't actually
+        # change (a re-detection of literally the same finding, harmless to
+        # skip). A dismiss/false-positive/wont-fix/fixed verdict recorded
+        # against the fingerprint this PATCH is about to replace must still
+        # be able to locate this thread afterwards --
+        # `_canonical._find_thread_by_fingerprint` checks these alongside
+        # the new fingerprint.
+        new_fp = fingerprint(classified.finding)
+        carried_forward = set(thread.prior_fingerprints)
+        if thread.fingerprint is not None and thread.fingerprint != new_fp:
+            carried_forward.add(thread.fingerprint)
+        carried_forward.discard(new_fp)
         new_body = _build_inline_comment_body(
             classified.finding,
             finding_id=thread.finding_id,
             include_suggestion_fence=include_fence,
+            prior_fingerprints=sorted(carried_forward),
         )
         ok, status, snippet = self.update_review_comment(thread.comment_id, new_body)
         if not ok:
@@ -1931,7 +1967,11 @@ def _render_review_body(
 
 
 def _build_inline_comment_body(
-    f: Finding, *, finding_id: int | None = None, include_suggestion_fence: bool = True
+    f: Finding,
+    *,
+    finding_id: int | None = None,
+    include_suggestion_fence: bool = True,
+    prior_fingerprints: Sequence[str] = (),
 ) -> str:
     """Render the markdown body for a GitHub inline review comment.
 
@@ -1952,6 +1992,14 @@ def _build_inline_comment_body(
         either silently fail to offer the one-click apply or offer it
         against the wrong lines. The proposed code still renders, just as a
         plain fence without the one-click affordance.
+    prior_fingerprints:
+        Fingerprints this same comment was previously rendered with (#720
+        fix). Only ever non-empty when `_apply_thread_update` is
+        re-rendering an existing comment whose fingerprint is about to
+        change -- carries the superseded fingerprint(s) forward into the new
+        marker so a verdict recorded against one of them can still locate
+        this thread later (`_canonical._find_thread_by_fingerprint`). Empty
+        for a first-time render, which keeps the marker's pre-#720 shape.
     """
     from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
     from ai_pr_review.vcs._finding_ids import fingerprint
@@ -1975,7 +2023,10 @@ def _build_inline_comment_body(
     # base64-encoded.
     body = append_inline_marker(body)
     meta_marker = build_inline_meta_marker(
-        fingerprint=fingerprint(f), category=f.category, severity=f.severity
+        fingerprint=fingerprint(f),
+        category=f.category,
+        severity=f.severity,
+        prior_fingerprints=prior_fingerprints,
     )
     return f"{body}\n{meta_marker}"
 

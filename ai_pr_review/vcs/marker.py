@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -425,6 +426,14 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:
 INLINE_META_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-finding:"
 _INLINE_META_MARKER_RE = re.compile(r"<!-- ai-pr-review-finding:([A-Za-z0-9+/=]+) -->")
 
+# Cap on how many superseded fingerprints one comment's marker carries
+# forward (see `prior_fingerprints` below). Bounds the marker's growth
+# against a pathological case where a finding gets reworded on every single
+# run forever; far larger than any real drift chain needs (#720's fix only
+# ever needs the fingerprint recorded by the most recent human verdict to
+# still be reachable).
+_MAX_PRIOR_FINGERPRINTS: Final[int] = 20
+
 
 @dataclass(frozen=True)
 class InlineMeta:
@@ -435,11 +444,25 @@ class InlineMeta:
     treat `None` as "unrecoverable" (wildcard-compatible for category, "do
     not treat as a severity waiver" for severity), never as a real enum
     member.
+
+    `prior_fps` (#720 fix) carries every fingerprint this same comment has
+    ever been rendered with, oldest first, capped at
+    `_MAX_PRIOR_FINGERPRINTS`. `github.py`'s `_apply_thread_update` PATCHes a
+    fuzzy-matched "update"/"escalate" thread's comment in place, which
+    changes `fp` to the new finding's exact fingerprint while the visible
+    `**[F<n>]**` token stays the same, so a human who dismisses that thread
+    based on the still-unchanged F-id can end up with a verdict recorded
+    against whichever fingerprint was current *at dismiss time*, which may
+    no longer be `fp` by the time this thread is read again.
+    `ai_pr_review.vcs._canonical._find_thread_by_fingerprint` checks `fp` and
+    `prior_fps` together so the thread stays discoverable by any fingerprint
+    it has ever carried, not just its current one.
     """
 
     fp: str
     cat: str | None
     sev: str | None
+    prior_fps: tuple[str, ...] = ()
 
 
 def _valid_categories() -> frozenset[str]:
@@ -451,19 +474,33 @@ def _valid_categories() -> frozenset[str]:
 _VALID_SEVERITIES: Final[frozenset[str]] = frozenset({"Critical", "High", "Medium", "Low"})
 
 
-def build_inline_meta_marker(*, fingerprint: str, category: str, severity: str) -> str:
+def build_inline_meta_marker(
+    *,
+    fingerprint: str,
+    category: str,
+    severity: str,
+    prior_fingerprints: Sequence[str] = (),
+) -> str:
     """Produce the base64-encoded per-comment metadata marker.
 
     `fingerprint` is `_finding_ids.fingerprint(f)`'s output verbatim
     (embeds the finding's file path, which may contain characters unsafe in
     an unescaped HTML comment — another reason this is base64, not raw JSON).
+
+    `prior_fingerprints` (#720 fix): every fingerprint this comment has
+    previously been rendered with, oldest first. Deduplicated and truncated
+    to the last `_MAX_PRIOR_FINGERPRINTS` entries (dropping the oldest) so a
+    finding reworded on every single run can't grow the marker without
+    bound. Omitted from the payload entirely when empty, matching the
+    pre-#720 marker shape exactly (no behavior change for a thread that has
+    never been through the fuzzy "update"/"escalate" path).
     """
-    payload = json.dumps(
-        {"fp": fingerprint, "cat": category, "sev": severity},
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    payload: dict[str, object] = {"fp": fingerprint, "cat": category, "sev": severity}
+    if prior_fingerprints:
+        deduped = list(dict.fromkeys(prior_fingerprints))
+        payload["pfp"] = deduped[-_MAX_PRIOR_FINGERPRINTS:]
+    encoded_payload = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    encoded = base64.b64encode(encoded_payload.encode("utf-8")).decode("ascii")
     return f"{INLINE_META_MARKER_PREFIX}{encoded} -->"
 
 
@@ -501,4 +538,10 @@ def extract_inline_meta(body: str) -> InlineMeta | None:
     cat = cat if isinstance(cat, str) and cat in _valid_categories() else None
     sev = data.get("sev")
     sev = sev if isinstance(sev, str) and sev in _VALID_SEVERITIES else None
-    return InlineMeta(fp=fp, cat=cat, sev=sev)
+    pfp_raw = data.get("pfp")
+    prior_fps = (
+        tuple(x for x in pfp_raw if isinstance(x, str) and x)
+        if isinstance(pfp_raw, list)
+        else ()
+    )
+    return InlineMeta(fp=fp, cat=cat, sev=sev, prior_fps=prior_fps)

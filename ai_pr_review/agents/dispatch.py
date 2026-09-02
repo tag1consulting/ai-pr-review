@@ -520,7 +520,7 @@ async def _run_single_agent(
     spec: AgentSpec,
     llm_call: LLMCall,
     context: DispatchContext,
-    limiter: anyio.abc.CapacityLimiter,
+    limiter: anyio.CapacityLimiter,
     diff_text: str,
     results: list[AgentResult | FailedAgent],
     enrichment: _EnrichmentBlock | None = None,
