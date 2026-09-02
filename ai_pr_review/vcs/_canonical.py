@@ -448,6 +448,7 @@ def decide_action(
     event: PostEvent,
     classified: Sequence[Classified],
     any_new_inline_eligible: bool,
+    known_fingerprints: frozenset[str] = frozenset(),
 ) -> Literal["put", "post"]:
     """Decide whether this run can PUT the canonical review's body, or must
     POST a fresh review.
@@ -465,11 +466,21 @@ def decide_action(
       human-facing message from `GitHubProvider.submit_approval`, issue
       #590's "approve on clear" path — PUTing a findings body over that
       message would erase it);
-    - any classified finding is `"new"` and either `any_new_inline_eligible`
-      (computed by the caller, which has the diff's eligible-line set) or
-      the finding's severity is High/Critical: new information must be
-      visible even when it can't get a diff anchor (out-of-diff, or over
-      `max_inline`) — a silent body-only PUT would otherwise hide it.
+    - any classified finding is `"new"`, its exact fingerprint is not
+      already in `known_fingerprints` (a fingerprint the caller has already
+      rendered in some prior review body -- not genuinely new information to
+      a human, just a persistent body-level finding surviving another
+      cycle), and either `any_new_inline_eligible` (computed by the caller
+      from which findings actually landed an inline comment, not just which
+      were eligible in principle) or the finding's severity is High/Critical:
+      new information must be visible even when it can't get a diff anchor
+      (out-of-diff, or over `max_inline`) — a silent body-only PUT would
+      otherwise hide it. Without the `known_fingerprints` exemption, a
+      single persistent out-of-diff High/Critical finding (or any PR over
+      `max_inline`) would force a fresh review on every single rerun,
+      forever, defeating the point of reuse for exactly the noisiest PRs
+      (issue #719) -- the PUT still renders it in the body every time, so no
+      information is actually lost by not forcing a POST.
 
     `"put"` otherwise, including when every `"new"` finding is body-level
     and below High severity (those still render in the reused body; they
@@ -486,6 +497,10 @@ def decide_action(
     if any_new_inline_eligible:
         return "post"
     for c in classified:
-        if c.kind == "new" and c.finding.severity in ("Critical", "High"):
+        if (
+            c.kind == "new"
+            and c.finding.severity in ("Critical", "High")
+            and fingerprint(c.finding) not in known_fingerprints
+        ):
             return "post"
     return "put"

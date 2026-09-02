@@ -25,7 +25,7 @@ from ai_pr_review.vcs._inline import (
     partition_findings,
     split_body_findings,
 )
-from ai_pr_review.vcs._stale import is_owned_by_us
+from ai_pr_review.vcs._stale import graphql_bot_login, is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     ID_MAP_MARKER_PREFIX,
@@ -163,6 +163,7 @@ class _PriorReviewState:
     verdicts: dict[str, str]
     all_threads: list[PriorThread]
     threads_fetch_complete: bool
+    known_fingerprints: frozenset[str]
 
 
 @dataclass
@@ -187,6 +188,15 @@ class GitHubProvider:
     config: GitHubConfig
     client: RecordingClient
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
+    # Thread ids post_findings PATCHed (update/escalate) or successfully
+    # reopened (recurred) during its most recent call, in this same process.
+    # resolve_stale consults this so it doesn't immediately re-resolve a
+    # thread canonical-review reuse just deliberately kept alive -- see
+    # issue #718. Reset at the top of every post_findings call, not
+    # accumulated across calls.
+    _kept_alive_thread_ids: set[str] = field(
+        default_factory=set, init=False, repr=False
+    )
 
     # ------------------------------------------------------------------
     # Paths
@@ -484,7 +494,12 @@ class GitHubProvider:
             parse_prior_thread,
             select_canonical,
         )
-        from ai_pr_review.vcs._finding_ids import assemble_id_map
+        from ai_pr_review.vcs._finding_ids import assemble_id_map, known_fingerprints
+
+        # Reset, not accumulate: this set describes only the most recent
+        # post_findings call, which is what the very next resolve_stale call
+        # (orchestrate.py runs them back-to-back) needs to know about.
+        self._kept_alive_thread_ids = set()
 
         try:
             reviews = self._list_prior_bot_reviews()
@@ -509,6 +524,7 @@ class GitHubProvider:
             if ID_MAP_MARKER_PREFIX in r["body"] or "**[F" in r["body"]
         ]
         id_map = assemble_id_map(prior_bodies, list(findings))
+        prior_known_fps = known_fingerprints(prior_bodies)
 
         canonical: CanonicalReview | None
         verdicts: dict[str, str]
@@ -537,17 +553,21 @@ class GitHubProvider:
             threads_fetch_complete = len(self._errors) == errors_before_threads
             all_threads = []
             for node in thread_nodes:
-                # bot_login=None: the marker is the sole ownership gate here,
-                # matching ai_pr_review.slash.dismiss's established pattern
-                # for GraphQL-sourced author logins. GitHub's GraphQL API
-                # reports the bot's login as "github-actions" (no "[bot]"
-                # suffix) -- verified live against a real thread this
-                # session -- while self.config.bot_login is the REST-style
-                # "github-actions[bot]" constant. Passing that constant here
-                # would make is_owned_by_us() reject every real thread,
-                # leaving all_threads permanently empty in production.
+                # graphql_bot_login() strips the REST-style "[bot]" suffix:
+                # GitHub's GraphQL API reports the bot's login as
+                # "github-actions" (no suffix) -- verified live against a
+                # real thread -- while self.config.bot_login is the
+                # REST-style "github-actions[bot]" constant. Comparing the
+                # raw constant here would make is_owned_by_us() reject every
+                # real thread, leaving all_threads permanently empty in
+                # production (#717); passing bot_login=None instead would
+                # fix that but drop the author check as a defense-in-depth
+                # signal entirely -- normalizing is strictly better now that
+                # the exact format difference is confirmed, not hypothesized.
                 parsed = parse_prior_thread(
-                    node, bot_login=None, id_map_bodies=prior_bodies
+                    node,
+                    bot_login=graphql_bot_login(self.config.bot_login),
+                    id_map_bodies=prior_bodies,
                 )
                 if parsed is not None:
                     all_threads.append(parsed)
@@ -568,6 +588,7 @@ class GitHubProvider:
             verdicts=verdicts,
             all_threads=all_threads,
             threads_fetch_complete=threads_fetch_complete,
+            known_fingerprints=prior_known_fps,
         )
 
     def _apply_classification_side_effects(
@@ -617,9 +638,18 @@ class GitHubProvider:
                             else t
                             for t in all_threads
                         ]
+                        # Only now (post-reopen) does this thread show up as
+                        # unresolved to resolve_stale's own GraphQL fetch --
+                        # record it so that fetch doesn't immediately
+                        # re-resolve the thread this run just reopened (#718).
+                        self._kept_alive_thread_ids.add(reopened_thread.thread_id)
                 else:
                     recurred_body_fps.add(fingerprint(c.finding))
             elif c.kind in ("update", "escalate") and c.thread is not None:
+                # This thread corresponds to a still-active finding whether
+                # or not the cosmetic PATCH below succeeds -- resolve_stale
+                # must never resolve it out from under an open finding (#718).
+                self._kept_alive_thread_ids.add(c.thread.thread_id)
                 patched = self._apply_thread_update(
                     c, enable_suggestions=enable_suggestions
                 )
@@ -702,6 +732,7 @@ class GitHubProvider:
         verdicts = prior_state.verdicts
         all_threads = prior_state.all_threads
         threads_fetch_complete = prior_state.threads_fetch_complete
+        prior_known_fps = prior_state.known_fingerprints
 
         classified = dedupe_thread_claims(
             [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
@@ -732,8 +763,36 @@ class GitHubProvider:
             if c.kind == "new" or (c.kind == "recurred" and c.thread is None)
         ]
 
+        # partition_findings/_build_inline_comment_payload run before
+        # decide_action (not after, as in the original draft) so
+        # any_new_inline_eligible reflects which findings actually landed an
+        # inline comment, not just which were eligible in principle. Raw
+        # eligibility (is_inline_eligible) also counts a finding that
+        # `max_inline` bumped to the body, or whose payload build failed, as
+        # if it got an inline slot -- which would force a fresh POST for a
+        # PR simply over the inline cap even when nothing about it actually
+        # changed (issue #719).
+        inline_candidates, body_findings = partition_findings(
+            render_findings, eligible_new=eligible_new, max_inline=max_inline
+        )
+        inline_comments: list[dict[str, Any]] = []
+        actually_inline_fps: set[str] = set()
+        for f in inline_candidates:
+            payload = _build_inline_comment_payload(
+                f,
+                eligible_new=eligible_new,
+                eligible_context=eligible_ctx,
+                enable_suggestions=enable_suggestions,
+                finding_id=id_map.get(fingerprint(f)),
+            )
+            if payload is not None:
+                inline_comments.append(payload)
+                actually_inline_fps.add(fingerprint(f))
+            else:
+                body_findings.append(f)
+
         any_new_inline_eligible = any(
-            c.kind == "new" and is_inline_eligible(c.finding, eligible_new)
+            c.kind == "new" and fingerprint(c.finding) in actually_inline_fps
             for c in classified
         )
         action = decide_action(
@@ -741,6 +800,7 @@ class GitHubProvider:
             event=event,
             classified=classified,
             any_new_inline_eligible=any_new_inline_eligible,
+            known_fingerprints=prior_known_fps,
         )
         _log.info(
             "github: canonical-review decision=%s (canonical=%s, canonical_state=%s, "
@@ -757,23 +817,6 @@ class GitHubProvider:
                 for c in classified
             ),
         )
-
-        inline_candidates, body_findings = partition_findings(
-            render_findings, eligible_new=eligible_new, max_inline=max_inline
-        )
-        inline_comments: list[dict[str, Any]] = []
-        for f in inline_candidates:
-            payload = _build_inline_comment_payload(
-                f,
-                eligible_new=eligible_new,
-                eligible_context=eligible_ctx,
-                enable_suggestions=enable_suggestions,
-                finding_id=id_map.get(fingerprint(f)),
-            )
-            if payload is not None:
-                inline_comments.append(payload)
-            else:
-                body_findings.append(f)
 
         in_diff_body, ood_body = split_body_findings(body_findings)
         body_bullets = self._render_body_bullets(
@@ -1321,12 +1364,24 @@ class GitHubProvider:
         for thread in threads:
             if thread.get("isResolved"):
                 continue
+            thread_id = thread.get("id")
+            if isinstance(thread_id, str) and thread_id in self._kept_alive_thread_ids:
+                # canonical-review reuse's post_findings just PATCHed this
+                # thread's comment (update/escalate) or reopened it
+                # (recurred) in this same run -- it corresponds to a still-
+                # active finding, not something to resolve as stale (#718).
+                continue
             body = _first_comment_body(thread)
             author = _first_comment_author_login(thread) or None
-            if not is_owned_by_us(body, author, self.config.bot_login, kind="inline"):
+            # graphql_bot_login() strips the REST-style "[bot]" suffix
+            # before comparing: GitHub's GraphQL API reports the bot's login
+            # without it (verified live), so comparing the raw constant here
+            # rejected every real thread (#717).
+            if not is_owned_by_us(
+                body, author, graphql_bot_login(self.config.bot_login), kind="inline"
+            ):
                 skipped_no_marker += 1
                 continue
-            thread_id = thread.get("id")
             if not isinstance(thread_id, str):
                 continue
             ok, status, body_snippet = self.resolve_thread(thread_id)
@@ -1745,7 +1800,10 @@ class GitHubProvider:
                 continue
             body = _first_comment_body(t)
             author = _first_comment_author_login(t) or None
-            if not is_owned_by_us(body, author, self.config.bot_login, kind="inline"):
+            # See resolve_stale's matching comment (#717).
+            if not is_owned_by_us(
+                body, author, graphql_bot_login(self.config.bot_login), kind="inline"
+            ):
                 continue
             rid = _first_comment_review_id(t)
             if rid is None:

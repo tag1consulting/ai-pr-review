@@ -110,6 +110,8 @@ Body-level findings appear in the `### Findings not attached to specific lines` 
 
 IDs are **PR-wide and stable across review cycles** — if `F1` was assigned to a finding in the first review, it refers to the same finding in every subsequent review. New findings introduced by later reviews get the next unused ID (IDs are never re-used). A gap like `F1, F3` (no `F2`) signals that `F2` was dismissed in a prior cycle.
 
+`F1` and `[F1]` (the bracketed form shown in the review body) are both accepted.
+
 If you post `/ai-pr-review dismiss` without an ID as a top-level PR comment, the bot replies with the list of active body-level finding IDs and the correct syntax.
 
 When all **inline** review threads are resolved, the `CHANGES_REQUESTED` review is automatically dismissed — the same behavior as the inline path, including the auto-approve check described below.

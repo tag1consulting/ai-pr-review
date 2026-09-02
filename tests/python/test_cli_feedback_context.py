@@ -209,6 +209,44 @@ def test_feedback_context_issue_comment_body_finding(monkeypatch) -> None:
     assert "context_missing_reason" not in result.stdout
 
 
+def test_feedback_context_issue_comment_bracketed_fid_token(monkeypatch) -> None:
+    # Review bodies render finding IDs as "**[F3]**"; a user copying that
+    # token verbatim types "[F3]" rather than "F3" — this must still resolve
+    # context, not silently miss (issue #735).
+    f = _finding("style issue", source="phpcs", file="legacy.py")
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "feedback-context",
+            "--pr-number",
+            "5",
+            "--is-review-comment",
+            "false",
+            "--comment-body",
+            "/ai-pr-review false-positive [F3] not a real bug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "source=phpcs" in result.stdout
+    assert "file=legacy.py" in result.stdout
+
+
 def test_feedback_context_issue_comment_no_fid_token_is_silent(monkeypatch) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         raise AssertionError("must not call the API with no F<n> token in the comment")
