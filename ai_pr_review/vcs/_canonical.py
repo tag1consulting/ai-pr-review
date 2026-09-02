@@ -101,6 +101,7 @@ def _safe_review_id(review: Mapping[str, Any]) -> int:
     return 0
 
 
+
 @dataclass(frozen=True)
 class CanonicalReview:
     """The bot review currently treated as canonical for this PR."""
@@ -116,14 +117,26 @@ def select_canonical(reviews: Sequence[Mapping[str, Any]]) -> CanonicalReview | 
     `ai_pr_review.slash.dismiss._record_verdict` calls this function
     directly rather than reimplementing the rule, so both sides of the
     write/read split are structurally guaranteed to agree on which review
-    carries the markers — a verdict written to one review can never be
-    invisible to classification reading from another because of a drifted
-    selection rule. `reviews` is expected in the shape
+    is canonical *given the same review list* — a verdict written to one
+    review can never be invisible to classification reading from another
+    because of a drifted selection rule. `reviews` is expected in the shape
     `GitHubProvider._list_prior_bot_reviews()` returns (the production
-    caller in the read path; `_record_verdict` uses `list_bot_reviews()`,
-    which has different error-handling semantics — see that method's
-    docstring): `{"id": int, "state": str, "body": str, ...}` (extra keys
-    ignored).
+    caller in the read path; `_record_verdict` uses `list_bot_reviews()`):
+    `{"id": int, "state": str, "body": str, ...}` (extra keys ignored).
+
+    Both of those provider methods share one underlying paginated walk
+    (`GitHubProvider._list_reviews_paginated`) now, so they can no longer
+    *independently* drift on pagination or error-handling bugs — but they
+    still legitimately differ in the review *set* each passes to this
+    function: `_list_prior_bot_reviews()` excludes `PENDING` reviews and
+    returns `[]` on any HTTP error mid-pagination, while `list_bot_reviews()`
+    includes every state and returns partial results on error (see
+    `_list_reviews_paginated`'s docstring for why each caller needs its own
+    contract). A `PENDING` review or a fetch error affecting only one side
+    could therefore still make this function pick a different canonical
+    review on each side — see the module-level design reference above; in
+    practice this is a narrow window (the bot's own reviews are never left
+    `PENDING`) rather than a bug this refactor set out to close.
     """
     if not reviews:
         return None
