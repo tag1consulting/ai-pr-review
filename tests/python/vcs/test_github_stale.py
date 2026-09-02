@@ -55,6 +55,12 @@ def _thread(
     author: str,
     review_db_id: int | None = None,
 ) -> dict:
+    """`author` is a GraphQL-sourced login: GitHub's GraphQL API reports
+    the bot's login without the REST-style "[bot]" suffix (verified live),
+    so callers representing our own bot pass "github-actions", not
+    "github-actions[bot]" -- the latter previously masked #717 (comparing
+    this field against the REST-style bot_login constant rejected every
+    real thread)."""
     inner: dict = {"body": body, "author": {"login": author}}
     if review_db_id is not None:
         inner["pullRequestReview"] = {"databaseId": review_db_id}
@@ -110,7 +116,7 @@ def test_resolve_stale_skips_threads_without_marker() -> None:
 def test_resolve_stale_resolves_our_markered_threads() -> None:
     our_body = f"[High] bad\n{INLINE_MARKER}"
     nodes = [
-        _thread("T_ours", resolved=False, body=our_body, author="github-actions[bot]"),
+        _thread("T_ours", resolved=False, body=our_body, author="github-actions"),
     ]
     mutations: list[str] = []
 
@@ -160,7 +166,7 @@ def test_resolve_stale_marker_but_different_author_skipped() -> None:
 
 def test_resolve_stale_already_resolved_skipped_silently() -> None:
     nodes = [
-        _thread("T_done", resolved=True, body=f"x\n{INLINE_MARKER}", author="github-actions[bot]"),
+        _thread("T_done", resolved=True, body=f"x\n{INLINE_MARKER}", author="github-actions"),
     ]
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -186,14 +192,14 @@ def test_resolve_stale_dismisses_older_review_when_newer_exists() -> None:
             "T41",
             resolved=True,
             body=f"old finding\n{INLINE_MARKER}",
-            author="github-actions[bot]",
+            author="github-actions",
             review_db_id=41,
         ),
         _thread(
             "T42",
             resolved=False,
             body=f"new finding\n{INLINE_MARKER}",
-            author="github-actions[bot]",
+            author="github-actions",
             review_db_id=42,
         ),
     ]
@@ -246,7 +252,7 @@ def test_resolve_stale_dismisses_stale_cr_when_current_run_posted_approve() -> N
             "T41",
             resolved=True,
             body=f"old finding\n{INLINE_MARKER}",
-            author="github-actions[bot]",
+            author="github-actions",
             review_db_id=41,
         ),
     ]
@@ -286,7 +292,7 @@ def test_resolve_stale_dismisses_stale_cr_when_current_run_had_no_review_id() ->
             "T41",
             resolved=True,
             body=f"old finding\n{INLINE_MARKER}",
-            author="github-actions[bot]",
+            author="github-actions",
             review_db_id=41,
         ),
     ]
@@ -320,7 +326,7 @@ def test_resolve_stale_never_dismisses_sole_bot_review() -> None:
             "T42",
             resolved=True,
             body=f"finding\n{INLINE_MARKER}",
-            author="github-actions[bot]",
+            author="github-actions",
             review_db_id=42,
         ),
     ]
@@ -349,7 +355,7 @@ def test_resolve_stale_wont_dismiss_when_unresolved_markered_thread_exists() -> 
             "T42",
             resolved=False,
             body=f"still bad\n{INLINE_MARKER}",
-            author="github-actions[bot]",
+            author="github-actions",
             review_db_id=42,
         ),
     ]
@@ -388,7 +394,7 @@ def test_resolve_thread_failure_includes_http_status_in_error() -> None:
     import json as _json
 
     nodes = [
-        _thread("T99", resolved=False, body=f"bad\n{INLINE_MARKER}", author="github-actions[bot]"),
+        _thread("T99", resolved=False, body=f"bad\n{INLINE_MARKER}", author="github-actions"),
     ]
 
     def handler(req: httpx.Request) -> httpx.Response:

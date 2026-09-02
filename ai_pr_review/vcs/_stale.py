@@ -43,3 +43,20 @@ def is_owned_by_us(
         if not has_summary_marker(body):
             return False
     return not (bot_login and author_login and author_login != bot_login)
+
+
+def graphql_bot_login(bot_login: str) -> str:
+    """Normalize a REST-style bot login (e.g. `"github-actions[bot]"`) for
+    comparison against a GraphQL-sourced `author.login` field.
+
+    GitHub's GraphQL API reports a bot's login *without* the REST API's
+    `"[bot]"` suffix (verified live against a real thread) -- comparing the
+    raw REST-style constant against a GraphQL author with `is_owned_by_us`
+    rejects every real thread, since the two representations of the same
+    identity never string-equal. This closes that gap by stripping the
+    suffix before the comparison, rather than passing `bot_login=None` and
+    losing the author check as defense-in-depth entirely: since the exact
+    format difference is now confirmed rather than hypothesized, a correct
+    normalized comparison is strictly better than no comparison at all.
+    """
+    return bot_login.removesuffix("[bot]")
