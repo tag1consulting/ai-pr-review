@@ -388,6 +388,71 @@ def test_escalated_finding_patches_and_replies_no_new_review() -> None:
     assert posts == []
 
 
+def test_resolve_stale_does_not_resolve_thread_post_findings_just_updated() -> None:
+    """Issue #718: orchestrate.py calls resolve_stale immediately after
+    post_findings, on the same provider instance. Without
+    _kept_alive_thread_ids, once #717's bot_login fix makes resolve_stale's
+    ownership gate actually recognize real threads, it would immediately
+    re-resolve the same thread post_findings just PATCHed for an
+    update/escalate classification -- undoing the entire point of keeping
+    it alive."""
+    old_finding = _finding("weak validation", severity="Low", line=5, category="other")
+    existing_comment_body = _build_inline_comment_body(old_finding)
+    canonical_body = _footer_body()
+    escalated_finding = _finding("weak validation", severity="Critical", line=5, category="other")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "resolveReviewThread"):
+            raise AssertionError(
+                "must not resolve th1 -- post_findings just PATCHed it for "
+                "an escalate classification this same run"
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=existing_comment_body, line=5,
+                )]
+            )
+        if req.method == "PATCH" and url.endswith("/pulls/comments/1"):
+            return httpx.Response(200, json={"id": 1})
+        if req.method == "POST" and url.endswith("/pulls/1/comments/1/replies"):
+            return httpx.Response(201, json={"id": 2})
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, _ = _make_provider(handler)
+    findings_result = prov.post_findings(
+        [escalated_finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+    assert findings_result.ok
+
+    stale_result = prov.resolve_stale(current_review_id=findings_result.review_id)
+    assert stale_result.threads_resolved == 0
+
+
 # ---------------------------------------------------------------------------
 # Recurrence: fixed finding reappears -> reply + unresolve, verdict tombstone
 # ---------------------------------------------------------------------------
