@@ -149,6 +149,38 @@ def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> Reco
 
 
 @dataclass
+class _PriorReviewState:
+    """Prior-review state `post_findings` classifies this run's findings against.
+
+    Assembled by `GitHubProvider._load_prior_state`. Every field degrades to
+    its "no prior state" value (empty map/list, `None`, `True` for
+    `threads_fetch_complete`) on a fetch failure, matching pre-canonical-reuse
+    behavior: every finding classifies "new" and a fresh review always POSTs.
+    """
+
+    id_map: dict[str, int]
+    canonical: CanonicalReview | None
+    verdicts: dict[str, str]
+    all_threads: list[PriorThread]
+    threads_fetch_complete: bool
+
+
+@dataclass
+class _ClassificationEffects:
+    """Counters and state mutations from applying per-finding side effects.
+
+    Returned by `GitHubProvider._apply_classification_side_effects`.
+    """
+
+    inline_updated: int
+    replies_posted: int
+    suppressed_count: int
+    recurred_body_fps: set[str]
+    updated_verdicts: dict[str, str]
+    all_threads: list[PriorThread]
+
+
+@dataclass
 class GitHubProvider:
     """GitHub REST + GraphQL implementation of VcsProvider."""
 
@@ -434,45 +466,26 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     # post_findings — pull-request review with inline comments + fallbacks
     # ------------------------------------------------------------------
-    def post_findings(
-        self,
-        findings: Sequence[Finding],
-        diff: DiffContext,
-        *,
-        event: PostEvent,
-        failed_agents: Sequence[str] = (),
-        token_table: str = "",
-        agent_prompt: str = "",
-        max_inline: int = 25,
-        enable_suggestions: bool = True,
-    ) -> FindingsResult:
-        from ai_pr_review.diff.linemap import parse_diff_sets
-        from ai_pr_review.vcs._body import format_body_finding, join_findings
+    def _load_prior_state(self, findings: Sequence[Finding]) -> _PriorReviewState:
+        """Fetch prior bot reviews/threads and derive id-map/canonical/verdicts.
+
+        Fetched unconditionally -- NOT gated on `if findings:` as the
+        ID-map fetch alone used to be -- because canonical-review selection
+        matters just as much on a fully clean run (zero findings, event
+        APPROVE): that's exactly the "quiet rerun" case this feature exists
+        to stop from posting a brand-new APPROVE review every single cycle.
+        Fail-soft throughout: any fetch error degrades every field to its
+        "no prior state" value, which is exactly today's pre-canonical-reuse
+        behavior (every finding classifies "new", a fresh review always
+        POSTs) rather than crashing the review run.
+        """
         from ai_pr_review.vcs._canonical import (
-            classify,
-            decide_action,
-            dedupe_thread_claims,
             merge_verdicts,
             parse_prior_thread,
             select_canonical,
         )
-        from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
+        from ai_pr_review.vcs._finding_ids import assemble_id_map
 
-        _added, _new_file = parse_diff_sets(diff.diff_text)
-        eligible_new = {(lr.file, lr.line) for lr in _added}
-        eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
-
-        # Fetch prior reviews once, feeding both the existing body-finding
-        # ID-map assembler (unchanged) and canonical-review classification
-        # (new). Fetched unconditionally -- NOT gated on `if findings:` as
-        # the ID-map fetch alone used to be -- because canonical-review
-        # selection matters just as much on a fully clean run (zero
-        # findings, event APPROVE): that's exactly the "quiet rerun" case
-        # this feature exists to stop from posting a brand-new APPROVE
-        # review every single cycle. Fail-soft on any error: an empty
-        # `reviews`/`all_threads` makes every finding classify "new" and
-        # `select_canonical` return `None`, which is exactly today's
-        # pre-canonical-reuse behavior (always POST a fresh review).
         try:
             reviews = self._list_prior_bot_reviews()
         except Exception as exc:  # noqa: BLE001
@@ -549,15 +562,32 @@ class GitHubProvider:
             all_threads = []
             threads_fetch_complete = True
 
-        classified = dedupe_thread_claims(
-            [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
+        return _PriorReviewState(
+            id_map=id_map,
+            canonical=canonical,
+            verdicts=verdicts,
+            all_threads=all_threads,
+            threads_fetch_complete=threads_fetch_complete,
         )
 
-        # Apply side effects for update/escalate/recurred-with-thread.
-        # suppressed produces no side effect (never reposted, permanently).
-        # recurred-without-thread (body-level) produces no side effect here
-        # either -- it's rendered in the body below instead of the original
-        # comment it no longer has.
+    def _apply_classification_side_effects(
+        self,
+        classified: Sequence[Classified],
+        *,
+        verdicts: dict[str, str],
+        all_threads: list[PriorThread],
+        head_sha: str,
+        enable_suggestions: bool,
+    ) -> _ClassificationEffects:
+        """Apply side effects for update/escalate/recurred-with-thread findings.
+
+        `suppressed` produces no side effect (never reposted, permanently).
+        `recurred`-without-thread (body-level) produces no side effect here
+        either -- it's rendered in the body by the caller instead of the
+        original comment it no longer has.
+        """
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
         inline_updated = 0
         replies_posted = 0
         suppressed_count = 0
@@ -569,7 +599,7 @@ class GitHubProvider:
             elif c.kind == "recurred":
                 updated_verdicts[fingerprint(c.finding)] = "recurred"
                 if c.thread is not None:
-                    reopened = self._notify_recurrence(c.thread, diff.head_sha)
+                    reopened = self._notify_recurrence(c.thread, head_sha)
                     replies_posted += 1
                     if reopened:
                         # Keep all_threads in sync with the reopen this just
@@ -600,8 +630,96 @@ class GitHubProvider:
                     # assert "severity escalated" for a comment that still
                     # shows the old severity.
                     if c.kind == "escalate":
-                        self._notify_escalation(c.thread, c.finding, diff.head_sha)
+                        self._notify_escalation(c.thread, c.finding, head_sha)
                         replies_posted += 1
+
+        return _ClassificationEffects(
+            inline_updated=inline_updated,
+            replies_posted=replies_posted,
+            suppressed_count=suppressed_count,
+            recurred_body_fps=recurred_body_fps,
+            updated_verdicts=updated_verdicts,
+            all_threads=all_threads,
+        )
+
+    def _render_body_bullets(
+        self,
+        findings_list: Sequence[Finding],
+        *,
+        eligible_new: set[tuple[str, int]],
+        recurred_body_fps: set[str],
+        head_sha: str,
+        id_map: dict[str, int],
+    ) -> list[str]:
+        """Render one column (in-diff or out-of-diff) of body-level findings."""
+        from ai_pr_review.vcs._body import format_body_finding
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
+        bullets: list[str] = []
+        for f in findings_list:
+            loc_note = ""
+            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
+                loc_note = " *(line not in diff)*"
+            if fingerprint(f) in recurred_body_fps:
+                loc_note += " *(recurred)*"
+            if f.file:
+                url = _blob_link(
+                    owner=self.config.owner, repo=self.config.repo,
+                    head_sha=head_sha, file=f.file, line=f.line,
+                )
+                loc_note += f" [↗]({url})"
+            bullets.append(format_body_finding(
+                f,
+                location_note=loc_note,
+                finding_id=id_map.get(fingerprint(f)),
+            ))
+        return bullets
+
+    def post_findings(
+        self,
+        findings: Sequence[Finding],
+        diff: DiffContext,
+        *,
+        event: PostEvent,
+        failed_agents: Sequence[str] = (),
+        token_table: str = "",
+        agent_prompt: str = "",
+        max_inline: int = 25,
+        enable_suggestions: bool = True,
+    ) -> FindingsResult:
+        from ai_pr_review.diff.linemap import parse_diff_sets
+        from ai_pr_review.vcs._body import join_findings
+        from ai_pr_review.vcs._canonical import classify, decide_action, dedupe_thread_claims
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
+        _added, _new_file = parse_diff_sets(diff.diff_text)
+        eligible_new = {(lr.file, lr.line) for lr in _added}
+        eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
+
+        prior_state = self._load_prior_state(findings)
+        id_map = prior_state.id_map
+        canonical = prior_state.canonical
+        verdicts = prior_state.verdicts
+        all_threads = prior_state.all_threads
+        threads_fetch_complete = prior_state.threads_fetch_complete
+
+        classified = dedupe_thread_claims(
+            [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
+        )
+
+        effects = self._apply_classification_side_effects(
+            classified,
+            verdicts=verdicts,
+            all_threads=all_threads,
+            head_sha=diff.head_sha,
+            enable_suggestions=enable_suggestions,
+        )
+        inline_updated = effects.inline_updated
+        replies_posted = effects.replies_posted
+        suppressed_count = effects.suppressed_count
+        recurred_body_fps = effects.recurred_body_fps
+        updated_verdicts = effects.updated_verdicts
+        all_threads = effects.all_threads
 
         # Only genuinely-new findings, plus body-level recurrences (which have
         # no existing comment to reply on), go through the normal render
@@ -658,42 +776,20 @@ class GitHubProvider:
                 body_findings.append(f)
 
         in_diff_body, ood_body = split_body_findings(body_findings)
-        body_bullets: list[str] = []
-        ood_bullets: list[str] = []
-        for f in in_diff_body:
-            loc_note = ""
-            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
-                loc_note = " *(line not in diff)*"
-            if fingerprint(f) in recurred_body_fps:
-                loc_note += " *(recurred)*"
-            if f.file:
-                url = _blob_link(
-                    owner=self.config.owner, repo=self.config.repo,
-                    head_sha=diff.head_sha, file=f.file, line=f.line,
-                )
-                loc_note += f" [↗]({url})"
-            body_bullets.append(format_body_finding(
-                f,
-                location_note=loc_note,
-                finding_id=id_map.get(fingerprint(f)),
-            ))
-        for f in ood_body:
-            loc_note = ""
-            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
-                loc_note = " *(line not in diff)*"
-            if fingerprint(f) in recurred_body_fps:
-                loc_note += " *(recurred)*"
-            if f.file:
-                url = _blob_link(
-                    owner=self.config.owner, repo=self.config.repo,
-                    head_sha=diff.head_sha, file=f.file, line=f.line,
-                )
-                loc_note += f" [↗]({url})"
-            ood_bullets.append(format_body_finding(
-                f,
-                location_note=loc_note,
-                finding_id=id_map.get(fingerprint(f)),
-            ))
+        body_bullets = self._render_body_bullets(
+            in_diff_body,
+            eligible_new=eligible_new,
+            recurred_body_fps=recurred_body_fps,
+            head_sha=diff.head_sha,
+            id_map=id_map,
+        )
+        ood_bullets = self._render_body_bullets(
+            ood_body,
+            eligible_new=eligible_new,
+            recurred_body_fps=recurred_body_fps,
+            head_sha=diff.head_sha,
+            id_map=id_map,
+        )
 
         # The headline must describe the PR's current state, not just this
         # run's diff: fold in every still-active classified finding
