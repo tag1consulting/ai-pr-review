@@ -24,6 +24,7 @@ def _clear_provider_envs(monkeypatch: pytest.MonkeyPatch) -> None:
         "GITHUB_TOKEN",
         "GITHUB_REPOSITORY",
         "GITHUB_API_URL",
+        "GITHUB_BOT_USERNAME",
         "PR_NUMBER",
         "GITLAB_TOKEN",
         "CI_JOB_TOKEN",
@@ -39,6 +40,7 @@ def _clear_provider_envs(monkeypatch: pytest.MonkeyPatch) -> None:
         "BITBUCKET_API_TOKEN",
         "BITBUCKET_WORKSPACE",
         "BITBUCKET_REPO_SLUG",
+        "AI_CANONICAL_REUSE",
     ]:
         monkeypatch.delenv(name, raising=False)
 
@@ -55,6 +57,67 @@ def test_default_provider_is_github(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PR_NUMBER", "1")
     prov = provider_from_env()
     assert isinstance(prov, GitHubProvider)
+
+
+def test_github_canonical_reuse_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.canonical_reuse is True
+
+
+@pytest.mark.parametrize("value", ["false", "False", "0", "no"])
+def test_github_canonical_reuse_kill_switch(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("AI_CANONICAL_REUSE", value)
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.canonical_reuse is False
+
+
+def test_github_bot_login_defaults_to_actions_bot(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.bot_login == "github-actions[bot]"
+
+
+def test_github_bot_login_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GITHUB_BOT_USERNAME mirrors GITLAB_BOT_USERNAME: lets a consumer whose
+    reviews post under a non-default identity (a custom GitHub App, or a
+    personal-access-token-authenticated test harness) tell GitHubConfig
+    which login owns its prior reviews/comments, so canonical-review reuse's
+    review-selection filters can recognize them as "ours"."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("GITHUB_BOT_USERNAME", "my-custom-bot")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.bot_login == "my-custom-bot"
+
+
+def test_github_bot_login_blank_override_keeps_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("GITHUB_BOT_USERNAME", "   ")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.bot_login == "github-actions[bot]"
 
 
 def test_explicit_github(monkeypatch: pytest.MonkeyPatch) -> None:

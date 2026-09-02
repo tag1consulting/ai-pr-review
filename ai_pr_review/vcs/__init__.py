@@ -100,7 +100,8 @@ def _build_github_from_env() -> GitHubProvider:
     """Build GitHubProvider from env.
 
     Required: GH_TOKEN (or GITHUB_TOKEN), GITHUB_REPOSITORY (owner/repo), PR_NUMBER.
-    Optional: GITHUB_API_URL (defaults to https://api.github.com).
+    Optional: GITHUB_API_URL (defaults to https://api.github.com), GITHUB_BOT_USERNAME
+    (defaults to GitHubConfig's own "github-actions[bot]" default).
     """
     token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
     if not token:
@@ -116,8 +117,31 @@ def _build_github_from_env() -> GitHubProvider:
     pr_number = _require_int_env("PR_NUMBER")
     base_url = (os.environ.get("GITHUB_API_URL") or "").strip() or "https://api.github.com"
 
+    canonical_reuse = (
+        os.environ.get("AI_CANONICAL_REUSE", "true").strip().lower()
+        not in ("false", "0", "no")
+    )
+    # GITHUB_BOT_USERNAME mirrors the GitLab provider's existing
+    # GITLAB_BOT_USERNAME override: it lets a consumer whose reviews post
+    # under an identity other than the default GitHub Actions bot (a custom
+    # GitHub App, or -- as in this project's own e2e test harness, which
+    # authenticates with a personal access token -- a human account) tell
+    # GitHubConfig which login actually owns its prior reviews/comments.
+    # Without this, _list_prior_bot_reviews()/list_bot_reviews()'s REST-side
+    # `review.user.login == bot_login` filter (and any GraphQL-side thread
+    # ownership check keyed off the same config value) can never recognize
+    # that identity's own prior output as "ours", so canonical-review
+    # reuse's review-level PUT-in-place path never engages -- confirmed live
+    # against the GitHub test PR: thread-level classification worked
+    # correctly, but reused_review stayed False because no prior review was
+    # ever recognized as a "bot review" to select as canonical. Only passed
+    # through when set; otherwise GitHubConfig's own "github-actions[bot]"
+    # default applies.
+    bot_login = os.environ.get("GITHUB_BOT_USERNAME", "").strip()
     config = GitHubConfig(
-        owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url
+        owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url,
+        canonical_reuse=canonical_reuse,
+        **({"bot_login": bot_login} if bot_login else {}),
     )
     return GitHubProvider(config=config, client=build_github_client(config))
 

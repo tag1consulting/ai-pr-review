@@ -336,8 +336,17 @@ async def run_review(
     # Incremental-run watermark advance (#493): only after post_findings
     # succeeded end-to-end. On failure, the watermark stays at the prior SHA
     # so the next run re-diffs from the right baseline and re-attempts the
-    # missed findings.
-    if not summary_text and findings_result is not None and findings_result.ok:
+    # missed findings. `skipped` (GitHub canonical-review reuse only) means
+    # this run made no write at all because a newer run's push already
+    # advanced the PR's head past this run's diff -- advancing the watermark
+    # to this run's now-stale diff.head_sha here could regress the
+    # incremental-diff baseline backward past what that newer run already set.
+    if (
+        not summary_text
+        and findings_result is not None
+        and findings_result.ok
+        and not findings_result.skipped
+    ):
         try:
             advanced = provider.advance_sha_watermark(diff.head_sha)
             if not advanced:

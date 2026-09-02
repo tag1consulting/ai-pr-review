@@ -72,6 +72,25 @@ class FindingsResult:
     event: PostEvent
     degraded_to_comment: bool = False
     error: str | None = None
+    # Canonical-review-reuse counters (GitHub only; always 0/False on
+    # GitLab/Bitbucket, which don't implement the reuse classification).
+    # inline_updated: comments PATCHed in place for an update/escalate
+    # classification. suppressed: findings matching a durable "dismissed"
+    # verdict, never reposted. replies_posted: escalation/recurrence
+    # notification replies posted on existing threads. reused_review: True
+    # when this call PUT the canonical review's body instead of POSTing a
+    # new review object.
+    inline_updated: int = 0
+    suppressed: int = 0
+    replies_posted: int = 0
+    reused_review: bool = False
+    # True when reused_review is True but no write actually happened -- the
+    # PR's head had already advanced past this run's diff, so a newer run
+    # already owns the canonical review. Callers must not advance the SHA
+    # watermark or run stale-thread cleanup keyed on this result: doing so
+    # with a stale diff.head_sha could regress the incremental-diff baseline
+    # backward past what the newer, actually-successful run already set.
+    skipped: bool = False
 
     @property
     def ok(self) -> bool:

@@ -145,6 +145,62 @@ def test_verdict_recorded_on_highest_id_review_not_the_finding_source() -> None:
     assert "No findings above the confidence threshold" in puts[0]
 
 
+def test_record_verdict_seeds_from_union_not_just_canonical_body() -> None:
+    """A verdict recorded on an older review must survive a later,
+    marker-less review (e.g. `GitHubProvider.submit_approval`'s human-facing
+    "auto-approved" message, issue #590) becoming canonical -- `_record_verdict`
+    must seed from `merge_verdicts(reviews)` (every prior body), not just
+    `extract_verdicts(canonical.body)`, or the marker-less review silently
+    erases every earlier verdict the next time one is written."""
+    older_verdict_body = (
+        "## AI Review Findings\n\nsome body\n"
+        + build_verdicts_marker({"already-dismissed-fp": "dismissed"})
+    )
+    f = _finding("new nit", source="code-reviewer", file="app.py", line=20)
+    bullet = format_body_finding(f, finding_id=9)
+    marker_less_canonical_body = "Auto-approved: all findings resolved."
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 5, "state": "DISMISSED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": "### Findings not attached to specific lines\n\n" + bullet + "\n",
+                    },
+                    {
+                        "id": 6, "state": "DISMISSED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": older_verdict_body,
+                    },
+                    {
+                        "id": 11, "state": "APPROVED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": marker_less_canonical_body,
+                    },
+                ],
+            )
+        if req.method == "PUT" and str(req.url).endswith("/reviews/11"):
+            return httpx.Response(200, json={"id": 11})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 9, actor="alice", command="fixed", commit_sha="a1b2c3d")
+
+    assert result.errors == ()
+    puts = _put_bodies(rec, "/reviews/11")
+    assert len(puts) == 1
+    verdicts = extract_verdicts(puts[0])
+    # The new verdict was recorded...
+    assert verdicts[fingerprint(f)] == "fixed"
+    # ...and the older review's verdict survived the union-seed, rather than
+    # being silently dropped because the canonical body itself carried no
+    # verdicts marker at all.
+    assert verdicts["already-dismissed-fp"] == "dismissed"
+
+
 def test_verdict_marker_upserts_into_existing_marker_without_duplicating() -> None:
     """A canonical review that already carries a verdicts marker (from an
     earlier dismiss on a different finding) must have that marker patched

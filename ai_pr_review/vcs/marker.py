@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import sys
+from dataclasses import dataclass
 from typing import Final
 
 _log = logging.getLogger(__name__)
@@ -326,7 +327,19 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
 # at command-handling time via `GitHubProvider.update_review_body`.
 VERDICTS_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-verdicts:"
 _VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
-_VALID_VERDICTS: Final[frozenset[str]] = frozenset({"dismissed", "fixed"})
+# "recurred" is a tombstone, not a third human verdict: written in place of
+# deleting a "fixed" entry when that finding reappears unchanged. Because
+# merge_verdicts (ai_pr_review/vcs/_canonical.py) unions verdicts across
+# every prior bot review body rather than trusting only the newest one (the
+# newest review is not guaranteed to carry every verdict -- see
+# _record_verdict's union-seeding fix), a bare delete on the newest body
+# would not remove the key from an older body still in that union, and every
+# subsequent run would re-classify the finding as recurred forever. Recording
+# "recurred" instead is a real, retained value that permanently overrides the
+# stale "fixed" entry once it has been seen once. classify() treats it
+# identically to "no verdict at all" (falls through to normal open/new
+# classification).
+_VALID_VERDICTS: Final[frozenset[str]] = frozenset({"dismissed", "fixed", "recurred"})
 
 
 def build_verdicts_marker(verdicts: dict[str, str]) -> str:
@@ -383,3 +396,109 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:
         return _VERDICTS_MARKER_RE.sub(new_marker, body, count=1)
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}{new_marker}"
+
+
+# Per-inline-comment metadata marker (canonical-review reuse, read side).
+# Embeds a finding's exact fingerprint(), category, and severity directly on
+# its own inline comment so a later run can classify against it (exact
+# recurrence check, cross-run fuzzy match, escalation detection) without
+# reconstructing any of the three from rendered text. None of the three is
+# otherwise recoverable: category is never rendered anywhere in a comment
+# body, and severity is only recoverable by re-parsing the `**[Sev]**` token
+# in the comment's first line (ai_pr_review.slash.dismiss.parse_inline_comment_header
+# already isolates it as a throwaway group).
+#
+# Payload is base64-encoded, not raw JSON like VERDICTS_MARKER_PREFIX, because
+# an inline comment's own body embeds `suggested_code` (a Finding field)
+# UNESCAPED ahead of this marker (see github.py's _build_inline_comment_body):
+# `is_suggestion_safe` only rejects triple backticks, so nothing stops a
+# hostile finding's suggested code from containing text that looks like
+# `<!-- ai-pr-review-finding: {...} -->`. A raw-JSON marker could then be
+# forged or duplicated inside the rendered code fence, and a plain
+# `.search()` can't tell a real marker from one sitting inside markdown a
+# code fence just happens to render literally. Base64 closes that off the
+# same way ID_MAP_MARKER_HIDDEN already does, and extract_inline_meta below
+# additionally takes the LAST match in the body (the renderer always appends
+# the real marker after everything else, including any suggestion fence) and
+# validates the decoded severity/category against the known enums before
+# trusting either.
+INLINE_META_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-finding:"
+_INLINE_META_MARKER_RE = re.compile(r"<!-- ai-pr-review-finding:([A-Za-z0-9+/=]+) -->")
+
+
+@dataclass(frozen=True)
+class InlineMeta:
+    """Decoded payload of an inline finding's metadata marker.
+
+    `cat`/`sev` are `None` when absent or when the decoded value doesn't
+    match a currently-known `Category`/`Severity` literal — callers must
+    treat `None` as "unrecoverable" (wildcard-compatible for category, "do
+    not treat as a severity waiver" for severity), never as a real enum
+    member.
+    """
+
+    fp: str
+    cat: str | None
+    sev: str | None
+
+
+def _valid_categories() -> frozenset[str]:
+    from ai_pr_review.findings.models import CATEGORIES
+
+    return frozenset(CATEGORIES)
+
+
+_VALID_SEVERITIES: Final[frozenset[str]] = frozenset({"Critical", "High", "Medium", "Low"})
+
+
+def build_inline_meta_marker(*, fingerprint: str, category: str, severity: str) -> str:
+    """Produce the base64-encoded per-comment metadata marker.
+
+    `fingerprint` is `_finding_ids.fingerprint(f)`'s output verbatim
+    (embeds the finding's file path, which may contain characters unsafe in
+    an unescaped HTML comment — another reason this is base64, not raw JSON).
+    """
+    payload = json.dumps(
+        {"fp": fingerprint, "cat": category, "sev": severity},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    return f"{INLINE_META_MARKER_PREFIX}{encoded} -->"
+
+
+def extract_inline_meta(body: str) -> InlineMeta | None:
+    """Extract and validate the metadata marker from an inline comment body.
+
+    Returns `None` when no marker is present, the payload doesn't decode, or
+    it decodes to something without a usable `fp`. `cat`/`sev` are
+    individually dropped to `None` (not treated as a reason to discard the
+    whole result) when unrecognized, so a future new category/severity value
+    degrades to "unrecoverable" for that one field rather than losing the
+    fingerprint too.
+    """
+    matches = list(_INLINE_META_MARKER_RE.finditer(body))
+    if not matches:
+        return None
+    # Last match: see the module-level comment above this section — a forged
+    # marker-shaped string earlier in the body (e.g. inside a suggestion
+    # fence) cannot appear after the real one.
+    match = matches[-1]
+    try:
+        payload_raw = base64.b64decode(match.group(1), validate=True).decode("utf-8")
+        data = json.loads(payload_raw)
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _log.warning(
+            "ai-pr-review: inline finding-meta marker present but undecodable: %s", exc,
+        )
+        return None
+    if not isinstance(data, dict):
+        return None
+    fp = data.get("fp")
+    if not isinstance(fp, str) or not fp:
+        return None
+    cat = data.get("cat")
+    cat = cat if isinstance(cat, str) and cat in _valid_categories() else None
+    sev = data.get("sev")
+    sev = sev if isinstance(sev, str) and sev in _VALID_SEVERITIES else None
+    return InlineMeta(fp=fp, cat=cat, sev=sev)

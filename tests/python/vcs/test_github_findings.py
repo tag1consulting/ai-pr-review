@@ -179,8 +179,9 @@ def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:
 def test_ood_only_prior_review_preserves_finding_id() -> None:
     """Issue #550 regression: an out-of-diff-only prior review body (no
     "### Findings not attached to specific lines" heading) must still be
-    picked up by _list_prior_bot_review_bodies() so F-IDs are reconstructed
-    on the next cycle instead of churning to new numbers.
+    picked up by post_findings's prior_bodies filter (over
+    _list_prior_bot_reviews()) so F-IDs are reconstructed on the next cycle
+    instead of churning to new numbers.
 
     Uses two out-of-diff findings so churn is observable: if reconstruction
     is starved (the pre-#550-fix behavior), assemble_id_map() sees an empty
@@ -235,9 +236,10 @@ def test_ood_only_prior_review_preserves_finding_id() -> None:
 
     # Second cycle: finding A is resolved/dismissed; only B is re-detected.
     # The GET /reviews call returns the first review (author
-    # github-actions[bot], state COMMENTED) so _list_prior_bot_review_bodies()
-    # must surface first_body for ID reconstruction. If it does, B keeps its
-    # original ID (F2). If reconstruction is starved, B is renumbered to F1.
+    # github-actions[bot], state COMMENTED) so post_findings's prior_bodies
+    # filter must surface first_body for ID reconstruction. If it does, B
+    # keeps its original ID (F2). If reconstruction is starved, B is
+    # renumbered to F1.
     def handler2(req: httpx.Request) -> httpx.Response:
         if req.method == "GET" and "/reviews" in str(req.url):
             return httpx.Response(

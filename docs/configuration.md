@@ -208,6 +208,12 @@ These variables enable optional capabilities that are off by default.
 |----------|---------|-------------|
 | `AI_JUDGE_PASS` | `true` | Run a cheap-model judge pass (Phase 2.75) after findings are extracted, merged, suppressed, and scoped. The judge sends a single compact LLM call (no diff text) and returns `keep` or `downrank` per finding. `downrank` lowers the finding's confidence by 15 points and routes it to the review body instead of as an inline comment — the finding is still reported, at its unchanged severity, and still counts toward the review's "Overall Risk" headline and `REQUEST_CHANGES` decision exactly as an inline finding would. Corroborated findings (static-analyzer + LLM-agent agreement on the same file+line) are exempt from `downrank`. Always fail-soft: any judge error returns findings unchanged. The judge call's token usage appears as a `judge-pass` row in the token usage table and is included in the Total. Set to `false` to disable and restore pre-v2.1 behavior. |
 
+#### Quiet reruns (GitHub only)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_CANONICAL_REUSE` | `true` | GitHub only. Controls whether reruns reuse the bot's existing "canonical" review (see [Features: Quiet reruns](features#quiet-reruns-github)) instead of always posting a fresh one. Set to `false` to restore the pre-canonical-reuse behavior of always POSTing a new review — an escape hatch if you hit a bug in the reuse path before a fix ships. Read once at provider construction from the raw env var (not a `Config` field), since it's GitHub-specific rather than provider-neutral. |
+
 #### Per-agent language-profile routing
 
 | Variable | Default | Description |
@@ -246,6 +252,12 @@ These variables configure the logging system. Set them in your workflow `env:` b
 | `AI_PR_REVIEW_CORRELATION_ID` | *(auto-generated)* | 8-character hex correlation ID injected into every log record for the duration of a review run. Auto-generated at startup; set explicitly to correlate logs across multiple jobs. |
 
 Secret masking is always active: API keys, tokens, and other credentials from `ReviewConfig` are redacted from log output regardless of log format or level.
+
+### GitHub-specific variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_BOT_USERNAME` | `github-actions[bot]` | Login that owns this bot's prior reviews/comments, for both the review-selection filter and thread-ownership checks. Set this if your reviews post under a different identity than the default GitHub Actions bot — a custom GitHub App, or (as in this project's own e2e test harness) a personal-access-token-authenticated account. Mirrors `GITLAB_BOT_USERNAME` below. |
 
 ### Bitbucket-specific variables
 

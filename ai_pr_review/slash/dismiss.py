@@ -30,10 +30,10 @@ from ai_pr_review.vcs._finding_ids import (
     _LOCATION_RE,
     _SOURCE_RE,
     BODY_SECTION_START_MARKERS,
-    _parse_existing_ids,
+    fingerprint_for_finding_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
-from ai_pr_review.vcs.marker import extract_id_map, extract_verdicts, upsert_verdicts_marker
+from ai_pr_review.vcs.marker import extract_id_map, upsert_verdicts_marker
 
 if TYPE_CHECKING:
     from ai_pr_review.vcs.github import GitHubProvider
@@ -198,23 +198,13 @@ def list_active_body_ids(bodies: Sequence[str]) -> list[int]:
 def _fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | None:
     """Reverse-lookup a stable F<n> ID to its fingerprint.
 
-    Reuses `_parse_existing_ids` (the same authoritative fingerprint -> ID
-    parser `assemble_id_map` itself is built on) rather than only checking
-    the id-map marker directly -- that parser already handles both the
-    marker fast-path and the pre-marker bullet-scan fallback for older
-    reviews, and this must never silently diverge from it.
-
-    IDs are permanent once assigned (`assemble_id_map` never reassigns one),
-    so any body recent enough to have seen this finding carries the mapping
-    -- no need to specifically target the canonical review's body. Returns
-    `None` if the ID was never assigned an entry (e.g. it genuinely doesn't
-    exist), in which case verdict recording is skipped entirely (see
-    `_record_verdict`) rather than guessing.
+    Thin wrapper over `ai_pr_review.vcs._finding_ids.fingerprint_for_finding_id`
+    (factored out there so `ai_pr_review.vcs._canonical` can reuse the exact
+    same lookup for legacy-thread fallback without this module's own
+    `vcs.github` import creating a cycle). Kept here, still private, since
+    every existing call site in this module refers to it by this name.
     """
-    for fp, fid in _parse_existing_ids(bodies).items():
-        if fid == finding_id:
-            return fp
-    return None
+    return fingerprint_for_finding_id(bodies, finding_id)
 
 
 def _record_verdict(
@@ -252,19 +242,31 @@ def _record_verdict(
     `dismiss_by_finding_id`/`dismiss_inline_reply` and crash the CLI command
     -- after the thread has already been resolved on GitHub -- which is
     exactly the outcome this function's docstring promises never happens.
+
+    Seeds the verdicts map from `merge_verdicts(reviews)` -- the union
+    across every prior bot review body -- rather than only the canonical
+    body's own `extract_verdicts`. Reading just the canonical body would
+    silently drop every earlier verdict whenever a marker-less review (e.g.
+    `GitHubProvider.submit_approval`'s human-facing "auto-approved" message,
+    issue #590) becomes canonical between one verdict write and the next.
+    `select_canonical` centralizes the "highest id, any state" rule so this
+    function and the read side (`ai_pr_review.vcs._canonical`, which
+    consumes these verdicts during `post_findings` classification) can never
+    disagree about which review is canonical.
     """
+    from ai_pr_review.vcs._canonical import merge_verdicts, select_canonical
+
     if fingerprint is None:
         return
     if not reviews:
         return
-    canonical = max(reviews, key=lambda r: r.get("id") or 0)
-    canonical_id = canonical.get("id")
-    if not isinstance(canonical_id, int):
+    canonical = select_canonical(reviews)
+    if canonical is None:
         return
-    body = canonical.get("body") or ""
-    verdicts = extract_verdicts(body)
+    canonical_id = canonical.review_id
+    verdicts = merge_verdicts(reviews)
     verdicts[fingerprint] = verdict
-    new_body = upsert_verdicts_marker(body, verdicts)
+    new_body = upsert_verdicts_marker(canonical.body, verdicts)
     try:
         ok, status, snippet = provider.update_review_body(canonical_id, new_body)
     except httpx.HTTPError as exc:
