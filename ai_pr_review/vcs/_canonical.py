@@ -28,6 +28,16 @@ sources feed `classify()`:
   `**[Sev]**` header re-parsing for severity and an id-map reverse lookup
   for fingerprint; their category is permanently unrecoverable (`None`,
   treated as a wildcard by `categories_compatible`).
+
+A verdict is keyed to whatever fingerprint was current at the moment a
+human ran the slash command -- but a fuzzy "update"/"escalate" match can
+PATCH a thread's comment afterwards, replacing its metadata marker's
+fingerprint while the visible `**[F<n>]**` token (and the verdict already
+recorded against the old fingerprint) stay put (#720). `PriorThread.
+prior_fingerprints` carries every fingerprint a thread's comment has ever
+been rendered with, and `_find_thread_by_fingerprint` checks it alongside
+the thread's current fingerprint, so a dismissed/fixed verdict recorded
+before the drift still resolves back to the same thread afterwards.
 """
 
 from __future__ import annotations
@@ -188,6 +198,15 @@ class PriorThread:
     category: str | None
     fingerprint: str | None
     finding_id: int | None
+    # #720 fix: every fingerprint this thread's comment has ever carried,
+    # oldest first, populated from the per-comment metadata marker's `pfp`
+    # field (see `marker.InlineMeta.prior_fps`'s docstring for why this
+    # exists). Empty for a thread that has never been through the fuzzy
+    # "update"/"escalate" PATCH path, and always empty for a legacy thread
+    # with no metadata marker at all. `_find_thread_by_fingerprint` checks
+    # this alongside `fingerprint` so a verdict recorded against a
+    # since-superseded fingerprint can still locate the thread.
+    prior_fingerprints: frozenset[str] = frozenset()
 
 
 def parse_prior_thread(
@@ -233,6 +252,7 @@ def parse_prior_thread(
     fp = meta.fp if meta else None
     category = meta.cat if meta else None
     severity = meta.sev if meta else None
+    prior_fingerprints = frozenset(meta.prior_fps) if meta else frozenset()
 
     if severity is None:
         first_line = body.splitlines()[0] if body else ""
@@ -274,6 +294,7 @@ def parse_prior_thread(
         category=category,
         fingerprint=fp,
         finding_id=finding_id,
+        prior_fingerprints=prior_fingerprints,
     )
 
 
@@ -314,8 +335,18 @@ class Classified:
 def _find_thread_by_fingerprint(
     threads: Sequence[PriorThread], fp: str
 ) -> PriorThread | None:
+    """Locate the thread currently or ever carrying fingerprint `fp`.
+
+    Checks `t.prior_fingerprints` alongside `t.fingerprint` (#720 fix): a
+    fuzzy "update"/"escalate" match PATCHes a thread's comment in place,
+    replacing its metadata marker's fingerprint with the new finding's exact
+    one while `**[F<n>]**` stays the same. A verdict recorded against
+    whichever fingerprint was current at the time (e.g. a dismiss reply read
+    against the not-yet-drifted comment) must still resolve back to this
+    same thread once its fingerprint has moved on.
+    """
     for t in threads:
-        if t.fingerprint == fp:
+        if t.fingerprint == fp or fp in t.prior_fingerprints:
             return t
     return None
 
@@ -472,6 +503,7 @@ def decide_action(
     event: PostEvent,
     classified: Sequence[Classified],
     any_new_inline_eligible: bool,
+    known_fingerprints: frozenset[str] = frozenset(),
 ) -> Literal["put", "post"]:
     """Decide whether this run can PUT the canonical review's body, or must
     POST a fresh review.
@@ -489,11 +521,21 @@ def decide_action(
       human-facing message from `GitHubProvider.submit_approval`, issue
       #590's "approve on clear" path — PUTing a findings body over that
       message would erase it);
-    - any classified finding is `"new"` and either `any_new_inline_eligible`
-      (computed by the caller, which has the diff's eligible-line set) or
-      the finding's severity is High/Critical: new information must be
-      visible even when it can't get a diff anchor (out-of-diff, or over
-      `max_inline`) — a silent body-only PUT would otherwise hide it.
+    - any classified finding is `"new"`, its exact fingerprint is not
+      already in `known_fingerprints` (a fingerprint the caller has already
+      rendered in some prior review body -- not genuinely new information to
+      a human, just a persistent body-level finding surviving another
+      cycle), and either `any_new_inline_eligible` (computed by the caller
+      from which findings actually landed an inline comment, not just which
+      were eligible in principle) or the finding's severity is High/Critical:
+      new information must be visible even when it can't get a diff anchor
+      (out-of-diff, or over `max_inline`) — a silent body-only PUT would
+      otherwise hide it. Without the `known_fingerprints` exemption, a
+      single persistent out-of-diff High/Critical finding (or any PR over
+      `max_inline`) would force a fresh review on every single rerun,
+      forever, defeating the point of reuse for exactly the noisiest PRs
+      (issue #719) -- the PUT still renders it in the body every time, so no
+      information is actually lost by not forcing a POST.
 
     `"put"` otherwise, including when every `"new"` finding is body-level
     and below High severity (those still render in the reused body; they
@@ -510,6 +552,10 @@ def decide_action(
     if any_new_inline_eligible:
         return "post"
     for c in classified:
-        if c.kind == "new" and c.finding.severity in ("Critical", "High"):
+        if (
+            c.kind == "new"
+            and c.finding.severity in ("Critical", "High")
+            and fingerprint(c.finding) not in known_fingerprints
+        ):
             return "post"
     return "put"

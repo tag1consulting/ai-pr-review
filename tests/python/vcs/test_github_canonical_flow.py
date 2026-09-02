@@ -17,7 +17,7 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import build_verdicts_marker
+from ai_pr_review.vcs.marker import build_verdicts_marker, upsert_verdicts_marker
 from ai_pr_review.vcs.protocol import DiffContext
 
 _VALID_SHA = "abc1234def5678abc1234def5678abc1234def56"
@@ -218,6 +218,62 @@ def test_quiet_rerun_puts_canonical_body_posts_nothing_new() -> None:
     assert posts == []
 
 
+def test_new_medium_finding_over_max_inline_puts_not_posts() -> None:
+    """Issue #719: any_new_inline_eligible must reflect which findings
+    actually landed an inline comment, not raw eligibility. A Medium
+    finding that's in-diff (so is_inline_eligible would say True) but gets
+    bumped to the body by max_inline=0 must not force a fresh POST -- it
+    never got a new inline comment at all, and it's below the High/Critical
+    body-level exemption's threshold too."""
+    canonical_body = _footer_body()
+    new_finding = _finding("in-diff but bumped to body", severity="Medium")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([])
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError(
+                "must PUT the canonical -- the finding never actually got "
+                "an inline comment (max_inline=0 bumped it to the body) and "
+                "is below the High/Critical body-level exemption"
+            )
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [new_finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+        max_inline=0,
+    )
+
+    assert result.ok
+    assert result.reused_review is True
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    assert len(puts) == 1
+
+
 # ---------------------------------------------------------------------------
 # Genuinely new finding -> exactly one POST, old CR left standing (has
 # unresolved threads) or dismissed (none left)
@@ -269,6 +325,91 @@ def test_new_finding_posts_fresh_review_and_dismisses_cleared_canonical() -> Non
     assert len(dismissals) == 1
     posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
     assert len(posts) == 1
+
+
+def test_persistent_out_of_diff_critical_finding_puts_on_second_run() -> None:
+    """Issue #719: a body-level Critical finding with no diff anchor (so it
+    can never become an inline thread to fuzzy-match against) forces a
+    fresh POST the first time it's seen -- but once its exact fingerprint
+    is visible in the canonical's own body (via the id-map marker), an
+    unchanged rerun must PUT instead of repeating the dismiss+POST cycle
+    forever."""
+    persistent = _finding(
+        "structural issue with no diff anchor",
+        severity="Critical",
+        file="unrelated_file.py",
+        line=1,
+    )
+
+    # Cycle 1: no prior review at all -> canonical is None -> must POST.
+    def handler_cycle1(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([])
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 50, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov1, rec1 = _make_provider(handler_cycle1)
+    result1 = prov1.post_findings(
+        [persistent],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+    assert result1.reused_review is False
+    assert result1.review_id == 50
+    posts_cycle1 = [c for c in rec1.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts_cycle1) == 1
+    posted_body = posts_cycle1[0][2]["body"]
+
+    # Cycle 2: same exact finding again. The canonical review now carries
+    # this fingerprint's id-map entry from cycle 1's posted body.
+    def handler_cycle2(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 50, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": posted_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([])
+        if req.method == "GET" and url.endswith("/reviews/50"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": posted_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/50"):
+            return httpx.Response(200, json={"id": 50})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError(
+                "must PUT the canonical, not POST a fresh review, for an "
+                "unchanged persistent finding already visible in its body"
+            )
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov2, rec2 = _make_provider(handler_cycle2)
+    result2 = prov2.post_findings(
+        [persistent],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+    assert result2.ok
+    assert result2.reused_review is True
+    puts = [c for c in rec2.calls if c[0] == "PUT" and c[1].endswith("/reviews/50")]
+    assert len(puts) == 1
 
 
 def test_new_finding_does_not_dismiss_canonical_with_unresolved_owned_threads() -> None:
@@ -388,6 +529,71 @@ def test_escalated_finding_patches_and_replies_no_new_review() -> None:
     assert len(replies) == 1
     assert "Critical" in replies[0][2]["body"]
     assert posts == []
+
+
+def test_resolve_stale_does_not_resolve_thread_post_findings_just_updated() -> None:
+    """Issue #718: orchestrate.py calls resolve_stale immediately after
+    post_findings, on the same provider instance. Without
+    _kept_alive_thread_ids, once #717's bot_login fix makes resolve_stale's
+    ownership gate actually recognize real threads, it would immediately
+    re-resolve the same thread post_findings just PATCHed for an
+    update/escalate classification -- undoing the entire point of keeping
+    it alive."""
+    old_finding = _finding("weak validation", severity="Low", line=5, category="other")
+    existing_comment_body = _build_inline_comment_body(old_finding)
+    canonical_body = _footer_body()
+    escalated_finding = _finding("weak validation", severity="Critical", line=5, category="other")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "resolveReviewThread"):
+            raise AssertionError(
+                "must not resolve th1 -- post_findings just PATCHed it for "
+                "an escalate classification this same run"
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=existing_comment_body, line=5,
+                )]
+            )
+        if req.method == "PATCH" and url.endswith("/pulls/comments/1"):
+            return httpx.Response(200, json={"id": 1})
+        if req.method == "POST" and url.endswith("/pulls/1/comments/1/replies"):
+            return httpx.Response(201, json={"id": 2})
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, _ = _make_provider(handler)
+    findings_result = prov.post_findings(
+        [escalated_finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+    assert findings_result.ok
+
+    stale_result = prov.resolve_stale(current_review_id=findings_result.review_id)
+    assert stale_result.threads_resolved == 0
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +853,102 @@ def test_dismissed_finding_is_suppressed_not_reposted() -> None:
 
     assert result.ok
     assert result.suppressed == 1
+
+
+def test_dismissed_finding_stays_suppressed_after_fuzzy_update_drift() -> None:
+    """#720 regression: a fuzzy "update" match PATCHes an open thread's
+    comment in place, replacing its private metadata marker's fingerprint
+    with the reworded finding's exact one while the visible **[F<n>]**
+    token stays put. If a human then dismisses that thread, dismiss.py
+    records the verdict against whatever fingerprint was current *at dismiss
+    time* -- per #720's own narrative, that can be the finding's original
+    (now-superseded) fingerprint. The next run must still suppress the same
+    (still-reworded) finding rather than reposting it as "new" just because
+    the thread's own marker has moved on to a different fingerprint than the
+    one recorded in the verdicts map.
+    """
+    old_finding = _finding("SQL built via string concatenation", severity="Medium", line=5)
+    old_fp = fingerprint(old_finding)
+    original_comment_body = _build_inline_comment_body(old_finding, finding_id=3)
+
+    # Reworded -- fingerprint changes -- but same file/severity/category and
+    # within PROXIMITY_LINES, so classify() fuzzy-matches it to th1 as an
+    # "update" rather than "new".
+    reworded_finding = _finding(
+        "SQL query concatenates untrusted input", severity="Medium", line=6
+    )
+    reworded_fp = fingerprint(reworded_finding)
+    assert reworded_fp != old_fp
+
+    state = {"canonical_body": _footer_body(), "comment_body": original_comment_body, "resolved": False}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": state["canonical_body"],
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=state["comment_body"], line=5, is_resolved=state["resolved"],
+                )]
+            )
+        if req.method == "PATCH" and url.endswith("/pulls/comments/1"):
+            state["comment_body"] = (body or {}).get("body", state["comment_body"])
+            return httpx.Response(200, json={"id": 1})
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": state["canonical_body"]})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            state["canonical_body"] = (body or {}).get("body", state["canonical_body"])
+            return httpx.Response(200, json={"id": 10})
+        if req.method == "POST" and "/pulls/1/comments" in url:
+            raise AssertionError(
+                "an update-classified finding must be PATCHed in place, "
+                "never reposted as a brand new comment"
+            )
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+
+    # Run 1: the reworded finding fuzzy-matches th1 as "update" -- PATCHes
+    # the comment in place. Its metadata marker now carries reworded_fp, not
+    # old_fp, but the visible F3 token is untouched.
+    result1 = prov.post_findings(
+        [reworded_finding], DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA), event="REQUEST_CHANGES",
+    )
+    assert result1.ok
+    patches = [c for c in rec.calls if c[0] == "PATCH" and c[1].endswith("/pulls/comments/1")]
+    assert len(patches) == 1
+
+    # Simulate dismiss.py: a human replies `/ai-pr-review dismiss` on that
+    # thread, reads the still-visible F3 token, and records a "dismissed"
+    # verdict -- against the finding's original fingerprint, per #720's own
+    # narrative of what the reverse F-id lookup can return. dismiss.py also
+    # always resolves the underlying GraphQL thread.
+    state["canonical_body"] = upsert_verdicts_marker(state["canonical_body"], {old_fp: "dismissed"})
+    state["resolved"] = True
+
+    # Run 2: same reworded finding, unchanged. Must be suppressed, not
+    # reposted as "new".
+    result2 = prov.post_findings(
+        [reworded_finding], DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA), event="REQUEST_CHANGES",
+    )
+    assert result2.ok
+    assert result2.suppressed == 1
 
 
 # ---------------------------------------------------------------------------
