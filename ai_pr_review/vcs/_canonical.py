@@ -303,9 +303,33 @@ Kind = Literal["new", "suppressed", "recurred", "update", "escalate"]
 
 @dataclass(frozen=True)
 class Classified:
+    """A finding paired with its classification and (when applicable) the
+    prior thread that classification refers to.
+
+    Invariant, enforced below rather than left to caller convention: `kind`
+    "update"/"escalate" always refers to an existing thread (that's the
+    whole point of those two classifications -- there's nothing to PATCH or
+    reply to otherwise) and must carry a non-`None` `thread`; `kind`
+    "new"/"suppressed" never refers to one and must carry `None`. `kind`
+    "recurred" is the one classification that legitimately goes either way
+    (a thread when the original inline comment still exists, `None` for a
+    body-level recurrence with no comment to reopen) and is intentionally
+    excluded from this check.
+    """
+
     finding: Finding
     kind: Kind
     thread: PriorThread | None
+
+    def __post_init__(self) -> None:
+        if self.kind in ("update", "escalate") and self.thread is None:
+            raise ValueError(
+                f"Classified(kind={self.kind!r}) requires a non-None thread"
+            )
+        if self.kind in ("new", "suppressed") and self.thread is not None:
+            raise ValueError(
+                f"Classified(kind={self.kind!r}) must not carry a thread"
+            )
 
 
 def _find_thread_by_fingerprint(
