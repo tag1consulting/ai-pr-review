@@ -7,6 +7,7 @@ successful post (2.FR-10).
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -465,6 +466,7 @@ class GitHubProvider:
         from ai_pr_review.vcs._canonical import (
             classify,
             decide_action,
+            dedupe_thread_claims,
             merge_verdicts,
             parse_prior_thread,
             select_canonical,
@@ -513,6 +515,13 @@ class GitHubProvider:
         canonical = select_canonical(reviews)
         verdicts = merge_verdicts(reviews)
 
+        # fetch_review_threads() never raises on an HTTP/GraphQL error -- it
+        # appends to self._errors and returns whatever it collected so far
+        # (possibly []), so completeness has to be checked via self._errors,
+        # not a try/except. threads_fetch_complete gates the
+        # dismiss-superseded-review step below: an incomplete fetch must
+        # never be treated as "zero unresolved threads".
+        errors_before_threads = len(self._errors)
         try:
             thread_nodes = self.fetch_review_threads()
         except Exception as exc:  # noqa: BLE001
@@ -521,17 +530,28 @@ class GitHubProvider:
                 "every finding will classify as new this cycle: %s", exc,
             )
             thread_nodes = []
+            self._errors.append(f"fetch_review_threads: {exc}")
+        threads_fetch_complete = len(self._errors) == errors_before_threads
         all_threads: list[PriorThread] = []
         for node in thread_nodes:
+            # bot_login=None: the marker is the sole ownership gate here,
+            # matching ai_pr_review.slash.dismiss's established pattern for
+            # GraphQL-sourced author logins. GitHub's GraphQL API reports the
+            # bot's login as "github-actions" (no "[bot]" suffix) -- verified
+            # live against a real thread this session -- while
+            # self.config.bot_login is the REST-style "github-actions[bot]"
+            # constant. Passing that constant here would make
+            # is_owned_by_us() reject every real thread, leaving all_threads
+            # permanently empty in production.
             parsed = parse_prior_thread(
-                node, bot_login=self.config.bot_login, id_map_bodies=prior_bodies
+                node, bot_login=None, id_map_bodies=prior_bodies
             )
             if parsed is not None:
                 all_threads.append(parsed)
 
-        classified = [
-            classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings
-        ]
+        classified = dedupe_thread_claims(
+            [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
+        )
 
         # Apply side effects for update/escalate/recurred-with-thread.
         # suppressed produces no side effect (never reposted, permanently).
@@ -549,16 +569,39 @@ class GitHubProvider:
             elif c.kind == "recurred":
                 updated_verdicts[fingerprint(c.finding)] = "recurred"
                 if c.thread is not None:
-                    self._notify_recurrence(c.thread, diff.head_sha)
+                    reopened = self._notify_recurrence(c.thread, diff.head_sha)
                     replies_posted += 1
+                    if reopened:
+                        # Keep all_threads in sync with the reopen this just
+                        # performed on GitHub: the dismiss-superseded-review
+                        # gate below (_has_unresolved_owned_threads) reads
+                        # this same list, and without this update it would
+                        # see the stale is_resolved=True snapshot fetched
+                        # before this side effect ran -- letting a review
+                        # with a thread this run just reopened be dismissed
+                        # as if it had no unresolved threads at all.
+                        reopened_thread = c.thread
+                        all_threads = [
+                            dataclasses.replace(t, is_resolved=False)
+                            if t.thread_id == reopened_thread.thread_id
+                            else t
+                            for t in all_threads
+                        ]
                 else:
                     recurred_body_fps.add(fingerprint(c.finding))
             elif c.kind in ("update", "escalate") and c.thread is not None:
-                self._apply_thread_update(c, enable_suggestions=enable_suggestions)
-                inline_updated += 1
-                if c.kind == "escalate":
-                    self._notify_escalation(c.thread, c.finding, diff.head_sha)
-                    replies_posted += 1
+                patched = self._apply_thread_update(
+                    c, enable_suggestions=enable_suggestions
+                )
+                if patched:
+                    inline_updated += 1
+                    # Only claim an escalation happened if the underlying
+                    # PATCH actually landed -- otherwise the reply would
+                    # assert "severity escalated" for a comment that still
+                    # shows the old severity.
+                    if c.kind == "escalate":
+                        self._notify_escalation(c.thread, c.finding, diff.head_sha)
+                        replies_posted += 1
 
         # Only genuinely-new findings, plus body-level recurrences (which have
         # no existing comment to reply on), go through the normal render
@@ -698,10 +741,34 @@ class GitHubProvider:
             )
 
         # action == "post", or the PUT attempt above was abandoned.
+        result = self._post_new_review(
+            body=body,
+            inline_comments=inline_comments,
+            event=event,
+            diff=diff,
+            body_bullets_count=len(body_bullets),
+        )
+
+        # Dismiss the superseded canonical review only *after* confirming the
+        # replacement actually landed as a real REQUEST_CHANGES review --
+        # not before. Dismissing first (the original ordering here) mirrors
+        # the exact hazard `_dismiss_stale_reviews` is already careful to
+        # avoid: if `_post_new_review`'s own fallback chain degrades to a
+        # COMMENT review or a plain issue comment, dismissing the old CR
+        # beforehand would leave the PR with no blocking review at all,
+        # silently unblocking something that should still be blocked.
+        # `threads_fetch_complete` additionally guards against the fail-open
+        # case where `fetch_review_threads()` degraded to a partial/empty
+        # list on an HTTP or GraphQL error: an incomplete fetch must never
+        # be treated as "zero unresolved threads".
         if (
             canonical is not None
             and canonical.state == "CHANGES_REQUESTED"
             and event == "REQUEST_CHANGES"
+            and result.event == "REQUEST_CHANGES"
+            and not result.degraded_to_comment
+            and not result.error
+            and threads_fetch_complete
             and not self._has_unresolved_owned_threads(canonical.review_id, all_threads)
         ):
             ok, status, snippet = self.dismiss_review(
@@ -717,13 +784,6 @@ class GitHubProvider:
                     f"HTTP {status}: {snippet}"
                 )
 
-        result = self._post_new_review(
-            body=body,
-            inline_comments=inline_comments,
-            event=event,
-            diff=diff,
-            body_bullets_count=len(body_bullets),
-        )
         return FindingsResult(
             review_id=result.review_id,
             inline_posted=result.inline_posted,
@@ -1018,9 +1078,13 @@ class GitHubProvider:
 
     def _apply_thread_update(
         self, classified: Classified, *, enable_suggestions: bool
-    ) -> None:
+    ) -> bool:
         """PATCH a still-open thread's comment in place for an `update` or
-        `escalate` classification.
+        `escalate` classification. Returns whether the PATCH succeeded --
+        the caller only counts `inline_updated` and posts an escalation
+        reply when it did, since a failed PATCH leaves the comment showing
+        the old content/severity and a reply claiming otherwise would itself
+        be a silent-failure risk.
 
         The `suggestion` fence is only kept when the matched thread's
         anchored range exactly matches this finding's -- `PATCH` cannot move
@@ -1030,7 +1094,7 @@ class GitHubProvider:
         """
         thread = classified.thread
         if thread is None:
-            return
+            return False
         include_fence = (
             enable_suggestions
             and not thread.is_outdated
@@ -1051,6 +1115,7 @@ class GitHubProvider:
             self._errors.append(
                 f"update comment {thread.comment_id}: HTTP {status}: {snippet}"
             )
+        return ok
 
     def _notify_escalation(
         self, thread: PriorThread, finding: Finding, head_sha: str
@@ -1070,7 +1135,14 @@ class GitHubProvider:
                 f"escalation reply {thread.comment_id}: HTTP {status}: {snippet}"
             )
 
-    def _notify_recurrence(self, thread: PriorThread, head_sha: str) -> None:
+    def _notify_recurrence(self, thread: PriorThread, head_sha: str) -> bool:
+        """Reply on the recurred finding's thread and reopen it. Returns
+        whether the thread was actually reopened (`unresolve_thread`
+        succeeded) -- the caller uses this to keep its in-memory thread
+        snapshot in sync, since a successful reopen changes the thread's
+        resolved state on GitHub with no corresponding update to any
+        already-fetched `PriorThread` (frozen, and fetched before this side
+        effect runs)."""
         message = (
             "This finding was marked fixed but reappeared unchanged in the "
             f"latest run (`{head_sha[:7]}`)."
@@ -1093,6 +1165,7 @@ class GitHubProvider:
             self._errors.append(
                 f"unresolve thread {thread.thread_id}: HTTP {status2}: {snippet2}"
             )
+        return ok2
 
     def _render_fallback_body(
         self, body: str, inline_comments: Sequence[dict[str, Any]]

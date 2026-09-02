@@ -11,9 +11,11 @@ from __future__ import annotations
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._canonical import (
     CanonicalReview,
+    Classified,
     PriorThread,
     classify,
     decide_action,
+    dedupe_thread_claims,
     fingerprint_location,
     merge_verdicts,
     parse_prior_thread,
@@ -308,6 +310,41 @@ def test_classify_beyond_proximity_window_does_not_match() -> None:
     assert result.kind == "new"
 
 
+def test_dedupe_thread_claims_keeps_highest_severity_demotes_rest_to_new() -> None:
+    """Two distinct findings within PROXIMITY_LINES of the same open thread
+    both fuzzy-match it independently (classify() has no cross-finding
+    visibility). Applying both side effects would PATCH the same comment
+    twice, silently dropping one finding. dedupe_thread_claims keeps the
+    higher-severity claim and sends the other back through as "new" so it
+    gets its own slot instead of disappearing."""
+    thread = _thread(thread_id="shared", line=100, severity="Low")
+    low = _finding("nit", line=99, severity="Low")
+    high = _finding("real bug", line=101, severity="Critical")
+    classified = [
+        Classified(low, "update", thread),
+        Classified(high, "escalate", thread),
+    ]
+    result = dedupe_thread_claims(classified)
+    kept = [c for c in result if c.thread is not None]
+    demoted = [c for c in result if c.thread is None]
+    assert len(kept) == 1
+    assert kept[0].finding is high
+    assert kept[0].kind == "escalate"
+    assert len(demoted) == 1
+    assert demoted[0].finding is low
+    assert demoted[0].kind == "new"
+
+
+def test_dedupe_thread_claims_is_a_noop_when_no_collision() -> None:
+    t1 = _thread(thread_id="t1", line=10)
+    t2 = _thread(thread_id="t2", line=50)
+    f1 = _finding("a", line=10)
+    f2 = _finding("b", line=50)
+    classified = [Classified(f1, "update", t1), Classified(f2, "update", t2)]
+    result = dedupe_thread_claims(classified)
+    assert result == classified
+
+
 def test_classify_resolved_non_fixed_thread_is_not_a_fuzzy_open_match() -> None:
     """A resolved thread with no verdict at all (e.g. resolved by
     resolve_stale's routine housekeeping sweep, not a human verdict) must not
@@ -422,6 +459,26 @@ def test_parse_prior_thread_falls_back_to_original_line_when_line_absent() -> No
     thread = parse_prior_thread(node, bot_login="github-actions[bot]")
     assert thread is not None
     assert thread.line == 7
+
+
+def test_parse_prior_thread_recognizes_graphql_style_login_when_bot_login_none() -> None:
+    """GitHub's GraphQL API reports the bot's login without the REST-style
+    "[bot]" suffix (verified live against a real thread). GitHubProvider
+    passes bot_login=None to parse_prior_thread for exactly this reason --
+    this test locks that in."""
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    node = _thread_node(body=body, author="github-actions")
+    assert parse_prior_thread(node, bot_login=None) is not None
+
+
+def test_parse_prior_thread_rest_style_bot_login_rejects_graphql_login() -> None:
+    """Documents the exact bug this PR fixed at the GitHubProvider call
+    site: comparing a GraphQL-sourced "github-actions" author against the
+    REST-style "github-actions[bot]" constant makes every real thread look
+    unowned. This is why the call site must pass bot_login=None instead."""
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    node = _thread_node(body=body, author="github-actions")
+    assert parse_prior_thread(node, bot_login="github-actions[bot]") is None
 
 
 # ---------------------------------------------------------------------------

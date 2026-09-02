@@ -403,6 +403,40 @@ def classify(
     return Classified(finding, "new", None)
 
 
+def dedupe_thread_claims(classified: Sequence[Classified]) -> list[Classified]:
+    """Ensure at most one classified finding claims a given thread this run.
+
+    `classify()` runs once per finding against a shared, unmodified
+    `all_threads` snapshot, so two distinct findings within `PROXIMITY_LINES`
+    of the same still-open thread can both fuzzy-match it and come back
+    `"update"`/`"escalate"` referencing the identical `thread`. Applying both
+    side effects would `PATCH` the same comment twice — the second write
+    silently drops the first finding's content, since neither renders in the
+    body — and, if both are `"escalate"`, post a duplicate reply. Keep only
+    the highest-severity claim per `thread_id` (ties keep the earlier one);
+    demote the rest to `"new"` so they get their own slot instead of
+    disappearing.
+    """
+    best_index_by_thread: dict[str, int] = {}
+    for i, c in enumerate(classified):
+        if c.kind not in ("update", "escalate") or c.thread is None:
+            continue
+        tid = c.thread.thread_id
+        current = best_index_by_thread.get(tid)
+        if current is None or _rank(c.finding.severity) < _rank(
+            classified[current].finding.severity
+        ):
+            best_index_by_thread[tid] = i
+
+    kept = set(best_index_by_thread.values())
+    return [
+        Classified(c.finding, "new", None)
+        if c.kind in ("update", "escalate") and c.thread is not None and i not in kept
+        else c
+        for i, c in enumerate(classified)
+    ]
+
+
 def decide_action(
     canonical: CanonicalReview | None,
     *,

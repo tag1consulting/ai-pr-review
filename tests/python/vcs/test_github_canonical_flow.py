@@ -116,7 +116,12 @@ def _thread_node(
                 {
                     "databaseId": comment_id,
                     "body": body,
-                    "author": {"login": "github-actions[bot]"},
+                    # GitHub's GraphQL API reports the bot's login without
+                    # the REST-style "[bot]" suffix (verified live) --
+                    # deliberately not "github-actions[bot]" here, so this
+                    # fixture would catch a regression to comparing against
+                    # that REST-style constant in the ownership gate.
+                    "author": {"login": "github-actions"},
                     "pullRequestReview": {"databaseId": review_id},
                 }
             ]
@@ -631,3 +636,61 @@ def test_graphql_failure_degrades_to_posting_everything_as_new() -> None:
     assert result.ok
     assert result.review_id == 40
     assert result.reused_review is False
+    # A failed/incomplete thread fetch must never be treated as "zero
+    # unresolved owned threads" -- that would let the canonical CR review be
+    # dismissed based on a fetch that could easily be missing an open High
+    # finding's thread, reopening the auto-approve hole this feature's own
+    # dismiss gate exists to close.
+    dismissals = [c for c in rec.calls if "/dismissals" in c[1]]
+    assert dismissals == []
+
+
+def test_dismiss_superseded_review_only_after_replacement_confirmed_posted() -> None:
+    """Dismissing the superseded canonical review before confirming the
+    replacement actually posted as REQUEST_CHANGES would, on a mid-run
+    failure, leave the PR with no blocking review at all -- silently
+    unblocking something that should still be blocked. The canonical must
+    stay standing when the fresh post degrades."""
+    canonical_body = _footer_body()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([])
+        if req.method in ("PUT", "POST") and "/dismissals" in url:
+            raise AssertionError(
+                "must never dismiss the canonical before the replacement "
+                "review is confirmed to have posted as REQUEST_CHANGES"
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            # Both the initial POST and the COMMENT-retry fallback fail,
+            # degrading _post_new_review all the way to a plain issue
+            # comment (event becomes "COMMENT", degraded_to_comment=True).
+            return httpx.Response(422, text="validation failed")
+        if req.method == "POST" and url.endswith("/issues/1/comments"):
+            return httpx.Response(201, json={"id": 99})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [_finding("brand new issue", severity="High")],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.degraded_to_comment is True
+    assert result.event != "REQUEST_CHANGES"
