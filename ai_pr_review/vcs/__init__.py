@@ -116,8 +116,13 @@ def _build_github_from_env() -> GitHubProvider:
     pr_number = _require_int_env("PR_NUMBER")
     base_url = (os.environ.get("GITHUB_API_URL") or "").strip() or "https://api.github.com"
 
+    canonical_reuse = (
+        os.environ.get("AI_CANONICAL_REUSE", "true").strip().lower()
+        not in ("false", "0", "no")
+    )
     config = GitHubConfig(
-        owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url
+        owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url,
+        canonical_reuse=canonical_reuse,
     )
     return GitHubProvider(config=config, client=build_github_client(config))
 

@@ -208,6 +208,12 @@ These variables enable optional capabilities that are off by default.
 |----------|---------|-------------|
 | `AI_JUDGE_PASS` | `true` | Run a cheap-model judge pass (Phase 2.75) after findings are extracted, merged, suppressed, and scoped. The judge sends a single compact LLM call (no diff text) and returns `keep` or `downrank` per finding. `downrank` lowers the finding's confidence by 15 points and routes it to the review body instead of as an inline comment — the finding is still reported, at its unchanged severity, and still counts toward the review's "Overall Risk" headline and `REQUEST_CHANGES` decision exactly as an inline finding would. Corroborated findings (static-analyzer + LLM-agent agreement on the same file+line) are exempt from `downrank`. Always fail-soft: any judge error returns findings unchanged. The judge call's token usage appears as a `judge-pass` row in the token usage table and is included in the Total. Set to `false` to disable and restore pre-v2.1 behavior. |
 
+#### Quiet reruns (GitHub only)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_CANONICAL_REUSE` | `true` | GitHub only. Controls whether reruns reuse the bot's existing "canonical" review (see [Features: Quiet reruns](features#quiet-reruns-github)) instead of always posting a fresh one. Set to `false` to restore the pre-canonical-reuse behavior of always POSTing a new review — an escape hatch if you hit a bug in the reuse path before a fix ships. Read once at provider construction from the raw env var (not a `Config` field), since it's GitHub-specific rather than provider-neutral. |
+
 #### Per-agent language-profile routing
 
 | Variable | Default | Description |

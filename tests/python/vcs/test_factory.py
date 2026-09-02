@@ -39,6 +39,7 @@ def _clear_provider_envs(monkeypatch: pytest.MonkeyPatch) -> None:
         "BITBUCKET_API_TOKEN",
         "BITBUCKET_WORKSPACE",
         "BITBUCKET_REPO_SLUG",
+        "AI_CANONICAL_REUSE",
     ]:
         monkeypatch.delenv(name, raising=False)
 
@@ -55,6 +56,30 @@ def test_default_provider_is_github(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PR_NUMBER", "1")
     prov = provider_from_env()
     assert isinstance(prov, GitHubProvider)
+
+
+def test_github_canonical_reuse_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.canonical_reuse is True
+
+
+@pytest.mark.parametrize("value", ["false", "False", "0", "no"])
+def test_github_canonical_reuse_kill_switch(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("AI_CANONICAL_REUSE", value)
+    prov = provider_from_env()
+    assert isinstance(prov, GitHubProvider)
+    assert prov.config.canonical_reuse is False
 
 
 def test_explicit_github(monkeypatch: pytest.MonkeyPatch) -> None:

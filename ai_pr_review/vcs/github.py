@@ -122,6 +122,12 @@ class GitHubConfig:
     token: str
     bot_login: str = _BOT_LOGIN_DEFAULT
     base_url: str = "https://api.github.com"
+    # Kill switch for canonical-review reuse (issue tracker: PR #716). When
+    # False, post_findings always POSTs a fresh review exactly like every
+    # release before this feature -- an escape hatch for a consumer pinned
+    # to @main who hits a bug in the reuse path without waiting for a
+    # version pin or a revert. Set via AI_CANONICAL_REUSE=false.
+    canonical_reuse: bool = True
 
 
 def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
@@ -216,25 +222,27 @@ class GitHubProvider:
         return results
 
     # ------------------------------------------------------------------
-    # Prior bot review bodies — used for body-finding ID reconstruction
+    # Prior bot reviews — id/state/body reconstruction for ID-map assembly
+    # and canonical-review-reuse classification
     # ------------------------------------------------------------------
     def _list_prior_bot_reviews(self) -> list[dict[str, Any]]:
         """Return `{"id", "state", "body"}` for every prior bot review,
         paginated. On any HTTP error mid-pagination, returns `[]` rather
-        than partial results (the same #550/#553 guarantee
-        `_list_prior_bot_review_bodies`, now a thin filter over this method,
-        has always had) -- distinct from `list_bot_reviews`, which appends
-        to `self._errors` and keeps whatever it collected so far; that
-        method has its own existing callers with that partial-result
-        contract already baked in, so this is a new method rather than a
-        change to it.
+        than partial results (the same #550/#553 guarantee the now-removed
+        `_list_prior_bot_review_bodies` always had) -- distinct from
+        `list_bot_reviews`, which appends to `self._errors` and keeps
+        whatever it collected so far; that method has its own existing
+        callers (`_record_verdict`) with that partial-result contract
+        already baked in, so this is a separate method rather than a change
+        to it (see `select_canonical`'s docstring for the resulting
+        write/read discrepancy this leaves open).
 
-        Feeds both the body-finding ID-map assembler (via
-        `_list_prior_bot_review_bodies`) and the canonical-review-reuse
-        classification path in `post_findings`
-        (`ai_pr_review.vcs._canonical.select_canonical`/`merge_verdicts`,
-        which need every prior review's id/state/body, not just the
-        id-map-bearing subset).
+        Feeds both the body-finding ID-map assembler in `post_findings`
+        (filtering for `ID_MAP_MARKER_PREFIX`/`"**[F"` inline, replacing the
+        old dedicated method) and the canonical-review-reuse classification
+        path (`ai_pr_review.vcs._canonical.select_canonical`/
+        `merge_verdicts`, which need every prior review's id/state/body, not
+        just the id-map-bearing subset).
         """
         c = self.config
         reviews: list[dict[str, Any]] = []
@@ -263,29 +271,6 @@ class GitHubProvider:
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None
         return reviews
-
-    def _list_prior_bot_review_bodies(self) -> list[str]:
-        """Return the body text of all prior bot reviews that carry F-IDs.
-
-        Used by the body-finding ID-map assembler to reconstruct which
-        ``[F<n>]`` IDs have already been assigned on this PR.  On error,
-        returns an empty list so rendering degrades gracefully (IDs restart
-        at 1 rather than failing).
-
-        A body is included if it carries the machine-readable id-map marker
-        (``ID_MAP_MARKER_PREFIX``, covers every finding bucket: inline,
-        in-diff body, and out-of-diff) or, for pre-marker reviews, a rendered
-        ``**[F<n>]**`` token. Filtering on the ``### Findings not attached to
-        specific lines`` heading alone (as this used to) drops out-of-diff-only
-        review bodies — they carry F-IDs but never render that heading — which
-        starves ID reconstruction and can churn F-IDs across review cycles
-        (issue #550).
-        """
-        return [
-            r["body"]
-            for r in self._list_prior_bot_reviews()
-            if ID_MAP_MARKER_PREFIX in r["body"] or "**[F" in r["body"]
-        ]
 
     # ------------------------------------------------------------------
     # get_last_reviewed_sha
@@ -512,42 +497,57 @@ class GitHubProvider:
         ]
         id_map = assemble_id_map(prior_bodies, list(findings))
 
-        canonical = select_canonical(reviews)
-        verdicts = merge_verdicts(reviews)
+        canonical: CanonicalReview | None
+        verdicts: dict[str, str]
+        all_threads: list[PriorThread]
+        threads_fetch_complete: bool
+        if self.config.canonical_reuse:
+            canonical = select_canonical(reviews)
+            verdicts = merge_verdicts(reviews)
 
-        # fetch_review_threads() never raises on an HTTP/GraphQL error -- it
-        # appends to self._errors and returns whatever it collected so far
-        # (possibly []), so completeness has to be checked via self._errors,
-        # not a try/except. threads_fetch_complete gates the
-        # dismiss-superseded-review step below: an incomplete fetch must
-        # never be treated as "zero unresolved threads".
-        errors_before_threads = len(self._errors)
-        try:
-            thread_nodes = self.fetch_review_threads()
-        except Exception as exc:  # noqa: BLE001
-            _log.warning(
-                "github: failed to fetch review threads for classification; "
-                "every finding will classify as new this cycle: %s", exc,
-            )
-            thread_nodes = []
-            self._errors.append(f"fetch_review_threads: {exc}")
-        threads_fetch_complete = len(self._errors) == errors_before_threads
-        all_threads: list[PriorThread] = []
-        for node in thread_nodes:
-            # bot_login=None: the marker is the sole ownership gate here,
-            # matching ai_pr_review.slash.dismiss's established pattern for
-            # GraphQL-sourced author logins. GitHub's GraphQL API reports the
-            # bot's login as "github-actions" (no "[bot]" suffix) -- verified
-            # live against a real thread this session -- while
-            # self.config.bot_login is the REST-style "github-actions[bot]"
-            # constant. Passing that constant here would make
-            # is_owned_by_us() reject every real thread, leaving all_threads
-            # permanently empty in production.
-            parsed = parse_prior_thread(
-                node, bot_login=None, id_map_bodies=prior_bodies
-            )
-            if parsed is not None:
-                all_threads.append(parsed)
+            # fetch_review_threads() never raises on an HTTP/GraphQL error --
+            # it appends to self._errors and returns whatever it collected so
+            # far (possibly []), so completeness has to be checked via
+            # self._errors, not a try/except. threads_fetch_complete gates
+            # the dismiss-superseded-review step below: an incomplete fetch
+            # must never be treated as "zero unresolved threads".
+            errors_before_threads = len(self._errors)
+            try:
+                thread_nodes = self.fetch_review_threads()
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "github: failed to fetch review threads for classification; "
+                    "every finding will classify as new this cycle: %s", exc,
+                )
+                thread_nodes = []
+                self._errors.append(f"fetch_review_threads: {exc}")
+            threads_fetch_complete = len(self._errors) == errors_before_threads
+            all_threads = []
+            for node in thread_nodes:
+                # bot_login=None: the marker is the sole ownership gate here,
+                # matching ai_pr_review.slash.dismiss's established pattern
+                # for GraphQL-sourced author logins. GitHub's GraphQL API
+                # reports the bot's login as "github-actions" (no "[bot]"
+                # suffix) -- verified live against a real thread this
+                # session -- while self.config.bot_login is the REST-style
+                # "github-actions[bot]" constant. Passing that constant here
+                # would make is_owned_by_us() reject every real thread,
+                # leaving all_threads permanently empty in production.
+                parsed = parse_prior_thread(
+                    node, bot_login=None, id_map_bodies=prior_bodies
+                )
+                if parsed is not None:
+                    all_threads.append(parsed)
+        else:
+            # Kill switch (AI_CANONICAL_REUSE=false): behave exactly like
+            # every release before this feature existed -- no canonical to
+            # reuse, no verdicts to suppress/recur against, no threads to
+            # match. Every finding classifies "new" below and this run
+            # always POSTs a fresh review.
+            canonical = None
+            verdicts = {}
+            all_threads = []
+            threads_fetch_complete = True
 
         classified = dedupe_thread_claims(
             [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
@@ -623,6 +623,21 @@ class GitHubProvider:
             event=event,
             classified=classified,
             any_new_inline_eligible=any_new_inline_eligible,
+        )
+        _log.info(
+            "github: canonical-review decision=%s (canonical=%s, canonical_state=%s, "
+            "event=%s, new=%d, any_new_inline_eligible=%s, "
+            "new_high_or_critical=%s)",
+            action,
+            canonical.review_id if canonical is not None else None,
+            canonical.state if canonical is not None else None,
+            event,
+            sum(1 for c in classified if c.kind == "new"),
+            any_new_inline_eligible,
+            any(
+                c.kind == "new" and c.finding.severity in ("Critical", "High")
+                for c in classified
+            ),
         )
 
         inline_candidates, body_findings = partition_findings(
@@ -720,7 +735,7 @@ class GitHubProvider:
         )
 
         if action == "put" and canonical is not None:
-            put_ok, _put_status, put_snippet = self._try_put_canonical(
+            put_ok, _put_status, put_snippet, put_skipped = self._try_put_canonical(
                 canonical, body, diff
             )
             if put_ok:
@@ -733,6 +748,7 @@ class GitHubProvider:
                     suppressed=suppressed_count,
                     replies_posted=replies_posted,
                     reused_review=True,
+                    skipped=put_skipped,
                 )
             _log.warning(
                 "github: could not reuse canonical review %d (%s); "
@@ -1025,26 +1041,37 @@ class GitHubProvider:
 
     def _try_put_canonical(
         self, canonical: CanonicalReview, body: str, diff: DiffContext
-    ) -> tuple[bool, int, str]:
+    ) -> tuple[bool, int, str, bool]:
         """Pre-write concurrency re-check, then PUT the canonical review's
-        body. Returns (ok, status, snippet).
+        body. Returns (ok, status, snippet, skipped).
 
         `ok=False` means: something else wrote to the canonical review since
-        it was selected (a concurrent run or slash command), or the PR's
-        head has already moved past this run's diff -- in either case the
-        caller must fall through to POSTing a fresh review rather than
-        clobbering a concurrent write or overwriting a newer run's
-        canonical. This narrows the lost-update window from "the whole run"
-        to "one re-check to one write"; it does not eliminate the race
-        (no distributed lock exists) -- see docs/features.md for the
+        it was selected (a concurrent run or slash command) -- the caller
+        must fall through to POSTing a fresh review rather than clobbering a
+        concurrent write. This narrows the lost-update window from "the
+        whole run" to "one re-check to one write"; it does not eliminate the
+        race (no distributed lock exists) -- see docs/features.md for the
         `concurrency:` group recommendation for consumers that push rapidly.
+
+        `skipped=True` (only possible alongside `ok=True`) means: the PR's
+        head has already moved past this run's diff, so a newer run already
+        owns the canonical -- no write happened at all, distinct from a
+        write that actually landed. The caller must not treat this the same
+        as a real post for watermark-advance or stale-cleanup purposes: this
+        run's `diff.head_sha` is stale, and advancing the watermark to it
+        after a newer run has already advanced it to a later SHA would
+        regress the incremental-diff baseline backward.
         """
         recheck = self.get_review_state_and_body(canonical.review_id)
         if recheck is None:
-            return False, 0, "could not re-fetch canonical review before write"
+            return False, 0, "could not re-fetch canonical review before write", False
         state, current_body = recheck
         if state != canonical.state or current_body != canonical.body:
-            return False, 0, "canonical review changed since selection (concurrent write)"
+            return (
+                False, 0,
+                "canonical review changed since selection (concurrent write)",
+                False,
+            )
 
         head_sha = self.get_pr_head_sha()
         if head_sha is not None and head_sha != diff.head_sha:
@@ -1053,9 +1080,10 @@ class GitHubProvider:
                 "skipping canonical write, a newer run owns it",
                 diff.head_sha, head_sha,
             )
-            return True, 200, "skipped: PR head advanced past this run's diff"
+            return True, 200, "skipped: PR head advanced past this run's diff", True
 
-        return self.update_review_body(canonical.review_id, body)
+        ok, status, snippet = self.update_review_body(canonical.review_id, body)
+        return ok, status, snippet, False
 
     def _has_unresolved_owned_threads(
         self, review_id: int, all_threads: Sequence[PriorThread]

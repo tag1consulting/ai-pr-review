@@ -79,8 +79,9 @@ def _safe_review_id(review: Mapping[str, Any]) -> int:
     """Best-effort int coercion of a review dict's `id`, defaulting to 0 on
     anything that isn't already an int/float/str/bytes numeral -- mirrors
     `ai_pr_review.vcs.github._safe_int`'s tolerance so a single malformed
-    entry from `list_bot_reviews()` degrades this module's ordering rather
-    than raising and losing the whole selection/merge."""
+    entry from `GitHubProvider._list_prior_bot_reviews()` (the production
+    caller) degrades this module's ordering rather than raising and losing
+    the whole selection/merge."""
     value = review.get("id")
     try:
         if isinstance(value, (int, float, str, bytes)):
@@ -102,13 +103,17 @@ class CanonicalReview:
 def select_canonical(reviews: Sequence[Mapping[str, Any]]) -> CanonicalReview | None:
     """Pick the canonical review: the highest-id bot review, any state.
 
-    Identical rule to `ai_pr_review.slash.dismiss._record_verdict`'s
-    `max(reviews, key=lambda r: r.get("id") or 0)` — both sides of the
-    write/read split must agree on which review carries the markers, or a
-    verdict written to one review is invisible to classification reading
-    from another. `reviews` is expected in the shape
-    `GitHubProvider.list_bot_reviews()` returns: `{"id": int, "state": str,
-    "body": str, ...}` (extra keys ignored).
+    `ai_pr_review.slash.dismiss._record_verdict` calls this function
+    directly rather than reimplementing the rule, so both sides of the
+    write/read split are structurally guaranteed to agree on which review
+    carries the markers — a verdict written to one review can never be
+    invisible to classification reading from another because of a drifted
+    selection rule. `reviews` is expected in the shape
+    `GitHubProvider._list_prior_bot_reviews()` returns (the production
+    caller in the read path; `_record_verdict` uses `list_bot_reviews()`,
+    which has different error-handling semantics — see that method's
+    docstring): `{"id": int, "state": str, "body": str, ...}` (extra keys
+    ignored).
     """
     if not reviews:
         return None

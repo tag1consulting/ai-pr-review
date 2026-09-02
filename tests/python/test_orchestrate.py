@@ -32,6 +32,7 @@ class _FakeProvider:
 
     summary_ok: bool = True
     findings_ok: bool = True
+    findings_skipped: bool = False
     summary_calls: list[tuple[str, str]] = field(default_factory=list)
     findings_calls: list[dict[str, Any]] = field(default_factory=list)
     stale_calls: int = 0
@@ -84,6 +85,7 @@ class _FakeProvider:
             inline_posted=len(findings),
             body_findings=0,
             event=event,  # type: ignore[arg-type]
+            skipped=self.findings_skipped,
         )
 
     def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:
@@ -645,6 +647,36 @@ def test_incremental_run_skips_watermark_when_post_findings_raises(
         assert "advance_sha_watermark" not in provider.last_call_order, (
             "watermark must not advance when post_findings raised; "
             f"call_order={provider.last_call_order!r}"
+        )
+
+    anyio.run(_run)
+
+
+def test_incremental_run_skips_watermark_when_findings_result_skipped(
+    tmp_path: Path,
+) -> None:
+    """GitHub canonical-review reuse: skipped=True on an otherwise-ok
+    FindingsResult means a newer run's push already advanced the PR's head
+    past this run's diff, so no write happened at all. Advancing the
+    watermark to this run's now-stale diff.head_sha here would regress the
+    incremental-diff baseline backward past what the newer run already set."""
+    provider = _FakeProvider(findings_ok=True, findings_skipped=True)
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+        )
+        assert result.ok is True, "a skipped write is not a failure"
+        assert "post_findings" in provider.last_call_order
+        assert "advance_sha_watermark" not in provider.last_call_order, (
+            "watermark must not advance when the write was skipped "
+            f"(superseded by a newer run); call_order={provider.last_call_order!r}"
         )
 
     anyio.run(_run)

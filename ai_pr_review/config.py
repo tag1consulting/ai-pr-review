@@ -82,6 +82,11 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Telemetry ---
         "AI_TELEMETRY_ENABLED",
         "AI_TELEMETRY_SINK",
+        # --- Canonical-review reuse (GitHub only) ---
+        # Read directly by ai_pr_review.vcs.__init__._build_github_from_env,
+        # not by Config -- registered here only so Config.from_env's unknown-
+        # AI_*-var check doesn't warn about it.
+        "AI_CANONICAL_REUSE",
     }
 )
 

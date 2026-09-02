@@ -528,6 +528,75 @@ def test_reopened_recurrence_thread_protects_canonical_from_dismissal() -> None:
     assert len(unresolves) == 1
 
 
+def test_canonical_reuse_false_always_posts_fresh_review() -> None:
+    """AI_CANONICAL_REUSE=false (GitHubConfig.canonical_reuse=False) is the
+    kill switch: even a run with zero findings against an existing
+    CHANGES_REQUESTED canonical must behave exactly like every release
+    before this feature -- a fresh POST, no PUT, no thread fetch, no
+    dismissal."""
+    canonical_body = _footer_body()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            raise AssertionError(
+                "canonical_reuse=False must not fetch review threads at all"
+            )
+        if req.method in ("PUT", "POST") and "/dismissals" in url:
+            raise AssertionError("canonical_reuse=False must never dismiss anything")
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            raise AssertionError("canonical_reuse=False must never PUT the canonical")
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 30, "state": "APPROVED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    rec = _Recorder()
+
+    def _wrap(request: httpx.Request) -> httpx.Response:
+        import json as _j2
+        b = None
+        if request.content:
+            try:
+                b = _j2.loads(request.content)
+            except Exception:
+                b = None
+        rec.calls.append((request.method, str(request.url), b))
+        return handler(request)
+
+    transport = httpx.MockTransport(_wrap)
+    http = httpx.Client(transport=transport, base_url="https://api.github.com")
+    client = RecordingClient(
+        http=http, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    config = GitHubConfig(owner="o", repo="r", pr_number=1, token="t", canonical_reuse=False)
+    prov = GitHubProvider(config=config, client=client)
+
+    result = prov.post_findings(
+        [], DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA), event="APPROVE",
+    )
+
+    assert result.ok
+    assert result.review_id == 30
+    assert result.reused_review is False
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+
+
 # ---------------------------------------------------------------------------
 # Dismissed verdict: suppressed, nothing posted for it
 # ---------------------------------------------------------------------------
@@ -658,6 +727,10 @@ def test_head_sha_advanced_skips_canonical_write() -> None:
 
     assert result.ok
     assert result.reused_review is True
+    # skipped=True distinguishes "no write happened, a newer run owns the
+    # canonical" from an actual PUT -- orchestrate.py must not advance the
+    # SHA watermark to this run's now-stale diff.head_sha on this result.
+    assert result.skipped is True
     puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
     assert puts == []
 

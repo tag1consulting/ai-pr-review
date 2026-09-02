@@ -327,3 +327,21 @@ def emit_review_result(result: ReviewResult, *, base_ref: str, head: str) -> Non
             err=True,
         )
 
+    # Canonical-review reuse activity (GitHub only; these fields are always
+    # 0/False on GitLab/Bitbucket). Surfacing them is the difference between
+    # a maintainer being able to tell from the run log whether reuse engaged
+    # at all versus having to reason about it from GitHub's UI after the fact.
+    if posted is not None and (
+        posted.reused_review or posted.inline_updated or posted.suppressed
+        or posted.replies_posted
+    ):
+        click.echo(
+            "Canonical review reuse: "
+            f"reused={posted.reused_review}"
+            f"{' (skipped, superseded by a newer run)' if posted.skipped else ''}, "
+            f"updated={posted.inline_updated}, "
+            f"suppressed={posted.suppressed}, "
+            f"replies={posted.replies_posted}",
+            err=True,
+        )
+

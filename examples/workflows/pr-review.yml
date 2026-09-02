@@ -119,6 +119,13 @@ jobs:
       github.event_name == 'pull_request' &&
       !github.event.pull_request.draft &&
       !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
+    # Rapid back-to-back pushes to the same PR can otherwise run two review
+    # jobs concurrently, racing on the canonical-review reuse write path
+    # (docs/architecture-internals.md's "Concurrency" section) and on the
+    # summary comment upsert. Canceling the superseded run avoids both.
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

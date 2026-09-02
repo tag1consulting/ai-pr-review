@@ -84,6 +84,13 @@ class FindingsResult:
     suppressed: int = 0
     replies_posted: int = 0
     reused_review: bool = False
+    # True when reused_review is True but no write actually happened -- the
+    # PR's head had already advanced past this run's diff, so a newer run
+    # already owns the canonical review. Callers must not advance the SHA
+    # watermark or run stale-thread cleanup keyed on this result: doing so
+    # with a stale diff.head_sha could regress the incremental-diff baseline
+    # backward past what the newer, actually-successful run already set.
+    skipped: bool = False
 
     @property
     def ok(self) -> bool:
