@@ -20,6 +20,9 @@ Supported commands:
   fixed [F<n>] [sha] [reason]     — mark finding as fixed (not a suppression verdict; does NOT store feedback);
                                      optional commit SHA is echoed in the reply, not validated
 
+``F<n>`` tokens also accept the bracketed form ``[F<n>]`` shown in review
+bodies (e.g. ``**[F1]**``) — see ``_FID_RE``.
+
 The ``author_association`` guard (OWNER/MEMBER/COLLABORATOR) is enforced at
 the GitHub Actions workflow level before this parser is called; the parser
 trusts the caller's pre-filtering.
@@ -52,6 +55,13 @@ KNOWN_COMMANDS: frozenset[str] = frozenset(
 # as vcs.marker's _SHA_PATTERN, duplicated here rather than imported to keep
 # the parser free of a dependency on the vcs package.
 _SHA_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+
+# Matches an F<n> finding-ID token, with optional surrounding square
+# brackets. Findings are rendered in review bodies and inline comments as
+# **[F1]** (see vcs/_finding_ids.py), so a user copying that token verbatim
+# types "[F1]" rather than "F1" — accept both rather than silently
+# mis-parsing the bracketed form as free-text reason (issue #735).
+_FID_RE = re.compile(r"^\[?[Ff](\d+)\]?$")
 
 # Secret patterns to reject from reason text (basic; not a full scan)
 _SECRET_PATTERNS: list[re.Pattern[str]] = [
@@ -185,10 +195,12 @@ def parse_command(body: str) -> SlashCommand | ParseError | None:
         command in ("dismiss", "false-positive", "wont-fix", "explain", "revise", "fixed")
         and raw_reason
     ):
-        # The first word may be a finding ID like "F3" or "f3".
+        # The first word may be a finding ID like "F3", "f3", or "[F3]"
+        # (the bracketed form shown in review bodies — see _FID_RE above).
         id_parts = raw_reason.split(None, 1)
-        if re.match(r"^[Ff]\d+$", id_parts[0]):
-            finding_id = int(id_parts[0][1:])
+        fid_match = _FID_RE.match(id_parts[0])
+        if fid_match:
+            finding_id = int(fid_match.group(1))
             raw_reason = id_parts[1] if len(id_parts) > 1 else ""
 
     # "fixed" additionally accepts an optional commit SHA as the next

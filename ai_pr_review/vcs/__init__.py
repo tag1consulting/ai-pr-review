@@ -25,6 +25,9 @@ from ai_pr_review.vcs.github import (
 from ai_pr_review.vcs.github import (
     build_client as build_github_client,
 )
+from ai_pr_review.vcs.github import (
+    build_elevated_client as build_github_elevated_client,
+)
 from ai_pr_review.vcs.gitlab import (
     GitLabConfig,
     GitLabProvider,
@@ -100,13 +103,27 @@ def _build_github_from_env() -> GitHubProvider:
     """Build GitHubProvider from env.
 
     Required: GH_TOKEN (or GITHUB_TOKEN), GITHUB_REPOSITORY (owner/repo), PR_NUMBER.
-    Optional: GITHUB_API_URL (defaults to https://api.github.com).
+    Optional: GITHUB_API_URL (defaults to https://api.github.com), GITHUB_BOT_USERNAME
+    (defaults to GitHubConfig's own "github-actions[bot]" default).
+
+    Token split (#734): when BOTH `GITHUB_TOKEN` and `GH_TOKEN` are set and
+    differ, `GITHUB_TOKEN` becomes the provider's primary token (used for
+    every write except thread resolution) and `GH_TOKEN` becomes the
+    elevated token reserved for `resolve_thread`/`unresolve_thread` --
+    GitHub blocks the `resolveReviewThread` GraphQL mutation under the
+    default Actions token from a comment-triggered workflow, so a PAT/App
+    token is unavoidable for that one call. When only one of the two is
+    set (today's single-token consumers), that token is used for
+    everything, matching pre-#734 behavior exactly.
     """
-    token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    github_token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    gh_token = (os.environ.get("GH_TOKEN") or "").strip()
+    token = github_token or gh_token
     if not token:
         raise ProviderConfigError(
             "GH_TOKEN (or GITHUB_TOKEN) is required for VCS_PROVIDER=github"
         )
+    elevated_token = gh_token if gh_token and gh_token != token else None
     repo = _require_env("GITHUB_REPOSITORY")
     if "/" not in repo:
         raise ProviderConfigError(
@@ -120,11 +137,33 @@ def _build_github_from_env() -> GitHubProvider:
         os.environ.get("AI_CANONICAL_REUSE", "true").strip().lower()
         not in ("false", "0", "no")
     )
+    # GITHUB_BOT_USERNAME mirrors the GitLab provider's existing
+    # GITLAB_BOT_USERNAME override: it lets a consumer whose reviews post
+    # under an identity other than the default GitHub Actions bot (a custom
+    # GitHub App, or -- as in this project's own e2e test harness, which
+    # authenticates with a personal access token -- a human account) tell
+    # GitHubConfig which login actually owns its prior reviews/comments.
+    # Without this, _list_prior_bot_reviews()/list_bot_reviews()'s REST-side
+    # `review.user.login == bot_login` filter (and any GraphQL-side thread
+    # ownership check keyed off the same config value) can never recognize
+    # that identity's own prior output as "ours", so canonical-review
+    # reuse's review-level PUT-in-place path never engages -- confirmed live
+    # against the GitHub test PR: thread-level classification worked
+    # correctly, but reused_review stayed False because no prior review was
+    # ever recognized as a "bot review" to select as canonical. Only passed
+    # through when set; otherwise GitHubConfig's own "github-actions[bot]"
+    # default applies.
+    bot_login = os.environ.get("GITHUB_BOT_USERNAME", "").strip()
     config = GitHubConfig(
         owner=owner, repo=name, pr_number=pr_number, token=token, base_url=base_url,
-        canonical_reuse=canonical_reuse,
+        canonical_reuse=canonical_reuse, elevated_token=elevated_token,
+        **({"bot_login": bot_login} if bot_login else {}),
     )
-    return GitHubProvider(config=config, client=build_github_client(config))
+    return GitHubProvider(
+        config=config,
+        client=build_github_client(config),
+        elevated_client=build_github_elevated_client(config),
+    )
 
 
 def _build_gitlab_from_env() -> GitLabProvider:

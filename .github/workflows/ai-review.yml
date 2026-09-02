@@ -69,11 +69,18 @@ jobs:
       pull-requests: none
       issues: none
     steps:
+      # actions/checkout@v7 refuses to check out fork PR head code under
+      # pull_request_target unless explicitly opted in (added upstream in
+      # actions/checkout#2454, checkout v7.0.0). This job is deliberately
+      # designed for that scenario: persist-credentials is disabled below,
+      # and it only runs static analyzers (ruff/hadolint/semgrep) that never
+      # execute the analyzed code, with permissions dropped to contents:read.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
 
       - name: Create results dir
         run: mkdir -p sarif-results
@@ -173,12 +180,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Check out the PR head commit for diff content, but with persist-credentials
-      # disabled so the fork cannot abuse the GITHUB_TOKEN.
+      # disabled so the fork cannot abuse the GITHUB_TOKEN. allow-unsafe-pr-checkout
+      # opts back into actions/checkout@v7's fork-PR-under-pull_request_target block
+      # (actions/checkout#2454); the container-action restore step immediately below
+      # is the mitigation that makes this safe (a fork can't substitute action.yml).
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
 
       # Restore trusted container-action from the base branch so a fork PR
       # cannot substitute a malicious action.yml.
@@ -312,14 +323,20 @@ jobs:
   # Fires only on issue_comment and pull_request_review_comment events.
   # All pull_request_target / workflow_dispatch jobs above are skipped on those events.
   slash-commands:
+    # author_association is unreliable on pull_request_review_comment webhooks
+    # (see #732), so it gates only the issue_comment path; review comments pass
+    # through to slash-commands.yml's `authorize` job, which verifies via API.
     if: >-
       startsWith(github.event.comment.body, '/ai-pr-review') &&
-      contains(
-        fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-        github.event.comment.author_association
-      ) &&
-      (github.event_name == 'pull_request_review_comment' ||
-       (github.event_name == 'issue_comment' && github.event.issue.pull_request))
+      (
+        github.event_name == 'pull_request_review_comment' ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request &&
+         contains(
+           fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+           github.event.comment.author_association
+         ))
+      )
     uses: ./.github/workflows/slash-commands.yml
     with:
       event-name: ${{ github.event_name }}

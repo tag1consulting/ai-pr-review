@@ -25,7 +25,7 @@ from ai_pr_review.vcs._inline import (
     partition_findings,
     split_body_findings,
 )
-from ai_pr_review.vcs._stale import is_owned_by_us
+from ai_pr_review.vcs._stale import graphql_bot_login, is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     ID_MAP_MARKER_PREFIX,
@@ -138,14 +138,25 @@ class GitHubConfig:
     # to @main who hits a bug in the reuse path without waiting for a
     # version pin or a revert. Set via AI_CANONICAL_REUSE=false.
     canonical_reuse: bool = True
+    # Optional elevated token (a PAT or GitHub App token), distinct from
+    # `token`, reserved for the two GraphQL mutations GitHub refuses to run
+    # under the default Actions token from a comment-triggered workflow:
+    # `resolveReviewThread`/`unresolveReviewThread` (issue #734). When unset,
+    # `GitHubProvider` falls back to `token` for those calls too, matching
+    # pre-#734 single-token behavior. Keeping this separate from `token`
+    # means every *other* write (dismissing a superseded review, the
+    # auto-approve review, replies, reactions) is attributed to the bot
+    # identity that owns `token` instead of whichever identity owns the PAT.
+    elevated_token: str | None = None
 
 
-def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
-    """Build a RecordingClient preconfigured for GitHub API calls."""
+def _build_http_client(
+    *, token: str, base_url: str, retry: RetryPolicy | None
+) -> RecordingClient:
     http = httpx.Client(
-        base_url=config.base_url,
+        base_url=base_url,
         headers={
-            "Authorization": f"Bearer {config.token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -158,13 +169,80 @@ def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> Reco
     )
 
 
+def build_client(config: GitHubConfig, retry: RetryPolicy | None = None) -> RecordingClient:
+    """Build a RecordingClient preconfigured for GitHub API calls."""
+    return _build_http_client(token=config.token, base_url=config.base_url, retry=retry)
+
+
+def build_elevated_client(
+    config: GitHubConfig, retry: RetryPolicy | None = None
+) -> RecordingClient | None:
+    """Build the elevated-token client for `resolve_thread`/`unresolve_thread`.
+
+    Returns `None` when `config.elevated_token` is unset -- callers should
+    treat that as "use the regular client for thread resolution too" (see
+    `GitHubProvider._thread_client`).
+    """
+    if not config.elevated_token:
+        return None
+    return _build_http_client(
+        token=config.elevated_token, base_url=config.base_url, retry=retry
+    )
+
+
+@dataclass
+class _PriorReviewState:
+    """Prior-review state `post_findings` classifies this run's findings against.
+
+    Assembled by `GitHubProvider._load_prior_state`. Every field degrades to
+    its "no prior state" value (empty map/list, `None`, `True` for
+    `threads_fetch_complete`) on a fetch failure, matching pre-canonical-reuse
+    behavior: every finding classifies "new" and a fresh review always POSTs.
+    """
+
+    id_map: dict[str, int]
+    canonical: CanonicalReview | None
+    verdicts: dict[str, str]
+    all_threads: list[PriorThread]
+    threads_fetch_complete: bool
+    known_fingerprints: frozenset[str]
+
+
+@dataclass
+class _ClassificationEffects:
+    """Counters and state mutations from applying per-finding side effects.
+
+    Returned by `GitHubProvider._apply_classification_side_effects`.
+    """
+
+    inline_updated: int
+    replies_posted: int
+    suppressed_count: int
+    recurred_body_fps: set[str]
+    updated_verdicts: dict[str, str]
+    all_threads: list[PriorThread]
+
+
 @dataclass
 class GitHubProvider:
     """GitHub REST + GraphQL implementation of VcsProvider."""
 
     config: GitHubConfig
     client: RecordingClient
+    # Elevated-token client for resolve_thread/unresolve_thread only (#734).
+    # None means "no separate elevated token configured" -- _thread_client()
+    # falls back to `client`, matching pre-#734 behavior.
+    elevated_client: RecordingClient | None = None
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
+    # Thread ids post_findings PATCHed (update/escalate) or successfully
+    # reopened (recurred) during its most recent call, in this same process.
+    # resolve_stale consults this so it doesn't immediately re-resolve a
+    # thread canonical-review reuse just deliberately kept alive -- see
+    # issue #718. Reset at the top of every post_findings call, not
+    # accumulated across calls.
+    _kept_alive_thread_ids: set[str] = field(
+        default_factory=set, init=False, repr=False
+    )
 
     # ------------------------------------------------------------------
     # Paths
@@ -497,45 +575,31 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     # post_findings — pull-request review with inline comments + fallbacks
     # ------------------------------------------------------------------
-    def post_findings(
-        self,
-        findings: Sequence[Finding],
-        diff: DiffContext,
-        *,
-        event: PostEvent,
-        failed_agents: Sequence[str] = (),
-        token_table: str = "",
-        agent_prompt: str = "",
-        max_inline: int = 25,
-        enable_suggestions: bool = True,
-    ) -> FindingsResult:
-        from ai_pr_review.diff.linemap import parse_diff_sets
-        from ai_pr_review.vcs._body import format_body_finding, join_findings
+    def _load_prior_state(self, findings: Sequence[Finding]) -> _PriorReviewState:
+        """Fetch prior bot reviews/threads and derive id-map/canonical/verdicts.
+
+        Fetched unconditionally -- NOT gated on `if findings:` as the
+        ID-map fetch alone used to be -- because canonical-review selection
+        matters just as much on a fully clean run (zero findings, event
+        APPROVE): that's exactly the "quiet rerun" case this feature exists
+        to stop from posting a brand-new APPROVE review every single cycle.
+        Fail-soft throughout: any fetch error degrades every field to its
+        "no prior state" value, which is exactly today's pre-canonical-reuse
+        behavior (every finding classifies "new", a fresh review always
+        POSTs) rather than crashing the review run.
+        """
         from ai_pr_review.vcs._canonical import (
-            classify,
-            decide_action,
-            dedupe_thread_claims,
             merge_verdicts,
             parse_prior_thread,
             select_canonical,
         )
-        from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
+        from ai_pr_review.vcs._finding_ids import assemble_id_map, known_fingerprints
 
-        _added, _new_file = parse_diff_sets(diff.diff_text)
-        eligible_new = {(lr.file, lr.line) for lr in _added}
-        eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
+        # Reset, not accumulate: this set describes only the most recent
+        # post_findings call, which is what the very next resolve_stale call
+        # (orchestrate.py runs them back-to-back) needs to know about.
+        self._kept_alive_thread_ids = set()
 
-        # Fetch prior reviews once, feeding both the existing body-finding
-        # ID-map assembler (unchanged) and canonical-review classification
-        # (new). Fetched unconditionally -- NOT gated on `if findings:` as
-        # the ID-map fetch alone used to be -- because canonical-review
-        # selection matters just as much on a fully clean run (zero
-        # findings, event APPROVE): that's exactly the "quiet rerun" case
-        # this feature exists to stop from posting a brand-new APPROVE
-        # review every single cycle. Fail-soft on any error: an empty
-        # `reviews`/`all_threads` makes every finding classify "new" and
-        # `select_canonical` return `None`, which is exactly today's
-        # pre-canonical-reuse behavior (always POST a fresh review).
         try:
             reviews = self._list_prior_bot_reviews()
         except Exception as exc:  # noqa: BLE001
@@ -559,6 +623,7 @@ class GitHubProvider:
             if ID_MAP_MARKER_PREFIX in r["body"] or "**[F" in r["body"]
         ]
         id_map = assemble_id_map(prior_bodies, list(findings))
+        prior_known_fps = known_fingerprints(prior_bodies)
 
         canonical: CanonicalReview | None
         verdicts: dict[str, str]
@@ -587,17 +652,21 @@ class GitHubProvider:
             threads_fetch_complete = len(self._errors) == errors_before_threads
             all_threads = []
             for node in thread_nodes:
-                # bot_login=None: the marker is the sole ownership gate here,
-                # matching ai_pr_review.slash.dismiss's established pattern
-                # for GraphQL-sourced author logins. GitHub's GraphQL API
-                # reports the bot's login as "github-actions" (no "[bot]"
-                # suffix) -- verified live against a real thread this
-                # session -- while self.config.bot_login is the REST-style
-                # "github-actions[bot]" constant. Passing that constant here
-                # would make is_owned_by_us() reject every real thread,
-                # leaving all_threads permanently empty in production.
+                # graphql_bot_login() strips the REST-style "[bot]" suffix:
+                # GitHub's GraphQL API reports the bot's login as
+                # "github-actions" (no suffix) -- verified live against a
+                # real thread -- while self.config.bot_login is the
+                # REST-style "github-actions[bot]" constant. Comparing the
+                # raw constant here would make is_owned_by_us() reject every
+                # real thread, leaving all_threads permanently empty in
+                # production (#717); passing bot_login=None instead would
+                # fix that but drop the author check as a defense-in-depth
+                # signal entirely -- normalizing is strictly better now that
+                # the exact format difference is confirmed, not hypothesized.
                 parsed = parse_prior_thread(
-                    node, bot_login=None, id_map_bodies=prior_bodies
+                    node,
+                    bot_login=graphql_bot_login(self.config.bot_login),
+                    id_map_bodies=prior_bodies,
                 )
                 if parsed is not None:
                     all_threads.append(parsed)
@@ -612,15 +681,34 @@ class GitHubProvider:
             all_threads = []
             threads_fetch_complete = True
 
-        classified = dedupe_thread_claims(
-            [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
+        return _PriorReviewState(
+            id_map=id_map,
+            canonical=canonical,
+            verdicts=verdicts,
+            all_threads=all_threads,
+            threads_fetch_complete=threads_fetch_complete,
+            known_fingerprints=prior_known_fps,
         )
 
-        # Apply side effects for update/escalate/recurred-with-thread.
-        # suppressed produces no side effect (never reposted, permanently).
-        # recurred-without-thread (body-level) produces no side effect here
-        # either -- it's rendered in the body below instead of the original
-        # comment it no longer has.
+    def _apply_classification_side_effects(
+        self,
+        classified: Sequence[Classified],
+        *,
+        verdicts: dict[str, str],
+        all_threads: list[PriorThread],
+        head_sha: str,
+        enable_suggestions: bool,
+    ) -> _ClassificationEffects:
+        """Apply side effects for update/escalate/recurred-with-thread findings.
+
+        `suppressed` produces no side effect (never reposted, permanently).
+        `recurred`-without-thread (body-level) produces no side effect here
+        either -- it's rendered in the body by the caller instead of the
+        original comment it no longer has.
+        """
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
+
         inline_updated = 0
         replies_posted = 0
         suppressed_count = 0
@@ -632,7 +720,7 @@ class GitHubProvider:
             elif c.kind == "recurred":
                 updated_verdicts[fingerprint(c.finding)] = "recurred"
                 if c.thread is not None:
-                    reopened = self._notify_recurrence(c.thread, diff.head_sha)
+                    reopened = self._notify_recurrence(c.thread, head_sha)
                     replies_posted += 1
                     if reopened:
                         # Keep all_threads in sync with the reopen this just
@@ -650,9 +738,18 @@ class GitHubProvider:
                             else t
                             for t in all_threads
                         ]
+                        # Only now (post-reopen) does this thread show up as
+                        # unresolved to resolve_stale's own GraphQL fetch --
+                        # record it so that fetch doesn't immediately
+                        # re-resolve the thread this run just reopened (#718).
+                        self._kept_alive_thread_ids.add(reopened_thread.thread_id)
                 else:
                     recurred_body_fps.add(fingerprint(c.finding))
             elif c.kind in ("update", "escalate") and c.thread is not None:
+                # This thread corresponds to a still-active finding whether
+                # or not the cosmetic PATCH below succeeds -- resolve_stale
+                # must never resolve it out from under an open finding (#718).
+                self._kept_alive_thread_ids.add(c.thread.thread_id)
                 patched = self._apply_thread_update(
                     c, enable_suggestions=enable_suggestions
                 )
@@ -663,8 +760,115 @@ class GitHubProvider:
                     # assert "severity escalated" for a comment that still
                     # shows the old severity.
                     if c.kind == "escalate":
-                        self._notify_escalation(c.thread, c.finding, diff.head_sha)
+                        self._notify_escalation(c.thread, c.finding, head_sha)
                         replies_posted += 1
+
+        return _ClassificationEffects(
+            inline_updated=inline_updated,
+            replies_posted=replies_posted,
+            suppressed_count=suppressed_count,
+            recurred_body_fps=recurred_body_fps,
+            updated_verdicts=updated_verdicts,
+            all_threads=all_threads,
+        )
+
+    def _render_body_bullets(
+        self,
+        findings_list: Sequence[Finding],
+        *,
+        eligible_new: set[tuple[str, int]],
+        recurred_body_fps: set[str],
+        head_sha: str,
+        id_map: dict[str, int],
+    ) -> list[str]:
+        """Render one column (in-diff or out-of-diff) of body-level findings."""
+        from ai_pr_review.vcs._body import format_body_finding
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
+        bullets: list[str] = []
+        for f in findings_list:
+            loc_note = ""
+            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
+                loc_note = " *(line not in diff)*"
+            if fingerprint(f) in recurred_body_fps:
+                loc_note += " *(recurred)*"
+            if f.file:
+                url = _blob_link(
+                    owner=self.config.owner, repo=self.config.repo,
+                    head_sha=head_sha, file=f.file, line=f.line,
+                )
+                loc_note += f" [↗]({url})"
+            bullets.append(format_body_finding(
+                f,
+                location_note=loc_note,
+                finding_id=id_map.get(fingerprint(f)),
+            ))
+        return bullets
+
+    def post_findings(
+        self,
+        findings: Sequence[Finding],
+        diff: DiffContext,
+        *,
+        event: PostEvent,
+        failed_agents: Sequence[str] = (),
+        token_table: str = "",
+        agent_prompt: str = "",
+        max_inline: int = 25,
+        enable_suggestions: bool = True,
+    ) -> FindingsResult:
+        from ai_pr_review.diff.linemap import parse_diff_sets
+        from ai_pr_review.vcs._body import join_findings
+        from ai_pr_review.vcs._canonical import classify, decide_action, dedupe_thread_claims
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
+        _added, _new_file = parse_diff_sets(diff.diff_text)
+        eligible_new = {(lr.file, lr.line) for lr in _added}
+        eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
+
+        prior_state = self._load_prior_state(findings)
+        id_map = prior_state.id_map
+        canonical = prior_state.canonical
+        verdicts = prior_state.verdicts
+        all_threads = prior_state.all_threads
+        threads_fetch_complete = prior_state.threads_fetch_complete
+        prior_known_fps = prior_state.known_fingerprints
+
+        classified = dedupe_thread_claims(
+            [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
+        )
+
+        # #720 fix, part 2: a fuzzy "update"/"escalate" match keeps the
+        # matched thread's visible **[F<n>]** token (thread.finding_id is
+        # passed to _apply_thread_update below, never reassigned), but
+        # id_map above was assembled before classification ran and has no
+        # idea a thread claimed this finding -- it already minted a brand
+        # new id for the finding's (possibly just-changed) fingerprint,
+        # which is never rendered anywhere a human sees it. Re-point that
+        # fingerprint at the thread's existing id instead, so this run's
+        # id-map marker (and any future dismiss.py reverse F-id lookup that
+        # reads it) agrees with what the comment actually shows.
+        for c in classified:
+            if (
+                c.kind in ("update", "escalate")
+                and c.thread is not None
+                and c.thread.finding_id is not None
+            ):
+                id_map[fingerprint(c.finding)] = c.thread.finding_id
+
+        effects = self._apply_classification_side_effects(
+            classified,
+            verdicts=verdicts,
+            all_threads=all_threads,
+            head_sha=diff.head_sha,
+            enable_suggestions=enable_suggestions,
+        )
+        inline_updated = effects.inline_updated
+        replies_posted = effects.replies_posted
+        suppressed_count = effects.suppressed_count
+        recurred_body_fps = effects.recurred_body_fps
+        updated_verdicts = effects.updated_verdicts
+        all_threads = effects.all_threads
 
         # Only genuinely-new findings, plus body-level recurrences (which have
         # no existing comment to reply on), go through the normal render
@@ -677,8 +881,36 @@ class GitHubProvider:
             if c.kind == "new" or (c.kind == "recurred" and c.thread is None)
         ]
 
+        # partition_findings/_build_inline_comment_payload run before
+        # decide_action (not after, as in the original draft) so
+        # any_new_inline_eligible reflects which findings actually landed an
+        # inline comment, not just which were eligible in principle. Raw
+        # eligibility (is_inline_eligible) also counts a finding that
+        # `max_inline` bumped to the body, or whose payload build failed, as
+        # if it got an inline slot -- which would force a fresh POST for a
+        # PR simply over the inline cap even when nothing about it actually
+        # changed (issue #719).
+        inline_candidates, body_findings = partition_findings(
+            render_findings, eligible_new=eligible_new, max_inline=max_inline
+        )
+        inline_comments: list[dict[str, Any]] = []
+        actually_inline_fps: set[str] = set()
+        for f in inline_candidates:
+            payload = _build_inline_comment_payload(
+                f,
+                eligible_new=eligible_new,
+                eligible_context=eligible_ctx,
+                enable_suggestions=enable_suggestions,
+                finding_id=id_map.get(fingerprint(f)),
+            )
+            if payload is not None:
+                inline_comments.append(payload)
+                actually_inline_fps.add(fingerprint(f))
+            else:
+                body_findings.append(f)
+
         any_new_inline_eligible = any(
-            c.kind == "new" and is_inline_eligible(c.finding, eligible_new)
+            c.kind == "new" and fingerprint(c.finding) in actually_inline_fps
             for c in classified
         )
         action = decide_action(
@@ -686,6 +918,7 @@ class GitHubProvider:
             event=event,
             classified=classified,
             any_new_inline_eligible=any_new_inline_eligible,
+            known_fingerprints=prior_known_fps,
         )
         _log.info(
             "github: canonical-review decision=%s (canonical=%s, canonical_state=%s, "
@@ -703,60 +936,21 @@ class GitHubProvider:
             ),
         )
 
-        inline_candidates, body_findings = partition_findings(
-            render_findings, eligible_new=eligible_new, max_inline=max_inline
-        )
-        inline_comments: list[dict[str, Any]] = []
-        for f in inline_candidates:
-            payload = _build_inline_comment_payload(
-                f,
-                eligible_new=eligible_new,
-                eligible_context=eligible_ctx,
-                enable_suggestions=enable_suggestions,
-                finding_id=id_map.get(fingerprint(f)),
-            )
-            if payload is not None:
-                inline_comments.append(payload)
-            else:
-                body_findings.append(f)
-
         in_diff_body, ood_body = split_body_findings(body_findings)
-        body_bullets: list[str] = []
-        ood_bullets: list[str] = []
-        for f in in_diff_body:
-            loc_note = ""
-            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
-                loc_note = " *(line not in diff)*"
-            if fingerprint(f) in recurred_body_fps:
-                loc_note += " *(recurred)*"
-            if f.file:
-                url = _blob_link(
-                    owner=self.config.owner, repo=self.config.repo,
-                    head_sha=diff.head_sha, file=f.file, line=f.line,
-                )
-                loc_note += f" [↗]({url})"
-            body_bullets.append(format_body_finding(
-                f,
-                location_note=loc_note,
-                finding_id=id_map.get(fingerprint(f)),
-            ))
-        for f in ood_body:
-            loc_note = ""
-            if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
-                loc_note = " *(line not in diff)*"
-            if fingerprint(f) in recurred_body_fps:
-                loc_note += " *(recurred)*"
-            if f.file:
-                url = _blob_link(
-                    owner=self.config.owner, repo=self.config.repo,
-                    head_sha=diff.head_sha, file=f.file, line=f.line,
-                )
-                loc_note += f" [↗]({url})"
-            ood_bullets.append(format_body_finding(
-                f,
-                location_note=loc_note,
-                finding_id=id_map.get(fingerprint(f)),
-            ))
+        body_bullets = self._render_body_bullets(
+            in_diff_body,
+            eligible_new=eligible_new,
+            recurred_body_fps=recurred_body_fps,
+            head_sha=diff.head_sha,
+            id_map=id_map,
+        )
+        ood_bullets = self._render_body_bullets(
+            ood_body,
+            eligible_new=eligible_new,
+            recurred_body_fps=recurred_body_fps,
+            head_sha=diff.head_sha,
+            id_map=id_map,
+        )
 
         # The headline must describe the PR's current state, not just this
         # run's diff: fold in every still-active classified finding
@@ -1183,6 +1377,8 @@ class GitHubProvider:
         drift) or an outdated thread would otherwise offer a one-click apply
         against the wrong lines, or fail to apply at all.
         """
+        from ai_pr_review.vcs._finding_ids import fingerprint
+
         thread = classified.thread
         if thread is None:
             return False
@@ -1192,10 +1388,25 @@ class GitHubProvider:
             and thread.line == classified.finding.line
             and thread.start_line == classified.finding.start_line
         )
+        # #720 fix: carry the thread's current fingerprint (and anything it
+        # already carried forward) into the new marker as a "prior"
+        # fingerprint, unless this finding's fingerprint didn't actually
+        # change (a re-detection of literally the same finding, harmless to
+        # skip). A dismiss/false-positive/wont-fix/fixed verdict recorded
+        # against the fingerprint this PATCH is about to replace must still
+        # be able to locate this thread afterwards --
+        # `_canonical._find_thread_by_fingerprint` checks these alongside
+        # the new fingerprint.
+        new_fp = fingerprint(classified.finding)
+        carried_forward = set(thread.prior_fingerprints)
+        if thread.fingerprint is not None and thread.fingerprint != new_fp:
+            carried_forward.add(thread.fingerprint)
+        carried_forward.discard(new_fp)
         new_body = _build_inline_comment_body(
             classified.finding,
             finding_id=thread.finding_id,
             include_suggestion_fence=include_fence,
+            prior_fingerprints=sorted(carried_forward),
         )
         ok, status, snippet = self.update_review_comment(thread.comment_id, new_body)
         if not ok:
@@ -1288,12 +1499,24 @@ class GitHubProvider:
         for thread in threads:
             if thread.get("isResolved"):
                 continue
+            thread_id = thread.get("id")
+            if isinstance(thread_id, str) and thread_id in self._kept_alive_thread_ids:
+                # canonical-review reuse's post_findings just PATCHed this
+                # thread's comment (update/escalate) or reopened it
+                # (recurred) in this same run -- it corresponds to a still-
+                # active finding, not something to resolve as stale (#718).
+                continue
             body = _first_comment_body(thread)
             author = _first_comment_author_login(thread) or None
-            if not is_owned_by_us(body, author, self.config.bot_login, kind="inline"):
+            # graphql_bot_login() strips the REST-style "[bot]" suffix
+            # before comparing: GitHub's GraphQL API reports the bot's login
+            # without it (verified live), so comparing the raw constant here
+            # rejected every real thread (#717).
+            if not is_owned_by_us(
+                body, author, graphql_bot_login(self.config.bot_login), kind="inline"
+            ):
                 skipped_no_marker += 1
                 continue
-            thread_id = thread.get("id")
             if not isinstance(thread_id, str):
                 continue
             ok, status, body_snippet = self.resolve_thread(thread_id)
@@ -1364,12 +1587,23 @@ class GitHubProvider:
                 break
         return threads
 
+    def _thread_client(self) -> RecordingClient:
+        """Client for the resolveReviewThread/unresolveReviewThread mutations.
+
+        These are the only two calls this provider makes that GitHub refuses
+        to run under the default Actions token from a comment-triggered
+        workflow, hence the separate elevated token (#734). Every other
+        write stays on `self.client` so it's attributed to that token's
+        identity rather than the elevated one.
+        """
+        return self.elevated_client or self.client
+
     def resolve_thread(self, thread_id: str) -> tuple[bool, int, str]:
         mutation = (
             "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
         )
-        resp = self.client.request(
+        resp = self._thread_client().request(
             "POST",
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
@@ -1481,7 +1715,7 @@ class GitHubProvider:
             "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}}}"
         )
-        resp = self.client.request(
+        resp = self._thread_client().request(
             "POST",
             _GRAPHQL_PATH,
             json_body={"query": mutation, "variables": {"id": thread_id}},
@@ -1703,7 +1937,10 @@ class GitHubProvider:
                 continue
             body = _first_comment_body(t)
             author = _first_comment_author_login(t) or None
-            if not is_owned_by_us(body, author, self.config.bot_login, kind="inline"):
+            # See resolve_stale's matching comment (#717).
+            if not is_owned_by_us(
+                body, author, graphql_bot_login(self.config.bot_login), kind="inline"
+            ):
                 continue
             rid = _first_comment_review_id(t)
             if rid is None:
@@ -1831,7 +2068,11 @@ def _render_review_body(
 
 
 def _build_inline_comment_body(
-    f: Finding, *, finding_id: int | None = None, include_suggestion_fence: bool = True
+    f: Finding,
+    *,
+    finding_id: int | None = None,
+    include_suggestion_fence: bool = True,
+    prior_fingerprints: Sequence[str] = (),
 ) -> str:
     """Render the markdown body for a GitHub inline review comment.
 
@@ -1852,6 +2093,14 @@ def _build_inline_comment_body(
         either silently fail to offer the one-click apply or offer it
         against the wrong lines. The proposed code still renders, just as a
         plain fence without the one-click affordance.
+    prior_fingerprints:
+        Fingerprints this same comment was previously rendered with (#720
+        fix). Only ever non-empty when `_apply_thread_update` is
+        re-rendering an existing comment whose fingerprint is about to
+        change -- carries the superseded fingerprint(s) forward into the new
+        marker so a verdict recorded against one of them can still locate
+        this thread later (`_canonical._find_thread_by_fingerprint`). Empty
+        for a first-time render, which keeps the marker's pre-#720 shape.
     """
     from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
     from ai_pr_review.vcs._finding_ids import fingerprint
@@ -1875,7 +2124,10 @@ def _build_inline_comment_body(
     # base64-encoded.
     body = append_inline_marker(body)
     meta_marker = build_inline_meta_marker(
-        fingerprint=fingerprint(f), category=f.category, severity=f.severity
+        fingerprint=fingerprint(f),
+        category=f.category,
+        severity=f.severity,
+        prior_fingerprints=prior_fingerprints,
     )
     return f"{body}\n{meta_marker}"
 
