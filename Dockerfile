@@ -23,7 +23,7 @@
 # hadolint ignore=DL3029
 FROM koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d AS shellcheck
 # hadolint ignore=DL3029
-FROM trufflesecurity/trufflehog:3.97.2@sha256:e29b6b30579602ed33406e24ac4eb27656ce376d3b07ba3e4cee5b5a93f9fd80 AS trufflehog
+FROM trufflesecurity/trufflehog:3.97.3@sha256:fb7cf5c0abda87c477789e241ed361ccbb1d459491d6c5de347b78f094b8034b AS trufflehog
 # hadolint ignore=DL3029
 FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d AS golangci-lint
 # hadolint ignore=DL3029
