@@ -12,6 +12,7 @@ What changed in each release, newest first. The 10 most recent versions each hav
 
 | Version | Highlights |
 |---------|-----------|
+| [v2.8.0](version-history/v2.8.0) | GitLab cross-run finding dedup; canonical-review empty-body/dismiss fixes; Opus 5 default |
 | [v2.7.0](version-history/v2.7.0) | Canonical-review reuse (GitHub); phpstan/checkov/tflint fork-workspace hardening |
 | [v2.6.1](version-history/v2.6.1) | Bitbucket ownership/watermark markers no longer render as visible text |
 | [v2.6.0](version-history/v2.6.0) | Four documentation-checking static analyzers; `golangci-lint`/`phpcs` fixes |
@@ -21,8 +22,7 @@ What changed in each release, newest first. The 10 most recent versions each hav
 | [v2.4.7](version-history/v2.4.7) | `max_tokens_per_agent` default raised back to 32768 |
 | [v2.4.6](version-history/v2.4.6) | "Overall Risk" headline no longer contradicts the review decision |
 | [v2.4.5](version-history/v2.4.5) | Merge-commit filter and unbounded fallback diffs fixed |
-| [v2.4.4](version-history/v2.4.4) | Slash-command reviews post as `github-actions[bot]`, not the PAT owner |
 
-See [Older releases](version-history/archive) for v2.4.3 and earlier, back to v0.7.0.
+See [Older releases](version-history/archive) for v2.4.4 and earlier, back to v0.7.0.
 
 For the underlying commit-level changelog, see [CHANGELOG.md](https://github.com/tag1consulting/ai-pr-review/blob/main/CHANGELOG.md) on GitHub.

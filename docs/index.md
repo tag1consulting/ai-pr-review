@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.8.0
+
+**GitLab reruns stop duplicating findings, and a batch of canonical-review correctness fixes lands on GitHub.** GitLab's `post_findings` now fuzzy-matches each finding against this bot's still-open prior discussions and skips reposting a match, closing the gap with GitHub's canonical-review reuse (issue #710). On GitHub, canonical-review selection no longer picks an empty-body auto-created review (which broke every subsequent `dismiss`/`false-positive`/`wont-fix`/`fixed` with an HTTP 422), a `resolve_stale` reintroduction of the "resolves its own just-posted comment" bug is fixed on GitLab, and the `/ai-pr-review dismiss` family no longer leaks a raw `::warning::` annotation into its reply text. The Anthropic premium default also moves to `claude-opus-5`, with an adaptive-thinking effort cap so it stays under the client timeout.
+
+See [Version History → v2.8.0](version-history/v2.8.0) for details.
+
 ## What's new in v2.7.0
 
 **Canonical-review reuse (GitHub) plus a security hardening pass.** Rerunning the review no longer always posts a new review object — a quiet rerun updates the existing review in place instead of piling up noise. This release also closes a code-execution path reopened by fork-PR checkout: `phpstan`, `checkov`, and `tflint` no longer auto-discover config/plugin content from the analyzed workspace (a project's own `phpstan.neon` is no longer honored, even on trusted runs — `PHPSTAN_LEVEL` always applies now).
@@ -79,12 +85,6 @@ See [Version History → v2.7.0](version-history/v2.7.0) for details.
 **Bitbucket's PR-comment renderer HTML-escapes raw `<!-- -->` comments instead of hiding them like GitHub and GitLab do**, so the review's ownership/watermark markers were rendering as visible literal text on every Bitbucket comment. Bitbucket now uses a hidden reference-link marker form instead, which all three providers render as nothing.
 
 See [Version History → v2.6.1](version-history/v2.6.1) for details.
-
-## What's new in v2.6.0
-
-**Four new token-free static analyzers check documentation instead of code:** `docs-api-check` flags a doc comment that no longer matches its function's signature, `docs-missing-check` flags a newly-added public API with no doc comment at all, `docs-ref-check` catches broken Markdown links and heading anchors, and `docs-drift-check` catches doc references to a file the current PR deletes. None can trigger `REQUEST_CHANGES` on their own — all four report at low/medium severity. This release also fixes two static-analyzer bugs: `golangci-lint` had been producing zero findings on every Go PR since the v2.0.0 rewrite pinned golangci-lint v2 (which removed the flag the analyzer relied on), and `phpcs` was silently dropping findings under its 4.x bitmask exit-code scheme.
-
-See [Version History → v2.6.0](version-history/v2.6.0) for details.
 
 ## Learn more
 
