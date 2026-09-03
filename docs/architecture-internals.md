@@ -353,7 +353,7 @@ For the complete, always-current list of every `AI_*` variable, see `_KNOWN_AI_V
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-5` | `claude-opus-4-8` |
+| `anthropic` | `claude-sonnet-5` | `claude-opus-5` |
 | `openai` | `gpt-5.4-mini` | `gpt-5.4` |
 | `openai-compatible` | (user-specified) | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |

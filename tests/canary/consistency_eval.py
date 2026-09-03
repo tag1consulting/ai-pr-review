@@ -94,7 +94,7 @@ DEFAULT_AGENT_NAMES = ("code-reviewer", "silent-failure-hunter")
 # Models to test. Both current defaults, since both have temperature stripped
 # by resolve_temperature and so both run at the API default of 1.0 today.
 # Override with AI_EVAL_MODELS (comma-separated).
-DEFAULT_MODELS = ("claude-sonnet-5", "claude-opus-4-8")
+DEFAULT_MODELS = ("claude-sonnet-5", "claude-opus-5")
 
 DEFAULT_RUNS = 5
 

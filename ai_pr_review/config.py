@@ -583,7 +583,7 @@ class ReviewConfig(BaseModel):
         openai-compatible is left as-is (user must specify).
         """
         _PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {
-            "anthropic":    ("claude-sonnet-5",                     "claude-opus-4-8"),
+            "anthropic":    ("claude-sonnet-5",                     "claude-opus-5"),
             "openai":       ("gpt-5.4-mini",                        "gpt-5.4"),
             "google":       ("gemini-2.5-flash",                    "gemini-2.5-pro"),
             "bedrock-proxy": ("us.anthropic.claude-sonnet-5",       "global.anthropic.claude-opus-4-7"),
