@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -56,6 +56,9 @@ from ai_pr_review.vcs.protocol import (
     StaleResult,
     SummaryResult,
 )
+
+if TYPE_CHECKING:
+    from ai_pr_review.vcs._canonical import PriorThread
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +133,17 @@ class GitLabProvider:
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
     _resolved_bot_username: str | None = field(
         default=None, init=False, repr=False
+    )
+    # Cross-run dedup keep-alive set (#710). Reset at the top of every
+    # post_findings call, read by the same instance's subsequent
+    # resolve_stale() call within one orchestrate.py run -- mirrors
+    # GitHubProvider._kept_alive_thread_ids exactly (github.py). Populated
+    # by discussions this same call just created (unconditionally -- this
+    # half of the fix is what actually closes Finding 0, and applies even
+    # with cross_run_dedup=False) and, only when cross_run_dedup is enabled,
+    # by fuzzy-matched "update"/"escalate" discussions from a prior run.
+    _kept_alive_discussion_ids: set[str] = field(
+        default_factory=set, init=False, repr=False
     )
 
     # ------------------------------------------------------------------
@@ -237,6 +251,57 @@ class GitLabProvider:
             self._resolved_bot_username = username
             return username
         return None
+
+    # ------------------------------------------------------------------
+    # Cross-run finding dedup (#710) — load and parse prior discussions
+    # ------------------------------------------------------------------
+    def _load_prior_discussions(
+        self, *, head_sha: str, eligible_new: set[tuple[str, int]]
+    ) -> list[PriorThread]:
+        """Fetch and parse this bot's prior owned discussions for fuzzy-match
+        classification. Fail-soft throughout: any failure degrades to `[]`,
+        which is exactly today's pre-dedup behavior (every finding classifies
+        "new", every eligible finding gets a fresh discussion).
+        """
+        from ai_pr_review.vcs._canonical import parse_gitlab_prior_thread
+
+        if not self.config.cross_run_dedup:
+            return []
+
+        bot_username = self._get_bot_username()
+        if bot_username == _BOT_IDENTITY_AUTH_FAILED:
+            return []
+
+        try:
+            discussions = self._fetch_discussions()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "gitlab: failed to fetch prior discussions for cross-run "
+                "dedup; every finding will classify as new this cycle: %s",
+                exc, exc_info=True,
+            )
+            return []
+
+        threads: list[PriorThread] = []
+        for disc in discussions:
+            try:
+                parsed = parse_gitlab_prior_thread(
+                    disc,
+                    bot_username=bot_username,
+                    current_head_sha=head_sha,
+                    current_base_sha=self.config.diff_base_sha,
+                    eligible_new=eligible_new,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "gitlab: failed to parse prior discussion %r for "
+                    "cross-run dedup; skipping it: %s",
+                    disc.get("id"), exc, exc_info=True,
+                )
+                continue
+            if parsed is not None:
+                threads.append(parsed)
+        return threads
 
     # ------------------------------------------------------------------
     # get_last_reviewed_sha
@@ -439,14 +504,44 @@ class GitLabProvider:
         choose to retry as plain body content.
         """
         from ai_pr_review.diff.linemap import parse_diff_sets
+        from ai_pr_review.vcs._canonical import classify, dedupe_thread_claims
 
         _added, _new_file = parse_diff_sets(diff.diff_text)
         eligible_new = {(lr.file, lr.line) for lr in _added}
         eligible_ctx = {(lr.file, lr.line) for lr in _new_file}
 
+        # Reset, not accumulate: describes only this call, read by the very
+        # next resolve_stale() call orchestrate.py runs right after it (#710
+        # Finding 0).
+        self._kept_alive_discussion_ids = set()
+
         errors_before = len(self._errors)
+
+        # Cross-run dedup (#710): fuzzy-match every finding against this
+        # bot's still-open prior discussions before deciding what to post.
+        # GitLab has no verdicts map (no dismiss/false-positive/wont-fix/fixed
+        # slash commands here), so passing verdicts={} makes classify() only
+        # ever return "new", "update", or "escalate" -- never
+        # "suppressed"/"recurred", both of which require a verdict to reach.
+        # _load_prior_discussions returns [] when cross_run_dedup=False (or
+        # on any fetch/parse failure), which makes every finding classify
+        # "new" -- i.e. today's pre-dedup behavior.
+        prior_threads = self._load_prior_discussions(
+            head_sha=diff.head_sha, eligible_new=eligible_new
+        )
+        classified = dedupe_thread_claims(
+            [classify(f, verdicts={}, all_threads=prior_threads) for f in findings]
+        )
+        for c in classified:
+            if c.kind in ("update", "escalate") and c.thread is not None:
+                # This discussion corresponds to a still-active finding --
+                # resolve_stale must never resolve it out from under one, and
+                # this call must not repost it as a new discussion.
+                self._kept_alive_discussion_ids.add(c.thread.thread_id)
+        new_findings = [c.finding for c in classified if c.kind == "new"]
+
         inline_candidates, body_findings = partition_findings(
-            list(findings), eligible_new=eligible_new, max_inline=max_inline
+            new_findings, eligible_new=eligible_new, max_inline=max_inline
         )
         inline_posted = 0
 
@@ -462,6 +557,15 @@ class GitLabProvider:
             )
             if resp.status_code < 400:
                 inline_posted += 1
+                new_disc_id = (resp.json() or {}).get("id")
+                if isinstance(new_disc_id, str) and new_disc_id:
+                    # Fixes Finding 0: without this, the resolve_stale() call
+                    # orchestrate.py runs immediately after this method
+                    # returns would see this discussion as owned + unresolved
+                    # + resolvable + marker-bearing and resolve it on the
+                    # spot, collapsing a review comment before a human ever
+                    # sees it as open.
+                    self._kept_alive_discussion_ids.add(new_disc_id)
             else:
                 # 400 commonly means position invalid for line not in MR diff.
                 # Fall back to body — gl_api equivalent in bash did the same.
@@ -654,6 +758,12 @@ class GitLabProvider:
         for disc in discussions:
             disc_id = disc.get("id")
             if not isinstance(disc_id, str) or not disc_id:
+                continue
+            if disc_id in self._kept_alive_discussion_ids:
+                # post_findings (this same run, same instance) either just
+                # created this discussion or fuzzy-matched it as still
+                # corresponding to an active finding -- resolving it here
+                # would undo that in the same breath (#710 Finding 0).
                 continue
             notes = disc.get("notes") or []
             if not notes:
