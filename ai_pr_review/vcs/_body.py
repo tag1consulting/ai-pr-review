@@ -20,6 +20,14 @@ from ai_pr_review.findings.models import Finding
 # different limits — each provider can override.
 GITHUB_MAX_BODY_SIZE: Final[int] = 65_536
 
+# Substring of `truncate_body`'s trailer, exported so callers (e.g.
+# `ai_pr_review.slash.dismiss.classify_finding`) can detect a truncated body
+# without duplicating the trailer text. A truncated body's id-map marker can
+# still list an ID whose bullet was cut off by the truncation itself, so a
+# caller reconstructing "which bucket is this ID in" from a truncated body
+# must not trust the absence of a bullet as proof the ID isn't a body finding.
+TRUNCATION_MARKER: Final[str] = "Review output truncated"
+
 _SEVERITY_ICONS: Final[dict[str, str]] = {
     "critical": "🚨",
     "high": "🔴",
@@ -207,7 +215,7 @@ def truncate_body(body: str, limit: int = GITHUB_MAX_BODY_SIZE) -> str:
     head = encoded[:limit].decode("utf-8", errors="ignore")
     trailer = (
         "\n\n---\n"
-        "*Review output truncated — body exceeded provider API limit "
+        f"*{TRUNCATION_MARKER} — body exceeded provider API limit "
         f"({limit:,} bytes). Run a full review locally to see complete output.*"
     )
     return head + trailer

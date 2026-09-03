@@ -145,6 +145,46 @@ def test_verdict_recorded_on_highest_id_review_not_the_finding_source() -> None:
     assert "No findings above the confidence threshold" in puts[0]
 
 
+def test_verdict_put_targets_newest_non_empty_review_not_implicit_reply_review() -> None:
+    """GitHub auto-creates a `body: ""` review authored by the bot every time
+    it replies to an inline comment via the REST replies endpoint (the
+    severity-escalation notice, the recurred-finding reply, the
+    feedback-command reply). Such a review is routinely the highest id --
+    confirmed live on a real PR, where three of these implicit reviews
+    landed after the real CHANGES_REQUESTED review that carried the
+    finding. Without the empty-body filter in `select_canonical`, the verdict
+    PUT lands on the empty review and GitHub rejects it with HTTP 422
+    ("Could not edit a review with a missing body"), silently dropping the
+    verdict. The PUT must instead land on review 9 (the newest non-empty
+    body), never on review 12."""
+    f = _finding("style nit", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=2)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 9, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body},
+                    {"id": 12, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": ""},
+                ],
+            )
+        if req.method == "PUT" and str(req.url).endswith("/reviews/9"):
+            return httpx.Response(200, json={"id": 9})
+        if req.method == "PUT" and str(req.url).endswith("/reviews/12"):
+            raise AssertionError("verdict must never target the empty-body implicit review")
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 2, actor="alice", command="dismiss")
+
+    assert result.errors == ()
+    puts = _put_bodies(rec, "/reviews/9")
+    assert len(puts) == 1
+    assert extract_verdicts(puts[0]) == {fingerprint(f): "dismissed"}
+
+
 def test_record_verdict_seeds_from_union_not_just_canonical_body() -> None:
     """A verdict recorded on an older review must survive a later,
     marker-less review (e.g. `GitHubProvider.submit_approval`'s human-facing
@@ -268,6 +308,41 @@ def test_verdict_put_failure_does_not_leak_into_dismiss_result_errors(caplog) ->
     assert result.errors == ()
     assert result.feedback_source == "phpcs"
     assert any("failed to record" in msg for msg in caplog.messages)
+
+
+def test_verdict_put_failure_warning_goes_to_stderr_not_stdout(
+    monkeypatch, capsys
+) -> None:
+    """`dismiss`/`dismiss-inline` (ai_pr_review/cli.py) print the human-facing
+    reply to stdout, which the calling workflow captures verbatim and posts
+    as the PR comment. A verdict-recording-failure `::warning::` annotation
+    printed to stdout (an earlier version of `_warn_verdict_failure` did
+    exactly this) lands inside that posted comment instead of the Actions
+    log -- confirmed live on a real PR. `dismiss_by_finding_id` itself never
+    touches stdout, so this asserts directly on `_warn_verdict_failure`'s
+    stream choice rather than on `click.echo`'s (a CLI-level concern)."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and str(req.url).endswith("/reviews/1"):
+            return httpx.Response(422, text="Validation Failed")
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 3, actor="alice", command="dismiss")
+
+    assert result.errors == ()
+    captured = capsys.readouterr()
+    assert "::warning::" not in captured.out
+    assert "::warning::" in captured.err
 
 
 def test_verdict_put_raising_httpx_error_does_not_crash_dismiss(caplog) -> None:
@@ -495,3 +570,85 @@ def test_fingerprint_lookup_safely_diverges_from_classify_when_marker_omits_the_
 
     assert result.errors == ()
     assert result.feedback_source == "phpcs"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end incident reproduction: a finding that moved from an out-of-diff
+# body bullet (older review) to an inline thread (newest review), dismissed
+# via a top-level `/ai-pr-review dismiss F<n>` comment, with a reply-created
+# empty-body review sitting at the highest id in between.
+# ---------------------------------------------------------------------------
+
+
+def test_dismiss_by_finding_id_moved_to_inline_resolves_and_dismisses() -> None:
+    """Reproduces the live incident this fix addresses. F15 was an
+    out-of-diff Low body bullet in an older APPROVED review (id 8). The next
+    run rendered it as an inline High finding (id-map only) with its own
+    open thread on a newer CHANGES_REQUESTED review (id 9). GitHub also
+    auto-created an empty-body COMMENTED review (id 12, from an unrelated
+    bot reply) that is the highest id of the three. Before this fix,
+    `classify_finding` scanned oldest-first, found the stale body bullet,
+    and took the body-only branch: no thread fetch, no resolve, no review
+    dismissal, and the verdict PUT (had it even been attempted) would 422
+    against review 12. After this fix: F15 classifies INLINE from the
+    newest review, the thread resolves, the verdict lands on review 9 (never
+    12), and review 9 -- now fully resolved -- is dismissed."""
+    old_bullet = format_body_finding(
+        Finding(severity="low", confidence=80, finding="secret", source="trufflehog", file="hubspotForm.js", line=62),
+        finding_id=15,
+    )
+    old_body = "<details>\n<summary>Out-of-diff analyzer findings (1)</summary>\n\n" + old_bullet + "\n</details>"
+
+    inline_finding = Finding(
+        severity="high", confidence=80, finding="secret", source="trufflehog", file="hubspotForm.js", line=62
+    )
+    comment_body = _build_inline_comment_body(inline_finding, finding_id=15)
+    new_body = (
+        "## AI Review Findings\n\n"
+        + comment_body
+        + "\n"
+        + build_id_map_marker({fingerprint(inline_finding): 15})
+    )
+
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=77, review_db_id=9)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and url.endswith("/reviews/9"):
+            return httpx.Response(200, json={"id": 9, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 8, "state": "APPROVED", "user": {"login": "github-actions[bot]"}, "body": old_body},
+                    {"id": 9, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": new_body},
+                    {"id": 12, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": ""},
+                ],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/9"):
+            return httpx.Response(200, json={"id": 9})
+        if req.method == "PUT" and url.endswith("/reviews/9/dismissals"):
+            return httpx.Response(200, json={"id": 9, "state": "DISMISSED"})
+        if req.method == "PUT" and (url.endswith("/reviews/12") or url.endswith("/reviews/12/dismissals")):
+            raise AssertionError("must never write to the empty-body implicit review")
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 15, actor="alice", command="dismiss")
+
+    assert result.errors == ()
+    assert result.thread_resolved is True
+    assert result.review_dismissed is True
+    # BODY-branch side effects (feedback-store routing) must NOT have fired --
+    # this is the INLINE path.
+    assert result.feedback_source == ""
+
+    puts = _put_bodies(rec, "/reviews/9")
+    assert len(puts) == 1
+    assert extract_verdicts(puts[0]) == {fingerprint(inline_finding): "dismissed"}
+    assert any(c[0] == "PUT" and c[1].endswith("/reviews/9/dismissals") for c in rec.calls)

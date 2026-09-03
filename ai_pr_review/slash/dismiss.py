@@ -19,18 +19,21 @@ from __future__ import annotations
 import enum
 import logging
 import os as _os
-from collections.abc import Sequence
+import sys as _sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from ai_pr_review.vcs._body import TRUNCATION_MARKER
 from ai_pr_review.vcs._finding_ids import (
     _ID_RE,
     _LOCATION_RE,
     _SOURCE_RE,
     BODY_SECTION_START_MARKERS,
     fingerprint_for_finding_id,
+    safe_review_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.marker import extract_id_map, upsert_verdicts_marker
@@ -101,14 +104,9 @@ class DismissResult:
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
-def _scan_body_bullets(bodies: Sequence[str]) -> dict[int, ClassifiedFinding]:
-    """Scan all body-finding buckets in every body, unconditionally.
-
-    Unlike `_parse_existing_ids` (which takes a marker fast-path and never
-    scans bullets when the id-map marker is present), this scan always walks
-    every body's lines. The id-map marker carries fingerprints for *all*
-    finding buckets (inline + body buckets) indiscriminately, so it
-    cannot answer "which bucket is F<n> in" — only a bullet-scan can.
+def _scan_body_bullets_one(body: str) -> dict[int, ClassifiedFinding]:
+    """Scan a single review body's two body-finding buckets for `**[F<n>]**`
+    bullets.
 
     Section tracking mirrors `_parse_existing_ids`'s fallback loop: entered by
     any of `BODY_SECTION_START_MARKERS` (the in-diff "### Findings not
@@ -118,81 +116,158 @@ def _scan_body_bullets(bodies: Sequence[str]) -> dict[int, ClassifiedFinding]:
     "###" or a "</details>" close.
     """
     result: dict[int, ClassifiedFinding] = {}
-    for body in bodies:
-        in_body_section = False
-        for line in body.splitlines():
-            stripped = line.strip()
-            if any(marker in stripped for marker in BODY_SECTION_START_MARKERS):
-                in_body_section = True
-                continue
-            if in_body_section and stripped.startswith("###"):
-                in_body_section = False
-                continue
-            if in_body_section and "</details>" in stripped:
-                in_body_section = False
-                continue
-            if not in_body_section:
-                continue
-            if not stripped.startswith("- "):
-                continue
+    in_body_section = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if any(marker in stripped for marker in BODY_SECTION_START_MARKERS):
+            in_body_section = True
+            continue
+        if in_body_section and stripped.startswith("###"):
+            in_body_section = False
+            continue
+        if in_body_section and "</details>" in stripped:
+            in_body_section = False
+            continue
+        if not in_body_section:
+            continue
+        if not stripped.startswith("- "):
+            continue
 
-            id_match = _ID_RE.search(stripped)
-            if not id_match:
-                continue
-            finding_id = int(id_match.group(1))
-            if finding_id in result:
-                continue
+        id_match = _ID_RE.search(stripped)
+        if not id_match:
+            continue
+        finding_id = int(id_match.group(1))
+        if finding_id in result:
+            continue
 
-            after_id = stripped[id_match.end() :]
-            source = ""
-            src_m = _SOURCE_RE.search(after_id)
-            if src_m:
-                source = src_m.group(1).split(",")[0].strip()
+        after_id = stripped[id_match.end() :]
+        source = ""
+        src_m = _SOURCE_RE.search(after_id)
+        if src_m:
+            source = src_m.group(1).split(",")[0].strip()
 
-            file_ = ""
-            line_no = ""
-            loc_m = _LOCATION_RE.search(stripped)
-            if loc_m:
-                loc_str = loc_m.group(1)
-                if ":" in loc_str:
-                    file_, _, line_no = loc_str.rpartition(":")
-                    if not line_no.isdigit():
-                        file_ = loc_str
-                        line_no = ""
-                else:
+        file_ = ""
+        line_no = ""
+        loc_m = _LOCATION_RE.search(stripped)
+        if loc_m:
+            loc_str = loc_m.group(1)
+            if ":" in loc_str:
+                file_, _, line_no = loc_str.rpartition(":")
+                if not line_no.isdigit():
                     file_ = loc_str
+                    line_no = ""
+            else:
+                file_ = loc_str
 
-            result[finding_id] = ClassifiedFinding(
-                location=FindingLocation.BODY,
-                source=source,
-                file=file_,
-                line=line_no,
-                rule_id=source,
-            )
+        result[finding_id] = ClassifiedFinding(
+            location=FindingLocation.BODY,
+            source=source,
+            file=file_,
+            line=line_no,
+            rule_id=source,
+        )
     return result
+
+
+def bodies_newest_first(reviews: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return review bodies ordered newest (highest id) first.
+
+    `classify_finding` and `list_active_body_ids` both need this ordering --
+    see their docstrings for why. Every production call site
+    (`dismiss_by_finding_id`, `ai_pr_review.cli`'s `dismiss` and
+    `feedback-context` commands) builds its `bodies` list from
+    `provider.list_bot_reviews()`/`_list_prior_bot_reviews()`, which return
+    reviews in GitHub API order (oldest first) -- relying on that order
+    implicitly would silently break classification if a future caller ever
+    passed reviews in a different order, so every caller should route
+    through this helper instead of building `bodies` by hand.
+
+    Uses `ai_pr_review.vcs._finding_ids.safe_review_id` (shared with
+    `ai_pr_review.vcs._canonical.select_canonical`/`merge_verdicts`) so this
+    module's notion of "highest id" can never independently drift from
+    theirs.
+    """
+    ordered = sorted(reviews, key=safe_review_id, reverse=True)
+    return [str(r.get("body") or "") for r in ordered]
 
 
 def classify_finding(bodies: Sequence[str], finding_id: int) -> ClassifiedFinding:
     """Classify F<finding_id> as BODY, INLINE, or UNKNOWN.
 
-    Precedence: an unconditional bullet-scan across both body buckets first
-    (BODY); only if that finds nothing, check the id-map's combined values
-    across all bodies (INLINE); otherwise UNKNOWN.
+    `bodies` must be ordered newest-first (see `bodies_newest_first`).
+    Classification walks bodies from newest to oldest and stops at the
+    first body that renders F<finding_id> at all: a body bullet (BODY,
+    using that body's own source/file/line context) takes precedence over
+    an id-map entry (INLINE) *within the same body*, but a newer body's
+    rendering always takes precedence over an older body's, regardless of
+    which bucket each puts it in. Only when no body at all knows the ID
+    (dropped from the review entirely) does this return UNKNOWN.
+
+    F-IDs are stable across review cycles, but a finding can move buckets
+    between runs: an out-of-diff Low bullet in one cycle can become an
+    inline High finding with its own thread in the next, once its line
+    enters the diff (or the reverse, once the line leaves the diff again).
+    Scanning bodies oldest-first (this function's original behavior) could
+    return BODY for a finding that has since moved inline in the newest
+    review, which sends `/ai-pr-review dismiss F<n>` down the body-only
+    branch (feedback-store entry, no thread fetch, no resolve, no review
+    dismissal) even though the finding is now blocking the PR via an open,
+    unresolved inline thread. Confirmed as the root cause of a live
+    incident: a body-level dismiss on a finding that had moved inline never
+    resolved the thread, and the blocking review was never dismissed.
+
+    An id-map hit in a *truncated* body (carrying `TRUNCATION_MARKER`,
+    `ai_pr_review.vcs._body.truncate_body`'s trailer) is not trusted as a
+    definitive INLINE verdict on its own: `GitHubProvider.
+    _finalize_body_with_markers` truncates the visible findings text first
+    and appends the id-map marker afterward, so a truncated body can list an
+    ID in its id-map while the bullet that would have classified it BODY was
+    cut off. Such a hit is remembered as a fallback and only used if no
+    older body resolves the ID more definitively (a bullet, or an id-map hit
+    in a body that isn't truncated); otherwise a >64KB review would
+    misclassify its own overflowed body findings as INLINE and send their
+    dismiss down the wrong branch, the same failure shape as the
+    oldest-first bug this function was rewritten to fix.
     """
-    body_findings = _scan_body_bullets(bodies)
-    if finding_id in body_findings:
-        return body_findings[finding_id]
-
+    inline_fallback: ClassifiedFinding | None = None
     for body in bodies:
+        bullets = _scan_body_bullets_one(body)
+        if finding_id in bullets:
+            return bullets[finding_id]
         if finding_id in extract_id_map(body).values():
+            if TRUNCATION_MARKER in body:
+                if inline_fallback is None:
+                    inline_fallback = ClassifiedFinding(location=FindingLocation.INLINE)
+                continue
             return ClassifiedFinding(location=FindingLocation.INLINE)
-
+    if inline_fallback is not None:
+        return inline_fallback
     return ClassifiedFinding(location=FindingLocation.UNKNOWN)
 
 
 def list_active_body_ids(bodies: Sequence[str]) -> list[int]:
-    """Return all F<n> IDs currently rendered as body bullets, sorted."""
-    return sorted(_scan_body_bullets(bodies).keys())
+    """Return every F<n> ID currently classified as a body-level finding,
+    sorted.
+
+    `bodies` must be ordered newest-first (see `bodies_newest_first`).
+    Backs the "please specify a finding ID" reply (`ai_pr_review.cli`'s
+    `dismiss` command with no `F<n>` given), so the IDs offered there must
+    agree with what `/ai-pr-review dismiss F<n>` will actually do for each
+    one -- delegates to `classify_finding` itself (the single source of
+    truth for the newest-first precedence rule) rather than re-deriving a
+    similar-but-possibly-drifted rule. An ID that has since moved inline in
+    the newest review is correctly excluded even though an older review
+    still renders it as a body bullet.
+    """
+    candidate_ids: set[int] = set()
+    for body in bodies:
+        candidate_ids.update(_scan_body_bullets_one(body).keys())
+        candidate_ids.update(extract_id_map(body).values())
+    return sorted(
+        fid
+        for fid in candidate_ids
+        if classify_finding(bodies, fid).location is FindingLocation.BODY
+    )
 
 
 def _fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | None:
@@ -215,10 +290,13 @@ def _record_verdict(
 ) -> None:
     """Best-effort: patch the canonical review's verdict marker.
 
-    "Canonical" = the most recently posted bot review (highest `id`) among
-    `reviews`, regardless of its current state -- a dismissed review is
-    still fully visible and still the last thing this bot posted; dismissal
-    doesn't delete or hide it.
+    "Canonical" = the most recently posted bot review (highest `id`) with a
+    non-empty body among `reviews`, regardless of its current state (a
+    dismissed review is still fully visible and still the last thing this
+    bot posted, dismissal doesn't delete or hide it). A review with an
+    empty body is skipped: GitHub auto-creates one of these whenever the
+    bot replies to an inline comment, and rejects any attempt to `PUT` a
+    body onto it.
 
     Deliberately swallows every failure into a log line (and a GitHub
     Actions `::warning::` annotation when running in CI), never raising and
@@ -249,10 +327,11 @@ def _record_verdict(
     silently drop every earlier verdict whenever a marker-less review (e.g.
     `GitHubProvider.submit_approval`'s human-facing "auto-approved" message,
     issue #590) becomes canonical between one verdict write and the next.
-    `select_canonical` centralizes the "highest id, any state" rule so this
-    function and the read side (`ai_pr_review.vcs._canonical`, which
-    consumes these verdicts during `post_findings` classification) can never
-    disagree about which review is canonical.
+    `select_canonical` centralizes the "highest id with a non-empty body,
+    any state" rule so this function and the read side
+    (`ai_pr_review.vcs._canonical`, which consumes these verdicts during
+    `post_findings` classification) can never disagree about which review
+    is canonical.
     """
     from ai_pr_review.vcs._canonical import merge_verdicts, select_canonical
 
@@ -262,6 +341,18 @@ def _record_verdict(
         return
     canonical = select_canonical(reviews)
     if canonical is None:
+        # Every review's body is empty (e.g. the bot has only ever posted
+        # reply-created reviews on this PR so far). Warn rather than
+        # returning silently: this function's own docstring promises every
+        # failure surfaces as a log line, and a caller regressing the
+        # invariant that a non-None fingerprint implies at least one
+        # non-empty review body would otherwise drop a verdict with zero
+        # trace anywhere, reproducing the exact bug class this side channel
+        # exists to prevent.
+        _warn_verdict_failure(
+            f"skipping '{verdict}' verdict: no canonical review with a "
+            f"non-empty body among {len(reviews)} review(s)"
+        )
         return
     canonical_id = canonical.review_id
     verdicts = merge_verdicts(reviews)
@@ -283,8 +374,21 @@ def _record_verdict(
 
 
 def _warn_verdict_failure(message: str) -> None:
+    """Emit the verdict-recording-failure annotation to stderr, never stdout.
+
+    `dismiss`/`dismiss-inline` (ai_pr_review/cli.py) print the human-facing
+    reply to stdout, which the calling workflow captures verbatim
+    (`reply=$(ai-pr-review ...)`, `.github/workflows/slash-commands.yml`)
+    and posts as the PR comment. A `print()` to stdout here would land this
+    `::warning::` annotation inside that posted comment instead of the
+    Actions log — confirmed live: an early version of this function did
+    exactly that, and a user's `/ai-pr-review dismiss F<n>` reply arrived
+    with a raw HTTP-422 warning line glued onto the front of it. Every other
+    `::warning::`/`::notice::` annotation in cli.py already goes to stderr
+    via `click.echo(..., err=True)`; this matches that contract.
+    """
     if _os.environ.get("GITHUB_ACTIONS") == "true":
-        print(f"::warning::ai-pr-review: {message}", flush=True)
+        print(f"::warning::ai-pr-review: {message}", file=_sys.stderr, flush=True)
     _log.warning("dismiss: %s", message)
 
 
@@ -609,7 +713,7 @@ def dismiss_by_finding_id(
     errors: list[str] = []
 
     reviews = provider.list_bot_reviews()
-    bodies = [r.get("body") or "" for r in reviews]
+    bodies = bodies_newest_first(reviews)
     classified = classify_finding(bodies, finding_id)
 
     if classified.location is FindingLocation.UNKNOWN:
@@ -781,10 +885,10 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
     optional ``**[F<n>]**`` id token, the first bracket group is severity and
     the second is the source tag — unlike a body bullet (``- {icon} **[F{n}]**
     [{source}] {text}``, no leading severity bracket), so `_SOURCE_RE`'s
-    first-match behavior used by `_scan_body_bullets` does not apply here.
+    first-match behavior used by `_scan_body_bullets_one` does not apply here.
     For multi-source findings (e.g. ``[code-reviewer, security-reviewer]``),
     only the first source tag is kept, matching the body-level convention.
-    Matches `_scan_body_bullets`'s existing rule_id convention: for a SARIF
+    Matches `_scan_body_bullets_one`'s existing rule_id convention: for a SARIF
     source (e.g. ``sarif:bandit``), `rule_id` is the full source string, not
     a separately-rendered bracket — no render path emits a distinct third
     bracket group for the rule ID.

@@ -54,7 +54,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from ai_pr_review.findings.merge import _SEVERITY_ORDER, PROXIMITY_LINES, categories_compatible
-from ai_pr_review.vcs._finding_ids import _ID_RE, fingerprint, fingerprint_for_finding_id
+from ai_pr_review.vcs._finding_ids import (
+    _ID_RE,
+    fingerprint,
+    fingerprint_for_finding_id,
+    safe_review_id,
+)
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.marker import extract_inline_meta, extract_verdicts
 
@@ -91,23 +96,6 @@ def _rank(severity: str) -> int:
     return _SEVERITY_RANK.get(severity, 99)
 
 
-def _safe_review_id(review: Mapping[str, Any]) -> int:
-    """Best-effort int coercion of a review dict's `id`, defaulting to 0 on
-    anything that isn't already an int/float/str/bytes numeral -- mirrors
-    `ai_pr_review.vcs.github._safe_int`'s tolerance so a single malformed
-    entry from `GitHubProvider._list_prior_bot_reviews()` (the production
-    caller) degrades this module's ordering rather than raising and losing
-    the whole selection/merge."""
-    value = review.get("id")
-    try:
-        if isinstance(value, (int, float, str, bytes)):
-            return int(value)
-    except (ValueError, TypeError):
-        pass
-    return 0
-
-
-
 @dataclass(frozen=True)
 class CanonicalReview:
     """The bot review currently treated as canonical for this PR."""
@@ -118,7 +106,8 @@ class CanonicalReview:
 
 
 def select_canonical(reviews: Sequence[Mapping[str, Any]]) -> CanonicalReview | None:
-    """Pick the canonical review: the highest-id bot review, any state.
+    """Pick the canonical review: the highest-id bot review with a
+    non-empty body, any state.
 
     `ai_pr_review.slash.dismiss._record_verdict` calls this function
     directly rather than reimplementing the rule, so both sides of the
@@ -143,10 +132,35 @@ def select_canonical(reviews: Sequence[Mapping[str, Any]]) -> CanonicalReview | 
     review on each side — see the module-level design reference above; in
     practice this is a narrow window (the bot's own reviews are never left
     `PENDING`) rather than a bug this refactor set out to close.
+
+    Reviews whose body is empty or whitespace-only are skipped entirely
+    (returns `None` if every review is such). GitHub auto-creates a
+    `body: ""`, `state: "COMMENTED"` review authored by our bot every time
+    it replies to an inline comment via `POST /pulls/{n}/comments/{id}/
+    replies` (`GitHubProvider.reply_to_review_comment`, used by the
+    severity-escalation notice, the recurred-finding reply, and the
+    feedback-command reply) — confirmed live (issue found via a real
+    consumer PR): the bot's own escalation/feedback replies routinely leave
+    one of these implicit reviews as the highest-id one. Left unfiltered,
+    such a review becomes canonical on both sides: the write side
+    (`_record_verdict`) then tries to `PUT` a body onto it and GitHub
+    rejects the request with HTTP 422 ("Could not edit a review with a
+    missing body"), silently dropping every verdict recorded from then on;
+    the read side (`post_findings` -> `decide_action`) sees a canonical
+    body with no footer marker and falls back to posting a fresh review on
+    every single rerun, defeating canonical-review reuse entirely. The
+    predicate is "body is empty", not "body lacks our footer marker" —
+    `GitHubProvider.submit_approval`'s human-facing auto-approve message
+    (issue #590) is non-empty but also carries no footer, and must remain
+    eligible to be picked as canonical (`decide_action` already handles a
+    footer-less-but-non-empty canonical body via its own `_FOOTER_MARKER`
+    check further down; this function must not pre-empt that by excluding
+    it here on a different, wrong criterion).
     """
-    if not reviews:
+    candidates = [r for r in reviews if str(r.get("body") or "").strip()]
+    if not candidates:
         return None
-    best = max(reviews, key=_safe_review_id)
+    best = max(candidates, key=safe_review_id)
     review_id = best.get("id")
     if not isinstance(review_id, int):
         return None
@@ -170,7 +184,7 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     `ai_pr_review.slash.dismiss._record_verdict` seeds from this same
     union rather than from the canonical body alone).
     """
-    ordered = sorted(reviews, key=_safe_review_id)
+    ordered = sorted(reviews, key=safe_review_id)
     result: dict[str, str] = {}
     for r in ordered:
         result.update(extract_verdicts(str(r.get("body") or "")))

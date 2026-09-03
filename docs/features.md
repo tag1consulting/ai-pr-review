@@ -50,7 +50,7 @@ To force a full-PR diff for a single run, add the **`ai-review-rescan`** label t
 
 ## Quiet reruns (GitHub)
 
-Rerunning the review on a PR no longer always creates a new top-level review object. Each run classifies its findings against the bot's most-recently-posted review (the "canonical" review, whichever state it's in — dismissed or not) and its existing threads:
+Rerunning the review on a PR no longer always creates a new top-level review object. Each run classifies its findings against the bot's most-recently-posted review with a body (the "canonical" review, whichever state it's in — dismissed or not; an empty-body review GitHub auto-creates when the bot replies to an inline comment is never treated as canonical, since GitHub rejects any attempt to update its body) and its existing threads:
 
 - **Nothing new** (identical findings, no verdict changes): the canonical review's body is updated in place (`PUT`). No new Conversation-tab entry.
 - **A still-open finding reworded or unchanged**: its comment is updated in place, silently. A severity *decrease* on a still-matched finding is also applied silently, with no reply — only an *increase* gets a notification (below); a downgrade with no accompanying explanation can look like the finding was tampered with rather than re-assessed, so treat a silent severity change on a rerun as a re-assessment, not a data-loss signal.
