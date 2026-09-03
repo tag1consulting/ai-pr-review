@@ -46,12 +46,32 @@ import hashlib
 import html as _html
 import logging
 import re
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final
 
 from ai_pr_review.findings.models import Finding
 
 _log = logging.getLogger(__name__)
+
+
+def safe_review_id(review: Mapping[str, Any]) -> int:
+    """Best-effort int coercion of a review dict's `id`, defaulting to 0 on
+    anything that isn't already an int/float/str/bytes numeral.
+
+    Shared by `ai_pr_review.vcs._canonical.select_canonical`/`merge_verdicts`
+    (sorting/selecting by review id) and `ai_pr_review.slash.dismiss.
+    bodies_newest_first` (ordering bodies newest-first) -- both need the same
+    tolerant coercion so a single malformed `id` entry degrades ordering
+    rather than raising and losing the whole selection/merge/sort, and so the
+    two modules' notions of "highest id" can never independently drift.
+    """
+    value = review.get("id")
+    try:
+        if isinstance(value, (int, float, str, bytes)):
+            return int(value)
+    except (ValueError, TypeError):
+        pass
+    return 0
 
 # Matches a body-finding ID token, e.g. **[F3]** (case-insensitive for
 # robustness, though we always emit upper-case F).
@@ -69,7 +89,7 @@ _LOCATION_RE = re.compile(r"\*\(at `([^`]+)`")
 # containing <details> label instead), and APPROVE reviews with only
 # Medium/Low findings (issue #645 — this third heading was missing from both
 # this fallback scanner and `ai_pr_review/slash/dismiss.py`'s
-# `_scan_body_bullets`, so an approved review's body findings were never
+# `_scan_body_bullets_one`, so an approved review's body findings were never
 # locatable by `/ai-pr-review dismiss|false-positive|wont-fix F<n>`). Shared
 # here so the two scanners cannot drift out of sync again over a future
 # fourth heading.

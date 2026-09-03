@@ -218,6 +218,80 @@ def test_quiet_rerun_puts_canonical_body_posts_nothing_new() -> None:
     assert posts == []
 
 
+def test_quiet_rerun_reuses_canonical_despite_higher_id_empty_body_reply_review() -> None:
+    """Same quiet-rerun scenario as `test_quiet_rerun_puts_canonical_body_posts_nothing_new`,
+    but GitHub's review list also carries review 11 -- an empty-body,
+    `COMMENTED` review auto-created when the bot replied to an inline
+    comment (`GitHubProvider.reply_to_review_comment`), with a *higher* id
+    than the real canonical review 10. Confirmed live on a real consumer PR:
+    this shape is routine, not a fabricated edge case, and existed on the
+    PR whose incident this fix addresses. `select_canonical` must skip the
+    empty-body review so `post_findings` still treats review 10 as
+    canonical and reuses it (`PUT`) -- not fall back to `POST`ing a fresh
+    review because the naive highest-id pick (11) carries no footer, and
+    never attempt to `PUT` review 11 at all (GitHub 422s on that)."""
+    existing_finding = _finding("existing issue", severity="Medium")
+    existing_comment_body = _build_inline_comment_body(existing_finding)
+    canonical_body = _footer_body()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews") or (
+            req.method == "GET" and "/reviews?" in url
+        ):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    },
+                    {
+                        "id": 11, "state": "COMMENTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": "",
+                    },
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=existing_comment_body, line=5,
+                )]
+            )
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        if req.method == "PUT" and url.endswith("/reviews/11"):
+            return httpx.Response(422, json={"message": "Could not edit a review with a missing body."})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [existing_finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    assert result.reused_review is True
+    assert result.review_id == 10
+    puts_10 = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    puts_11 = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/11")]
+    posts = [c for c in rec.calls if c[0] == "POST" and "/reviews" in c[1] and not c[1].endswith("/graphql")]
+    assert len(puts_10) == 1
+    assert puts_11 == []
+    assert posts == []
+
+
 def test_new_medium_finding_over_max_inline_puts_not_posts() -> None:
     """Issue #719: any_new_inline_eligible must reflect which findings
     actually landed an inline comment, not raw eligibility. A Medium

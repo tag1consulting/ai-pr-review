@@ -19,6 +19,7 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
+from ai_pr_review.vcs.marker import build_id_map_marker
 
 
 @dataclass
@@ -237,6 +238,55 @@ def test_missing_finding_id_lists_active_ids(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "F3" in result.stdout
+
+
+def test_missing_finding_id_excludes_id_moved_inline_in_newer_review(monkeypatch) -> None:
+    """Regression test for the CLI wiring, not just the pure classifier:
+    `dismiss`'s missing-finding-id branch (cli.py) must route
+    `provider.list_bot_reviews()` through `bodies_newest_first` before
+    calling `list_active_body_ids` -- with only one mocked review (as every
+    other test in this file uses), ordering is a no-op and this wiring
+    could be silently dropped without failing any test. Here F9 is a body
+    bullet in the older review (id 1) but only an id-map entry in the
+    newer review (id 2, F9's line moved into the diff and became inline);
+    F5 is a body bullet in both. The active-ID hint must offer F5 but not
+    F9 -- offering F9 would steer a user into a `/ai-pr-review dismiss F9`
+    that (per the classify_finding fix) resolves as INLINE and can't be
+    acted on via the body-only path this hint advertises."""
+    f9 = _finding("secret", source="trufflehog", file="hubspotForm.js", line=62)
+    f5 = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    older_bullet_f9 = format_body_finding(f9, finding_id=9)
+    older_bullet_f5 = format_body_finding(f5, finding_id=5)
+    older_body = (
+        "### Findings not attached to specific lines\n\n"
+        + older_bullet_f9 + "\n" + older_bullet_f5 + "\n"
+    )
+    newer_bullet_f5 = format_body_finding(f5, finding_id=5)
+    newer_body = (
+        "### Findings not attached to specific lines\n\n" + newer_bullet_f5 + "\n"
+        + build_id_map_marker({"trufflehog|hubspotForm.js|62|abc123456789": 9})
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 1, "state": "APPROVED", "user": {"login": "github-actions[bot]"}, "body": older_body},
+                    {"id": 2, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": newer_body},
+                ],
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(None))
+
+    assert result.exit_code == 0, result.output
+    assert "F5" in result.stdout
+    assert "F9" not in result.stdout
 
 
 def test_missing_finding_id_no_active_ids(monkeypatch) -> None:

@@ -735,7 +735,11 @@ def dismiss(
       0 — handled (including "not found" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
-    from ai_pr_review.slash.dismiss import dismiss_by_finding_id, list_active_body_ids
+    from ai_pr_review.slash.dismiss import (
+        bodies_newest_first,
+        dismiss_by_finding_id,
+        list_active_body_ids,
+    )
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
     os.environ["PR_NUMBER"] = str(pr_number)
@@ -756,7 +760,7 @@ def dismiss(
     provider = _build_github_provider_or_exit("dismiss")
 
     if finding_id is None:
-        active_ids = list_active_body_ids([r.get("body") or "" for r in provider.list_bot_reviews()])
+        active_ids = list_active_body_ids(bodies_newest_first(provider.list_bot_reviews()))
         if active_ids:
             ids_text = ", ".join(f"F{n}" for n in active_ids)
             click.echo(
@@ -1097,6 +1101,7 @@ def feedback_context(
 
     from ai_pr_review.slash.dismiss import (
         FeedbackContext,
+        bodies_newest_first,
         context_from_body_finding_id,
         context_from_parent_comment,
     )
@@ -1116,7 +1121,7 @@ def feedback_context(
             # as ai_pr_review.slash.parser._FID_RE (issue #735).
             match = re.fullmatch(r"\[?[Ff](\d{1,6})\]?", fid_token)
             if match:
-                bodies = [r.get("body") or "" for r in provider.list_bot_reviews()]
+                bodies = bodies_newest_first(provider.list_bot_reviews())
                 context = context_from_body_finding_id(bodies, int(match.group(1)))
 
     def _single_line(value: str) -> str:

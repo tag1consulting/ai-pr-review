@@ -307,6 +307,58 @@ def test_feedback_context_issue_comment_inline_finding_emits_notice_not_warning(
     assert "inline finding" in result.stderr
 
 
+def test_feedback_context_issue_comment_uses_newer_review_when_id_moved_inline(monkeypatch) -> None:
+    """Regression test for the CLI wiring, not just the pure classifier:
+    `feedback_context` (cli.py) must route `provider.list_bot_reviews()`
+    through `bodies_newest_first` before calling `context_from_body_finding_id`
+    -- with only one mocked review (as every other test in this file uses),
+    ordering is a no-op and this wiring could be silently dropped without
+    failing any test. F9 is a body bullet in the older review (id 1) but
+    only an id-map entry in the newer review (id 2, its line moved into the
+    diff and became inline). The newer review's classification must win:
+    an INLINE notice, not stale BODY context from the superseded bullet."""
+    f = _finding("secret", source="trufflehog", file="hubspotForm.js", line=62)
+    older_bullet = format_body_finding(f, finding_id=9)
+    older_body = "### Findings not attached to specific lines\n\n" + older_bullet + "\n"
+    newer_body = (
+        "## AI Review Findings\n\n"
+        '<!-- ai-pr-review-id-map: {"trufflehog|hubspotForm.js|62|abc123456789": 9} -->'
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 1, "state": "APPROVED", "user": {"login": "github-actions[bot]"}, "body": older_body},
+                    {"id": 2, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": newer_body},
+                ],
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "feedback-context",
+            "--pr-number",
+            "5",
+            "--is-review-comment",
+            "false",
+            "--comment-body",
+            "/ai-pr-review false-positive F9 not a real bug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert "::notice::" in result.stderr
+    assert "inline finding" in result.stderr
+
+
 def test_feedback_context_non_github_provider_degrades_gracefully() -> None:
     runner = CliRunner()
     result = runner.invoke(

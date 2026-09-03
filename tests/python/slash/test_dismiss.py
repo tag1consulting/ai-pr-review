@@ -5,6 +5,7 @@ from __future__ import annotations
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.slash.dismiss import (
     FindingLocation,
+    bodies_newest_first,
     classify_finding,
     context_from_body_finding_id,
     list_active_body_ids,
@@ -213,6 +214,172 @@ def test_list_active_body_ids_empty_when_no_bullets() -> None:
     assert list_active_body_ids(["no findings here", ""]) == []
 
 
+# ---------------------------------------------------------------------------
+# Newest-first precedence: a stable F<n> ID can move between the body and
+# inline buckets across review cycles. `classify_finding` must trust the
+# newest review's rendering, not whichever body happens to be scanned first.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_prefers_newest_body_when_finding_moved_body_to_inline() -> None:
+    """Reproduces a live incident: F15 was an out-of-diff Low body bullet in
+    an older APPROVED review, then became an inline High finding (its own
+    thread, id-map entry only) in the newest CHANGES_REQUESTED review once
+    its line entered the diff. Classifying it as BODY (the old oldest-first
+    behavior) sent `/ai-pr-review dismiss F15` down the body-only branch --
+    no thread fetch, no resolve, no review dismissal -- even though the
+    finding was blocking the PR via an open inline thread."""
+    older_bullet = format_body_finding(
+        _finding("secret", source="trufflehog", file="hubspotForm.js", line=62, severity="low"),
+        finding_id=15,
+    )
+    older_body = "<details>\n<summary>Out-of-diff analyzer findings (1)</summary>\n\n" + older_bullet + "\n</details>"
+    id_map = {"trufflehog|hubspotForm.js|62|abc123456789": 15}
+    newer_body = "## AI Review Findings\n\n" + build_id_map_marker(id_map)
+
+    # bodies_newest_first orders highest-id review first; simulate that
+    # ordering directly (id ordering is bodies_newest_first's own concern,
+    # tested separately below).
+    result = classify_finding([newer_body, older_body], 15)
+
+    assert result.location is FindingLocation.INLINE
+
+
+def test_classify_prefers_newest_body_when_finding_moved_inline_to_body() -> None:
+    """The reverse move: an inline finding (id-map only, older review) whose
+    line later left the diff and became an out-of-diff body bullet in the
+    newest review. The newest body's own bullet context (source/file/line)
+    must win, not a generic INLINE classification from the older body."""
+    id_map = {"semgrep|eleventy.config.js|326|ea67f36bf10e": 4}
+    older_body = "## AI Review Findings\n\n" + build_id_map_marker(id_map)
+    f = _finding("path traversal", source="semgrep", file="eleventy.config.js", line=326)
+    bullet = format_body_finding(f, finding_id=4)
+    newer_body = "<details>\n<summary>Out-of-diff analyzer findings (1)</summary>\n\n" + bullet + "\n</details>"
+
+    result = classify_finding([newer_body, older_body], 4)
+
+    assert result.location is FindingLocation.BODY
+    assert result.source == "semgrep"
+    assert result.file == "eleventy.config.js"
+
+
+def test_classify_falls_back_to_older_body_when_dropped_from_newest() -> None:
+    """A finding absent from the newest review entirely (dropped this cycle,
+    e.g. a stale suppression) must still be found by falling through to an
+    older body that does know it -- the pre-existing fallback behavior,
+    preserved by the newest-first rewrite."""
+    f = _finding("style nit", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=7)
+    older_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+    newer_body = "## AI Review: Approved\n\nNo findings above the confidence threshold."
+
+    result = classify_finding([newer_body, older_body], 7)
+
+    assert result.location is FindingLocation.BODY
+    assert result.source == "phpcs"
+
+
+def test_classify_ignores_reply_created_empty_bodies() -> None:
+    """An empty body (GitHub's auto-created review from a bot reply via the
+    REST replies endpoint) carries no bullets and no id-map -- it must be
+    silently skipped, never mistaken for UNKNOWN before older bodies are
+    consulted."""
+    f = _finding("style nit", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=7)
+    older_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    result = classify_finding(["", older_body], 7)
+
+    assert result.location is FindingLocation.BODY
+
+
+def test_list_active_body_ids_excludes_id_now_classified_inline() -> None:
+    """The "please specify a finding ID" hint must never offer an ID that
+    `/ai-pr-review dismiss F<n>` would actually resolve as INLINE -- that
+    mismatch is what steered a user into the failing body-only path during
+    the live incident this fixes."""
+    id_map = {"trufflehog|hubspotForm.js|62|abc123456789": 15}
+    newer_body = "## AI Review Findings\n\n" + build_id_map_marker(id_map)
+    older_bullet = format_body_finding(
+        _finding("secret", source="trufflehog", file="hubspotForm.js", line=62, severity="low"),
+        finding_id=15,
+    )
+    older_body = "<details>\n<summary>Out-of-diff analyzer findings (1)</summary>\n\n" + older_bullet + "\n</details>"
+
+    f2 = _finding("style nit", source="phpcs", file="legacy.py", line=5)
+    still_body_bullet = format_body_finding(f2, finding_id=8)
+    still_body_body = "### Findings not attached to specific lines\n\n" + still_body_bullet + "\n"
+
+    assert list_active_body_ids([newer_body, older_body, still_body_body]) == [8]
+
+
+def test_bodies_newest_first_orders_by_review_id_descending() -> None:
+    reviews = [
+        {"id": 5, "body": "oldest"},
+        {"id": 12, "body": "newest"},
+        {"id": 9, "body": "middle"},
+    ]
+    assert bodies_newest_first(reviews) == ["newest", "middle", "oldest"]
+
+
+def test_bodies_newest_first_treats_missing_body_as_empty_string() -> None:
+    reviews = [{"id": 2, "body": None}, {"id": 1}]
+    assert bodies_newest_first(reviews) == ["", ""]
+
+
+# ---------------------------------------------------------------------------
+# Truncated-body safety: a >64KB review body truncates its visible findings
+# text before appending the id-map marker (GitHubProvider.
+# _finalize_body_with_markers), so a truncated newest body can carry an
+# id-map entry for an ID whose bullet was cut off. An id-map hit alone must
+# not be trusted as INLINE when the body is truncated.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_falls_back_to_older_bullet_when_newest_body_truncated() -> None:
+    """The newest review's body overflowed and was truncated -- its id-map
+    marker still lists F9 (markers are appended after truncation), but the
+    bullet that would classify it BODY was cut off. An older, untruncated
+    review still carries the full bullet. The older body's bullet must win;
+    trusting the truncated body's id-map hit would misclassify a body
+    finding as INLINE purely because of an unrelated size overflow."""
+    f = _finding("style nit", source="phpcs", file="legacy.py", line=5)
+    older_bullet = format_body_finding(f, finding_id=9)
+    older_body = "### Findings not attached to specific lines\n\n" + older_bullet + "\n"
+
+    id_map = {"phpcs|legacy.py|5|deadbeefcafe": 9}
+    truncated_newest_body = (
+        "## AI Review Findings\n\nsome truncated content\n\n---\n"
+        "*Review output truncated — body exceeded provider API limit (65,536 bytes). "
+        "Run a full review locally to see complete output.*\n"
+        + build_id_map_marker(id_map)
+    )
+
+    result = classify_finding([truncated_newest_body, older_body], 9)
+
+    assert result.location is FindingLocation.BODY
+    assert result.source == "phpcs"
+
+
+def test_classify_falls_back_to_inline_when_only_truncated_body_knows_id() -> None:
+    """Same truncated-newest-body shape, but no older review ever rendered
+    this ID at all (a brand new finding that also happened to overflow the
+    body). There is nothing better to fall back to, so the truncated body's
+    id-map hit is still used rather than reporting UNKNOWN and losing the
+    information entirely."""
+    id_map = {"phpcs|legacy.py|5|deadbeefcafe": 9}
+    truncated_body = (
+        "## AI Review Findings\n\nsome truncated content\n\n---\n"
+        "*Review output truncated — body exceeded provider API limit (65,536 bytes). "
+        "Run a full review locally to see complete output.*\n"
+        + build_id_map_marker(id_map)
+    )
+
+    result = classify_finding([truncated_body], 9)
+
+    assert result.location is FindingLocation.INLINE
+
+
 def test_classify_finding_scans_all_bodies_not_just_first() -> None:
     f = _finding("finding in second review", file="z.py", line=1)
     bullet = format_body_finding(f, finding_id=2)
@@ -314,6 +481,26 @@ def test_context_from_body_finding_id_inline_sets_notice_not_missing_reason() ->
     assert context.missing_reason == ""
     assert "inline finding" in context.notice
     assert "F4" in context.notice
+
+
+def test_context_from_body_finding_id_moved_to_inline_returns_notice() -> None:
+    """A finding still rendered as a body bullet in an older review, but now
+    an id-map-only INLINE finding in the newest review, must report INLINE
+    (using the newest review's rendering) -- not stale BODY context from the
+    superseded older bullet."""
+    older_bullet = format_body_finding(
+        _finding("secret", source="trufflehog", file="hubspotForm.js", line=62, severity="low"),
+        finding_id=15,
+    )
+    older_body = "<details>\n<summary>Out-of-diff analyzer findings (1)</summary>\n\n" + older_bullet + "\n</details>"
+    id_map = {"trufflehog|hubspotForm.js|62|abc123456789": 15}
+    newer_body = "## AI Review Findings\n\n" + build_id_map_marker(id_map)
+
+    context = context_from_body_finding_id([newer_body, older_body], 15)
+
+    assert context.source == ""
+    assert "inline finding" in context.notice
+    assert "F15" in context.notice
 
 
 def test_context_from_body_finding_id_not_found_is_silent() -> None:

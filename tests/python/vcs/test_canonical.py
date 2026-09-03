@@ -106,7 +106,57 @@ def test_select_canonical_empty_returns_none() -> None:
 
 
 def test_select_canonical_skips_non_int_id() -> None:
-    assert select_canonical([{"id": "not-an-int", "state": "COMMENTED", "body": ""}]) is None
+    # Non-empty body, so the empty-body filter (added for the reply-created
+    # implicit-review fix) isn't what makes this None -- it's genuinely the
+    # non-int `id` branch being exercised.
+    assert (
+        select_canonical([{"id": "not-an-int", "state": "COMMENTED", "body": "some body"}])
+        is None
+    )
+
+
+def test_select_canonical_skips_empty_and_whitespace_bodies() -> None:
+    """GitHub auto-creates a body-less review (state COMMENTED) every time
+    the bot replies to an inline comment via the REST replies endpoint. Left
+    unfiltered, that review -- often the highest id -- becomes canonical and
+    GitHub then rejects any PUT to it (HTTP 422: "Could not edit a review
+    with a missing body"), silently dropping every verdict recorded from
+    then on. The next non-empty review, regardless of its own id gap, must
+    be selected instead."""
+    reviews = [
+        {"id": 5, "state": "CHANGES_REQUESTED", "body": "## AI Review Findings\n..."},
+        {"id": 6, "state": "COMMENTED", "body": ""},
+        {"id": 7, "state": "COMMENTED", "body": "   \n\t  "},
+    ]
+    canonical = select_canonical(reviews)
+    assert canonical == CanonicalReview(
+        review_id=5, state="CHANGES_REQUESTED", body="## AI Review Findings\n..."
+    )
+
+
+def test_select_canonical_all_bodies_empty_returns_none() -> None:
+    reviews = [
+        {"id": 1, "state": "COMMENTED", "body": ""},
+        {"id": 2, "state": "COMMENTED", "body": None},
+    ]
+    assert select_canonical(reviews) is None
+
+
+def test_select_canonical_keeps_footerless_non_empty_body() -> None:
+    """A non-empty body with no footer marker (e.g. `GitHubProvider.
+    submit_approval`'s human-facing auto-approve message, issue #590) must
+    still be eligible as canonical -- the empty-body filter is not a footer
+    check. `decide_action` is what separately falls back to `"post"` for a
+    footer-less canonical; `select_canonical` must not pre-empt that by
+    excluding it here on a different criterion."""
+    reviews = [
+        {"id": 3, "state": "CHANGES_REQUESTED", "body": "## AI Review Findings\n..."},
+        {"id": 9, "state": "APPROVED", "body": "@alice cleared the last active finding."},
+    ]
+    canonical = select_canonical(reviews)
+    assert canonical == CanonicalReview(
+        review_id=9, state="APPROVED", body="@alice cleared the last active finding."
+    )
 
 
 # ---------------------------------------------------------------------------
