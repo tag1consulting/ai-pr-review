@@ -318,12 +318,12 @@ def test_cache_priming_env_true(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.cache_priming is True
 
 
-def test_anthropic_premium_default_is_opus_4_8(monkeypatch: pytest.MonkeyPatch) -> None:
-    """resolve_models() should fill the Anthropic premium slot with claude-opus-4-8."""
+def test_anthropic_premium_default_is_opus_5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_models() should fill the Anthropic premium slot with claude-opus-5."""
     monkeypatch.delenv("AI_MODEL_PREMIUM", raising=False)
     monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
     cfg = ReviewConfig(provider="anthropic").resolve_models()
-    assert cfg.model_premium == "claude-opus-4-8"
+    assert cfg.model_premium == "claude-opus-5"
 
 
 def test_anthropic_standard_default_is_sonnet_5(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -56,7 +56,7 @@ TARGET_AGENT_NAMES = ("code-reviewer", "silent-failure-hunter")
 # a real, live-tested key for the new provider; an entry with no working
 # key is a false claim of coverage, not a canary.
 PROVIDER_MODELS: dict[str, tuple[str, str, str]] = {
-    "anthropic": ("ANTHROPIC_API_KEY", "claude-sonnet-5", "claude-opus-4-8"),
+    "anthropic": ("ANTHROPIC_API_KEY", "claude-sonnet-5", "claude-opus-5"),
 }
 
 

@@ -41,7 +41,7 @@ _ANTHROPIC_VERSION = "2023-06-01"
 
 # The exact model IDs ai-pr-review defaults to (config.py) and that
 # resolve_temperature() strips temperature for.
-MODELS = ("claude-sonnet-5", "claude-opus-4-8")
+MODELS = ("claude-sonnet-5", "claude-opus-4-8", "claude-opus-5")
 
 # temperature configurations to probe. None => omit the field entirely (the
 # baseline ai-pr-review currently sends); 0.0 and 1.0 => send an explicit value.

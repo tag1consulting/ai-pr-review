@@ -31,6 +31,12 @@ def test_resolve_temperature_rejected_for_opus_4_7() -> None:
     assert resolve_temperature(0.3, "claude-opus-4-7") is None
 
 
+def test_resolve_temperature_rejected_for_opus_5() -> None:
+    """Opus 5 was live-verified (2026-09-03) to reject temperature identically
+    to Opus 4.8, ahead of its default-model bump."""
+    assert resolve_temperature(0.3, "claude-opus-5") is None
+
+
 def test_resolve_temperature_accepted_for_sonnet_4_6() -> None:
     """Regression lock: Sonnet 4.6 still accepts a non-default temperature."""
     assert resolve_temperature(0.3, "claude-sonnet-4-6") == 0.3
@@ -64,6 +70,15 @@ def test_resolve_effort_omitted_for_opus_4_8() -> None:
 def test_resolve_effort_omitted_for_opus_4_7() -> None:
     """Regression lock: Opus 4.7 also has thinking off by default."""
     assert resolve_effort("claude-opus-4-7") is None
+
+
+def test_resolve_effort_low_for_opus_5() -> None:
+    """Unlike Opus 4.7/4.8, Opus 5 has adaptive thinking ON by default -- live
+    verified 2026-09-03 against tests/canary/stress_diff.txt: 206s/11,433
+    thinking tokens uncapped vs. 67s/2,464 capped at effort="low", the same
+    mitigation Sonnet 5 needed for issue #592. Ahead of the default-model
+    bump, so this must not regress back to None."""
+    assert resolve_effort("claude-opus-5") == "low"
 
 
 def test_resolve_effort_omitted_for_sonnet_4_6() -> None:

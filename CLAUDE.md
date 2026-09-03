@@ -41,7 +41,7 @@ The action uses the Python engine in `ai_pr_review/`.
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-5` | `claude-opus-4-8` |
+| `anthropic` | `claude-sonnet-5` | `claude-opus-5` |
 | `openai` | `gpt-5.4-mini` | `gpt-5.4` |
 | `openai-compatible` | (user-specified) | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |
@@ -50,6 +50,8 @@ The action uses the Python engine in `ai_pr_review/`.
 ### Verifying a model change before merge (required)
 
 Any PR that changes a default model (this table) or adds a new supported model **must** verify the change against a genuinely demanding diff before merge, not just a small representative one. This is a hard lesson from #592: Sonnet 5 became the default (#583) with unit tests (no network access, can't observe real model behavior) plus one live e2e run against a 310-line, 6-file diff. That diff didn't demand enough reasoning to trigger Sonnet 5's adaptive-thinking-exhausts-max_tokens failure mode, which then crashed `code-reviewer`/`silent-failure-hunter` on the first real PR complex enough to hit it.
+
+The process caught the same failure class again on the Opus 5 bump (2026-09-03): live-verified against `stress_diff.txt` with no effort cap, Opus 5 took 206s and spent 11,433 thinking tokens (vs. Opus 4.8's 44s/0 thinking tokens on the identical prompt) — comfortably exceeding `llm/anthropic.py`'s 180s client timeout under real load. Unlike Opus 4.7/4.8 (thinking off by default, explicit opt-in required), Opus 5 has adaptive thinking **on** by default. `resolve_effort()` now caps it at `"low"` the same way it already did for Sonnet 5, live-verified to bring the same prompt down to 67s/2,464 thinking tokens.
 
 Before merging a model-default or new-model-support PR:
 

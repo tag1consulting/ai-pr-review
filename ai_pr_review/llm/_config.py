@@ -45,8 +45,9 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
     Returning None (which makes the provider modules omit the `temperature`
     field entirely) is REQUIRED for the models listed below, not merely
     conservative. Verified against the live Anthropic Messages API on
-    2026-07-21 (tests/canary/temperature_verify.py), identical for
-    claude-sonnet-5 and claude-opus-4-8:
+    2026-07-21 (tests/canary/temperature_verify.py) for claude-sonnet-5 and
+    claude-opus-4-8, and re-verified 2026-09-03 for claude-opus-5 (identical
+    behavior confirmed live ahead of the Opus 5 default-model bump):
 
         temperature omitted -> HTTP 200
         temperature=0.0     -> HTTP 400  "`temperature` is deprecated for this model."
@@ -63,7 +64,8 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
     """
     lower = model_id.lower()
     if (
-        "opus-4-8" in lower
+        "opus-5" in lower
+        or "opus-4-8" in lower
         or "opus-4.8" in lower
         or "opus-4-7" in lower
         or "opus-4.7" in lower
@@ -82,16 +84,25 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
 def resolve_effort(model_id: str) -> str | None:
     """Return the output_config.effort value to send for this model, or None to omit it.
 
-    Only Claude Sonnet 5 has adaptive thinking on by default (implicit effort="high"),
+    Claude Sonnet 5 has adaptive thinking on by default (implicit effort="high"),
     which can consume max_tokens entirely on thinking before any text is produced
     (see issue #592). Capping effort at "low" bounds thinking without disabling it
     outright. Other models either don't support adaptive thinking (predate it, would
     400 on an unrecognized output_config) or have thinking off by default already
     (Opus 4.7/4.8 require an explicit thinking:{type:adaptive} opt-in), so they don't
     have this failure mode and must not receive the parameter.
+
+    Claude Opus 5 was verified live (2026-09-03, ahead of its default-model bump)
+    to ALSO have adaptive thinking on by default -- unlike Opus 4.7/4.8, this is
+    a new default-on behavior for Opus 5 specifically. Against
+    tests/canary/stress_diff.txt with no effort cap: 206s wall time, 11,433
+    thinking tokens, comfortably exceeding llm/anthropic.py's 180s client
+    timeout under real load. With effort="low": 67s wall time, 2,464 thinking
+    tokens -- same mitigation as Sonnet 5, verified to actually work rather
+    than assumed to carry over.
     """
     lower = model_id.lower()
-    if "sonnet-5" in lower:
+    if "sonnet-5" in lower or "opus-5" in lower:
         return "low"
     return None
 
