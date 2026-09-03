@@ -7,11 +7,14 @@ object or array), and converts failed_checks to Finding instances.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from ai_pr_review.findings.models import Finding
@@ -97,19 +100,41 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     for f in target_files:
         file_args += ["--file", f]
 
+    # Never let checkov auto-discover .checkov.yaml/.checkov.yml from the
+    # analyzed workspace: the workspace may be untrusted fork-PR content
+    # checked out under pull_request_target (#739), and that config can set
+    # `external-checks-dir` to import arbitrary Python check modules from the
+    # repo. An explicit --config-file always takes priority over checkov's
+    # own auto-discovery, so pointing it at a fresh, empty file guarantees no
+    # workspace config is ever honored, regardless of trust context.
     try:
-        result = subprocess.run(
-            ["checkov", *file_args, "--output", "json", "--quiet", "--compact"],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: checkov timed out after %ss; skipping.", exc.timeout)
-        return []
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", prefix="checkov-trusted-", delete=False
+        ) as trusted_config:
+            trusted_config.write("# Deliberately empty; see #739.\n")
+            trusted_config_path = trusted_config.name
     except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: checkov failed to start: %s", exc)
+        logger.warning("[ai-pr-review] WARNING: could not create trusted checkov config: %s; skipping.", exc)
         return []
+
+    try:
+        try:
+            result = subprocess.run(
+                ["checkov", *file_args, "--config-file", trusted_config_path,
+                 "--output", "json", "--quiet", "--compact"],
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.warning("[ai-pr-review] WARNING: checkov timed out after %ss; skipping.", exc.timeout)
+            return []
+        except OSError as exc:
+            logger.warning("[ai-pr-review] WARNING: checkov failed to start: %s", exc)
+            return []
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(trusted_config_path)
 
     if result.returncode >= 2:
         logger.warning(

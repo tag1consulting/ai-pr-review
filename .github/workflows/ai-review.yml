@@ -82,8 +82,16 @@ jobs:
           persist-credentials: false
           allow-unsafe-pr-checkout: true
 
+      # A fork PR can commit its own sarif-results/ directory. Without the
+      # rm -rf, a pre-committed file at one of the three fixed names below
+      # (ruff.sarif/hadolint.sarif/semgrep.sarif) would survive untouched if
+      # the corresponding real analyzer step fails to produce output (masked
+      # by each step's continue-on-error: true) and gets treated as a
+      # confidence-90 corroborating SARIF finding (#739).
       - name: Create results dir
-        run: mkdir -p sarif-results
+        run: |
+          rm -rf sarif-results
+          mkdir -p sarif-results
 
       # --- Ruff (Python) ---
       - uses: actions/setup-python@v7
@@ -225,6 +233,14 @@ jobs:
           head_sha=$(git rev-parse HEAD)
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           echo "base_ref=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      # Fork PR content checked out above may include its own sarif-results/
+      # directory; clear it before downloading the real artifact so a
+      # download failure or cache miss (continue-on-error below) can never
+      # leave a fork-committed file sitting at one of the fixed SARIF names
+      # the container-action ingests as confidence-90 findings (#739).
+      - name: Clear results dir before download
+        run: rm -rf sarif-results
 
       # Download the SARIF artifacts produced by the sarif-prep job.
       # continue-on-error so a prep failure or cache miss doesn't block the review.

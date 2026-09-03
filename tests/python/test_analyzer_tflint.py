@@ -48,6 +48,52 @@ class TestRunTflintGuards:
         assert "tflint not found" in caplog.text
 
 
+class TestRunTflintTrustedConfig:
+    def test_workspace_tflint_hcl_never_auto_discovered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fork-committed .tflint.hcl (which could set plugin_dir to a
+        fork-committed plugin binary) must never be passed to tflint -- an
+        explicit --config pointing at a trusted, empty file always wins over
+        auto-discovery, and TFLINT_PLUGIN_DIR is pinned to a fresh empty
+        directory as defense in depth (#739)."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".tflint.hcl").write_text('plugin "evil" {\n  enabled = true\n}\n')
+        tf = tmp_path / "main.tf"
+        tf.write_text('resource "x" "y" {}\n')
+        cf = _make_cf([str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
+            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"issues":[],"errors":[]}', stderr="")
+            _run_tflint(cf, Path("/dev/null"))
+        call_args, call_kwargs = mock_run.call_args
+        args = call_args[0]
+        config_args = [a for a in args if a.startswith("--config=")]
+        assert len(config_args) == 1
+        configured_path = config_args[0].removeprefix("--config=")
+        assert configured_path != str(tmp_path / ".tflint.hcl")
+        assert not configured_path.startswith(str(tmp_path))
+        plugin_dir = call_kwargs["env"]["TFLINT_PLUGIN_DIR"]
+        assert not plugin_dir.startswith(str(tmp_path))
+
+    def test_trusted_config_file_cleaned_up(self, tmp_path: Path) -> None:
+        tf = tmp_path / "main.tf"
+        tf.write_text('resource "x" "y" {}\n')
+        cf = _make_cf([str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
+            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"issues":[],"errors":[]}', stderr="")
+            _run_tflint(cf, Path("/dev/null"))
+        args, kwargs = mock_run.call_args
+        configured_path = next(a for a in args[0] if a.startswith("--config=")).removeprefix("--config=")
+        assert not Path(configured_path).exists()
+        assert not Path(kwargs["env"]["TFLINT_PLUGIN_DIR"]).exists()
+
+
 class TestRunTflintFindings:
     def _run_with_fixture(self, fixture_name: str, tmp_path: Path) -> list:
         fixture = _load_fixture(fixture_name)
