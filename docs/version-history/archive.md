@@ -8,7 +8,11 @@ render_with_liquid: false
 
 # Older releases
 
-v2.4.3 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.4.4 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.4.4
+
+**Slash-command reviews (`rescan`, `review-full`) now post as `github-actions[bot]` instead of the `GH_TOKEN` PAT's owner.** The reusable slash-commands workflow was routing the PAT reserved for the `dismiss` command's thread-resolution call into the same token used for posting the review itself, so anyone running `/ai-pr-review rescan` or `/ai-pr-review review-full` on a repo with a personal-PAT `GH_TOKEN` saw the review attributed to that person instead of the bot. Fixed to match the automatic review job's token wiring.
 
 ## v2.4.3
 
