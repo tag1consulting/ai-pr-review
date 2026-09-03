@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.7.0] - 2026-09-02
 
-### Fixed
-
-- Bitbucket's rendered review comment placed the token-usage table after the carried-forward PR walkthrough, so a long walkthrough could push the whole body past the 32,000-byte truncation limit and silently cut off the (always small) token table — including the model name, which the `ai-pr-review-e2e` canary checks for. The token table now renders immediately after findings, before the walkthrough, matching the ordering already used to protect findings from the same truncation (issue #728).
-
 ### Added
 
 - **Canonical-review reuse (GitHub)**: rerunning the review no longer always posts a new review object. A fully quiet rerun updates the existing review's body in place; a still-open finding is updated (with a reply on severity escalation) rather than reposted; a `fixed` finding that recurs gets a reply and its thread reopened; a `dismiss`/`false-positive`/`wont-fix`'d finding is never reposted, even a fuzzy-matched nearby one of a compatible category and no higher severity. Only a genuinely new finding — or one severe enough (High/Critical) to require visibility regardless of diff anchoring — triggers a fresh review, and the prior blocking review is dismissed only after the fresh review is confirmed to have actually posted. Set `AI_CANONICAL_REUSE=false` to disable. See [docs/features.md](docs/features.md#quiet-reruns-github). GitHub-only; GitLab/Bitbucket parity tracked in issue #710.
@@ -23,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `_record_verdict` (the `/ai-pr-review dismiss`/`false-positive`/`wont-fix`/`fixed` verdict-recording path) now seeds its verdicts map from every prior bot review, not just the canonical review's own body — a marker-less review becoming canonical (e.g. the PR-wide auto-approve path's human-facing message) could previously erase every earlier verdict the next time one was recorded.
 - Canonical-review reuse's thread-ownership check compared GitHub's GraphQL-reported author login (`"github-actions"`) against a REST-style constant (`"github-actions[bot]"`), rejecting every real thread and making the entire reuse feature a no-op in production while also defeating its own dismiss-safety gate. `resolve_stale` and `_dismiss_stale_reviews` had the same pre-existing bug, independent of and predating canonical-review reuse. Fixed everywhere by normalizing the REST-style constant before comparison (`ai_pr_review.vcs._stale.graphql_bot_login()`), which restores the author check as a real defense-in-depth signal instead of dropping it (issue #717).
 - Fixing #717 made `resolve_stale` recognize real threads again, which would have immediately undone canonical-review reuse's own thread keep-alive: it would re-resolve a thread `post_findings` had just PATCHed (`update`/`escalate`) or reopened (`recurred`) in the same run. `post_findings` now records the thread ids it touched each run (`GitHubProvider._kept_alive_thread_ids`) and `resolve_stale` skips them (issue #718).
+- Bitbucket's rendered review comment placed the token-usage table after the carried-forward PR walkthrough, so a long walkthrough could push the whole body past the 32,000-byte truncation limit and silently cut off the (always small) token table — including the model name, which the `ai-pr-review-e2e` canary checks for. The token table now renders immediately after findings, before the walkthrough, matching the ordering already used to protect findings from the same truncation (issue #728).
 
 ### Security
 
