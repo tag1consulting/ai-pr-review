@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-contradictory verdicts marker no longer trusted (issue #755).** A GitHub review's `<!-- ai-pr-review-verdicts: ... -->` marker was observed claiming a finding `"dismissed"` in the very same review body that rendered it as a visible, non-suppressed finding — a state `classify()`'s own logic proves impossible under any normal code path (a truly-dismissed finding is excluded from rendering entirely; a recurring `"fixed"` finding has its verdict overwritten to the `"recurred"` tombstone in the same pass that renders it). The exact write path that produced the contradiction was not found (GitHub Actions job logs had already expired by investigation time, and a live reproduction against realistic prior-review state proved `ai_pr_review`'s own code sends byte-identical, marker-less bodies for both halves of the APPROVE+inline dual-post — see `github.py`'s `_post_new_review`). Trusting a contradictory `"dismissed"`/`"fixed"` entry risks permanently and silently suppressing a finding no human ever acted on, since `classify()` short-circuits to `"suppressed"` on the next run before a human ever sees it again. `merge_verdicts()` now cross-checks each review's verdicts marker against that same review's own id-map and drops any `"dismissed"`/`"fixed"` entry contradicted by a rendered fingerprint in the identical body, logging loudly if it fires (a repeat would provide the debug signal this investigation couldn't get from expired logs). `_apply_classification_side_effects` also gained a narrower, complementary invariant check for the same contradiction, scoped to findings classified `"new"` in the current run.
+
 ## [2.8.0] - 2026-09-03
 
 ### Changed

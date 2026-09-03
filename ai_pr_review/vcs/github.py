@@ -717,6 +717,33 @@ class GitHubProvider:
         for c in classified:
             if c.kind == "suppressed":
                 suppressed_count += 1
+            elif c.kind == "new":
+                # Invariant: classify() only returns "new" after checking
+                # verdicts.get(fp) is neither "dismissed" nor "fixed" (see
+                # _canonical.classify -- an exact or fuzzy "dismissed" match
+                # returns "suppressed", and an exact "fixed" match returns
+                # "recurred", both before falling through to "new"). So a
+                # "new"-classified finding provably had no "dismissed"/"fixed"
+                # entry in `verdicts` at classification time (issue #755: a
+                # "dismissed" entry was observed in a *freshly posted* review
+                # for findings that had never been dismissed by a human --
+                # root cause not found via static tracing or expired CI
+                # logs). Rather than trust that invariant silently, enforce
+                # it here: strip any contradictory carried-forward entry so a
+                # never-dismissed finding can never render as "dismissed" in
+                # the marker this run writes, and log loudly so a recurrence
+                # has an actual stack/context to debug from.
+                fp = fingerprint(c.finding)
+                stale_verdict = updated_verdicts.get(fp)
+                if stale_verdict in ("dismissed", "fixed"):
+                    _log.error(
+                        "github: invariant violation (issue #755) -- finding "
+                        "classified 'new' but verdicts carried a stale %r "
+                        "entry for fingerprint %r; stripping it before "
+                        "writing the verdicts marker. file=%s line=%s",
+                        stale_verdict, fp, c.finding.file, c.finding.line,
+                    )
+                    del updated_verdicts[fp]
             elif c.kind == "recurred":
                 updated_verdicts[fingerprint(c.finding)] = "recurred"
                 if c.thread is not None:

@@ -47,6 +47,7 @@ before the drift still resolves back to the same thread afterwards.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -61,7 +62,9 @@ from ai_pr_review.vcs._finding_ids import (
     safe_review_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
-from ai_pr_review.vcs.marker import extract_inline_meta, extract_verdicts
+from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, extract_verdicts
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ai_pr_review.findings.models import Finding
@@ -183,11 +186,44 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     every verdict ever recorded (this is also why
     `ai_pr_review.slash.dismiss._record_verdict` seeds from this same
     union rather than from the canonical body alone).
+
+    Self-consistency guard (issue #755): every legitimate code path that
+    renders a finding in a review's own body also guarantees that same
+    body's verdicts marker does not claim `"dismissed"`/`"fixed"` for it --
+    `classify()` excludes an exact-or-fuzzy `"dismissed"` match from
+    rendering entirely (`kind="suppressed"`), and a `"fixed"` match that
+    recurs gets its verdict overwritten to the `"recurred"` tombstone in the
+    very same `_apply_classification_side_effects` call that renders it
+    (`ai_pr_review.vcs.github`). So a review whose own id-map shows a
+    fingerprint as rendered, and whose own verdicts marker simultaneously
+    claims that identical fingerprint `"dismissed"` or `"fixed"`, is
+    self-contradictory -- one of the two claims within that single body is
+    wrong, and trusting the "dismissed" claim risks permanently, silently
+    suppressing a finding no human ever acted on (`classify()` short-circuits
+    to `"suppressed"` before a human ever sees it again). The rendered
+    content is the stronger signal (a human could see it), so a
+    contradictory dismissed/fixed entry is dropped rather than trusted, with
+    a loud log line since this observably happened once (#755) with no
+    located write path.
     """
     ordered = sorted(reviews, key=safe_review_id)
     result: dict[str, str] = {}
     for r in ordered:
-        result.update(extract_verdicts(str(r.get("body") or "")))
+        body = str(r.get("body") or "")
+        verdicts = extract_verdicts(body)
+        rendered_fps = extract_id_map(body).keys()
+        for fp, verdict in verdicts.items():
+            if verdict in ("dismissed", "fixed") and fp in rendered_fps:
+                _log.error(
+                    "github: self-contradictory verdicts marker (issue #755) "
+                    "-- review %r renders fingerprint %r in its own id-map "
+                    "while its verdicts marker claims %r for the same "
+                    "fingerprint; dropping the contradictory verdict rather "
+                    "than risk permanently suppressing an un-dismissed finding",
+                    r.get("id"), fp, verdict,
+                )
+                continue
+            result[fp] = verdict
     return result
 
 
