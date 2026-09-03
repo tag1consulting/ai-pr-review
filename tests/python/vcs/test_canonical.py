@@ -25,7 +25,11 @@ from ai_pr_review.vcs._canonical import (
     select_canonical,
 )
 from ai_pr_review.vcs._finding_ids import fingerprint
-from ai_pr_review.vcs.marker import build_inline_meta_marker, build_verdicts_marker
+from ai_pr_review.vcs.marker import (
+    build_id_map_marker,
+    build_inline_meta_marker,
+    build_verdicts_marker,
+)
 
 _FOOTER_BODY = (
     "## AI Review Findings\n\nsome body\n\n---\n"
@@ -191,6 +195,54 @@ def test_merge_verdicts_recurred_tombstone_in_older_body_wins_over_stale_fixed_i
 
 def test_merge_verdicts_empty() -> None:
     assert merge_verdicts([]) == {}
+
+
+def test_merge_verdicts_drops_dismissed_entry_contradicted_by_own_id_map() -> None:
+    """Issue #755: a review whose own body renders a finding (id-map entry)
+    cannot legitimately also claim, in that same body's verdicts marker,
+    that the identical fingerprint is "dismissed" -- classify() excludes a
+    truly-dismissed finding from rendering entirely. A body making both
+    claims at once is self-contradictory; the rendered claim (visible to a
+    human) wins and the "dismissed" entry must not be trusted, since
+    trusting it would permanently suppress a finding no human ever acted on."""
+    contradictory_body = (
+        build_id_map_marker({"fp-a": 1, "fp-b": 2})
+        + "\n"
+        + build_verdicts_marker({"fp-a": "dismissed", "fp-c": "dismissed"})
+    )
+    reviews = [{"id": 1, "body": contradictory_body}]
+    # fp-a: dropped (rendered in this same body's id-map -- contradiction).
+    # fp-c: kept ("dismissed" and never rendered here -- no contradiction).
+    assert merge_verdicts(reviews) == {"fp-c": "dismissed"}
+
+
+def test_merge_verdicts_drops_fixed_entry_contradicted_by_own_id_map() -> None:
+    """Same self-consistency guard, "fixed" variant: a recurring finding's
+    verdict is overwritten to the "recurred" tombstone in the same call that
+    renders it (github.py's _apply_classification_side_effects), so a body
+    that renders a fingerprint while its own marker still claims "fixed" for
+    it is equally contradictory."""
+    contradictory_body = (
+        build_id_map_marker({"fp-a": 1})
+        + "\n"
+        + build_verdicts_marker({"fp-a": "fixed"})
+    )
+    reviews = [{"id": 1, "body": contradictory_body}]
+    assert merge_verdicts(reviews) == {}
+
+
+def test_merge_verdicts_recurred_not_contradicted_by_own_id_map() -> None:
+    """The "recurred" tombstone is expected to coexist with a rendered
+    id-map entry in the very same body (that's exactly how it gets written
+    -- github.py sets it in the same pass that renders the recurrence as a
+    body bullet), so it must never trip the self-consistency guard."""
+    body = (
+        build_id_map_marker({"fp-a": 1})
+        + "\n"
+        + build_verdicts_marker({"fp-a": "recurred"})
+    )
+    reviews = [{"id": 1, "body": body}]
+    assert merge_verdicts(reviews) == {"fp-a": "recurred"}
 
 
 # ---------------------------------------------------------------------------
