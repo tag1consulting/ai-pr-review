@@ -6,12 +6,14 @@ invokes phpstan, and converts its JSON output to Finding instances.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -27,6 +29,13 @@ _PHP_EXTENSIONS = frozenset({".php", ".module", ".inc", ".theme", ".install", ".
 _REMEDIATION = "Fix the type error reported by PHPStan. See https://phpstan.org/user-guide/getting-started"
 _VALID_LEVEL_RE = re.compile(r"^[0-9]$")
 _DEFAULT_LEVEL = "3"
+
+# Absolute, image-baked composer install (see Dockerfile) — never a path
+# relative to the analyzed workspace. Used only to give Drupal-aware analysis
+# when the shipped container has phpstan-drupal installed; absent entirely in
+# non-container (direct-action) deployments, where this simply evaluates False.
+_BAKED_COMPOSER_AUTOLOAD = Path("/opt/composer/vendor/autoload.php")
+_BAKED_PHPSTAN_DRUPAL = Path("/opt/composer/vendor/mglaman/phpstan-drupal")
 
 
 def _severity_for_level(level: str) -> Literal["High", "Medium", "Low"]:
@@ -65,16 +74,31 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         )
         level = _DEFAULT_LEVEL
 
-    args = ["phpstan", "analyse", "--error-format=json", "--no-progress", "--memory-limit=512M"]
+    # Never let phpstan auto-discover phpstan.neon/phpstan.neon.dist from the
+    # analyzed workspace: the workspace may be untrusted fork-PR content
+    # checked out under pull_request_target (#739), and a config file's
+    # `bootstrapFiles`/`includes` entries are arbitrary PHP executed by this
+    # subprocess. `--configuration` always takes priority over PHPStan's own
+    # auto-discovery, so pointing it at an empty, freshly-created file
+    # guarantees no workspace config is ever honored, regardless of trust
+    # context. This intentionally drops the previous "consumer phpstan.neon
+    # drives everything" behavior; PHPSTAN_LEVEL now always applies.
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".neon", prefix="phpstan-trusted-", delete=False
+        ) as trusted_config:
+            trusted_config.write("# Deliberately empty; see #739.\n")
+            trusted_config_path = trusted_config.name
+    except OSError as exc:
+        logger.warning("[ai-pr-review] WARNING: could not create trusted phpstan config: %s; skipping.", exc)
+        return []
 
-    has_config = Path("phpstan.neon").is_file() or Path("phpstan.neon.dist").is_file()
-    if has_config:
-        # Consumer config drives everything
-        pass
-    else:
-        args.append(f"--level={level}")
-        if Path("vendor/mglaman/phpstan-drupal").is_dir() and Path("vendor/autoload.php").is_file():
-            args.append("--autoload-file=vendor/autoload.php")
+    args = [
+        "phpstan", "analyse", "--error-format=json", "--no-progress", "--memory-limit=512M",
+        f"--configuration={trusted_config_path}", f"--level={level}",
+    ]
+    if _BAKED_PHPSTAN_DRUPAL.is_dir() and _BAKED_COMPOSER_AUTOLOAD.is_file():
+        args.append(f"--autoload-file={_BAKED_COMPOSER_AUTOLOAD}")
 
     # `--` stops option parsing so an attacker-controlled changed-file path
     # beginning with a dash (e.g. `--autoload-file=evil.php`) is treated as a
@@ -83,18 +107,22 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     args += target_files
 
     try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: phpstan timed out after %ss; skipping.", exc.timeout)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: phpstan failed to start: %s", exc)
-        return []
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.warning("[ai-pr-review] WARNING: phpstan timed out after %ss; skipping.", exc.timeout)
+            return []
+        except OSError as exc:
+            logger.warning("[ai-pr-review] WARNING: phpstan failed to start: %s", exc)
+            return []
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(trusted_config_path)
 
     if result.returncode >= 2:
         logger.warning(

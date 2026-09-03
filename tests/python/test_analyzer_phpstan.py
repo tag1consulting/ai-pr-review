@@ -232,9 +232,14 @@ class TestRunPhpstanFindings:
             findings = _run_phpstan(cf, Path("/dev/null"))
         assert findings == []
 
-    def test_config_present_skips_level_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_workspace_phpstan_neon_never_auto_discovered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fork-committed phpstan.neon must not suppress --level or be
+        passed to phpstan; the analyzer always drives its own trusted,
+        empty --configuration file instead (#739)."""
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "phpstan.neon").write_text("parameters:\n  level: 5\n")
+        (tmp_path / "phpstan.neon").write_text("parameters:\n  level: 5\n  bootstrapFiles: [evil.php]\n")
         f = tmp_path / "MyService.php"
         f.write_text("<?php\n")
         cf = _make_cf([str(f)])
@@ -245,9 +250,17 @@ class TestRunPhpstanFindings:
             mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
             _run_phpstan(cf, Path("/dev/null"))
         call_args = mock_run.call_args[0][0]
-        assert not any(a.startswith("--level=") for a in call_args)
+        assert "--level=3" in call_args
+        config_args = [a for a in call_args if a.startswith("--configuration=")]
+        assert len(config_args) == 1
+        configured_path = config_args[0].removeprefix("--configuration=")
+        assert configured_path != str(tmp_path / "phpstan.neon")
+        assert not configured_path.startswith(str(tmp_path))
 
-    def test_drupal_autoload_added_when_available(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_workspace_vendor_autoload_not_used(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A fork-committed vendor/autoload.php must never be passed to
+        --autoload-file -- only the image-baked, absolute composer path
+        counts (#739)."""
         monkeypatch.chdir(tmp_path)
         vendor_drupal = tmp_path / "vendor" / "mglaman" / "phpstan-drupal"
         vendor_drupal.mkdir(parents=True)
@@ -262,7 +275,49 @@ class TestRunPhpstanFindings:
             mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
             _run_phpstan(cf, Path("/dev/null"))
         call_args = mock_run.call_args[0][0]
-        assert "--autoload-file=vendor/autoload.php" in call_args
+        assert not any(a.startswith("--autoload-file=") for a in call_args)
+
+    def test_baked_drupal_autoload_used_when_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The image-baked composer path (absolute, never fork-controlled)
+        is honored when present."""
+        baked_vendor = tmp_path / "opt-composer" / "vendor"
+        (baked_vendor / "mglaman" / "phpstan-drupal").mkdir(parents=True)
+        (baked_vendor / "autoload.php").write_text("<?php\n")
+        monkeypatch.setattr(
+            "ai_pr_review.analyzers.native.phpstan._BAKED_PHPSTAN_DRUPAL",
+            baked_vendor / "mglaman" / "phpstan-drupal",
+        )
+        monkeypatch.setattr(
+            "ai_pr_review.analyzers.native.phpstan._BAKED_COMPOSER_AUTOLOAD",
+            baked_vendor / "autoload.php",
+        )
+        f = tmp_path / "MyService.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
+            _run_phpstan(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        assert f"--autoload-file={baked_vendor / 'autoload.php'}" in call_args
+
+    def test_trusted_config_file_cleaned_up(self, tmp_path: Path) -> None:
+        f = tmp_path / "MyService.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
+            _run_phpstan(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        configured_path = next(a for a in call_args if a.startswith("--configuration=")).removeprefix(
+            "--configuration="
+        )
+        assert not Path(configured_path).exists()
 
     def test_remediation_references_phpstan(self, tmp_path: Path) -> None:
         findings = self._run_with_fixture("phpstan-error.json", tmp_path)

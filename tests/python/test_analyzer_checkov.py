@@ -125,6 +125,46 @@ class TestRunCheckovGuards:
         assert "checkov not found" in caplog.text
 
 
+class TestRunCheckovTrustedConfig:
+    def test_workspace_checkov_yaml_never_auto_discovered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fork-committed .checkov.yaml (which could set external-checks-dir
+        to import arbitrary Python check modules) must never be passed to
+        checkov -- an explicit --config-file pointing at a trusted, empty
+        file always wins over auto-discovery (#739)."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".checkov.yaml").write_text("external-checks-dir:\n  - ./evil-checks\n")
+        tf = tmp_path / "main.tf"
+        tf.write_text("resource \"x\" \"y\" {}\n")
+        cf = _make_cf([str(tf)], terraform=[str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
+            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _run_checkov(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        assert "--config-file" in call_args
+        configured_path = call_args[call_args.index("--config-file") + 1]
+        assert configured_path != str(tmp_path / ".checkov.yaml")
+        assert not configured_path.startswith(str(tmp_path))
+
+    def test_trusted_config_file_cleaned_up(self, tmp_path: Path) -> None:
+        tf = tmp_path / "main.tf"
+        tf.write_text("resource \"x\" \"y\" {}\n")
+        cf = _make_cf([str(tf)], terraform=[str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
+            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            _run_checkov(cf, Path("/dev/null"))
+        call_args = mock_run.call_args[0][0]
+        configured_path = call_args[call_args.index("--config-file") + 1]
+        assert not Path(configured_path).exists()
+
+
 class TestRunCheckovFindings:
     def _run_with_fixture(self, fixture_name: str, tmp_path: Path) -> list:
         fixture = _load_fixture(fixture_name)
