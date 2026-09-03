@@ -609,17 +609,24 @@ def _render_combined_body(
 
     pr_summary_block = f"\n### Summary\n{original_summary_text}\n" if original_summary_text else ""
 
-    # Findings before the walkthrough: if the body is truncated at the byte
-    # limit, the actionable content survives and the walkthrough is what
-    # gets cut, not the other way around (findings used to sit after a
-    # potentially-large walkthrough table and could be silently guillotined).
+    # Findings and the token table before the walkthrough: if the body is
+    # truncated at the byte limit, the actionable content and the (always
+    # small) cost table survive and the walkthrough is what gets cut, not
+    # the other way around. Findings used to sit after a potentially-large
+    # walkthrough and could be silently guillotined; the token table had the
+    # same bug (#728) -- a long carried-forward walkthrough could push the
+    # whole body past the byte limit and truncate away the trailing token
+    # table (and with it the model name), even though the table itself is
+    # only a few hundred bytes. `_extract_walkthrough` below is unaffected by
+    # this ordering: it splits on "### Summary" and only looks at what comes
+    # *after* that heading, never at what precedes it.
     parts: list[str] = [marker_line, heading, "", summary_block]
     if findings_block:
         parts.append(findings_block)
-    if pr_summary_block:
-        parts.append(pr_summary_block)
     if token_table:
         parts.append(_strip_details_wrapper(token_table))
+    if pr_summary_block:
+        parts.append(pr_summary_block)
     if agent_prompt and findings:
         parts.append(agent_prompt)
     parts.append(
