@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.7.0] - 2026-09-02
 
+### Fixed
+
+- Bitbucket's rendered review comment placed the token-usage table after the carried-forward PR walkthrough, so a long walkthrough could push the whole body past the 32,000-byte truncation limit and silently cut off the (always small) token table — including the model name, which the `ai-pr-review-e2e` canary checks for. The token table now renders immediately after findings, before the walkthrough, matching the ordering already used to protect findings from the same truncation (issue #728).
+
 ### Added
 
 - **Canonical-review reuse (GitHub)**: rerunning the review no longer always posts a new review object. A fully quiet rerun updates the existing review's body in place; a still-open finding is updated (with a reply on severity escalation) rather than reposted; a `fixed` finding that recurs gets a reply and its thread reopened; a `dismiss`/`false-positive`/`wont-fix`'d finding is never reposted, even a fuzzy-matched nearby one of a compatible category and no higher severity. Only a genuinely new finding — or one severe enough (High/Critical) to require visibility regardless of diff anchoring — triggers a fresh review, and the prior blocking review is dismissed only after the fresh review is confirmed to have actually posted. Set `AI_CANONICAL_REUSE=false` to disable. See [docs/features.md](docs/features.md#quiet-reruns-github). GitHub-only; GitLab/Bitbucket parity tracked in issue #710.
