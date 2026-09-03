@@ -36,6 +36,8 @@
 #   AI_REVIEW_PARALLEL           — parallel tiered fan-out (default: true)
 #   AI_REVIEW_IGNORE_MERGE_COMMITS — strip upstream base-branch merge commits (default: true)
 #   AI_REVIEW_FAIL_ON_FINDINGS   — exit code 2 on REQUEST_CHANGES/COMMENT, for CI gates (default: true)
+#   AI_REVIEW_TOKEN_USAGE_DISPLAY — token-usage content in the review comment: compact/full/off (default: compact)
+#   AI_REVIEW_TOKEN_USAGE_WARN_USD — high-usage warning threshold in USD, 0 disables (default: 1.00)
 #   AI_REVIEW_MODE_DEFAULT       — mode for automatic review AND /ai-pr-review rescan when set (default: '' — defer to policy.yml, else quick)
 #   AI_REVIEW_FEEDBACK_LOOP      — enable learning loop (default: false; GitHub-only)
 #   AI_REVIEW_CONTEXT_ENRICHMENT — tree-sitter symbol-context injection (default: true)
@@ -187,6 +189,16 @@ jobs:
           # gates (e.g. blocking Renovate auto-merge until the bot approves) (default: true).
           # Set AI_REVIEW_FAIL_ON_FINDINGS=false to make the review job non-blocking.
           fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'true' }}
+          # AI_REVIEW_TOKEN_USAGE_DISPLAY: token-usage content in the posted review
+          # comment (default: compact — a one-line cost/token/agent summary). Set to
+          # 'full' to restore the pre-#758 in-comment <details> table, or 'off' to
+          # omit token-usage content from the comment entirely. The full breakdown
+          # is always in GITHUB_STEP_SUMMARY and the CI job log regardless.
+          token-usage-display: ${{ vars.AI_REVIEW_TOKEN_USAGE_DISPLAY || 'compact' }}
+          # AI_REVIEW_TOKEN_USAGE_WARN_USD: estimated-cost threshold (USD) above which
+          # a high-usage warning line is added to the comment (default: 1.00). Set to
+          # 0 to disable.
+          token-usage-warn-usd: ${{ vars.AI_REVIEW_TOKEN_USAGE_WARN_USD || '1.00' }}
           # --- Capabilities (Python engine only — the default since v1.0.0) ---
           # AI_REVIEW_CONTEXT_ENRICHMENT: tree-sitter + ripgrep symbol-context injection
           # (default: true — matches the container image's own default, since it ships

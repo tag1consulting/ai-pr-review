@@ -58,7 +58,8 @@ class _FakeProvider:
         *,
         event: str,
         failed_agents: Sequence[str] = (),
-        token_table: str = "",
+        usage_block: str = "",
+        usage_warning: str = "",
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
@@ -69,7 +70,8 @@ class _FakeProvider:
                 "findings": list(findings),
                 "event": event,
                 "failed_agents": list(failed_agents),
-                "token_table": token_table,
+                "usage_block": usage_block,
+                "usage_warning": usage_warning,
             }
         )
         if not self.findings_ok:
@@ -498,12 +500,12 @@ def test_retry_exhausted_in_post_findings_returns_error_not_raises(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
-# token_table_renderer wiring
+# token_table_renderer / usage_warning_renderer wiring (#758)
 # ---------------------------------------------------------------------------
 
 
 def test_token_table_renderer_forwards_to_post_findings(tmp_path: Path) -> None:
-    """token_table_renderer output must be forwarded to provider.post_findings."""
+    """token_table_renderer output must be forwarded as post_findings' usage_block."""
     provider = _FakeProvider()
     ctx = _make_dispatch_context(tmp_path)
 
@@ -524,13 +526,13 @@ def test_token_table_renderer_forwards_to_post_findings(tmp_path: Path) -> None:
             token_table_renderer=_renderer,  # type: ignore[arg-type]
         )
         assert provider.findings_calls, "post_findings must have been called"
-        assert provider.findings_calls[0]["token_table"] == "<details>test-token-table</details>"
+        assert provider.findings_calls[0]["usage_block"] == "<details>test-token-table</details>"
 
     anyio.run(_run)
 
 
 def test_token_table_renderer_exception_is_failsoft(tmp_path: Path) -> None:
-    """A renderer that raises must not abort the review; post_findings gets token_table=''."""
+    """A renderer that raises must not abort the review; post_findings gets usage_block=''."""
     provider = _FakeProvider()
     ctx = _make_dispatch_context(tmp_path)
 
@@ -552,7 +554,80 @@ def test_token_table_renderer_exception_is_failsoft(tmp_path: Path) -> None:
         )
         assert result.ok is True
         assert provider.findings_calls, "post_findings must still have been called"
-        assert provider.findings_calls[0]["token_table"] == ""
+        assert provider.findings_calls[0]["usage_block"] == ""
+
+    anyio.run(_run)
+
+
+def test_usage_warning_renderer_forwards_to_post_findings(tmp_path: Path) -> None:
+    """usage_warning_renderer output must be forwarded as post_findings'
+    usage_warning, kept separate from whatever usage_block carries (#758)."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    def _block_renderer(
+        successes: object, sarif_elapsed_s: object,
+        judge_in: int, judge_out: int, judge_cw: int, judge_cr: int, judge_model: str,
+    ) -> str:
+        return "some-usage-block"
+
+    def _warning_renderer(
+        successes: object, sarif_elapsed_s: object,
+        judge_in: int, judge_out: int, judge_cw: int, judge_cr: int, judge_model: str,
+    ) -> str:
+        return "⚠️ High token usage"
+
+    async def _run() -> None:
+        await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            token_table_renderer=_block_renderer,  # type: ignore[arg-type]
+            usage_warning_renderer=_warning_renderer,  # type: ignore[arg-type]
+        )
+        assert provider.findings_calls, "post_findings must have been called"
+        assert provider.findings_calls[0]["usage_block"] == "some-usage-block"
+        assert provider.findings_calls[0]["usage_warning"] == "⚠️ High token usage"
+
+    anyio.run(_run)
+
+
+def test_usage_warning_renderer_exception_is_failsoft(tmp_path: Path) -> None:
+    """A raising usage_warning_renderer must not abort the review, and must
+    not affect the (independently rendered) usage_block."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    def _block_renderer(
+        successes: object, sarif_elapsed_s: object,
+        judge_in: int, judge_out: int, judge_cw: int, judge_cr: int, judge_model: str,
+    ) -> str:
+        return "some-usage-block"
+
+    def _bad_warning_renderer(
+        successes: object, sarif_elapsed_s: object,
+        judge_in: int, judge_out: int, judge_cw: int, judge_cr: int, judge_model: str,
+    ) -> str:
+        raise RuntimeError("warning renderer exploded")
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="## Summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            token_table_renderer=_block_renderer,  # type: ignore[arg-type]
+            usage_warning_renderer=_bad_warning_renderer,  # type: ignore[arg-type]
+        )
+        assert result.ok is True
+        assert provider.findings_calls, "post_findings must still have been called"
+        assert provider.findings_calls[0]["usage_block"] == "some-usage-block"
+        assert provider.findings_calls[0]["usage_warning"] == ""
 
     anyio.run(_run)
 

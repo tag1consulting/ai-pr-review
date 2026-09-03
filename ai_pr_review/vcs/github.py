@@ -839,7 +839,8 @@ class GitHubProvider:
         *,
         event: PostEvent,
         failed_agents: Sequence[str] = (),
-        token_table: str = "",
+        usage_block: str = "",
+        usage_warning: str = "",
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
@@ -1011,7 +1012,8 @@ class GitHubProvider:
             body_findings_text=join_findings(body_bullets),
             out_of_diff_findings_text=join_findings(ood_bullets),
             failed_agents=failed_agents,
-            token_table=token_table,
+            usage_block=usage_block,
+            usage_warning=usage_warning,
             agent_prompt=agent_prompt,
         )
         body = self._finalize_body_with_markers(
@@ -2009,7 +2011,8 @@ def _render_review_body(
     body_findings_text: str,
     out_of_diff_findings_text: str = "",
     failed_agents: Sequence[str],
-    token_table: str,
+    usage_block: str,
+    usage_warning: str,
     agent_prompt: str,
 ) -> str:
     """Compose the review body for GitHub's reviews API."""
@@ -2041,6 +2044,21 @@ def _render_review_body(
             f"{out_of_diff_findings_text}\n</details>"
         )
 
+    def _usage_section() -> str:
+        # build_usage_block prefixes usage_block with the mode-independent
+        # marker (#758) -- present even when usage_block itself is "" (e.g.
+        # token-usage-display: off), so every posted body carries the same
+        # anchor regardless of display mode. usage_warning is always
+        # appended as its own segment after it, never concatenated into
+        # usage_block itself -- see protocol.py's post_findings docstring
+        # for why.
+        from ai_pr_review.vcs.marker import build_usage_block
+
+        block = build_usage_block(usage_block, hidden=False)
+        if usage_warning:
+            return f"\n\n{block}\n\n{usage_warning}"
+        return f"\n\n{block}"
+
     if event == "APPROVE":
         if finding_total == 0:
             body = (
@@ -2058,8 +2076,7 @@ def _render_review_body(
             if body_findings_text:
                 body += f"\n\n### Findings (informational)\n{body_findings_text}"
         body += _ood_section()
-        if token_table:
-            body += f"\n\n{token_table}"
+        body += _usage_section()
         return body + footer
 
     if event == "COMMENT" and failed_agents and finding_total == 0:
@@ -2071,8 +2088,7 @@ def _render_review_body(
             "The review may be incomplete. Please verify manually or re-run the review."
         )
         body += _ood_section()
-        if token_table:
-            body += f"\n\n{token_table}"
+        body += _usage_section()
         return body + footer
 
     # COMMENT with findings or REQUEST_CHANGES
@@ -2086,8 +2102,7 @@ def _render_review_body(
     elif inline_count > 0:
         body += "\n\nAll findings are attached as inline comments."
     body += _ood_section()
-    if token_table:
-        body += f"\n\n{token_table}"
+    body += _usage_section()
     body += footer
     if agent_prompt:
         body += f"\n\n{agent_prompt}"

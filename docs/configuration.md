@@ -69,6 +69,8 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_ANALYZER_DIFF_SCOPE` | `cap` | `analyzer-diff-scope` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low and collapse under `<details>`. `drop`: remove entirely. `off`: pass through unchanged. Requires the Python engine. |
 | `AI_REVIEW_FAIL_ON_FINDINGS` | `false` (action default); shipped example workflow overrides to `true` | `fail-on-findings` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. Use as a CI gate so required status checks block auto-merge until the bot approves. Container-action only (see [CI gate](#ci-gate-fail-on-findings)). Set `AI_REVIEW_FAIL_ON_FINDINGS=false` as a repo variable to make the review job non-blocking. |
 | `AI_REVIEW_CONTEXT_MAX_QUERIES` | `200` | `context-max-queries` | Cap on ripgrep symbol-lookup queries shared across all agents in a run. Increase if logs show `context enrichment: max_queries=N reached`. Container-action only. |
+| `AI_REVIEW_TOKEN_USAGE_DISPLAY` | `compact` | `token-usage-display` | How token-usage/cost information appears in the posted review comment: `compact` (default, a one-line summary), `full` (the pre-#758 `<details>` table), or `off` (no token-usage content in the comment). The full breakdown is always in `GITHUB_STEP_SUMMARY` and the CI job log regardless. See [Features: Token usage](features#token-usage). |
+| `AI_REVIEW_TOKEN_USAGE_WARN_USD` | `1.00` | `token-usage-warn-usd` | Estimated-cost threshold (USD) above which a high-usage warning line is added to the comment. Set to `0` to disable. |
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -207,6 +209,13 @@ These variables enable optional capabilities that are off by default.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_JUDGE_PASS` | `true` | Run a cheap-model judge pass (Phase 2.75) after findings are extracted, merged, suppressed, and scoped. The judge sends a single compact LLM call (no diff text) and returns `keep` or `downrank` per finding. `downrank` lowers the finding's confidence by 15 points and routes it to the review body instead of as an inline comment — the finding is still reported, at its unchanged severity, and still counts toward the review's "Overall Risk" headline and `REQUEST_CHANGES` decision exactly as an inline finding would. Corroborated findings (static-analyzer + LLM-agent agreement on the same file+line) are exempt from `downrank`. Always fail-soft: any judge error returns findings unchanged. The judge call's token usage appears as a `judge-pass` row in the token usage table and is included in the Total. Set to `false` to disable and restore pre-v2.1 behavior. |
+
+#### Token usage display
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_TOKEN_USAGE_DISPLAY` | `compact` | How token-usage/cost information appears in the posted review comment. `compact` (default): a single cost/token/agent-count summary line. `full`: the full `<details>`-wrapped per-agent table, as posted before this input existed. `off`: no token-usage content in the comment at all. Independent of where the full breakdown is otherwise available: it's always written to `GITHUB_STEP_SUMMARY` (GitHub only) and always echoed to the CI job log (every provider), regardless of this setting. See [Features: Token usage](features#token-usage). |
+| `AI_TOKEN_USAGE_WARN_USD` | `1.00` | Estimated-cost threshold (USD) above which a separate high-usage warning line is added to the review comment — never combined into the same string as the table or compact line. Set to `0` to disable. When a run includes a model with no entry in `config/model-pricing.json`, the warning (if it fires) says the figure is a floor rather than a precise number, since the true cost may be higher. |
 
 #### Quiet reruns and cross-run finding dedup
 

@@ -97,6 +97,15 @@ class OrchestrationConfig:
 TokenTableRenderer = Callable[
     [Sequence[AgentResult], float | None, int, int, int, int, str], str
 ]
+# Same call shape as TokenTableRenderer (#758): kept deliberately independent
+# rather than folded into a single return value, since the two payloads must
+# never be concatenated into one string -- see protocol.py's post_findings
+# docstring for why (a warning inside a collapsed <details> block is
+# invisible, and combining them would break Bitbucket's accordion-stripping
+# regex).
+UsageWarningRenderer = Callable[
+    [Sequence[AgentResult], float | None, int, int, int, int, str], str
+]
 
 
 async def run_review(
@@ -110,6 +119,7 @@ async def run_review(
     config: OrchestrationConfig | None = None,
     skip_reason: str = "",
     token_table_renderer: TokenTableRenderer | None = None,
+    usage_warning_renderer: UsageWarningRenderer | None = None,
 ) -> ReviewResult:
     """End-to-end review: compute is upstream; this runs dispatch + post.
 
@@ -251,11 +261,12 @@ async def run_review(
         cfg.mode,
     )
 
-    # Phase 3.5: render token table (fail-soft; "" disables insertion).
-    token_table = ""
+    # Phase 3.5: render the token-usage block and (separately) its optional
+    # high-usage warning line (#758; both fail-soft, "" disables insertion).
+    usage_block = ""
     if token_table_renderer is not None:
         try:
-            token_table = token_table_renderer(
+            usage_block = token_table_renderer(
                 successes, sarif_elapsed_s,
                 judge_input_tokens, judge_output_tokens,
                 judge_cache_creation_tokens, judge_cache_read_tokens,
@@ -264,6 +275,21 @@ async def run_review(
         except Exception as exc:
             logger.warning(
                 "token table renderer raised (head_sha=%s): %s",
+                diff.head_sha, exc, exc_info=True,
+            )
+
+    usage_warning = ""
+    if usage_warning_renderer is not None:
+        try:
+            usage_warning = usage_warning_renderer(
+                successes, sarif_elapsed_s,
+                judge_input_tokens, judge_output_tokens,
+                judge_cache_creation_tokens, judge_cache_read_tokens,
+                judge_model_used,
+            )
+        except Exception as exc:
+            logger.warning(
+                "usage warning renderer raised (head_sha=%s): %s",
                 diff.head_sha, exc, exc_info=True,
             )
 
@@ -307,7 +333,8 @@ async def run_review(
                 diff,
                 event=outcome.event,
                 failed_agents=[f.name for f in failures],
-                token_table=token_table,
+                usage_block=usage_block,
+                usage_warning=usage_warning,
                 max_inline=cfg.max_inline,
                 enable_suggestions=cfg.enable_suggestions,
             )

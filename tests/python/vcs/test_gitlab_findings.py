@@ -309,7 +309,7 @@ def test_post_findings_appends_token_table_to_summary_note() -> None:
         findings,
         DiffContext(diff_text=_DIFF, head_sha=_HEAD),
         event="REQUEST_CHANGES",
-        token_table=accordion,
+        usage_block=accordion,
     )
 
     assert put_bodies, "PUT to update summary note must have been called"
@@ -342,7 +342,7 @@ def test_post_findings_token_table_strips_old_accordion() -> None:
         [],
         DiffContext(diff_text=_DIFF, head_sha=_HEAD),
         event="COMMENT",
-        token_table=new_accordion,
+        usage_block=new_accordion,
     )
 
     assert put_bodies, "PUT must have been called"
@@ -390,7 +390,7 @@ def test_post_findings_token_table_preserves_collapsed_walkthrough() -> None:
         [],
         DiffContext(diff_text=_DIFF, head_sha=_HEAD),
         event="COMMENT",
-        token_table=token_table,
+        usage_block=token_table,
     )
 
     assert put_bodies, "PUT must have been called"
@@ -398,6 +398,105 @@ def test_post_findings_token_table_preserves_collapsed_walkthrough() -> None:
     assert "Walkthrough (2 files)" in new_body, "walkthrough must survive the token-table append"
     assert "a.py" in new_body and "b.py" in new_body
     assert token_table in new_body
+
+
+def test_post_findings_usage_block_replaces_legacy_prefix_less_accordion() -> None:
+    """#758 backward-compat: a summary note posted by the version of this
+    code running before this upgrade carries the bare TOKEN_TABLE_OPEN_MARKER
+    accordion with no USAGE_MARKER in it at all. The first post-upgrade run
+    must still replace it (not double it), even though the new anchor the
+    upsert normally looks for was never written to this body.
+    """
+    import json
+
+    legacy_accordion = "<details>\n<summary>Token usage by agent</summary>\n\nold-legacy-table\n</details>"
+    stored = f"{_SUMMARY_MARKER}\n## PR Summary\n\n{legacy_accordion}"
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": stored}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        usage_block="new-compact-line",
+    )
+
+    assert put_bodies, "PUT must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "old-legacy-table" not in new_body, "the pre-upgrade accordion must be replaced, not kept"
+    assert "new-compact-line" in new_body
+
+
+def test_post_findings_usage_warning_appended_after_usage_block() -> None:
+    """The high-usage warning (#758) rides in the same PUT as the usage
+    block, appended after it -- never combined into the same string as the
+    block itself (see protocol.py's post_findings docstring)."""
+    import json
+
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": _EXISTING_NOTE_BODY}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        usage_block="_Review cost: $0.01_",
+        usage_warning="⚠️ High token usage",
+    )
+
+    assert put_bodies, "PUT must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "_Review cost: $0.01_" in new_body
+    assert "⚠️ High token usage" in new_body
+    assert new_body.index("_Review cost: $0.01_") < new_body.index("⚠️ High token usage")
+
+
+def test_post_findings_no_put_when_off_mode_produces_nothing() -> None:
+    """When both usage_block and usage_warning are empty (token-usage-display:
+    off with no warning), GitLab must not issue an otherwise-avoidable PUT
+    purely to write the bare marker -- unlike GitHub/Bitbucket, which always
+    render a full body regardless and so pay no such extra cost."""
+    put_calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": _EXISTING_NOTE_BODY}])
+        if req.method == "PUT":
+            put_calls.append(str(req.url))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        usage_block="",
+        usage_warning="",
+    )
+    assert put_calls == [], "no PUT should fire when there is nothing to write"
 
 
 def test_post_findings_token_table_no_summary_note_skips_put() -> None:
@@ -417,7 +516,7 @@ def test_post_findings_token_table_no_summary_note_skips_put() -> None:
         [],
         DiffContext(diff_text=_DIFF, head_sha=_HEAD),
         event="COMMENT",
-        token_table="<details>table</details>",
+        usage_block="<details>table</details>",
     )
     assert put_calls == [], "no PUT should be issued when no summary note found"
 
@@ -440,7 +539,7 @@ def test_post_findings_token_table_http_error_is_failsoft() -> None:
         findings,
         DiffContext(diff_text=_DIFF, head_sha=_HEAD),
         event="REQUEST_CHANGES",
-        token_table="<details>table</details>",
+        usage_block="<details>table</details>",
     )
     # Review still completes despite PUT failure
     assert result.error is None

@@ -446,7 +446,18 @@ CVE check queries [OSV.dev](https://osv.dev/) against `go.mod`, `package.json`, 
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the summary comment. On incremental runs the table is refreshed in place — the first-run PR summary is preserved and only the token data is replaced. The table uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
+By default, each posted review comment carries a single compact line summarizing the run's cost, e.g.:
+
+> _Review cost: $0.1234 · 45,678 tokens · 8 agents · Sonnet 5 · [full breakdown](run-url)_
+
+The full **Token usage by agent** table (the default before this feature shipped) is always available in two other places, regardless of `token-usage-display`:
+
+- The CI job log — echoed to stderr on every run, on every provider.
+- The [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary), on GitHub only.
+
+Set `token-usage-display: full` to restore the full table inside the review comment itself, or `off` to omit token-usage content from the comment entirely. See [Configuration](docs/configuration.md) for both inputs, including `token-usage-warn-usd` (default `1.00`), which adds a separate warning line to the comment when a run's estimated cost crosses the configured threshold.
+
+The full table (comment under `full`, step summary, and job log) uses an adaptive column layout — when any agent reports cache activity (Anthropic explicit caching or OpenAI automatic prefix caching), the table expands to 8 columns:
 
 | Column | Description |
 |--------|-------------|
@@ -467,7 +478,7 @@ When `AI_JUDGE_PASS=true` (the default) and the judge ran on a non-empty finding
 - **Language profiles** — maximum profile tokens injected across agents; shown when per-agent profile routing (v2.1.0+) was active.
 - **SARIF ingestion** — wall-clock elapsed time for SARIF parsing; shown when `AI_SARIF_PATHS` is configured.
 
-Costs are calculated using rates from `config/model-pricing.json` and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
+Costs are calculated using rates from `config/model-pricing.json` and do not reflect enterprise discounts, committed use agreements, or proxy markups.
 
 ## Architecture
 

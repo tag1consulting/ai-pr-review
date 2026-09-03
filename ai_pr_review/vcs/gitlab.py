@@ -41,10 +41,12 @@ from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryExhaustedError, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
+    USAGE_MARKER,
     append_inline_marker,
     append_skip_marker,
     build_inline_meta_marker,
     build_summary_marker,
+    build_usage_block,
     extract_summary_sha,
     has_skip_marker,
     replace_summary_sha,
@@ -490,7 +492,8 @@ class GitLabProvider:
         *,
         event: PostEvent,
         failed_agents: Sequence[str] = (),
-        token_table: str = "",
+        usage_block: str = "",
+        usage_warning: str = "",
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
@@ -575,14 +578,32 @@ class GitLabProvider:
                 )
                 body_findings.append(f)
 
-        # GitLab has no separate review-body concept: append the token table to
-        # the summary note (fail-soft — table failure must not abort the review).
-        if token_table:
+        # GitLab has no separate review-body concept: append the usage block
+        # (and, separately, any high-usage warning -- #758, never concatenated
+        # into usage_block itself) to the summary note. Fail-soft -- a failure
+        # here must not abort the review.
+        #
+        # Gated on real content (unlike GitHub/Bitbucket, which always render
+        # a full body regardless and so include the bare marker at zero extra
+        # cost): GitLab's summary-note update is otherwise-skippable, and
+        # firing an extra PUT purely to write an invisible marker when
+        # `token-usage-display: off` produced nothing to show would be a real
+        # cost (an extra API round trip on every run) for no correctness
+        # benefit -- nothing on GitLab reads this marker except this same
+        # upsert, which degrades safely (appends fresh content at the end
+        # rather than doubling anything) even if no marker was ever written
+        # by a prior "off"-mode run.
+        if usage_block or usage_warning:
+            usage_marker_block = build_usage_block(usage_block, hidden=False)
+            usage_payload = (
+                usage_marker_block if not usage_warning
+                else f"{usage_marker_block}\n\n{usage_warning}"
+            )
             try:
                 existing_notes = self._list_summary_notes()
             except Exception as exc:
                 logger.warning(
-                    "gitlab: token table: could not list summary notes: %s", exc, exc_info=True,
+                    "gitlab: token usage: could not list summary notes: %s", exc, exc_info=True,
                 )
                 existing_notes = []
             if existing_notes:
@@ -590,7 +611,7 @@ class GitLabProvider:
                 keep_id_raw = keep.get("id")
                 if keep_id_raw is None:
                     logger.warning(
-                        "gitlab: token table: summary note missing 'id' field; skipping"
+                        "gitlab: token usage: summary note missing 'id' field; skipping"
                     )
                     existing_notes = []
                 else:
@@ -598,38 +619,58 @@ class GitLabProvider:
                         keep_id = int(keep_id_raw)
                     except (TypeError, ValueError):
                         logger.warning(
-                            "gitlab: token table: summary note 'id' not convertible to int: %r; skipping",
+                            "gitlab: token usage: summary note 'id' not convertible to int: %r; skipping",
                             keep_id_raw,
                         )
                         existing_notes = []
             if existing_notes:
                 keep = existing_notes[0]
                 old_body = keep.get("body") or ""
-                # Avoid doubling if a previous run already appended the table.
-                # Anchor on the token table's own opening marker, not the bare
-                # `<details>` tag: a collapsed Walkthrough accordion can also
-                # appear in this body, and truncating at *its* `<details>`
-                # would silently delete the walkthrough (and everything after
-                # it) on every token-table append.
-                details_idx = old_body.find(TOKEN_TABLE_OPEN_MARKER)
+                # Avoid doubling if a previous run already appended a usage
+                # block. Anchor on the mode-independent USAGE_MARKER (#758),
+                # not the token table's own `<details>` tag: the marker
+                # precedes the payload in every token-usage-display mode
+                # (full/compact/off), whereas the accordion only exists under
+                # `full`. A collapsed Walkthrough accordion can also appear in
+                # this body, and truncating at *its* `<details>` would
+                # silently delete the walkthrough (and everything after it)
+                # on every usage-block append.
+                #
+                # Also check the legacy TOKEN_TABLE_OPEN_MARKER (the bare
+                # accordion tag every pre-#758 body used instead) and take
+                # whichever comes first: a body posted by the version of
+                # this code running before this upgrade carries only the old
+                # form, and without this fallback the first post-upgrade run
+                # would append a new usage block after it rather than
+                # replacing it, doubling the content once.
+                details_idx = min(
+                    (
+                        idx for idx in (
+                            old_body.find(USAGE_MARKER),
+                            old_body.find(TOKEN_TABLE_OPEN_MARKER),
+                        )
+                        if idx != -1
+                    ),
+                    default=-1,
+                )
                 base_body = old_body[:details_idx].rstrip() if details_idx != -1 else old_body.rstrip()
-                new_body = base_body + "\n\n" + token_table
+                new_body = base_body + "\n\n" + usage_payload
                 try:
                     resp = self.client.request(
                         "PUT", self._note_url(keep_id), json_body={"body": new_body}
                     )
                     if resp.status_code >= 400:
                         logger.warning(
-                            "gitlab: token table: could not update summary note (HTTP %d): %s",
+                            "gitlab: token usage: could not update summary note (HTTP %d): %s",
                             resp.status_code, resp.text[:200],
                         )
                 except Exception as exc:
                     logger.warning(
-                        "gitlab: token table: could not PUT summary note: %s", exc, exc_info=True,
+                        "gitlab: token usage: could not PUT summary note: %s", exc, exc_info=True,
                     )
-            elif token_table:
+            elif usage_payload:
                 logger.warning(
-                    "gitlab: token table: no summary note found; skipping token table append"
+                    "gitlab: token usage: no summary note found; skipping usage-block append"
                 )
 
         # The provider returns counts; orchestrator decides what to do with

@@ -148,12 +148,24 @@ class VcsProvider(Protocol):
         *,
         event: PostEvent,
         failed_agents: Sequence[str] = (),
-        token_table: str = "",
+        usage_block: str = "",
+        usage_warning: str = "",
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
     ) -> FindingsResult:
-        """Post findings as a PR review with inline comments where possible."""
+        """Post findings as a PR review with inline comments where possible.
+
+        ``usage_block`` (#758) is the mode-independent-marker-prefixed
+        token-usage payload (the full ``<details>`` table under
+        ``token-usage-display: full``, the compact one-line summary under
+        ``compact``, or just the bare marker under ``off``) — see
+        ``review.reporting`` and ``vcs.marker.build_usage_block``.
+        ``usage_warning`` is a separate, optional high-usage warning line,
+        never combined into ``usage_block`` itself (a warning embedded
+        inside a collapsed ``<details>`` block would be invisible, and
+        concatenating it would break Bitbucket's accordion-stripping regex).
+        """
         ...
 
     def resolve_stale(self, current_review_id: int | None = None) -> StaleResult:

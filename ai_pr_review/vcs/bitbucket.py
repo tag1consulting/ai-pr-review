@@ -43,11 +43,13 @@ from ai_pr_review.vcs.marker import (
     SKIP_MARKER_HIDDEN,
     SUMMARY_MARKER_HIDDEN_PREFIX,
     SUMMARY_MARKER_PREFIX,
+    USAGE_MARKER_HIDDEN,
     _hidden_marker_separator,
     append_inline_marker,
     append_skip_marker,
     build_id_map_marker,
     build_summary_marker,
+    build_usage_block,
     extract_id_map,
     extract_summary_sha,
     has_skip_marker,
@@ -208,7 +210,8 @@ class BitbucketProvider:
         *,
         event: PostEvent,
         failed_agents: Sequence[str] = (),
-        token_table: str = "",
+        usage_block: str = "",
+        usage_warning: str = "",
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
@@ -249,13 +252,14 @@ class BitbucketProvider:
             [existing_body] if existing_body else [], list(findings)
         )
 
-        # token_table is deliberately NOT passed into _render_combined_body:
-        # findings_block alone can be arbitrarily large (a real e2e run against
-        # a heavily-seeded test PR produced 63 findings, filling the entire
-        # 32,000-byte budget on its own), so embedding the token table inside
-        # the pre-truncation string -- at any position -- does not guarantee
-        # it survives. It is reserved and appended after truncation instead,
-        # the same way id_map_marker already is, below.
+        # usage_block/usage_warning are deliberately NOT passed into
+        # _render_combined_body: findings_block alone can be arbitrarily
+        # large (a real e2e run against a heavily-seeded test PR produced 63
+        # findings, filling the entire 32,000-byte budget on its own), so
+        # embedding either inside the pre-truncation string -- at any
+        # position -- does not guarantee it survives. Both are reserved and
+        # appended after truncation instead, the same way id_map_marker
+        # already is, below.
         body = _render_combined_body(
             existing_body=existing_body,
             findings=findings,
@@ -313,46 +317,90 @@ class BitbucketProvider:
             id_map_marker = ""
             marker_reserve = 0
 
-        # Reserve room for the token table too, and append it after
+        # Reserve room for the usage block too, and append it after
         # truncation rather than embedding it in `body` beforehand (#728) --
         # findings_block alone can exceed the entire byte budget (a real
         # heavily-seeded test PR produced 63 findings), so no position
         # inside the pre-truncation string guarantees survival; only an
         # explicit reservation does, same as id_map_marker above.
-        stripped_token_table = _strip_details_wrapper(token_table) if token_table else ""
-        token_table_bytes = len(stripped_token_table.encode("utf-8")) if stripped_token_table else 0
-        token_table_reserve = token_table_bytes + 2 if stripped_token_table else 0
-        if stripped_token_table and (
-            marker_reserve + token_table_reserve > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
-        ):
+        #
+        # Order matters here: _strip_details_wrapper runs on the BARE
+        # usage_block (no marker prefix yet) so its `\A<details>...\Z`
+        # anchor can still match a full-mode accordion; the mode-independent
+        # marker (#758) is prepended via build_usage_block AFTER stripping,
+        # in its Bitbucket-hidden reference-link form -- prepending it
+        # first would put marker text before the `<details>` tag and make
+        # the anchored regex fail to match, silently un-fixing #703. Under
+        # `compact`/`off`, usage_block has no `<details>` wrapper for the
+        # regex to match in the first place, so stripping is a no-op
+        # pass-through for those modes; build_usage_block still always
+        # prepends the marker, including onto "" (`off`, or no data), so
+        # every posted comment carries the same anchor regardless of mode --
+        # this always runs (unlike GitLab's gated update), since Bitbucket
+        # composes and PUTs a full comment body on every call regardless.
+        stripped_payload = _strip_details_wrapper(usage_block) if usage_block else ""
+        usage_block_marked = build_usage_block(stripped_payload, hidden=True)
+        usage_block_bytes = len(usage_block_marked.encode("utf-8"))
+        usage_block_reserve = usage_block_bytes + 2
+        if marker_reserve + usage_block_reserve > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES:
             _log.warning(
-                "bitbucket: token table (%d bytes) too large to fit alongside "
-                "the id-map marker in comment body for %s/%s PR #%s; omitting "
-                "token table for this cycle",
-                token_table_bytes,
+                "bitbucket: token usage block (%d bytes) too large to fit "
+                "alongside the id-map marker in comment body for %s/%s PR "
+                "#%s; omitting it for this cycle",
+                usage_block_bytes,
                 self.config.workspace, self.config.repo_slug, self.config.pr_id,
             )
-            stripped_token_table = ""
-            token_table_reserve = 0
+            # Still reserve/emit the bare marker alone (a handful of bytes)
+            # rather than dropping the anchor entirely for this cycle.
+            usage_block_marked = build_usage_block("", hidden=True)
+            usage_block_bytes = len(usage_block_marked.encode("utf-8"))
+            usage_block_reserve = usage_block_bytes + 2
 
-        truncate_limit = max(0, _MAX_BITBUCKET_BODY_SIZE - marker_reserve - token_table_reserve)
+        # The high-usage warning (#758) gets the same reserve-then-append
+        # treatment, as its own segment -- never combined into usage_block
+        # itself (see protocol.py's post_findings docstring for why: a
+        # warning glued onto an accordion string would break the regex
+        # above, which is anchored on the accordion being the *entire*
+        # input).
+        usage_warning_bytes = len(usage_warning.encode("utf-8")) if usage_warning else 0
+        usage_warning_reserve = usage_warning_bytes + 2 if usage_warning else 0
+        if usage_warning and (
+            marker_reserve + usage_block_reserve + usage_warning_reserve
+            > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
+        ):
+            _log.warning(
+                "bitbucket: high-usage warning (%d bytes) too large to fit "
+                "in comment body for %s/%s PR #%s; omitting it for this cycle",
+                usage_warning_bytes,
+                self.config.workspace, self.config.repo_slug, self.config.pr_id,
+            )
+            usage_warning = ""
+            usage_warning_reserve = 0
+
+        truncate_limit = max(
+            0,
+            _MAX_BITBUCKET_BODY_SIZE - marker_reserve - usage_block_reserve - usage_warning_reserve,
+        )
         body = truncate_body(body, limit=truncate_limit)
-        if stripped_token_table:
-            # Exactly one "\n" here, same as the "\n".join(parts) this used to
-            # go through in _render_combined_body: _strip_details_wrapper's
-            # output always ends in its own trailing "\n", so this single join
-            # newline becomes a real blank line at the seam -- required so
-            # Bitbucket's table parser doesn't absorb whatever follows as a
-            # spurious trailing row (#703). A conditional "avoid a double
-            # newline" separator (as used for hidden reference-link markers)
-            # would collapse that intentional blank line back down to one.
-            body += "\n" + stripped_token_table
+        # rstrip+"\n\n" (rather than the bare "\n" _render_combined_body used
+        # to join on) guarantees a real blank line before the block
+        # regardless of whether it ends in its own trailing newline. Under
+        # `full`, the stripped accordion inside usage_block_marked always
+        # ends in exactly one "\n" -- that, plus this join, is what keeps
+        # Bitbucket's table parser from absorbing whatever follows as a
+        # spurious trailing row (#703). Under `compact`/`off`, the payload
+        # isn't a table (no such hazard), but the same normalization keeps
+        # it visually separated as its own paragraph. usage_block_marked
+        # always carries at least the bare marker, so this always runs.
+        body = body.rstrip("\n") + "\n\n" + usage_block_marked.rstrip("\n")
+        if usage_warning:
+            body = body.rstrip("\n") + "\n\n" + usage_warning
         # Footer is appended unconditionally, like INLINE_MARKER_HIDDEN below --
         # neither is reserved for, matching this function's existing tolerance
         # for a small overshoot past _MAX_BITBUCKET_BODY_SIZE (itself already a
         # conservative estimate of Bitbucket's actual server-side limit, not
         # an exact boundary -- see issue #728).
-        body += "\n" + _FOOTER
+        body = body.rstrip("\n") + "\n\n" + _FOOTER
         body = append_inline_marker(body, marker=INLINE_MARKER_HIDDEN)
         if id_map_marker:
             # `[//]: # (...)` cannot interrupt a paragraph per CommonMark
@@ -679,16 +727,25 @@ def _render_combined_body(
 
 
 # Section-boundary needles `_extract_walkthrough` cuts the carried-forward
-# walkthrough text at. All four can legitimately follow the "### Summary"
-# heading in a body this function itself rendered: "### Findings" and
-# "### Findings (informational)" (findings_block; both variants start with
-# the shorter needle), the token table in either its Bitbucket-stripped bold
-# form or (defensively) the raw <details> form if _strip_details_wrapper ever
-# fails to match, and the agent-prompt <details> block (unused by any current
-# caller -- see ai_pr_review/vcs/protocol.py -- but cheap to guard against a
-# future one).
+# walkthrough text at. All can legitimately follow the "### Summary" heading
+# in a body this function itself rendered: "### Findings" and "### Findings
+# (informational)" (findings_block; both variants start with the shorter
+# needle), the mode-independent USAGE_MARKER_HIDDEN (#758) -- present at the
+# start of the usage block in every token-usage-display mode (full/compact/
+# off) going forward -- and the agent-prompt <details> block (unused by any
+# current caller -- see ai_pr_review/vcs/protocol.py -- but cheap to guard
+# against a future one).
+#
+# The bold-heading and raw-<details> forms stay as a fallback (not the
+# primary anchor any more) for the same reason gitlab.py's upsert also
+# checks the legacy TOKEN_TABLE_OPEN_MARKER: a comment posted by the version
+# of this code running before this upgrade carries the pre-#758 form with no
+# USAGE_MARKER_HIDDEN in it at all, and without this fallback the first
+# post-upgrade incremental run would extract too much (or too little) of the
+# walkthrough from that one carried-forward comment.
 _WALKTHROUGH_BOUNDARIES: Final[tuple[str, ...]] = (
     "\n### Findings",
+    "\n" + USAGE_MARKER_HIDDEN,
     "\n**Token usage by agent**",
     "\n<details>\n<summary>Token usage by agent</summary>",
     "\n<details>\n<summary>🤖 Prompt for AI agents</summary>",

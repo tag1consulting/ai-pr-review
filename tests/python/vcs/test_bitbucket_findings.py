@@ -434,7 +434,7 @@ def test_post_findings_token_table_has_no_details_tags_and_separates_footer() ->
         findings,
         DiffContext(diff_text="", head_sha=_HEAD),
         event="COMMENT",
-        token_table=token_table,
+        usage_block=token_table,
     )
     assert result.ok
     raw = captured[0]["content"]["raw"]
@@ -461,7 +461,8 @@ def _run_post_findings_cycle(
     *,
     comment_id: int = 42,
     event: str = "REQUEST_CHANGES",
-    token_table: str = "",
+    usage_block: str = "",
+    usage_warning: str = "",
 ) -> str:
     """Simulate one review cycle: an existing comment with `existing_body`
     is fetched, `post_findings` renders + PUTs a new body, which is returned
@@ -486,7 +487,7 @@ def _run_post_findings_cycle(
     prov = _make_provider(handler)
     result = prov.post_findings(
         findings, DiffContext(diff_text="", head_sha=_HEAD), event=event,  # type: ignore[arg-type]
-        token_table=token_table,
+        usage_block=usage_block, usage_warning=usage_warning,
     )
     assert result.ok, result.error
     return captured[0]["content"]["raw"]
@@ -579,7 +580,7 @@ def test_truncation_protects_token_table_over_walkthrough() -> None:
     )
 
     raw = _run_post_findings_cycle(
-        _first_run_body(oversized_walkthrough), [finding], token_table=token_table_marker,
+        _first_run_body(oversized_walkthrough), [finding], usage_block=token_table_marker,
     )
 
     assert len(raw.encode("utf-8")) <= 32_000 + 300  # + truncation trailer slack
@@ -608,7 +609,7 @@ def test_truncation_protects_token_table_when_findings_alone_overflow() -> None:
     ]
 
     raw = _run_post_findings_cycle(
-        _first_run_body(""), findings, token_table=token_table_marker,
+        _first_run_body(""), findings, usage_block=token_table_marker,
     )
 
     assert len(raw.encode("utf-8")) <= 32_000 + 300  # + truncation trailer slack
