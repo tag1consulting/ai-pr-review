@@ -564,10 +564,14 @@ def test_truncation_protects_findings_over_walkthrough() -> None:
 def test_truncation_protects_token_table_over_walkthrough() -> None:
     """Regression for #728: a long carried-forward walkthrough must not
     push the (always small) token-usage table past the byte limit. Before
-    the fix, the table sat after the walkthrough in the rendered body, so
-    an oversized walkthrough silently truncated the table away along with
-    itself -- the same bug already fixed for findings_block, applied here
-    to the token table."""
+    the fix, the table sat after the walkthrough inside the same
+    pre-truncation string, so an oversized walkthrough silently truncated
+    the table away along with itself. The fix reserves the table's bytes
+    and appends it after truncation instead of relying on ordering --
+    ordering alone isn't enough, since findings_block alone can exceed the
+    whole byte budget (a real e2e run produced 63 findings that did
+    exactly that), so no position in the pre-truncation string can
+    guarantee survival."""
     oversized_walkthrough = "x" * 40_000  # already over the 32,000-byte limit alone
     token_table_marker = "**Token usage by agent** | Sonnet 5 | TRUNCATION_SURVIVOR"
     finding = Finding(
@@ -580,11 +584,35 @@ def test_truncation_protects_token_table_over_walkthrough() -> None:
 
     assert len(raw.encode("utf-8")) <= 32_000 + 300  # + truncation trailer slack
     assert token_table_marker in raw, "the token table must survive truncation"
-    table_idx = raw.find(token_table_marker)
-    walkthrough_idx = raw.find("x" * 100)
-    # The walkthrough, if any of it survived at all, must appear after the
-    # token table -- never take priority over it.
-    assert walkthrough_idx == -1 or walkthrough_idx > table_idx
+    # The walkthrough must actually have been the thing cut -- otherwise this
+    # test would pass trivially because nothing needed truncating at all.
+    assert "x" * 40_000 not in raw
+
+
+def test_truncation_protects_token_table_when_findings_alone_overflow() -> None:
+    """The live failure this whole fix was written for: a heavily-seeded
+    test PR produced 63 findings whose rendered findings_block alone
+    exceeded the entire 32,000-byte budget, with no oversized walkthrough
+    involved at all. Reordering the token table relative to the walkthrough
+    (the first attempt at this fix) does nothing here, since the table
+    never even reaches the walkthrough's position -- only reserving its
+    bytes and appending it after truncation, regardless of what came
+    before, survives this case."""
+    token_table_marker = "**Token usage by agent** | Sonnet 5 | TRUNCATION_SURVIVOR"
+    # One long finding repeated enough times to blow the byte budget on its
+    # own, with no walkthrough at all (_first_run_body("") has none).
+    long_finding_text = "x" * 500
+    findings = [
+        Finding(severity="Low", confidence=60, finding=f"{long_finding_text}_{i}", file=f"f{i}.py", line=1)
+        for i in range(100)
+    ]
+
+    raw = _run_post_findings_cycle(
+        _first_run_body(""), findings, token_table=token_table_marker,
+    )
+
+    assert len(raw.encode("utf-8")) <= 32_000 + 300  # + truncation trailer slack
+    assert token_table_marker in raw, "the token table must survive even when findings alone overflow"
 
 
 def test_fingerprint_stable_and_new_finding_flagged() -> None:
