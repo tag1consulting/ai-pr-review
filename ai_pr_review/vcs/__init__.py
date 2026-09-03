@@ -218,6 +218,18 @@ def _build_gitlab_from_env() -> GitLabProvider:
         )
     bot_username = os.environ.get("GITLAB_BOT_USERNAME") or None
 
+    # Cross-run finding dedup (#710): a per-run "kept alive" set already
+    # fixes an independent bug (resolve_stale immediately resolving a
+    # discussion post_findings just created/kept, since GitLab's resolve_stale
+    # has no equivalent of GitHub's _kept_alive_thread_ids) regardless of this
+    # flag; the flag only gates the fuzzy-match "skip reposting an unchanged
+    # finding" behavior itself. Mirrors AI_CANONICAL_REUSE's parse, but kept
+    # as a separate flag since GitLab has no canonical review to couple it to.
+    cross_run_dedup = (
+        os.environ.get("AI_GITLAB_CROSS_RUN_DEDUP", "true").strip().lower()
+        not in ("false", "0", "no")
+    )
+
     config = GitLabConfig(
         project_id_or_path=project,
         mr_iid=mr_iid,
@@ -225,6 +237,7 @@ def _build_gitlab_from_env() -> GitLabProvider:
         diff_base_sha=diff_base_sha,
         bot_username=bot_username,
         base_url=base_url,
+        cross_run_dedup=cross_run_dedup,
     )
     return GitLabProvider(config=config, client=build_gitlab_client(config))
 

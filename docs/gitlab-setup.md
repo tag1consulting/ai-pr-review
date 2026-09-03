@@ -21,6 +21,7 @@ fences that the MR author can apply with one click.
 - Suggestion fences in inline discussions (GitLab's `suggestion` syntax)
 - Incremental-diff SHA watermark (same HTML-comment marker as GitHub)
 - Stale discussion resolution (prior bot inline threads are auto-resolved; gated on bot first-note authorship and the `<!-- ai-pr-review-inline -->` marker)
+- Cross-run finding dedup: an unchanged finding fuzzy-matches (same file, within 3 lines, compatible category) this bot's still-open prior discussions and isn't reposted every run, keeping the existing discussion open (issue #710). Narrower than GitHub's canonical-review reuse — no dismiss/false-positive/wont-fix/fixed verdicts on GitLab, so no suppression or escalation reply, and no in-place update of an existing discussion's body yet. Set `AI_GITLAB_CROSS_RUN_DEDUP=false` to disable.
 - MR approval / unapproval based on risk classification (no Critical/High
   findings → approve; Critical/High present → remove prior approval)
 - All existing AI agents and static analyzers (same container image)

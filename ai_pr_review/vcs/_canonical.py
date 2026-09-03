@@ -1,14 +1,19 @@
-"""Canonical-review reuse — read side (GitHub only, see #710 for parity gap).
+"""Canonical-review reuse — read side (GitHub and, since #710, GitLab's
+fuzzy-match dedup uses the same `classify()`/`PriorThread` shape with an
+empty `verdicts` map -- GitLab has no verdict/slash-command system, so only
+the "new"/"update"/"escalate" branches of `classify()` are ever reachable
+for it; Bitbucket is out of scope, see #710).
 
 Pure classification logic for reducing PR-comment clutter across review
 reruns: given the bot's prior reviews and review threads on a PR, decide
 whether a newly-computed finding is genuinely new, a recurrence of something
 previously marked `fixed`, an update to a still-open thread (same or higher
 severity), or something a human has already dismissed forever. The actual
-GitHub I/O (fetching reviews/threads, PATCHing comments, replying, PUTing
-the canonical review's body) lives in `ai_pr_review.vcs.github`; this module
-takes already-fetched data and returns decisions, so it can be tested
-without any HTTP stubbing.
+provider I/O (fetching reviews/threads or discussions, PATCHing/replying,
+PUTing the canonical review's body) lives in `ai_pr_review.vcs.github` and,
+for the GitLab-specific `parse_gitlab_prior_thread` below, `ai_pr_review.
+vcs.gitlab`; this module takes already-fetched data and returns decisions,
+so it can be tested without any HTTP stubbing.
 
 Design reference: the plan at the top of this PR's description and the
 original design doc it implements (canonical-review-reuse). Two verdict
@@ -44,6 +49,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -307,6 +313,102 @@ def parse_prior_thread(
         category=category,
         fingerprint=fp,
         finding_id=finding_id,
+        prior_fingerprints=prior_fingerprints,
+    )
+
+
+def parse_gitlab_prior_thread(
+    disc: Mapping[str, Any],
+    *,
+    bot_username: str | None,
+    current_head_sha: str,
+    current_base_sha: str,
+    eligible_new: AbstractSet[tuple[str, int]],
+) -> PriorThread | None:
+    """Build a `PriorThread` from one GitLab `/discussions` response entry.
+
+    Returns `None` when the discussion has no notes, its first note isn't a
+    positioned `DiffNote` on a text diff line (a body-only or file-level note
+    can't be fuzzy-matched by file+line), or that note isn't owned by us
+    (`is_owned_by_us(..., kind="inline")` — the same gate GitLab's
+    `resolve_stale` already applies).
+
+    Severity/category/fingerprint come from the per-comment metadata marker
+    (`extract_inline_meta`), same as GitHub's `parse_prior_thread`. GitLab has
+    no `**[F<n>]**` id-map convention, so there is no id-map-based fingerprint
+    fallback for legacy (pre-marker) discussions — only the `**[Sev]**`
+    header-regex fallback for severity; fingerprint/category stay `None`
+    (unrecoverable; `None` category is a wildcard to `categories_compatible`).
+
+    `is_outdated`: GitLab's REST API has no `isOutdated` flag, and a note's
+    `position` reflects coordinates *at post time*, not the current MR head.
+    Tier 1 (fully trusted): `position.head_sha == current_head_sha` and
+    `position.base_sha == current_base_sha` — nothing has changed since this
+    discussion was posted, so its line is exact. Tier 2 (head or base moved):
+    trust the anchor only if `(path, line)` is still in this run's
+    `eligible_new` (i.e. still lands on a currently-added line) — otherwise
+    treat it as outdated, which `classify()` reclassifies as `new` rather
+    than fuzzy-matching against a stale coordinate. This is deliberately
+    conservative: on any ambiguity it costs an extra repost, never a
+    silently-dropped finding.
+    """
+    notes = disc.get("notes") or []
+    if not notes:
+        return None
+    first = notes[0]
+    if first.get("type") != "DiffNote":
+        return None
+    position = first.get("position") or {}
+    if position.get("position_type") != "text":
+        return None
+    path = position.get("new_path")
+    line = position.get("new_line")
+    if not isinstance(path, str) or not path or not isinstance(line, int):
+        return None
+
+    body = str(first.get("body") or "")
+    author = ((first.get("author") or {}).get("username")) or None
+    if not is_owned_by_us(body, author, bot_username, kind="inline"):
+        return None
+
+    comment_id = first.get("id")
+    if not isinstance(comment_id, int):
+        return None
+    thread_id = disc.get("id")
+    if not isinstance(thread_id, str) or not thread_id:
+        return None
+
+    meta = extract_inline_meta(body)
+    fp = meta.fp if meta else None
+    category = meta.cat if meta else None
+    severity = meta.sev if meta else None
+    prior_fingerprints = frozenset(meta.prior_fps) if meta else frozenset()
+    if severity is None:
+        first_line = body.splitlines()[0] if body else ""
+        sev_match = _HEADER_SEVERITY_RE.search(first_line)
+        severity = sev_match.group(1) if sev_match else None
+
+    if (
+        position.get("head_sha") == current_head_sha
+        and position.get("base_sha") == current_base_sha
+    ):
+        is_outdated = False
+    else:
+        is_outdated = (path, line) not in eligible_new
+
+    return PriorThread(
+        thread_id=thread_id,
+        comment_id=comment_id,
+        review_id=None,
+        path=path,
+        line=line,
+        start_line=None,
+        is_resolved=bool(first.get("resolved")),
+        is_outdated=is_outdated,
+        severity=severity,
+        category=category,
+        fingerprint=fp,
+        finding_id=None,
         prior_fingerprints=prior_fingerprints,
     )
 

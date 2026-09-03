@@ -20,6 +20,7 @@ from ai_pr_review.vcs._canonical import (
     dedupe_thread_claims,
     fingerprint_location,
     merge_verdicts,
+    parse_gitlab_prior_thread,
     parse_prior_thread,
     select_canonical,
 )
@@ -690,6 +691,200 @@ def test_parse_prior_thread_normalized_login_still_rejects_different_bot() -> No
     body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
     node = _thread_node(body=body, author="other-automation-bot")
     assert parse_prior_thread(node, bot_login="github-actions") is None
+
+
+# ---------------------------------------------------------------------------
+# parse_gitlab_prior_thread (#710)
+# ---------------------------------------------------------------------------
+
+_GL_HEAD = "headsha1234"
+_GL_BASE = "basesha5678"
+
+
+def _gl_disc(
+    *,
+    body: str,
+    author: str = "gl-bot",
+    disc_id: str = "d1",
+    note_id: int = 100,
+    note_type: str | None = "DiffNote",
+    resolved: bool = False,
+    path: str | None = "app.py",
+    line: int | None = 10,
+    head_sha: str | None = _GL_HEAD,
+    base_sha: str | None = _GL_BASE,
+    position_type: str | None = "text",
+) -> dict:
+    position: dict | None = None
+    if path is not None:
+        position = {
+            "position_type": position_type,
+            "new_path": path,
+            "old_path": path,
+            "new_line": line,
+            "old_line": None,
+            "base_sha": base_sha,
+            "start_sha": base_sha,
+            "head_sha": head_sha,
+        }
+    note: dict = {
+        "id": note_id,
+        "type": note_type,
+        "body": body,
+        "author": {"username": author},
+        "resolvable": True,
+        "resolved": resolved,
+    }
+    if position is not None:
+        note["position"] = position
+    return {"id": disc_id, "notes": [note]}
+
+
+def test_parse_gitlab_prior_thread_reads_meta_marker() -> None:
+    f = _finding(file="app.py", line=10, severity="High", category="secret")
+    fp = fingerprint(f)
+    marker = build_inline_meta_marker(fingerprint=fp, category="secret", severity="High")
+    body = f"🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->\n{marker}"
+    disc = _gl_disc(body=body)
+
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    )
+    assert thread is not None
+    assert thread.fingerprint == fp
+    assert thread.category == "secret"
+    assert thread.severity == "High"
+    assert thread.path == "app.py"
+    assert thread.line == 10
+    assert thread.is_outdated is False
+
+
+def test_parse_gitlab_prior_thread_not_owned_by_us_returns_none() -> None:
+    disc = _gl_disc(body="some comment\n<!-- ai-pr-review-inline -->", author="someone-else")
+    assert parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    ) is None
+
+
+def test_parse_gitlab_prior_thread_no_notes_returns_none() -> None:
+    disc = {"id": "d1", "notes": []}
+    assert parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    ) is None
+
+
+def test_parse_gitlab_prior_thread_non_diffnote_returns_none() -> None:
+    """A body-only or file-level note has no line to fuzzy-match against."""
+    disc = _gl_disc(
+        body="🔴 **[High]** [x] y\n<!-- ai-pr-review-inline -->", note_type="DiscussionNote",
+    )
+    assert parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    ) is None
+
+
+def test_parse_gitlab_prior_thread_non_text_position_returns_none() -> None:
+    disc = _gl_disc(
+        body="🔴 **[High]** [x] y\n<!-- ai-pr-review-inline -->", position_type="file",
+    )
+    assert parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    ) is None
+
+
+def test_parse_gitlab_prior_thread_missing_position_returns_none() -> None:
+    disc = _gl_disc(body="🔴 **[High]** [x] y\n<!-- ai-pr-review-inline -->", path=None)
+    assert parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    ) is None
+
+
+def test_parse_gitlab_prior_thread_non_int_note_id_returns_none() -> None:
+    disc = _gl_disc(body="🔴 **[High]** [x] y\n<!-- ai-pr-review-inline -->")
+    disc["notes"][0]["id"] = "not-an-int"
+    assert parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    ) is None
+
+
+def test_parse_gitlab_prior_thread_legacy_falls_back_to_header_severity() -> None:
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    disc = _gl_disc(body=body)
+
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    )
+    assert thread is not None
+    assert thread.severity == "High"
+    assert thread.category is None
+    assert thread.fingerprint is None
+
+
+def test_parse_gitlab_prior_thread_resolved_flag_propagates() -> None:
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    disc = _gl_disc(body=body, resolved=True)
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    )
+    assert thread is not None
+    assert thread.is_resolved is True
+
+
+def test_parse_gitlab_prior_thread_tier1_same_head_and_base_is_not_outdated() -> None:
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    disc = _gl_disc(body=body, head_sha=_GL_HEAD, base_sha=_GL_BASE)
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),  # empty on purpose: Tier 1 doesn't consult it
+    )
+    assert thread is not None
+    assert thread.is_outdated is False
+
+
+def test_parse_gitlab_prior_thread_tier2_head_moved_but_still_eligible() -> None:
+    """Head advanced since posting, but this run's diff still has an added
+    line at the exact same coordinate -- trust the anchor."""
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    disc = _gl_disc(body=body, path="app.py", line=10, head_sha="oldhead", base_sha=_GL_BASE)
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new={("app.py", 10)},
+    )
+    assert thread is not None
+    assert thread.is_outdated is False
+
+
+def test_parse_gitlab_prior_thread_tier2_head_moved_and_no_longer_eligible_is_outdated() -> None:
+    """Head advanced and the old anchor no longer lands on an added line --
+    the code moved or was deleted; don't trust the coordinate."""
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    disc = _gl_disc(body=body, path="app.py", line=10, head_sha="oldhead", base_sha=_GL_BASE)
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new={("app.py", 99)},
+    )
+    assert thread is not None
+    assert thread.is_outdated is True
+
+
+def test_parse_gitlab_prior_thread_base_sha_mismatch_alone_triggers_tier2() -> None:
+    body = "🔴 **[High]** [code-reviewer] leaked key\n<!-- ai-pr-review-inline -->"
+    disc = _gl_disc(body=body, path="app.py", line=10, head_sha=_GL_HEAD, base_sha="oldbase")
+    thread = parse_gitlab_prior_thread(
+        disc, bot_username="gl-bot", current_head_sha=_GL_HEAD,
+        current_base_sha=_GL_BASE, eligible_new=set(),
+    )
+    assert thread is not None
+    assert thread.is_outdated is True
 
 
 # ---------------------------------------------------------------------------

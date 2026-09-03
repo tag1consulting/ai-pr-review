@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -43,17 +44,49 @@ def _disc(
     author: str,
     resolvable: bool = True,
     resolved: bool = False,
+    note_id: int | None = None,
+    note_type: str | None = None,
+    position: dict[str, Any] | None = None,
 ) -> dict:
+    """Build a `/discussions` response entry.
+
+    `note_id`/`note_type`/`position` (#710) are optional and omitted from the
+    note dict entirely when not passed, so every pre-#710 call site here
+    keeps its exact original shape. Needed by `test_gitlab_dedup.py`'s
+    reuse of this helper to build discussions `parse_gitlab_prior_thread`
+    can actually parse (which requires `type: "DiffNote"`, a `position`, and
+    an integer note `id`).
+    """
+    note: dict[str, Any] = {
+        "body": body,
+        "author": {"username": author},
+        "resolvable": resolvable,
+        "resolved": resolved,
+    }
+    if note_id is not None:
+        note["id"] = note_id
+    if note_type is not None:
+        note["type"] = note_type
+    if position is not None:
+        note["position"] = position
+    return {"id": did, "notes": [note]}
+
+
+def _position(
+    *,
+    new_path: str,
+    new_line: int,
+    head_sha: str = "head1",
+    base_sha: str = "basesha",
+    position_type: str = "text",
+) -> dict[str, Any]:
+    """Build a GitLab DiffNote `position` object (#710)."""
     return {
-        "id": did,
-        "notes": [
-            {
-                "body": body,
-                "author": {"username": author},
-                "resolvable": resolvable,
-                "resolved": resolved,
-            }
-        ],
+        "position_type": position_type,
+        "new_path": new_path,
+        "new_line": new_line,
+        "head_sha": head_sha,
+        "base_sha": base_sha,
     }
 
 

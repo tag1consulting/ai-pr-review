@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **GitLab cross-run finding dedup (issue #710)**: reruns no longer post a brand-new inline discussion for a finding that already has one. `post_findings` fuzzy-matches each finding against this bot's still-open prior discussions (same file, within 3 lines, compatible category — the same tolerance GitHub's canonical-review reuse uses) and skips reposting a match, keeping the existing discussion open instead of duplicating it. Every newly-posted discussion carries a per-finding metadata marker (fingerprint/category/severity) so future runs can match against it. Narrower than GitHub's canonical-review reuse: GitLab has no dismiss/false-positive/wont-fix/fixed verdict system, so there's no suppression, no escalation reply, and no in-place update of an existing discussion's body — an unmatched or more-severe finding simply gets its own fresh discussion. Set `AI_GITLAB_CROSS_RUN_DEDUP=false` to disable and restore the pre-dedup behavior of always posting a fresh discussion. See [docs/features.md](docs/features.md#quiet-reruns-github).
+
+### Fixed
+
+- `GitLabProvider.resolve_stale()` had no concept of "a discussion this same run just created or matched as still active" — it resolved every owned, unresolved, resolvable, marker-bearing discussion on the MR unconditionally, including one `post_findings` had just posted moments earlier in the same run (`orchestrate.py` calls `resolve_stale()` immediately after `post_findings()`). In effect, every GitLab inline review comment was auto-collapsed as "resolved" before a human ever saw it as open — the same bug class already fixed once on GitHub (issue #718), reintroduced on GitLab from day one. Fixed with the same per-run keep-alive tracking GitHub uses; applies regardless of `AI_GITLAB_CROSS_RUN_DEDUP`.
+- `GitLabProvider.post_findings`'s failure detection compared `inline_posted == 0` against `len(findings) > 0`, which would misclassify a run with zero inline candidates (everything routed to the body, or everything matched an existing discussion) as a failure. Now compares against `len(inline_candidates)` (what was actually attempted) and requires a real HTTP error, not just "nothing needed posting."
+
 ## [2.7.0] - 2026-09-02
 
 ### Added
