@@ -7,9 +7,10 @@ from collections.abc import Callable
 import httpx
 
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.gitlab import GitLabConfig, GitLabProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER
+from ai_pr_review.vcs.marker import INLINE_MARKER, extract_inline_meta
 from ai_pr_review.vcs.protocol import DiffContext
 
 
@@ -90,6 +91,61 @@ def test_post_findings_inline_for_eligible_line() -> None:
     assert INLINE_MARKER in body
     assert "unsafe call" in body
     assert "sanitize" in body
+
+
+def test_post_findings_embeds_per_finding_meta_marker() -> None:
+    """#710 plumbing: every newly-posted discussion carries a metadata marker
+    with this finding's exact fingerprint/category/severity, so a future run
+    can fuzzy-match against it (parse_gitlab_prior_thread). Pure plumbing in
+    this PR -- nothing reads it back yet."""
+    posts: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/discussions" in str(req.url):
+            posts.append(json.loads(req.content))
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    f = Finding(
+        severity="High", confidence=90, finding="unsafe call", source="blind",
+        file="app.py", line=4, category="injection",
+    )
+    result = prov.post_findings(
+        [f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_posted == 1
+    body = posts[0]["body"]
+    meta = extract_inline_meta(body)
+    assert meta is not None
+    assert meta.fp == fingerprint(f)
+    assert meta.cat == "injection"
+    assert meta.sev == "High"
+
+
+def test_post_findings_all_kept_alive_no_candidates_is_not_a_failure() -> None:
+    """Regression for the any_failure fix: a run with zero inline candidates
+    (nothing eligible) must not be reported as a failure just because some
+    unrelated error was recorded earlier in the same call."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    # No diff-eligible lines at all -> zero inline candidates, everything
+    # falls to body_findings; nothing should ever be POSTed.
+    f = Finding(
+        severity="Low", confidence=60, finding="pre-existing", source="ruff",
+        file="unrelated.py", line=999,
+    )
+    result = prov.post_findings(
+        [f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT"
+    )
+    assert result.inline_posted == 0
+    assert result.body_findings == 1
+    assert result.ok
 
 
 def test_post_findings_ineligible_line_not_inline() -> None:

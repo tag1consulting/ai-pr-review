@@ -87,6 +87,14 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # not by Config -- registered here only so Config.from_env's unknown-
         # AI_*-var check doesn't warn about it.
         "AI_CANONICAL_REUSE",
+        # --- Cross-run finding dedup (GitLab only, #710) ---
+        # Read directly by ai_pr_review.vcs.__init__._build_gitlab_from_env,
+        # not by Config -- registered here only so Config.from_env's unknown-
+        # AI_*-var check doesn't warn about it. Deliberately a separate flag
+        # from AI_CANONICAL_REUSE: GitLab has no canonical review, and coupling
+        # two independently-risky features would block rolling either back
+        # alone.
+        "AI_GITLAB_CROSS_RUN_DEDUP",
     }
 )
 

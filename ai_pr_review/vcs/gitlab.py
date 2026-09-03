@@ -31,6 +31,7 @@ from ai_pr_review.vcs._body import (
     severity_icon,
     truncate_body,
 )
+from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs._inline import (
     is_suggestion_range_valid,
     is_suggestion_safe,
@@ -42,6 +43,7 @@ from ai_pr_review.vcs.marker import (
     SUMMARY_MARKER_PREFIX,
     append_inline_marker,
     append_skip_marker,
+    build_inline_meta_marker,
     build_summary_marker,
     extract_summary_sha,
     has_skip_marker,
@@ -76,6 +78,10 @@ class GitLabConfig:
     diff_base_sha: str  # required for inline discussion positions
     bot_username: str | None = None  # if None, fetch from /user
     base_url: str = "https://gitlab.com/api/v4"
+    # Cross-run finding dedup (#710). Gates only the fuzzy-match "skip
+    # reposting an unchanged finding" behavior; the keep-alive fix for the
+    # resolve_stale-resolves-what-we-just-posted bug applies regardless.
+    cross_run_dedup: bool = True
 
 
 def _auth_header(token: str) -> tuple[str, str]:
@@ -535,9 +541,17 @@ class GitLabProvider:
             )
 
         # Scope failure detection to errors generated in this call only, not
-        # accumulated from prior calls (post_summary, _get_bot_username, etc.)
+        # accumulated from prior calls (post_summary, _get_bot_username, etc.).
+        # Gate on `attempted` (inline candidates actually attempted), not
+        # `len(findings)`: once cross-run dedup (#710) can legitimately post
+        # zero discussions because every inline candidate matched an existing
+        # one, `inline_posted == 0` is a correct, successful outcome, not a
+        # failure -- and `len(findings) > 0` alone can't distinguish that from
+        # "we tried and every POST failed". A run with zero inline candidates
+        # (everything fell to body_findings) is likewise not itself a failure.
+        attempted = len(inline_candidates)
         new_errors = len(self._errors) - errors_before
-        any_failure = new_errors > 0 and inline_posted == 0 and len(findings) > 0
+        any_failure = attempted > 0 and inline_posted == 0 and new_errors > 0
         return FindingsResult(
             review_id=None,
             inline_posted=inline_posted,
@@ -602,7 +616,17 @@ class GitLabProvider:
                 fence = "```suggestion:-0+0"
             parts.append(f"\n{fence}\n{f.suggested_code}\n```")
         body = "".join(parts)
-        return append_inline_marker(body)
+        body = append_inline_marker(body)
+        # Per-finding metadata marker (#710 plumbing): carries this finding's
+        # exact fingerprint/category/severity so a future run can fuzzy-match
+        # against it (ai_pr_review.vcs._canonical.parse_gitlab_prior_thread).
+        # Not read back by anything yet in this PR -- pure plumbing so
+        # production discussions start carrying real fingerprints before the
+        # matching logic that consumes them ships.
+        body += "\n" + build_inline_meta_marker(
+            fingerprint=fingerprint(f), category=f.category, severity=f.severity,
+        )
+        return body
 
     # ------------------------------------------------------------------
     # resolve_stale — marker-gated discussion resolution

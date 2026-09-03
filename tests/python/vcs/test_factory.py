@@ -41,6 +41,7 @@ def _clear_provider_envs(monkeypatch: pytest.MonkeyPatch) -> None:
         "BITBUCKET_WORKSPACE",
         "BITBUCKET_REPO_SLUG",
         "AI_CANONICAL_REUSE",
+        "AI_GITLAB_CROSS_RUN_DEDUP",
     ]:
         monkeypatch.delenv(name, raising=False)
 
@@ -203,6 +204,34 @@ def test_gitlab(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MR_IID", "7")
     monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc1234")
     assert isinstance(provider_from_env(), GitLabProvider)
+
+
+def test_gitlab_cross_run_dedup_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-x")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "42")
+    monkeypatch.setenv("MR_IID", "7")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc1234")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.cross_run_dedup is True
+
+
+@pytest.mark.parametrize("value", ["false", "False", "0", "no"])
+def test_gitlab_cross_run_dedup_kill_switch(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-x")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "42")
+    monkeypatch.setenv("MR_IID", "7")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc1234")
+    monkeypatch.setenv("AI_GITLAB_CROSS_RUN_DEDUP", value)
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.cross_run_dedup is False
 
 
 def test_gitlab_uses_ci_job_token_fallback(
