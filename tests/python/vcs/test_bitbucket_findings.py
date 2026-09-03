@@ -461,6 +461,7 @@ def _run_post_findings_cycle(
     *,
     comment_id: int = 42,
     event: str = "REQUEST_CHANGES",
+    token_table: str = "",
 ) -> str:
     """Simulate one review cycle: an existing comment with `existing_body`
     is fetched, `post_findings` renders + PUTs a new body, which is returned
@@ -484,7 +485,8 @@ def _run_post_findings_cycle(
 
     prov = _make_provider(handler)
     result = prov.post_findings(
-        findings, DiffContext(diff_text="", head_sha=_HEAD), event=event  # type: ignore[arg-type]
+        findings, DiffContext(diff_text="", head_sha=_HEAD), event=event,  # type: ignore[arg-type]
+        token_table=token_table,
     )
     assert result.ok, result.error
     return captured[0]["content"]["raw"]
@@ -557,6 +559,32 @@ def test_truncation_protects_findings_over_walkthrough() -> None:
     # after the findings section -- never take priority over it.
     walkthrough_idx = raw.find("x" * 100)
     assert walkthrough_idx == -1 or walkthrough_idx > findings_idx
+
+
+def test_truncation_protects_token_table_over_walkthrough() -> None:
+    """Regression for #728: a long carried-forward walkthrough must not
+    push the (always small) token-usage table past the byte limit. Before
+    the fix, the table sat after the walkthrough in the rendered body, so
+    an oversized walkthrough silently truncated the table away along with
+    itself -- the same bug already fixed for findings_block, applied here
+    to the token table."""
+    oversized_walkthrough = "x" * 40_000  # already over the 32,000-byte limit alone
+    token_table_marker = "**Token usage by agent** | Sonnet 5 | TRUNCATION_SURVIVOR"
+    finding = Finding(
+        severity="Low", confidence=60, finding="minor style nit",
+    )
+
+    raw = _run_post_findings_cycle(
+        _first_run_body(oversized_walkthrough), [finding], token_table=token_table_marker,
+    )
+
+    assert len(raw.encode("utf-8")) <= 32_000 + 300  # + truncation trailer slack
+    assert token_table_marker in raw, "the token table must survive truncation"
+    table_idx = raw.find(token_table_marker)
+    walkthrough_idx = raw.find("x" * 100)
+    # The walkthrough, if any of it survived at all, must appear after the
+    # token table -- never take priority over it.
+    assert walkthrough_idx == -1 or walkthrough_idx > table_idx
 
 
 def test_fingerprint_stable_and_new_finding_flagged() -> None:
