@@ -86,7 +86,7 @@ By default (`token-usage-display: compact`), each posted review comment carries 
 - **N agents** counts finding agents that actually ran; the synthetic `judge-pass` row (see below) contributes its tokens/cost to the total but is not counted as an agent.
 - **[full breakdown]** links to the current CI run when the platform exposes one (GitHub Actions, GitLab CI/CD job, or Bitbucket Pipelines — see `ai_pr_review/review/reporting.py`'s `ci_run_url()`); omitted when the relevant environment variables are empty rather than emitting a broken link.
 
-Set `token-usage-display: full` to restore the full `<details>`-wrapped table inside the comment (the behavior before this line existed), or `off` to omit token-usage content from the comment entirely. `token-usage-warn-usd` (default `1.00`, `0` disables) adds a separate warning line — never combined into the same string as the table or the compact line — when a run's estimated cost crosses the threshold. See [Configuration](configuration#action-inputs) for both inputs.
+Set `token-usage-display: full` to restore the full `<details>`-wrapped table inside the comment (the behavior before this line existed), or `off` to omit token-usage content from the comment entirely. `token-usage-warn-usd` (default `1.00`, `0` disables) adds a separate warning line — never combined into the same string as the table or the compact line — when a run's estimated cost crosses the threshold. See [Configuration](configuration#token-usage-display) for both inputs.
 
 Regardless of `token-usage-display`, the full per-agent breakdown is always available in two other places:
 

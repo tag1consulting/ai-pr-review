@@ -616,6 +616,38 @@ def test_truncation_protects_token_table_when_findings_alone_overflow() -> None:
     assert token_table_marker in raw, "the token table must survive even when findings alone overflow"
 
 
+def test_truncation_protects_both_usage_block_and_usage_warning_together() -> None:
+    """#758: usage_warning is reserved and appended as its own segment,
+    separately from usage_block -- both existing #728 regression tests above
+    only ever pass usage_block alone, so the sequential reserve check that
+    decides whether usage_warning still fits alongside an already-reserved
+    usage_block (bitbucket.py's post_findings, after the usage_block
+    reserve/fallback logic) has never been exercised with a second real
+    payload competing for the same remaining bytes. Both must survive
+    together under the same findings-alone-overflow pressure as the test
+    above.
+    """
+    token_table_marker = "**Token usage by agent** | Sonnet 5 | TRUNCATION_SURVIVOR"
+    warning_marker = "⚠️ High token usage WARNING_SURVIVOR"
+    long_finding_text = "x" * 500
+    findings = [
+        Finding(severity="Low", confidence=60, finding=f"{long_finding_text}_{i}", file=f"f{i}.py", line=1)
+        for i in range(100)
+    ]
+
+    raw = _run_post_findings_cycle(
+        _first_run_body(""), findings,
+        usage_block=token_table_marker, usage_warning=warning_marker,
+    )
+
+    assert len(raw.encode("utf-8")) <= 32_000 + 300  # + truncation trailer slack
+    assert token_table_marker in raw, "the usage block must survive when both payloads compete for budget"
+    assert warning_marker in raw, "the usage warning must survive when both payloads compete for budget"
+    # Warning is appended after the usage block, per the #758 design decision
+    # that the two are never combined into one string.
+    assert raw.index(token_table_marker) < raw.index(warning_marker)
+
+
 def test_fingerprint_stable_and_new_finding_flagged() -> None:
     """F-IDs on Bitbucket (previously nonexistent) must stay stable across
     runs for an unchanged finding, and a finding introduced on a later run

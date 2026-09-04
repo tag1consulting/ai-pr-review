@@ -245,3 +245,74 @@ def test_ci_run_url_github_partial_vars_falls_through(monkeypatch: pytest.Monkey
     monkeypatch.delenv("CI_JOB_URL", raising=False)
     monkeypatch.delenv("BITBUCKET_REPO_FULL_NAME", raising=False)
     assert ci_run_url() == ""
+
+
+# ---------------------------------------------------------------------------
+# _prepare() fail-soft on an unexpected exception during token-log assembly
+# (not just a pricing-load failure) -- regression guard. build_full_token_table
+# in particular is invoked directly in cli.py's job-log echo, outside of
+# orchestrate.run_review()'s own Phase 3.5 try/except, so a bug here must not
+# be able to turn an already-successful review into a reported CI failure.
+# ---------------------------------------------------------------------------
+
+
+def test_build_full_token_table_survives_token_log_assembly_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_pr_review.review import reporting
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated bug in token log assembly")
+
+    monkeypatch.setattr(reporting, "_build_token_log", _boom)
+    result = reporting.build_full_token_table([_make_agent_result()], None, _REPO_ROOT)
+    assert result == ""
+
+
+def test_build_token_table_accordion_survives_token_log_assembly_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_pr_review.review import reporting
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated bug in token log assembly")
+
+    monkeypatch.setattr(reporting, "_build_token_log", _boom)
+    result = reporting.build_token_table_accordion([_make_agent_result()], None, _REPO_ROOT)
+    assert result == ""
+
+
+def test_compute_token_totals_survives_token_log_assembly_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_pr_review.review import reporting
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated bug in token log assembly")
+
+    monkeypatch.setattr(reporting, "_build_token_log", _boom)
+    result = reporting.compute_token_totals([_make_agent_result()], _REPO_ROOT)
+    assert result is None
+
+
+def test_prepare_survives_exception_in_context_tokens_computation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The context_tokens/profile_tokens max() computations sit inside the
+    same try/except as _build_token_log -- a malformed AgentResult (e.g. a
+    non-numeric context_tokens_used from a future refactor) must not escape
+    either.
+    """
+    from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+    from ai_pr_review.review import reporting
+
+    bad_agent_result = AgentResult(
+        name="code-reviewer",
+        output="",
+        token_log=TokenUsage(model="claude-sonnet-5", input=100, output=50,
+                             cache_creation=0, cache_read=0),
+        truncated=False,
+        context_tokens_used="not-a-number",  # type: ignore[arg-type]
+    )
+    result = reporting.build_full_token_table([bad_agent_result], None, _REPO_ROOT)
+    assert result == ""

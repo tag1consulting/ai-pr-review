@@ -10,7 +10,7 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.gitlab import GitLabConfig, GitLabProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, extract_inline_meta
+from ai_pr_review.vcs.marker import INLINE_MARKER, USAGE_MARKER, extract_inline_meta
 from ai_pr_review.vcs.protocol import DiffContext
 
 
@@ -497,6 +497,52 @@ def test_post_findings_no_put_when_off_mode_produces_nothing() -> None:
         usage_warning="",
     )
     assert put_calls == [], "no PUT should fire when there is nothing to write"
+
+
+def test_post_findings_off_mode_clears_stale_usage_block_from_prior_run() -> None:
+    """Regression: switching to token-usage-display: off (or any run with no
+    token data) must not leave a stale cost/token figure from an earlier
+    compact/full run permanently visible in the GitLab summary note.
+
+    Before this fix, the whole upsert was gated on `if usage_block or
+    usage_warning:`, so an off-mode run (both empty) never even looked at
+    the existing note -- a prior run's usage block, once written, could
+    never be cleared again. The fix always lists the existing note and only
+    skips the PUT when there is truly nothing to add AND no stale marker to
+    strip.
+    """
+    import json
+
+    stale_usage_block = (
+        f"{USAGE_MARKER}\n\n_Review cost: $0.0100 · 500 tokens · 1 agent · Sonnet 5_"
+    )
+    stored = f"{_SUMMARY_MARKER}\n## PR Summary\n\n{stale_usage_block}"
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": stored}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        if req.method == "POST" and "/discussions" in str(req.url):
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        usage_block="",
+        usage_warning="",
+    )
+
+    assert put_bodies, "PUT must fire to clear the stale usage block, even though the new payload is empty"
+    new_body = put_bodies[-1]["body"]
+    assert "Review cost: $0.0100" not in new_body, "stale usage content must be removed under off mode"
+    assert USAGE_MARKER not in new_body
+    assert "## PR Summary" in new_body, "the rest of the note must survive"
 
 
 def test_post_findings_token_table_no_summary_note_skips_put() -> None:

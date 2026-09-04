@@ -94,37 +94,54 @@ def _prepare(
 ) -> _Prepared | None:
     """Shared fail-soft setup for every token-usage rendering path: assemble
     the token log, compute the two supplementary-row figures, and load
-    pricing data. Returns ``None`` on no-data or a pricing-load failure —
-    callers translate that into their own "nothing to show" sentinel
-    (``""`` for a rendered string, ``None`` for a ``TokenTotals``).
+    pricing data. Returns ``None`` on no-data, an unexpected error assembling
+    the token log, or a pricing-load failure — callers translate that into
+    their own "nothing to show" sentinel (``""`` for a rendered string,
+    ``None`` for a ``TokenTotals``).
+
+    Every caller advertises fail-soft behavior in its own docstring, and one
+    caller (``build_full_token_table``, feeding cli.py's CI job-log echo) is
+    invoked directly in ``_run_review_async`` *after* the review has already
+    posted successfully, with no surrounding ``try``/``except`` of its own —
+    unlike the accordion/compact-line renderers, which run inside
+    ``orchestrate.run_review()``'s own Phase 3.5 guard. Letting an exception
+    escape this function would let a cosmetic job-log feature turn an
+    already-successful review into a reported CI failure, so the whole
+    assembly step is wrapped, not just the pricing-file load.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.pricing import load_pricing
 
-    token_log = _build_token_log(
-        successes,
-        effective_max_tokens=effective_max_tokens,
-        judge_input_tokens=judge_input_tokens,
-        judge_output_tokens=judge_output_tokens,
-        judge_cache_creation_tokens=judge_cache_creation_tokens,
-        judge_cache_read_tokens=judge_cache_read_tokens,
-        judge_model=judge_model,
-    )
-    if not token_log:
-        return None
+    try:
+        token_log = _build_token_log(
+            successes,
+            effective_max_tokens=effective_max_tokens,
+            judge_input_tokens=judge_input_tokens,
+            judge_output_tokens=judge_output_tokens,
+            judge_cache_creation_tokens=judge_cache_creation_tokens,
+            judge_cache_read_tokens=judge_cache_read_tokens,
+            judge_model=judge_model,
+        )
+        if not token_log:
+            return None
 
-    # All enriched agents receive the same context block; take the max (which
-    # equals the single non-zero value) rather than summing to avoid double-counting.
-    context_tokens = max(
-        (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
-        default=0,
-    )
-    # Profile routing gives each agent a different section subset; take the max
-    # as a representative figure (the largest profile slice sent to any agent).
-    profile_tokens = max(
-        (ar.profile_tokens_used for ar in successes if isinstance(ar, AgentResult)),
-        default=0,
-    )
+        # All enriched agents receive the same context block; take the max
+        # (which equals the single non-zero value) rather than summing to
+        # avoid double-counting.
+        context_tokens = max(
+            (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+            default=0,
+        )
+        # Profile routing gives each agent a different section subset; take
+        # the max as a representative figure (the largest profile slice sent
+        # to any agent).
+        profile_tokens = max(
+            (ar.profile_tokens_used for ar in successes if isinstance(ar, AgentResult)),
+            default=0,
+        )
+    except Exception as exc:
+        logger.warning("token table: could not assemble token log: %s", exc, exc_info=True)
+        return None
 
     pricing_file = str(script_dir / "config" / "model-pricing.json")
     try:
@@ -366,10 +383,15 @@ def build_high_usage_warning(totals: TokenTotals | None, warn_usd: float) -> str
     the display mode produced.
 
     When ``totals.any_unknown`` is set (some model in the run has no pricing
-    entry), the wording says the figure is a floor rather than asserting a
-    precise number — the same run could genuinely cost more than shown, and
-    a threshold comparison against an artificially-low total must not
-    silently suppress the warning.
+    entry) and the warning does fire, the wording presents the figure as a
+    floor rather than a precise number, since the same run could genuinely
+    cost more than shown. Note this is a wording change only: the threshold
+    comparison above still runs against ``totals.cost_units``, which only
+    counts priced models, so a run whose priced portion falls under
+    ``warn_usd`` produces no warning even when the unpriced remainder could
+    push the real cost well above it. Closing that gap (e.g. always warning
+    when ``any_unknown`` is set and the priced total is within some margin
+    of the threshold) is a real product decision, not implemented here.
     """
     if totals is None or warn_usd <= 0:
         return ""
