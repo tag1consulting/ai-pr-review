@@ -399,6 +399,7 @@ runs:
           -e OPENAI_BASE_URL \
           -e BEDROCK_API_URL \
           -e GH_TOKEN \
+          -e GITHUB_ACTIONS \
           -e GITHUB_REPOSITORY \
           -e GITHUB_SERVER_URL \
           -e GITHUB_RUN_ID \
