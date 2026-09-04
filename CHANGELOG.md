@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `GITHUB_ACTIONS` is now passed through to the containerized engine (issue #759). The `::warning::`/`::error::` workflow annotations in `vcs/github.py`, `slash/dismiss.py`, `cli.py`, and `review/reporting.py` all gate on `os.environ.get("GITHUB_ACTIONS") == "true"` and previously saw it unset when running via `container-action/action.yml`, even inside real GitHub Actions, so those annotations were silently suppressed. `GITHUB_STEP_SUMMARY` writing is unaffected — it gates only on the `GITHUB_STEP_SUMMARY` path variable, which was already forwarded.
+
 ### Changed
 
 - **Behavior-changing for every consumer: the token usage table is no longer posted in full inside the review comment by default (issue #758)**. The full `Token usage by agent` breakdown was reference material, not review content, and its in-comment copy had caused two shipped bugs — Bitbucket rendering `<details>`/`<summary>` as literal text (#703) and Bitbucket silently truncating comments near 32KB, dropping the trailing table (#728). The review comment now carries a single compact line by default (`_Review cost: $0.1234 · 45,678 tokens · 8 agents · Sonnet 5 · [full breakdown](run-url)_`), plus a separate high-usage warning line when a run's estimated cost crosses a configurable threshold. The full table is always available in the CI job log (echoed to stderr on every provider — new) and, on GitHub, `GITHUB_STEP_SUMMARY` (unchanged).
