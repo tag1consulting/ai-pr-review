@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `GITHUB_ACTIONS` is now passed through to the containerized engine (issue #759). Any code branching on `os.environ.get("GITHUB_ACTIONS") == "true"` (the `::warning::` annotations in `vcs/github.py`/`slash/dismiss.py`, and the `GITHUB_STEP_SUMMARY` gating in `cli.py`/`review/reporting.py`) previously always saw it unset when running via `container-action/action.yml`, even inside real GitHub Actions.
+- `GITHUB_ACTIONS` is now passed through to the containerized engine (issue #759). The `::warning::`/`::error::` workflow annotations in `vcs/github.py`, `slash/dismiss.py`, `cli.py`, and `review/reporting.py` all gate on `os.environ.get("GITHUB_ACTIONS") == "true"` and previously saw it unset when running via `container-action/action.yml`, even inside real GitHub Actions, so those annotations were silently suppressed. `GITHUB_STEP_SUMMARY` writing is unaffected — it gates only on the `GITHUB_STEP_SUMMARY` path variable, which was already forwarded.
 
 ### Changed
 
