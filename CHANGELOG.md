@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `GITHUB_ACTIONS` is now passed through to the containerized engine (issue #759). The `::warning::`/`::error::` workflow annotations in `vcs/github.py`, `slash/dismiss.py`, `cli.py`, and `review/reporting.py` all gate on `os.environ.get("GITHUB_ACTIONS") == "true"` and previously saw it unset when running via `container-action/action.yml`, even inside real GitHub Actions, so those annotations were silently suppressed. `GITHUB_STEP_SUMMARY` writing is unaffected — it gates only on the `GITHUB_STEP_SUMMARY` path variable, which was already forwarded.
+- 20 further documented env vars — including the `AI_CANONICAL_REUSE` and `AI_GITLAB_CROSS_RUN_DEDUP` incident-response kill switches — are now passed through to the containerized engine (issue #761, a follow-up to #759's same bug class). All were read directly from the raw environment with no corresponding `container-action/action.yml` `inputs:` entry, so they were silently inert on the container path unless the calling workflow's own `env:` block happened to set them and this list forwarded them. A new regression test (`tests/python/test_container_action_env.py`) parses the `docker run -e` passthrough list and asserts it covers every var `ai_pr_review.config._KNOWN_AI_VARS` knows about (minus a documented, justified deny-list) plus an explicit non-`AI_*` allowlist, so this class of gap can't recur silently for a future var.
 
 ### Changed
 
