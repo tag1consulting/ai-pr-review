@@ -1247,3 +1247,128 @@ class TestEmitTelemetryThinkingTokens:
         agent_usage = event["token_usage_by_agent"]["code-reviewer"]
         assert agent_usage["thinking_tokens"] == 0
         assert agent_usage["stop_reason"] == ""
+
+
+class TestTokenUsageDisplayModeSelection:
+    """#758: _run_review_async's _token_renderer/_usage_warning_renderer
+    closures must select the right payload shape per rc.token_usage_display,
+    and the job-log echo (build_full_token_table -> _emit_review_result)
+    must be skipped under `off`. Drives the real cli.py call sites (mocking
+    only orchestrate.run_review) rather than calling reporting.py's builders
+    directly, so a regression in the mode-selection branches themselves --
+    not just in the builders they call -- would be caught here.
+    """
+
+    def _run_and_capture(
+        self, tmp_path: Path, *, token_usage_display: str, token_usage_warn_usd: float = 1.00,
+    ) -> dict[str, object]:
+        import anyio
+
+        from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+        from ai_pr_review.vcs.protocol import FindingsResult, SummaryResult, VcsProvider
+
+        diff_file = str(tmp_path / "diff.txt")
+        captured_kwargs: dict[str, object] = {}
+
+        provider = MagicMock(spec=VcsProvider)
+        provider.get_last_reviewed_sha.return_value = None
+
+        agent_result = AgentResult(
+            name="code-reviewer",
+            output="ok",
+            token_log=TokenUsage(
+                input=1000, output=500, cache_creation=0, cache_read=0,
+                model="claude-sonnet-5",
+            ),
+            truncated=False,
+        )
+
+        async def _fake_run_review(**kwargs: object) -> object:
+            captured_kwargs.update(kwargs)
+            result = MagicMock()
+            result.ok = True
+            result.skipped = False
+            result.failed_agents = []
+            result.agent_results = [agent_result]
+            result.judge_input_tokens = 0
+            result.judge_output_tokens = 0
+            result.judge_cache_creation_tokens = 0
+            result.judge_cache_read_tokens = 0
+            result.judge_model = ""
+            result.outcome = MagicMock()
+            result.outcome.event = "COMMENT"
+            result.findings = []
+            result.summary = SummaryResult(comment_id=1, created=True, updated=False)
+            result.findings_post = FindingsResult(
+                review_id=1, inline_posted=0, body_findings=0, event="COMMENT",
+            )
+            return result
+
+        with (
+            patch.dict(os.environ, {"AI_PR_REVIEW_DIFF_FILE": diff_file}),
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=provider),
+            patch("ai_pr_review.orchestrate.run_review", new=AsyncMock(side_effect=_fake_run_review)),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.agents.roster.AGENTS", []),
+            patch("ai_pr_review.cli._run_summarizer", return_value=""),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            exit_code = anyio.run(
+                _run_review_async,
+                _make_config(
+                    token_usage_display=token_usage_display,
+                    token_usage_warn_usd=token_usage_warn_usd,
+                ),
+            )
+
+        assert exit_code == 0
+        token_renderer = captured_kwargs["token_table_renderer"]
+        warning_renderer = captured_kwargs["usage_warning_renderer"]
+        usage_block = token_renderer([agent_result], None, 0, 0, 0, 0, "")  # type: ignore[operator]
+        usage_warning = warning_renderer([agent_result], None, 0, 0, 0, 0, "")  # type: ignore[operator]
+        return {"usage_block": usage_block, "usage_warning": usage_warning}
+
+    def test_full_mode_renders_accordion(self, tmp_path: Path) -> None:
+        out = self._run_and_capture(tmp_path, token_usage_display="full")
+        assert out["usage_block"].startswith("<details>")  # type: ignore[union-attr]
+        assert "Token usage by agent" in out["usage_block"]  # type: ignore[operator]
+
+    def test_compact_mode_renders_line(self, tmp_path: Path) -> None:
+        out = self._run_and_capture(tmp_path, token_usage_display="compact")
+        assert "<details>" not in out["usage_block"]  # type: ignore[operator]
+        assert out["usage_block"].startswith("_Review cost:")  # type: ignore[union-attr]
+        assert "Sonnet 5" in out["usage_block"]  # type: ignore[operator]
+
+    def test_off_mode_renders_nothing(self, tmp_path: Path) -> None:
+        out = self._run_and_capture(tmp_path, token_usage_display="off")
+        assert out["usage_block"] == ""
+        assert out["usage_warning"] == ""
+
+    def test_high_usage_warning_fires_when_threshold_crossed(self, tmp_path: Path) -> None:
+        out = self._run_and_capture(
+            tmp_path, token_usage_display="compact", token_usage_warn_usd=0.0001,
+        )
+        assert "High token usage" in out["usage_warning"]  # type: ignore[operator]
+
+    def test_high_usage_warning_silent_when_disabled(self, tmp_path: Path) -> None:
+        out = self._run_and_capture(
+            tmp_path, token_usage_display="compact", token_usage_warn_usd=0,
+        )
+        assert out["usage_warning"] == ""
+
+    def test_job_log_echo_present_unless_off(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._run_and_capture(tmp_path, token_usage_display="compact")
+        captured = capsys.readouterr()
+        assert "Token usage by agent:" in captured.err
+        assert "| Agent | Model |" in captured.err
+
+    def test_job_log_echo_absent_under_off(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._run_and_capture(tmp_path, token_usage_display="off")
+        captured = capsys.readouterr()
+        assert "Token usage by agent:" not in captured.err

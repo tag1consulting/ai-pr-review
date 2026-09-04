@@ -34,10 +34,13 @@ annotations are not currently available on the Bitbucket path.
   equivalent; the review always runs on PR create/push)
 - The large-diff "skip" comment (the review still exits cleanly and logs
   a warning, but no comment is posted)
-- Collapsed/expandable sections (the token-usage table and the PR-summary
-  Walkthrough render as flat, always-expanded content on Bitbucket; Bitbucket
-  Cloud renders no HTML at all in comments, so `<details>` isn't an option —
-  see [BCLOUD-20231](https://jira.atlassian.com/browse/BCLOUD-20231))
+- Collapsed/expandable sections (the PR-summary Walkthrough, and the
+  token-usage table under `token-usage-display: full`, render as flat,
+  always-expanded content on Bitbucket; Bitbucket Cloud renders no HTML at
+  all in comments, so `<details>` isn't an option — see
+  [BCLOUD-20231](https://jira.atlassian.com/browse/BCLOUD-20231)). The
+  default `token-usage-display: compact` is a single plain line, so this
+  only matters if you opt into `full`.
 
 ## One-time setup
 

@@ -78,9 +78,24 @@ This full canonical-review-reuse behavior is GitHub-only. GitLab has a narrower 
 
 ## Token usage
 
-After each review run, a collapsible **Token usage by agent** table is appended to the **review body** — the same comment that carries the findings (Approved / Changes Requested / Comment). The long-lived PR summary comment carries only the first-run walkthrough and is not rewritten on subsequent runs.
+By default (`token-usage-display: compact`), each posted review comment carries a single italic summary line rather than the full table:
 
-The table layout adapts based on cache activity:
+> _Review cost: $0.1234 · 45,678 tokens · 8 agents · Sonnet 5 · [full breakdown](run-url)_
+
+- **Review cost** is the run's estimated total at public list rates, suffixed `+` when any agent used a model absent from `config/model-pricing.json` (the true cost is at least this much).
+- **N agents** counts finding agents that actually ran; the synthetic `judge-pass` row (see below) contributes its tokens/cost to the total but is not counted as an agent.
+- **[full breakdown]** links to the current CI run when the platform exposes one (GitHub Actions, GitLab CI/CD job, or Bitbucket Pipelines — see `ai_pr_review/review/reporting.py`'s `ci_run_url()`); omitted when the relevant environment variables are empty rather than emitting a broken link.
+
+Set `token-usage-display: full` to restore the full `<details>`-wrapped table inside the comment (the behavior before this line existed), or `off` to omit token-usage content from the comment entirely. `token-usage-warn-usd` (default `1.00`, `0` disables) adds a separate warning line — never combined into the same string as the table or the compact line — when a run's estimated cost crosses the threshold. See [Configuration](configuration#token-usage-display) for both inputs.
+
+Regardless of `token-usage-display`, the full per-agent breakdown is always available in two other places:
+
+- **The CI job log** — echoed to stderr on every run, on every provider (GitHub, GitLab, Bitbucket).
+- **The [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary)** — GitHub only.
+
+The long-lived PR summary comment carries only the first-run walkthrough and is not rewritten on subsequent runs; token-usage content lives in the review body (GitHub) or the summary note (GitLab/Bitbucket), not the walkthrough.
+
+The full table's layout adapts based on cache activity:
 
 | Column | Description | When shown |
 |--------|-------------|------------|
@@ -109,4 +124,4 @@ Two supplementary rows may appear after the **Total** row. They are informationa
 | Language profiles | Maximum profile tokens injected across all agents (per-agent routing, v2.1.0+) | When language profiles were injected and the count was non-zero |
 | SARIF ingestion | Wall-clock elapsed time for parsing SARIF files (e.g. `0.34s`) | When `AI_SARIF_PATHS` is configured |
 
-Costs are calculated using public list prices and do not reflect enterprise discounts, committed use agreements, or proxy markups. The table is also written to the [GitHub Actions step summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary) for easy access from the Actions run page.
+Costs are calculated using public list prices and do not reflect enterprise discounts, committed use agreements, or proxy markups.

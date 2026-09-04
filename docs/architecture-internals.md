@@ -180,6 +180,8 @@ Token counts are accumulated per agent across all LLM calls. For Google Gemini, 
 
 `config/model-pricing.json` maps model ID patterns to display names and per-token rates. Each entry carries four rates: `input_rate`, `output_rate`, `cache_write_rate`, and `cache_read_rate` (all cost per 1M tokens). The token table uses an adaptive column layout — 6 columns when no rows have cache activity, 8 columns when any row does.
 
+`pricing.compute_totals()` is the single source of truth for aggregate figures (total tokens, total cost, the `any_unknown` flag for unpriced models, agent count, unique model names): `emit_token_table()`'s Total row and `review/reporting.py`'s compact usage line (`build_token_usage_line`) and high-usage warning (`build_high_usage_warning`) all derive from the same call, so the full table and the comment's compact summary can never report different numbers for the same run (#758). `review/reporting.py`'s `_prepare()` is the shared fail-soft setup (token-log assembly + pricing-file load) behind `build_token_table_accordion`, `build_full_token_table` (bare table, no `<details>` wrapper — used for the CI job-log echo), and `compute_token_totals`.
+
 ## Prompt caching
 
 ### Anthropic / Bedrock

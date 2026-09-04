@@ -36,6 +36,18 @@ ID_MAP_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-id-map:"
 # (for backward-compat stale-cleanup), but SKIP_MARKER is the upsert anchor.
 SKIP_MARKER: Final[str] = "<!-- ai-pr-review-skip -->"
 SKIP_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-skip)"
+# Precedes the token-usage payload (#758) in every `token-usage-display` mode
+# — `full` (the `<details>` accordion), `compact` (the one-line summary), and
+# `off` (nothing but this marker). A stable, mode-independent anchor is the
+# point: GitLab's summary-note upsert, Bitbucket's incremental
+# walkthrough-boundary extraction, and both prior-body finding scanners
+# (vcs/_finding_ids.py, slash/dismiss.py) all need to find "where the usage
+# block starts/ends" without caring which mode produced the body they are
+# re-reading. Before this, GitLab and Bitbucket anchored on
+# TOKEN_TABLE_OPEN_MARKER (the accordion's own opening tag) below, which only
+# exists in `full` mode.
+USAGE_MARKER: Final[str] = "<!-- ai-pr-review-usage -->"
+USAGE_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-usage)"
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
@@ -236,6 +248,25 @@ def append_inline_marker(body: str, *, marker: str = INLINE_MARKER) -> str:
     else:
         separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}{marker}"
+
+
+def build_usage_block(payload: str, *, hidden: bool = False) -> str:
+    """Prefix a rendered token-usage payload with the mode-independent marker.
+
+    `payload` is whatever `review/reporting.py` rendered for the configured
+    `token-usage-display` mode: the full `<details>` accordion (`full`), the
+    compact one-line summary (`compact`), or `""` (`off`). The marker
+    precedes the payload in every mode — including `off`, where it is the
+    only thing emitted — so downstream consumers (see USAGE_MARKER's
+    docstring above) always have the same anchor to search for regardless of
+    which mode produced the body.
+
+    Pass `hidden=True` (Bitbucket) for the reference-link-definition form.
+    """
+    marker = USAGE_MARKER_HIDDEN if hidden else USAGE_MARKER
+    if not payload:
+        return marker
+    return f"{marker}\n\n{payload}"
 
 
 def has_skip_marker(body: str) -> bool:

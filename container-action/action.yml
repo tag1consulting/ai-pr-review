@@ -216,6 +216,25 @@ inputs:
     required: false
     default: '4096'
 
+  token-usage-display:
+    description: >
+      How token-usage/cost information appears in the posted review comment:
+      'compact' (default) shows a single cost/token/agent-count summary
+      line; 'full' shows the full per-agent breakdown table, as posted
+      before this input existed; 'off' shows no token-usage content in the
+      comment. The full breakdown is always written to GITHUB_STEP_SUMMARY
+      and always echoed to the CI job log regardless of this setting.
+    required: false
+    default: 'compact'
+
+  token-usage-warn-usd:
+    description: >
+      Estimated-cost threshold (USD) above which a high-usage warning line
+      is added to the review comment, independent of token-usage-display.
+      Set to '0' to disable. Default: 1.00.
+    required: false
+    default: '1.00'
+
   exclude-patterns:
     description: >
       Comma-separated list of git pathspec globs to exclude from the diff
@@ -349,6 +368,8 @@ runs:
         AI_JUDGE_PASS: ${{ inputs.judge-pass }}
         AI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings == 'true' && 'true' || '' }}
         AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}
+        AI_TOKEN_USAGE_DISPLAY: ${{ inputs.token-usage-display }}
+        AI_TOKEN_USAGE_WARN_USD: ${{ inputs.token-usage-warn-usd }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
         AI_EXCLUDE_PATTERNS_MODE: ${{ inputs.exclude-patterns-mode }}
         AI_ANALYZERS: ${{ inputs.analyzers }}
@@ -379,6 +400,8 @@ runs:
           -e BEDROCK_API_URL \
           -e GH_TOKEN \
           -e GITHUB_REPOSITORY \
+          -e GITHUB_SERVER_URL \
+          -e GITHUB_RUN_ID \
           -e PR_NUMBER \
           -e BASE_REF \
           -e HEAD_REF \
@@ -397,6 +420,8 @@ runs:
           -e AI_JUDGE_PASS \
           ${AI_FAIL_ON_FINDINGS:+-e AI_FAIL_ON_FINDINGS} \
           -e AI_PROFILE_MAX_TOKENS \
+          -e AI_TOKEN_USAGE_DISPLAY \
+          -e AI_TOKEN_USAGE_WARN_USD \
           -e AI_EXCLUDE_PATTERNS \
           -e AI_EXCLUDE_PATTERNS_MODE \
           -e AI_ANALYZERS \

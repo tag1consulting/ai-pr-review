@@ -111,6 +111,37 @@ BODY_SECTION_START_MARKERS: Final[tuple[str, ...]] = (
 )
 
 
+def _ends_body_section(stripped_line: str) -> bool:
+    """True if `stripped_line` (already `.strip()`-ed) ends an in-progress
+    body-findings section during the `**[F<n>]**`-bullet fallback scan.
+
+    Three independent exit conditions:
+    - the next `"###"` heading — the common case for the headings in
+      `BODY_SECTION_START_MARKERS`;
+    - a `"</details>"` close tag — the out-of-diff findings block has no
+      `"###"` heading of its own (see `BODY_SECTION_START_MARKERS`), so its
+      own accordion close is its only boundary (issue #550);
+    - the token-usage marker (#758) — present at the start of the usage
+      block in every `token-usage-display` mode (`full`, `compact`, and
+      `off`), so scanning stops there even when no `"</details>"` precedes
+      it, which is the common case once `compact`/`off` became the default
+      and the token table stopped always being an accordion in the body.
+
+    Shared by `_parse_existing_ids` (this module) and
+    `ai_pr_review.slash.dismiss._scan_body_bullets_one`, which used to
+    duplicate this exact check independently in two files — extracted so the
+    two cannot silently drift apart again.
+    """
+    from ai_pr_review.vcs.marker import USAGE_MARKER, USAGE_MARKER_HIDDEN
+
+    return (
+        stripped_line.startswith("###")
+        or "</details>" in stripped_line
+        or USAGE_MARKER in stripped_line
+        or USAGE_MARKER_HIDDEN in stripped_line
+    )
+
+
 def fingerprint(f: Finding) -> str:
     """Return a stable fingerprint for a body-level finding.
 
@@ -182,10 +213,7 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
             if any(marker in stripped for marker in BODY_SECTION_START_MARKERS):
                 in_body_section = True
                 continue
-            if in_body_section and stripped.startswith("###"):
-                in_body_section = False
-                continue
-            if in_body_section and "</details>" in stripped:
+            if in_body_section and _ends_body_section(stripped):
                 in_body_section = False
                 continue
             if not in_body_section:

@@ -96,6 +96,71 @@ def _row_cost(entry: TokenEntry, rates: ModelRates) -> int | None:
     return cost
 
 
+@dataclass(frozen=True)
+class TokenTotals:
+    """Aggregate totals across a token log, shared by the full table's Total
+    row and the compact review-comment line (#758) so the two can never
+    silently disagree about the numbers they report for the same run.
+    """
+
+    input_tokens: int
+    output_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    grand_total: int
+    cost_units: int  # $0.0001 units, same as _row_cost/format_cost
+    any_unknown: bool  # True if any row's model had no pricing entry
+    agent_count: int  # excludes the synthetic "judge-pass" row
+    models: tuple[str, ...]  # unique display names, first-seen order
+
+
+def compute_totals(
+    token_log: list[TokenEntry], pricing_data: list[dict[str, object]]
+) -> TokenTotals:
+    """Compute the same totals emit_token_table's Total row renders.
+
+    Pulled out as its own function (rather than left inline in
+    emit_token_table's row loop) so review/reporting.py's compact usage line
+    can report the identical cost/token/model figures the full table shows,
+    without a second, independently-maintained accumulation loop that could
+    drift from this one.
+    """
+    total_in = total_out = total_cw = total_cr = total_cost = 0
+    any_unknown = False
+    agent_count = 0
+    seen_models: list[str] = []
+
+    for entry in token_log:
+        rates = model_pricing(entry.model, pricing_data)
+        cost_units = _row_cost(entry, rates)
+        if cost_units is None:
+            any_unknown = True
+        else:
+            total_cost += cost_units
+
+        total_in += entry.input_tokens
+        total_out += entry.output_tokens
+        total_cw += entry.cache_creation_tokens
+        total_cr += entry.cache_read_tokens
+
+        if entry.agent != "judge-pass":
+            agent_count += 1
+        if rates.display_name not in seen_models:
+            seen_models.append(rates.display_name)
+
+    return TokenTotals(
+        input_tokens=total_in,
+        output_tokens=total_out,
+        cache_creation_tokens=total_cw,
+        cache_read_tokens=total_cr,
+        grand_total=total_in + total_out + total_cw + total_cr,
+        cost_units=total_cost,
+        any_unknown=any_unknown,
+        agent_count=agent_count,
+        models=tuple(seen_models),
+    )
+
+
 def emit_token_table(
     token_log: list[TokenEntry],
     pricing_data: list[dict[str, object]],
@@ -123,18 +188,16 @@ def emit_token_table(
         lines.append("| Agent | Model | Input | Output | Total | Est. Cost |")
         lines.append("|-------|-------|------:|-------:|------:|----------:|")
 
-    total_in = total_out = total_cw = total_cr = total_cost = 0
-    any_unknown = False
+    # Totals (Total row + potential "+" suffix) come from compute_totals()
+    # rather than being accumulated a second time in this loop, so this
+    # table and reporting.py's compact usage line can never report
+    # different numbers for the same run (#758).
+    totals = compute_totals(token_log, pricing_data)
 
     for entry in token_log:
         rates = model_pricing(entry.model, pricing_data)
         cost_units = _row_cost(entry, rates)
-        if cost_units is None:
-            cost_display = "n/a"
-            any_unknown = True
-        else:
-            cost_display = format_cost(cost_units)
-            total_cost += cost_units
+        cost_display = "n/a" if cost_units is None else format_cost(cost_units)
 
         row_total = (
             entry.input_tokens
@@ -161,23 +224,18 @@ def emit_token_table(
                 f"{output_cell} | {row_total} | {cost_display} |"
             )
 
-        total_in += entry.input_tokens
-        total_out += entry.output_tokens
-        total_cw += entry.cache_creation_tokens
-        total_cr += entry.cache_read_tokens
-
-    grand_total = total_in + total_out + total_cw + total_cr
-    total_cost_str = format_cost(total_cost) + ("+" if any_unknown else "")
+    total_cost_str = format_cost(totals.cost_units) + ("+" if totals.any_unknown else "")
 
     if any_cache:
         lines.append(
-            f"| **Total** | | **{total_in}** | **{total_out}** | "
-            f"**{total_cw}** | **{total_cr}** | **{grand_total}** | **{total_cost_str}** |"
+            f"| **Total** | | **{totals.input_tokens}** | **{totals.output_tokens}** | "
+            f"**{totals.cache_creation_tokens}** | **{totals.cache_read_tokens}** | "
+            f"**{totals.grand_total}** | **{total_cost_str}** |"
         )
     else:
         lines.append(
-            f"| **Total** | | **{total_in}** | **{total_out}** | "
-            f"**{grand_total}** | **{total_cost_str}** |"
+            f"| **Total** | | **{totals.input_tokens}** | **{totals.output_tokens}** | "
+            f"**{totals.grand_total}** | **{total_cost_str}** |"
         )
 
     if context_tokens > 0:

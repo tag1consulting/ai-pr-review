@@ -32,6 +32,7 @@ from ai_pr_review.vcs._finding_ids import (
     _LOCATION_RE,
     _SOURCE_RE,
     BODY_SECTION_START_MARKERS,
+    _ends_body_section,
     fingerprint_for_finding_id,
     safe_review_id,
 )
@@ -108,12 +109,13 @@ def _scan_body_bullets_one(body: str) -> dict[int, ClassifiedFinding]:
     """Scan a single review body's two body-finding buckets for `**[F<n>]**`
     bullets.
 
-    Section tracking mirrors `_parse_existing_ids`'s fallback loop: entered by
+    Section tracking uses the same `_ends_body_section` exit check as
+    `_parse_existing_ids`'s fallback loop (`vcs/_finding_ids.py`): entered by
     any of `BODY_SECTION_START_MARKERS` (the in-diff "### Findings not
     attached to specific lines" heading, the out-of-diff "Out-of-diff
     analyzer findings" marker with no heading of its own, or the APPROVE-path
     "### Findings (informational)" heading — issue #645), exited by the next
-    "###" or a "</details>" close.
+    "###" heading, a "</details>" close, or the token-usage marker (#758).
     """
     result: dict[int, ClassifiedFinding] = {}
     in_body_section = False
@@ -122,10 +124,7 @@ def _scan_body_bullets_one(body: str) -> dict[int, ClassifiedFinding]:
         if any(marker in stripped for marker in BODY_SECTION_START_MARKERS):
             in_body_section = True
             continue
-        if in_body_section and stripped.startswith("###"):
-            in_body_section = False
-            continue
-        if in_body_section and "</details>" in stripped:
+        if in_body_section and _ends_body_section(stripped):
             in_body_section = False
             continue
         if not in_body_section:

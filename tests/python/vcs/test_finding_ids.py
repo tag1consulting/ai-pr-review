@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
-from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint, known_fingerprints
-from ai_pr_review.vcs.marker import build_id_map_marker, extract_id_map
+from ai_pr_review.vcs._finding_ids import (
+    _ends_body_section,
+    assemble_id_map,
+    fingerprint,
+    known_fingerprints,
+)
+from ai_pr_review.vcs.marker import (
+    USAGE_MARKER,
+    USAGE_MARKER_HIDDEN,
+    build_id_map_marker,
+    extract_id_map,
+)
 
 
 def _finding(
@@ -367,3 +377,60 @@ def test_known_fingerprints_excludes_a_never_seen_fingerprint() -> None:
     known = known_fingerprints([body])
     assert fingerprint(seen) in known
     assert fingerprint(unseen) not in known
+
+
+# ---------------------------------------------------------------------------
+# _ends_body_section() — #758: shared exit check used by both the fallback
+# scanner here and slash.dismiss._scan_body_bullets_one, so the two body
+# scanners cannot drift apart on what terminates a body-findings section.
+# ---------------------------------------------------------------------------
+
+
+def test_ends_body_section_on_heading() -> None:
+    assert _ends_body_section("### Something else") is True
+
+
+def test_ends_body_section_on_details_close() -> None:
+    assert _ends_body_section("</details>") is True
+
+
+def test_ends_body_section_on_usage_marker() -> None:
+    assert _ends_body_section(USAGE_MARKER) is True
+
+
+def test_ends_body_section_on_usage_marker_hidden() -> None:
+    assert _ends_body_section(USAGE_MARKER_HIDDEN) is True
+
+
+def test_ends_body_section_false_on_ordinary_bullet() -> None:
+    assert _ends_body_section("- **[F1]** some finding") is False
+
+
+def test_ends_body_section_shared_by_both_scanners() -> None:
+    """A pre-marker-era body whose usage block uses the new #758 marker
+    (rather than the legacy `<details>` accordion) must have scanning stop
+    at the marker in BOTH `_parse_existing_ids` (this module) and
+    `slash.dismiss._scan_body_bullets_one` — proving the two route through
+    the same `_ends_body_section` check rather than two independently
+    maintained copies of it.
+    """
+    from ai_pr_review.slash.dismiss import _scan_body_bullets_one
+
+    f = _finding("some issue")
+    body = (
+        "### Findings not attached to specific lines\n"
+        f"{format_body_finding(f, finding_id=1)}\n"
+        f"{USAGE_MARKER}\n\n"
+        "_Review cost: $0.0001 · 10 tokens · 1 agent · Sonnet 5_\n"
+        "- **[F99]** must not be picked up — it's past the usage marker"
+    )
+
+    ids_via_finding_ids = known_fingerprints([body])
+    classified = _scan_body_bullets_one(body)
+
+    assert fingerprint(f) in ids_via_finding_ids
+    assert 1 in classified
+    # Both scanners stopped at the marker: the bogus F99 bullet after it must
+    # not have been picked up as a second finding by either.
+    assert 99 not in classified
+    assert len(classified) == 1

@@ -29,7 +29,20 @@ from ai_pr_review.review.compute import run_compute
 from ai_pr_review.review.preflight import run_issue_linker as _run_issue_linker
 from ai_pr_review.review.preflight import run_summarizer as _run_summarizer
 from ai_pr_review.review.reporting import (
+    build_full_token_table as _build_full_token_table,
+)
+from ai_pr_review.review.reporting import (
+    build_high_usage_warning as _build_high_usage_warning,
+)
+from ai_pr_review.review.reporting import (
     build_token_table_accordion as _build_token_table_accordion,
+)
+from ai_pr_review.review.reporting import (
+    build_token_usage_line as _build_token_usage_line,
+)
+from ai_pr_review.review.reporting import ci_run_url as _ci_run_url
+from ai_pr_review.review.reporting import (
+    compute_token_totals as _compute_token_totals,
 )
 from ai_pr_review.review.reporting import (
     emit_post_failure_annotation as _emit_post_failure_annotation,
@@ -278,8 +291,27 @@ async def _run_review_async(config: ReviewConfig) -> int:
         judge_cache_read_tokens: int,
         judge_model: str,
     ) -> str:
-        return _build_token_table_accordion(
-            successes, runtime.sarif_elapsed_s, runtime.script_dir,
+        """Bare usage_block payload for the review comment (#758), per
+        rc.token_usage_display -- the mode-independent USAGE_MARKER wrapping
+        is applied per-provider, not here (each provider decides its own
+        marker form and where it belongs relative to any provider-specific
+        transform, e.g. Bitbucket's accordion-stripping).
+        """
+        if rc.token_usage_display == "off":
+            return ""
+        if rc.token_usage_display == "full":
+            return _build_token_table_accordion(
+                successes, runtime.sarif_elapsed_s, runtime.script_dir,
+                effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+                judge_input_tokens=judge_input_tokens,
+                judge_output_tokens=judge_output_tokens,
+                judge_cache_creation_tokens=judge_cache_creation_tokens,
+                judge_cache_read_tokens=judge_cache_read_tokens,
+                judge_model=judge_model,
+            )
+        # "compact" (default)
+        totals = _compute_token_totals(
+            successes, runtime.script_dir,
             effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
             judge_input_tokens=judge_input_tokens,
             judge_output_tokens=judge_output_tokens,
@@ -287,6 +319,35 @@ async def _run_review_async(config: ReviewConfig) -> int:
             judge_cache_read_tokens=judge_cache_read_tokens,
             judge_model=judge_model,
         )
+        return _build_token_usage_line(totals, run_url=_ci_run_url())
+
+    def _usage_warning_renderer(
+        successes: Sequence[_AgentResult],
+        _sarif_elapsed_unused: float | None,
+        judge_input_tokens: int,
+        judge_output_tokens: int,
+        judge_cache_creation_tokens: int,
+        judge_cache_read_tokens: int,
+        judge_model: str,
+    ) -> str:
+        """High-usage warning line (#758), independent of _token_renderer's
+        payload -- see protocol.py's post_findings docstring for why the two
+        are never combined into one string. Silent under
+        token-usage-display: off, matching "no token-usage content in the
+        comment at all."
+        """
+        if rc.token_usage_display == "off":
+            return ""
+        totals = _compute_token_totals(
+            successes, runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+            judge_input_tokens=judge_input_tokens,
+            judge_output_tokens=judge_output_tokens,
+            judge_cache_creation_tokens=judge_cache_creation_tokens,
+            judge_cache_read_tokens=judge_cache_read_tokens,
+            judge_model=judge_model,
+        )
+        return _build_high_usage_warning(totals, rc.token_usage_warn_usd)
 
     # Honour AI_DRY_RUN — assemble is complete but skip VCS posting.
     if rc.dry_run:
@@ -313,9 +374,31 @@ async def _run_review_async(config: ReviewConfig) -> int:
         provider=runtime.provider,
         config=runtime.orch_config,
         token_table_renderer=_token_renderer,
+        usage_warning_renderer=_usage_warning_renderer,
     )
 
-    _emit_review_result(result, base_ref=runtime.base_ref, head=runtime.head_sha)
+    # Full per-agent breakdown, always echoed to the CI job log regardless of
+    # provider (#758) -- GitLab and Bitbucket have no GITHUB_STEP_SUMMARY
+    # equivalent, so this is the only durable place their operators can
+    # reach it once the default review-comment display is the compact line
+    # rather than the full table. Skipped under token-usage-display: off,
+    # matching "no token-usage content" for that mode.
+    token_table_full = (
+        _build_full_token_table(
+            result.agent_results, runtime.sarif_elapsed_s, runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+            judge_input_tokens=result.judge_input_tokens,
+            judge_output_tokens=result.judge_output_tokens,
+            judge_cache_creation_tokens=result.judge_cache_creation_tokens,
+            judge_cache_read_tokens=result.judge_cache_read_tokens,
+            judge_model=result.judge_model,
+        )
+        if rc.token_usage_display != "off" else ""
+    )
+    _emit_review_result(
+        result, base_ref=runtime.base_ref, head=runtime.head_sha,
+        token_table_full=token_table_full,
+    )
     _write_step_summary(
         result, runtime, summary_text,
         token_table_md=_build_token_table_accordion(

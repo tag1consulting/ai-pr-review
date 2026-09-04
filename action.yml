@@ -322,6 +322,25 @@ inputs:
     required: false
     default: '4096'
 
+  token-usage-display:
+    description: >
+      How token-usage/cost information appears in the posted review comment:
+      'compact' (default) shows a single cost/token/agent-count summary
+      line; 'full' shows the full per-agent breakdown table, as posted
+      before this input existed; 'off' shows no token-usage content in the
+      comment. The full breakdown is always written to GITHUB_STEP_SUMMARY
+      and always echoed to the CI job log regardless of this setting.
+    required: false
+    default: 'compact'
+
+  token-usage-warn-usd:
+    description: >
+      Estimated-cost threshold (USD) above which a high-usage warning line
+      is added to the review comment, independent of token-usage-display.
+      Set to '0' to disable. Default: 1.00.
+    required: false
+    default: '1.00'
+
 runs:
   using: composite
   steps:
@@ -420,5 +439,7 @@ runs:
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
         AI_JUDGE_PASS: ${{ inputs.judge-pass }}
         AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}
+        AI_TOKEN_USAGE_DISPLAY: ${{ inputs.token-usage-display }}
+        AI_TOKEN_USAGE_WARN_USD: ${{ inputs.token-usage-warn-usd }}
         AI_PR_REVIEW_SCRIPT_DIR: ${{ github.action_path }}
       run: python3 -m ai_pr_review review

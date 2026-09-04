@@ -525,3 +525,79 @@ def test_unknown_agent_in_denylist_raises(
     with pytest.raises((ValueError, Exception)) as exc_info:
         ReviewConfig.from_env()
     assert "adversarial-genral" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Token usage display (#758)
+# ---------------------------------------------------------------------------
+
+
+def test_token_usage_display_default_is_compact() -> None:
+    cfg = ReviewConfig()
+    assert cfg.token_usage_display == "compact"
+
+
+def test_token_usage_display_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_TOKEN_USAGE_DISPLAY", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.token_usage_display == "compact"
+
+
+def test_token_usage_display_valid_values_accepted() -> None:
+    assert ReviewConfig(token_usage_display="compact").token_usage_display == "compact"
+    assert ReviewConfig(token_usage_display="full").token_usage_display == "full"
+    assert ReviewConfig(token_usage_display="off").token_usage_display == "off"
+
+
+def test_token_usage_display_normalized_to_lowercase() -> None:
+    cfg = ReviewConfig(token_usage_display="FULL")
+    assert cfg.token_usage_display == "full"
+
+
+def test_token_usage_display_invalid_value_raises() -> None:
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig(token_usage_display="table")
+    assert "token_usage_display" in str(exc_info.value)
+
+
+def test_token_usage_warn_usd_default_is_one_dollar() -> None:
+    cfg = ReviewConfig()
+    assert cfg.token_usage_warn_usd == 1.00
+
+
+def test_token_usage_warn_usd_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_TOKEN_USAGE_WARN_USD", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.token_usage_warn_usd == 1.00
+
+
+def test_token_usage_warn_usd_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TOKEN_USAGE_WARN_USD", "5.50")
+    cfg = ReviewConfig.from_env()
+    assert cfg.token_usage_warn_usd == 5.50
+
+
+def test_token_usage_warn_usd_zero_disables_and_is_kept() -> None:
+    """0 is the documented "disabled" sentinel -- must pass through unclamped."""
+    cfg = ReviewConfig(token_usage_warn_usd=0)
+    assert cfg.token_usage_warn_usd == 0
+
+
+def test_token_usage_warn_usd_negative_clamped_to_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = ReviewConfig(token_usage_warn_usd=-2.0)
+    assert cfg.token_usage_warn_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_token_usage_warn_usd_unparseable_env_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AI_TOKEN_USAGE_WARN_USD", "not-a-number")
+    cfg = ReviewConfig.from_env()
+    assert cfg.token_usage_warn_usd == 1.00
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err

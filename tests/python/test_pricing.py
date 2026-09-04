@@ -5,6 +5,7 @@ from pathlib import Path
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.pricing import (
     TokenEntry,
+    compute_totals,
     emit_token_table,
     format_cost,
     load_pricing,
@@ -202,6 +203,90 @@ def test_emit_token_table_baseline_8col_unchanged() -> None:
         "| **Total** | | **1000** | **500** | **200** | **50** | **1750** | **$0.0112** |"
     )
     assert emit_token_table(log, _SAMPLE_PRICING) == expected
+
+
+# ---------------------------------------------------------------------------
+# compute_totals() — #758 anti-drift guard: the compact review-comment line
+# and the full table's Total row must always agree, since both derive from
+# this one function rather than two independently-maintained accumulators.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_totals_matches_table_total_row_6col() -> None:
+    log = [
+        TokenEntry(agent="code-reviewer", model="claude-sonnet-4-6", input_tokens=1000, output_tokens=500),
+    ]
+    totals = compute_totals(log, _SAMPLE_PRICING)
+    table = emit_token_table(log, _SAMPLE_PRICING)
+    total_line = [ln for ln in table.splitlines() if "**Total**" in ln][0]
+
+    assert f"**{totals.input_tokens}**" in total_line
+    assert f"**{totals.output_tokens}**" in total_line
+    assert f"**{totals.grand_total}**" in total_line
+    total_cost_str = format_cost(totals.cost_units) + ("+" if totals.any_unknown else "")
+    assert f"**{total_cost_str}**" in total_line
+
+
+def test_compute_totals_matches_table_total_row_8col() -> None:
+    log = [
+        TokenEntry(
+            agent="security-reviewer",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=200,
+            cache_read_tokens=50,
+        ),
+    ]
+    totals = compute_totals(log, _SAMPLE_PRICING)
+    table = emit_token_table(log, _SAMPLE_PRICING)
+    total_line = [ln for ln in table.splitlines() if "**Total**" in ln][0]
+
+    assert f"**{totals.input_tokens}**" in total_line
+    assert f"**{totals.output_tokens}**" in total_line
+    assert f"**{totals.cache_creation_tokens}**" in total_line
+    assert f"**{totals.cache_read_tokens}**" in total_line
+    assert f"**{totals.grand_total}**" in total_line
+    total_cost_str = format_cost(totals.cost_units) + ("+" if totals.any_unknown else "")
+    assert f"**{total_cost_str}**" in total_line
+
+
+def test_compute_totals_agent_count_excludes_judge_pass() -> None:
+    log = [
+        TokenEntry(agent="code-reviewer", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+        TokenEntry(agent="security-reviewer", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+        TokenEntry(agent="judge-pass", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+    ]
+    totals = compute_totals(log, _SAMPLE_PRICING)
+    assert totals.agent_count == 2
+    # Tokens/cost still include the judge-pass row.
+    assert totals.input_tokens == 300
+
+
+def test_compute_totals_models_first_seen_order_unique() -> None:
+    log = [
+        TokenEntry(agent="a", model="claude-sonnet-4-6", input_tokens=10, output_tokens=5),
+        TokenEntry(agent="b", model="claude-sonnet-4-6", input_tokens=10, output_tokens=5),
+        TokenEntry(agent="c", model="claude-opus-9", input_tokens=10, output_tokens=5),
+    ]
+    totals = compute_totals(log, _SAMPLE_PRICING)
+    assert totals.models == ("Sonnet 4.6", "claude-opus-9")
+
+
+def test_compute_totals_any_unknown_true_for_unpriced_model() -> None:
+    log = [
+        TokenEntry(agent="a", model="some-unpriced-model", input_tokens=10, output_tokens=5),
+    ]
+    totals = compute_totals(log, _SAMPLE_PRICING)
+    assert totals.any_unknown is True
+
+
+def test_compute_totals_empty_log() -> None:
+    totals = compute_totals([], _SAMPLE_PRICING)
+    assert totals.grand_total == 0
+    assert totals.agent_count == 0
+    assert totals.models == ()
+    assert totals.any_unknown is False
 
 
 def test_emit_token_table_supplementary_rows_8col_column_count() -> None:
