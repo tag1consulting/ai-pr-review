@@ -41,6 +41,12 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_PR_REVIEW_RECORD_DIR",
         "AI_PR_REVIEW_COMPUTE_OUTPUT",
         "AI_PR_REVIEW_SCRIPT_DIR",
+        # Read directly by review/runtime.py, not by Config -- registered here
+        # only so Config.from_env's unknown-AI_*-var check doesn't warn about
+        # it. A container-internal staging path (defaults to /tmp inside the
+        # container); not forwarded by container-action/action.yml for the
+        # same reason as AI_PR_REVIEW_RECORD_DIR (#761).
+        "AI_PR_REVIEW_DIFF_FILE",
         # Claude Code sets this in its agent environment; not a user-configured var.
         "AI_AGENT",
         # --- Context enrichment ---

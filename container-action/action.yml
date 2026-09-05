@@ -385,6 +385,71 @@ runs:
         if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
           SUMMARY_MOUNT=(-e GITHUB_STEP_SUMMARY -v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY")
         fi
+        # NOTE: comments must never appear inside the `docker run \` continuation
+        # below. A `#` at a word boundary on the line the backslash-continuation
+        # splices into starts a comment that runs to the next real newline --
+        # it does NOT silently vanish: it fails LOUDLY, twice. `docker run --rm`
+        # with everything after the `#` cut away exits immediately (missing the
+        # image argument), and the remaining `-e VAR \`-continued lines after the
+        # comment are then parsed as a brand-new command starting with the
+        # literal token `-e`, which fails with "-e: command not found" (verified
+        # empirically against a stub `docker`, both with and without a trailing
+        # backslash on the comment line -- the backslash does not extend a
+        # comment). All commentary lives here, before the command starts,
+        # instead.
+        #
+        # The vars below AI_CONFIDENCE_THRESHOLD in the list are raw env-var
+        # overrides with no corresponding `inputs:` entry above. Most only take
+        # effect when the calling workflow's own `env:` sets them (inherited
+        # into this composite step) -- except GITHUB_API_URL and
+        # GITHUB_BOT_USERNAME are usually left to their real values: every
+        # GitHub Actions runner (including GHES) sets GITHUB_API_URL itself,
+        # same as GITHUB_ACTIONS/GITHUB_SERVER_URL/GITHUB_RUN_ID above; only
+        # GITHUB_BOT_USERNAME is workflow-env-only, like the rest of this group.
+        # Previously missing from this list (#761); see docs/configuration.md
+        # for most of these -- AI_DRY_RUN is documented in
+        # docs/local-development.md/docs/getting-started.md/README.md instead,
+        # and GITHUB_API_URL isn't documented as a user-facing knob anywhere
+        # (GHES is not a claimed target), forwarded anyway for consistency with
+        # its GITHUB_SERVER_URL/GITHUB_RUN_ID siblings and because the fallback
+        # it replaces (api.github.com) is wrong on GHES regardless of whether
+        # that's officially supported.
+        #
+        # Deliberately NOT forwarded (#761 triage):
+        #   AI_AGENT: set by Claude Code's own agent environment, never a
+        #     user-configured var (see config.py's _KNOWN_AI_VARS comment).
+        #   AI_PR_REVIEW_CORRELATION_ID: honored as an override when set
+        #     (cli.py falls back to generating one), but nothing in this
+        #     action's own flow ever sets it -- there's no value to forward.
+        #   AI_PR_REVIEW_SCRIPT_DIR: baked into the image via `ENV` in the
+        #     Dockerfile (points at /opt/ai-pr-review inside the container);
+        #     host-overriding it would point script-dir resolution at a path
+        #     that doesn't exist in the container.
+        #   AI_PR_REVIEW_RECORD_DIR / AI_PR_REVIEW_COMPUTE_OUTPUT / AI_PR_REVIEW_DIFF_FILE:
+        #     all three write to (or, for DIFF_FILE, read from) a filesystem
+        #     path, which requires a `-v` volume mount this composite action
+        #     doesn't provide (only $GITHUB_WORKSPACE and, optionally,
+        #     $GITHUB_STEP_SUMMARY are mounted) -- forwarding just the env var
+        #     without a matching mount would silently write into (or expect to
+        #     read from) the ephemeral container's throwaway filesystem.
+        #     AI_PR_REVIEW_RECORD_DIR/COMPUTE_OUTPUT work as documented on the
+        #     composite (non-container) action.yml path, which runs in the
+        #     runner's own filesystem; AI_PR_REVIEW_DIFF_FILE defaults sensibly
+        #     to a path inside the container either way.
+        #   VCS_PROVIDER and the GITLAB_*/CI_*/BITBUCKET_* family: this action
+        #     is the GitHub Actions wrapper specifically (see the `provider`
+        #     input's description and PR_NUMBER/BASE_REF/HEAD_REF/HEAD_SHA
+        #     below, all GitHub-shaped) -- VCS_PROVIDER is deliberately left at
+        #     its "github" default rather than forwarded, since setting up a
+        #     GitLab/Bitbucket run properly needs more input plumbing than one
+        #     env var. AI_GITLAB_CROSS_RUN_DEDUP is still forwarded for
+        #     consistency with _KNOWN_AI_VARS coverage even though it's a
+        #     no-op here, since VCS_PROVIDER can never be gitlab on this path.
+        #   AI_TELEMETRY_SINK: forwarded because its http(s):// form (the
+        #     realistic CI case) works fine -- but note its file:// form hits
+        #     the same throwaway-filesystem problem as
+        #     AI_PR_REVIEW_RECORD_DIR/COMPUTE_OUTPUT above and won't actually
+        #     persist anything on this path.
         docker run --rm \
           -e AI_PROVIDER \
           -e AI_REVIEW_MODE \
@@ -399,6 +464,7 @@ runs:
           -e OPENAI_BASE_URL \
           -e BEDROCK_API_URL \
           -e GH_TOKEN \
+          -e GITHUB_TOKEN \
           -e GITHUB_ACTIONS \
           -e GITHUB_REPOSITORY \
           -e GITHUB_SERVER_URL \
@@ -433,7 +499,30 @@ runs:
           ${FORCE_FULL_DIFF:+-e FORCE_FULL_DIFF} \
           ${STANDALONE_DEPTH:+-e STANDALONE_DEPTH} \
           ${LLM_RETRY_COUNT:+-e LLM_RETRY_COUNT} \
+          ${LLM_RETRY_BASE_DELAY:+-e LLM_RETRY_BASE_DELAY} \
           ${AI_CONFIDENCE_THRESHOLD:+-e AI_CONFIDENCE_THRESHOLD} \
+          -e AI_CANONICAL_REUSE \
+          -e AI_GITLAB_CROSS_RUN_DEDUP \
+          -e AI_LOG_LEVEL \
+          -e AI_LOG_FORMAT \
+          -e AI_TELEMETRY_ENABLED \
+          -e AI_TELEMETRY_SINK \
+          -e AI_FEEDBACK_BRANCH \
+          -e AI_FEEDBACK_MAX_TOKENS \
+          -e AI_FEEDBACK_RETENTION_COUNT \
+          -e AI_FEEDBACK_RETENTION_AGE_DAYS \
+          -e AI_CACHE_PRIMING \
+          -e AI_CONTEXT_LOOKUP_LINES \
+          -e AI_CONTEXT_MAX_TOKENS \
+          -e AI_DISABLE_GATE_ARCHITECTURE \
+          -e AI_DISABLE_GATE_SECURITY \
+          -e AI_DISABLE_GATE_EDGE_CASE \
+          -e AI_DRY_RUN \
+          -e LLM_PROMPT_CACHING \
+          -e PHPSTAN_LEVEL \
+          -e SEMGREP_RULES \
+          -e GITHUB_API_URL \
+          -e GITHUB_BOT_USERNAME \
           -e GITHUB_WORKSPACE=/workspace \
           -v "$GITHUB_WORKSPACE:/workspace" \
           "${SUMMARY_MOUNT[@]}" \
