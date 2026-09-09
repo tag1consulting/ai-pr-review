@@ -93,6 +93,18 @@ def _blob_link(*, owner: str, repo: str, head_sha: str, file: str, line: int | N
     return url
 
 
+def _discussion_link(*, owner: str, repo: str, pr_number: int, comment_id: int) -> str:
+    """Build a permalink to an existing inline review comment's thread.
+
+    Format confirmed live against an existing inline comment's `html_url`
+    (see `_blob_link`'s docstring, which found the same fact while building
+    the sibling body-level-finding link): `.../pull/{n}#discussion_r{id}`.
+    Used by `_render_carried_forward_section` (#766) so a still-open thread
+    from an earlier review is one click away instead of buried in history.
+    """
+    return f"https://github.com/{owner}/{repo}/pull/{pr_number}#discussion_r{comment_id}"
+
+
 def _parse_next_link(link_header: str) -> str | None:
     """Extract the rel=next URL from a GitHub Link response header."""
     if not link_header:
@@ -832,6 +844,54 @@ class GitHubProvider:
             ))
         return bullets
 
+    def _render_carried_forward_section(self, threads: Sequence[PriorThread]) -> str:
+        """Render one bullet per still-open bot-owned thread this run's
+        classification pass didn't touch (#766).
+
+        `_carried_forward_finding` synthesizes a stub `Finding` for each of
+        these threads so the headline count/risk describe the PR's true
+        current state, but that stub is deliberately never rendered --
+        without this, the count has nothing behind it. Sorted worst-severity
+        first so a Critical/High thread isn't lost under a pile of older Low
+        ones. `severity`/`finding_id` are `None` on a legacy thread with no
+        metadata marker; default the icon/label to Low (matching
+        `_carried_forward_finding`'s own fallback) and omit the `[F<n>]`
+        token rather than inventing one.
+        """
+        if not threads:
+            return ""
+        from ai_pr_review.vcs._body import sanitize_display_text, severity_icon
+
+        order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+        ranked = sorted(threads, key=lambda t: order.get(t.severity or "Low", 4))
+        c = self.config
+        bullets: list[str] = []
+        for t in ranked:
+            sev = t.severity or "Low"
+            parts = [severity_icon(sev), f"**[{sev}]**"]
+            if t.finding_id is not None:
+                parts.append(f"**[F{t.finding_id}]**")
+            # `t.path` is a real filename from the PR diff, so a PR author
+            # controls it, and both backticks and newlines are valid on most
+            # filesystems. sanitize_display_text() only defangs
+            # structure-breaking HTML, not Markdown -- a raw backtick would
+            # terminate the code span early and let the rest of the path
+            # render as live Markdown (arbitrary link text/URL) under the
+            # bot's own trusted identity. Neutralize both before the path
+            # ever reaches the code span.
+            safe_path = (
+                t.path.replace("\r", "").replace("\n", " ").replace("`", "'")
+            )
+            location = sanitize_display_text(safe_path)
+            if t.line is not None:
+                location = f"{location}:{t.line}"
+            link = _discussion_link(
+                owner=c.owner, repo=c.repo, pr_number=c.pr_number,
+                comment_id=t.comment_id,
+            )
+            bullets.append(f"- {' '.join(parts)} `{location}` — [open thread]({link})")
+        return "\n".join(bullets)
+
     def post_findings(
         self,
         findings: Sequence[Finding],
@@ -985,6 +1045,19 @@ class GitHubProvider:
         # (update/escalate/recurred-with-thread keep their own comment, just
         # not re-rendered in the body list above) plus any open owned thread
         # this run didn't touch at all.
+        touched_thread_ids = {
+            c.thread.thread_id for c in classified if c.thread is not None
+        }
+        # (#766) Named separately from the headline_findings.extend() below
+        # (rather than inlined into it, as before) because it now also feeds
+        # headline_inline_count, _render_carried_forward_section, and the
+        # approve-suppression check just below -- all three need the actual
+        # PriorThread objects, not the throwaway stub Finding each one maps to.
+        carried_forward = [
+            t for t in all_threads
+            if not t.is_resolved and t.thread_id not in touched_thread_ids
+        ]
+
         headline_findings = list(render_findings)
         headline_findings.extend(
             c.finding for c in classified if c.kind in ("update", "escalate")
@@ -993,24 +1066,84 @@ class GitHubProvider:
             c.finding for c in classified
             if c.kind == "recurred" and c.thread is not None
         )
-        touched_thread_ids = {
-            c.thread.thread_id for c in classified if c.thread is not None
-        }
-        headline_findings.extend(
-            _carried_forward_finding(t)
-            for t in all_threads
-            if not t.is_resolved and t.thread_id not in touched_thread_ids
-        )
-        headline_inline_count = len(inline_comments) + sum(
-            1 for c in classified if c.kind in ("update", "escalate")
+        headline_findings.extend(_carried_forward_finding(t) for t in carried_forward)
+        # A carried-forward thread *is* a live inline comment on the PR --
+        # omitting it here (pre-#766) made "(0 inline)" false whenever it was
+        # the only thing behind a nonzero count.
+        headline_inline_count = (
+            len(inline_comments)
+            + sum(1 for c in classified if c.kind in ("update", "escalate"))
+            + len(carried_forward)
         )
 
+        # (#766) A still-open Critical/High thread from an earlier run must
+        # not be silently approved over: on GitHub a newer APPROVE from the
+        # same reviewer supersedes an older CHANGES_REQUESTED review, so
+        # posting an APPROVE here -- even though *this run* found nothing
+        # new -- would unblock a PR that should stay blocked.
+        # `classify_review_outcome` (review/outcome.py) can't see this on its
+        # own: it only knows this run's own findings, never prior threads.
+        #
+        # `action == "put"` only ever PATCHes an existing review's body --
+        # GitHub's PUT /reviews/{id} cannot change a review's already
+        # submitted state -- so reusing the canonical review here would leave
+        # its "Approved" badge in place while the body underneath switches to
+        # findings language, a worse, self-contradicting state than either
+        # alone. Forcing `action = "post"` can't retract a stale approval an
+        # earlier (pre-fix) run already recorded, but it does put a real,
+        # separately visible COMMENT review in the PR timeline naming what's
+        # still open, matching the language `_render_review_body` renders
+        # for `render_event`.
+        #
+        # `not threads_fetch_complete` (an incomplete GraphQL fetch, e.g. a
+        # transient HTTP error -- never true just because `canonical_reuse`
+        # is off, which sets it True with an intentionally empty
+        # `all_threads`) also forces the downgrade, but *only* when
+        # `canonical is not None` -- i.e. only when we already know this bot
+        # has an existing active review on this PR, so an incomplete fetch
+        # could genuinely be hiding one of its still-open threads. Without
+        # that qualifier, a transient GraphQL blip on this PR's very *first*
+        # review (nothing to carry forward, ever) would needlessly downgrade
+        # every clean APPROVE to COMMENT -- a regression against this
+        # method's existing fail-soft design (`_load_prior_state`'s own
+        # docstring: any fetch error degrades to "no prior state", never to
+        # blocking the post itself) and the far more common case in
+        # practice. This still isn't airtight (a canonical-less PR whose
+        # only prior reviews are all `DISMISSED` could theoretically still
+        # carry an unresolved thread), but it targets the realistic #766
+        # scenario -- a rerun against an existing active review -- without
+        # trading a rare compound failure for a common one.
+        carried_forward_blocks_approval = event == "APPROVE" and (
+            (not threads_fetch_complete and canonical is not None)
+            or any((t.severity or "Low") in ("Critical", "High") for t in carried_forward)
+        )
+        render_event: PostEvent
+        if carried_forward_blocks_approval:
+            action = "post"
+            render_event = "COMMENT"
+            # The decision=%s logged just above (before this override can
+            # run) would otherwise claim "put" on a run that's actually
+            # about to POST a fresh COMMENT review -- log the override
+            # explicitly rather than leaving that log line stale.
+            _log.info(
+                "github: carried-forward Critical/High thread (or incomplete "
+                "thread fetch) forces action=post, render_event=COMMENT "
+                "(intended event was %s)",
+                event,
+            )
+        else:
+            render_event = event
+
+        carried_forward_text = self._render_carried_forward_section(carried_forward)
+
         body = _render_review_body(
-            event=event,
+            event=render_event,
             findings=headline_findings,
             inline_count=headline_inline_count,
             body_findings_text=join_findings(body_bullets),
             out_of_diff_findings_text=join_findings(ood_bullets),
+            carried_forward_text=carried_forward_text,
+            carried_forward_count=len(carried_forward),
             failed_agents=failed_agents,
             usage_block=usage_block,
             usage_warning=usage_warning,
@@ -1029,7 +1162,7 @@ class GitHubProvider:
                     review_id=canonical.review_id,
                     inline_posted=0,
                     body_findings=len(body_bullets),
-                    event=event,
+                    event=render_event,
                     inline_updated=inline_updated,
                     suppressed=suppressed_count,
                     replies_posted=replies_posted,
@@ -1046,7 +1179,7 @@ class GitHubProvider:
         result = self._post_new_review(
             body=body,
             inline_comments=inline_comments,
-            event=event,
+            event=render_event,
             diff=diff,
             body_bullets_count=len(body_bullets),
         )
@@ -1091,7 +1224,13 @@ class GitHubProvider:
             inline_posted=result.inline_posted,
             body_findings=result.body_findings,
             event=result.event,
-            degraded_to_comment=result.degraded_to_comment,
+            # `result.degraded_to_comment` is True only when `_post_new_review`
+            # itself had to fall back after an HTTP failure; OR in our own
+            # policy-driven downgrade (#766) so reporting.py's existing
+            # "intended review event was APPROVE but it was posted as COMMENT"
+            # warning covers this cause too, even though _post_new_review saw
+            # a normal 200 for the COMMENT it was asked to post.
+            degraded_to_comment=result.degraded_to_comment or carried_forward_blocks_approval,
             error=result.error,
             inline_updated=inline_updated,
             suppressed=suppressed_count,
@@ -2010,6 +2149,8 @@ def _render_review_body(
     inline_count: int,
     body_findings_text: str,
     out_of_diff_findings_text: str = "",
+    carried_forward_text: str = "",
+    carried_forward_count: int = 0,
     failed_agents: Sequence[str],
     usage_block: str,
     usage_warning: str,
@@ -2044,6 +2185,18 @@ def _render_review_body(
             f"{out_of_diff_findings_text}\n</details>"
         )
 
+    def _carried_forward_section() -> str:
+        # Deliberately flat, not a <details> block: a still-open finding
+        # from an earlier review is exactly what issue #766 found silently
+        # counted-but-invisible, so this section must never be collapsed
+        # the way _ood_section() collapses lower-priority analyzer noise.
+        if not carried_forward_text:
+            return ""
+        return (
+            f"\n\n### Still open from earlier reviews ({carried_forward_count})\n"
+            f"{carried_forward_text}"
+        )
+
     def _usage_section() -> str:
         # build_usage_block prefixes usage_block with the mode-independent
         # marker (#758) -- present even when usage_block itself is "" (e.g.
@@ -2069,12 +2222,26 @@ def _render_review_body(
             body = (
                 "## AI Review: Approved\n\n"
                 f"{severity_icon(risk)} **Overall Risk:** {risk} | "
-                f"**Findings:** {finding_total} ({inline_count} inline)\n\n"
-                "No Critical or High findings. The changes look good — "
-                "Medium/Low findings are informational only."
+                f"**Findings:** {finding_total} ({inline_count} inline)"
             )
+            # Only claim "the changes look good" when the count is actually
+            # backed by something a reader can see: an inline comment
+            # elsewhere on the diff, a body-level bullet below, or (#766) the
+            # new carried-forward section below. Before #766 this sentence
+            # rendered unconditionally, which is exactly how a carried-forward
+            # thread produced a count with nothing anywhere to back it.
+            # `event == "APPROVE"` here already guarantees risk is never
+            # Critical/High (post_findings forces a COMMENT instead when a
+            # carried-forward thread is), so the sentence stays true whenever
+            # it's shown.
+            if inline_count > 0 or body_findings_text or carried_forward_text:
+                body += (
+                    "\n\nNo Critical or High findings. The changes look good — "
+                    "Medium/Low findings are informational only."
+                )
             if body_findings_text:
                 body += f"\n\n### Findings (informational)\n{body_findings_text}"
+        body += _carried_forward_section()
         body += _ood_section()
         body += _usage_section()
         return body + footer
@@ -2087,6 +2254,7 @@ def _render_review_body(
             f"failed: {joined}\n\n"
             "The review may be incomplete. Please verify manually or re-run the review."
         )
+        body += _carried_forward_section()
         body += _ood_section()
         body += _usage_section()
         return body + footer
@@ -2101,6 +2269,7 @@ def _render_review_body(
         body += f"\n\n### Findings not attached to specific lines\n{body_findings_text}"
     elif inline_count > 0:
         body += "\n\nAll findings are attached as inline comments."
+    body += _carried_forward_section()
     body += _ood_section()
     body += _usage_section()
     body += footer
