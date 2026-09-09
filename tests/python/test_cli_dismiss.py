@@ -7,6 +7,7 @@ Follows the `_make_provider(handler)` HTTP-mocking harness established in
 
 from __future__ import annotations
 
+import json as _json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -17,7 +18,7 @@ import ai_pr_review.vcs as vcs_module
 from ai_pr_review.cli import cli
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
-from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
+from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import build_id_map_marker
 
@@ -51,12 +52,20 @@ def _finding(text: str, source: str, file: str, line: int = 10) -> Finding:
     return Finding(severity="medium", confidence=80, finding=text, source=source, file=file, line=line)
 
 
-def _base_args(finding_id: int | None, command: str = "dismiss", *, feedback_loop: bool = True) -> list[str]:
+def _base_args(
+    finding_id: int | None,
+    command: str = "dismiss",
+    *,
+    feedback_loop: bool = True,
+    feedback_write_allowed: bool = True,
+) -> list[str]:
     args = ["dismiss", "--actor", "alice", "--command", command, "--pr-number", "5"]
     if finding_id is not None:
         args += ["--finding-id", str(finding_id)]
     if feedback_loop:
         args += ["--enable-feedback-loop", "1"]
+    if feedback_write_allowed:
+        args += ["--feedback-write-allowed", "1"]
     return args
 
 
@@ -92,6 +101,46 @@ def test_body_finding_writes_feedback_and_echoes_reply(monkeypatch) -> None:
     assert appended[0].source == "phpcs"
     assert appended[0].file == "legacy.py"
     assert appended[0].command == "false-positive"
+
+
+def test_body_finding_feedback_write_not_allowed_blocks_store(monkeypatch) -> None:
+    """`--feedback-write-allowed=False` on the BODY (top-level `dismiss`)
+    path -- this is the job `dismiss-body-finding` gates with
+    SLASH_FEEDBACK_WRITE_ALLOWED (issue #769's closed COLLABORATOR gap), and
+    it was previously untested here: every other test in this file uses
+    `_base_args`'s default of `feedback_write_allowed=True`. Mirrors
+    `test_feedback_write_allowed_false_blocks_store_write` in
+    test_cli_dismiss_inline.py, which covers the same gate on the INLINE
+    path."""
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    def _boom(config):
+        raise AssertionError("make_store should not be called when the actor is not trusted")
+
+    monkeypatch.setattr("ai_pr_review.feedback.store.make_store", _boom)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(3, feedback_write_allowed=False))
+
+    assert result.exit_code == 0, result.output
+    assert "F3" in result.stdout
+    assert "OWNER or MEMBER" in result.stdout
+    # Distinguish from the "feedback loop disabled" message -- this reply
+    # must say the actor isn't trusted, not that the feature is off.
+    assert "feedback loop disabled" not in result.stdout
 
 
 def test_body_finding_feedback_store_failure_is_reported_honestly(monkeypatch) -> None:
@@ -215,6 +264,92 @@ def test_inline_finding_does_not_touch_feedback_store(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "could not find" in result.stdout
+
+
+def test_top_level_inline_finding_writes_full_context_feedback(monkeypatch) -> None:
+    """This PR's headline new capability, end-to-end through the actual
+    `dismiss` CLI command (previously covered only at the
+    `dismiss_by_finding_id` unit level in test_dismiss_verdicts.py, and at
+    the CLI level only for `dismiss-inline`): a top-level `/ai-pr-review
+    dismiss F<n>` naming an F-id that classifies as an INLINE finding (an
+    id-map entry with no matching body bullet) resolves its thread AND
+    writes a full-context (source/file/rule_id) feedback-store entry -- not
+    the empty-context entry the now-removed `feedback-command` path used to
+    write for this exact case."""
+    finding_id = 4
+    # Review body carries the id-map marker only (no body bullet for F4), so
+    # classify_finding resolves it as INLINE -- see
+    # test_inline_finding_classifies_via_id_map_not_bullet in
+    # tests/python/slash/test_dismiss.py for the minimal fixture this mirrors.
+    id_map = {"code-reviewer|src/foo.py|12|abc123456789": finding_id}
+    review_body = "Some review body.\n" + build_id_map_marker(id_map)
+
+    f = _finding("unsafe eval", source="code-reviewer", file="src/foo.py", line=12)
+    thread_body = _build_inline_comment_body(f, finding_id=finding_id)
+    thread_node = {
+        "id": "T1",
+        "isResolved": False,
+        "path": "src/foo.py",
+        "comments": {
+            "nodes": [
+                {
+                    "body": thread_body,
+                    "author": {"login": "github-actions[bot]"},
+                    "pullRequestReview": None,
+                }
+            ]
+        },
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    "nodes": [thread_node],
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    appended: list = []
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: (appended.append(entry), True)[1])})(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(finding_id))
+
+    assert result.exit_code == 0, result.output
+    assert f"F{finding_id}" in result.stdout
+    assert "resolved the thread" in result.stdout
+    assert len(appended) == 1
+    assert appended[0].source == "code-reviewer"
+    assert appended[0].file == "src/foo.py"
+    assert appended[0].extras.get("finding_id") == finding_id
 
 
 def test_missing_finding_id_lists_active_ids(monkeypatch) -> None:
@@ -416,6 +551,13 @@ def test_fixed_body_finding_never_writes_feedback_store(monkeypatch) -> None:
     assert "fixed" in result.stdout
     # Must not claim a suppression verdict was recorded -- that's false for "fixed".
     assert "suppressed on future review runs" not in result.stdout
+    # Regression guard for the bug DismissResult.acted was introduced to fix
+    # (issue #769): a successful BODY `fixed` sets none of feedback_source/
+    # feedback_file/thread_resolved/review_dismissed/pr_approved (no thread
+    # exists for a body-level finding), so the old acted-derived-from-those-
+    # fields expression reacted "confused" to a command that fully succeeded.
+    assert "::notice::reaction=done" in result.stderr
+    assert "::notice::reaction=confused" not in result.stderr
 
 
 def test_fixed_body_finding_echoes_bare_sha(monkeypatch) -> None:

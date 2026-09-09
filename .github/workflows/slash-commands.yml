@@ -700,6 +700,15 @@ jobs:
           SLASH_ACTOR: ${{ inputs.actor-login }}
           SLASH_PR_NUMBER: ${{ inputs.pr-number || inputs.issue-number }}
           AI_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
+          # Issue #769: this job is now the sole writer for the whole verdict
+          # family (dismiss/false-positive/wont-fix), including BODY and
+          # INLINE F-ids named on a top-level comment -- so it needs its own
+          # trust gate for the store write, mirroring the OWNER/MEMBER bar
+          # docs/learning-loop.md documents and the SLASH_APPROVE_ALLOWED
+          # precedent below in dismiss-finding. Reliable here:
+          # author_association IS trustworthy on issue_comment (unlike
+          # pull_request_review_comment -- see the authorize job / #732).
+          SLASH_FEEDBACK_WRITE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
           # only (#734); GITHUB_TOKEN below is what every other write in
@@ -940,15 +949,28 @@ jobs:
           # Only consumed by `fixed`, to parse its optional commit SHA
           # (ai_pr_review/slash/parser.py); ignored by every other command.
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+          # Issue #769: this job is now the sole writer for an inline verdict's
+          # feedback-store entry (previously only the now-removed
+          # `feedback-command` job's `slash` invocation wrote it). Same
+          # OWNER/MEMBER trust bar docs/learning-loop.md documents for a
+          # learning-loop write.
+          AI_FEEDBACK_LOOP: ${{ inputs.enable-feedback-loop }}
           # Auto-approve (issue #590) is a stronger side effect than a single
-          # dismiss, so it is gated at the OWNER/MEMBER bar feedback-command
-          # already uses for its persistent learning-loop writes -- tighter
-          # than this job's own OWNER/MEMBER/COLLABORATOR admission gate
-          # above. A COLLABORATOR can still dismiss/false-positive/wont-fix
-          # normally; they just never trigger the PR-wide auto-approve.
-          # `dismiss-inline` forces this False for `fixed` regardless of what
+          # dismiss, so it is gated at the same OWNER/MEMBER bar as the
+          # feedback-store write just above -- tighter than this job's own
+          # OWNER/MEMBER/COLLABORATOR admission gate above. A COLLABORATOR can
+          # still dismiss/false-positive/wont-fix normally; they just never
+          # trigger the PR-wide auto-approve or a feedback-store write.
+          # `dismiss-inline` forces both False for `fixed` regardless of what
           # we pass here -- a fix claim is not a maintainer verdict.
-          SLASH_APPROVE_ALLOWED: ${{ contains(fromJSON('["OWNER","MEMBER"]'), inputs.comment-author-association) }}
+          #
+          # needs.authorize.outputs.is_member, not
+          # inputs.comment-author-association: author_association is
+          # unreliable on pull_request_review_comment (see the authorize job
+          # / #732) -- the same reason this job's own admission gate above
+          # trusts is_collab instead of comment-author-association.
+          SLASH_APPROVE_ALLOWED: ${{ needs.authorize.outputs.is_member }}
+          SLASH_FEEDBACK_WRITE_ALLOWED: ${{ needs.authorize.outputs.is_member }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
           # only (#734); GITHUB_TOKEN below is what every other write in
@@ -1060,11 +1082,17 @@ jobs:
     # trust level GitHub uses to gate "approve workflow runs from forks".
     # COLLABORATOR is intentionally excluded for persistent side-effects.
     #
+    # Handles bare `/ai-pr-review feedback <text>` only (plus the unimplemented
+    # explain/revise stubs on the review-thread path). dismiss/false-positive/
+    # wont-fix are entirely owned by dismiss-body-finding/dismiss-finding
+    # instead (issue #769) -- both the reply and the feedback-store write, on
+    # both event types below.
+    #
     # Accepts both event types:
     #   - issue_comment (PR comments)
     #   - pull_request_review_comment (replies on inline review threads)
-    # because the natural UX for `/ai-pr-review false-positive` is to reply
-    # on the AI's finding comment.  See #290.
+    # because the natural UX for `/ai-pr-review feedback` is to reply on the
+    # AI's finding comment.  See #290.
     needs: authorize
     # OWNER/MEMBER-only is enforced via API membership (needs.authorize.outputs.is_member)
     # rather than inputs.comment-author-association, which is unreliable on
@@ -1103,6 +1131,23 @@ jobs:
             exit 1
           fi
 
+      - name: Parse command (review-thread path only)
+        # Issue #769: dismiss/false-positive/wont-fix/fixed are now owned
+        # entirely by dismiss-body-finding (issue_comment) / dismiss-finding
+        # (pull_request_review_comment) -- both the reply and the
+        # feedback-store write. This job must skip its review-thread
+        # single-shot path for those commands so it doesn't also write/reply.
+        # Only matters for the review-thread path: the top-level path's
+        # exclusion is enforced by "List feedback commands"' `--families`
+        # filter below, which never selects the dismiss family in the first
+        # place. Mirrors dismiss-finding's identical single-line parse.
+        id: cmd
+        env:
+          COMMENT: ${{ inputs.comment-body }}
+        run: |
+          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          echo "command=$command" >> "$GITHUB_OUTPUT"
+
       - name: React — seen
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
@@ -1137,7 +1182,9 @@ jobs:
         # feedback verdicts, each naming a different F<n>, can appear in one
         # comment).
         id: context
-        if: steps.endpoints.outputs.is_review_comment == 'true'
+        if: |
+          steps.endpoints.outputs.is_review_comment == 'true' &&
+          !contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), steps.cmd.outputs.command)
         env:
           # actions-token, not github-token: this step only performs plain
           # REST GETs (fetch_review_comment, list_bot_reviews) — no
@@ -1161,7 +1208,9 @@ jobs:
         # for why the top-level path (issue_comment) now runs its own loop
         # instead of this single-shot invocation.
         id: handler
-        if: steps.endpoints.outputs.is_review_comment == 'true'
+        if: |
+          steps.endpoints.outputs.is_review_comment == 'true' &&
+          !contains(fromJSON('["dismiss","false-positive","wont-fix","fixed"]'), steps.cmd.outputs.command)
         env:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
           # Prefer wrapper-supplied context (legacy), else the context
@@ -1212,18 +1261,24 @@ jobs:
 
       - name: List feedback commands
         # Top-level only (issue #733): scans EVERY line of the comment for
-        # false-positive/wont-fix/feedback, so a single top-level comment
-        # posting several verdicts (each possibly naming a different F<n>)
-        # gets every line persisted, not just the first. "dismiss" (alias
-        # for false-positive) and "fixed" are covered/excluded exactly as
-        # `SlashCommand.is_feedback_command` defines: "fixed" must never
-        # reach the feedback store (see that property's docstring).
+        # bare `feedback`, so a single top-level comment posting several
+        # free-form notes gets every line persisted, not just the first.
+        #
+        # dismiss/false-positive/wont-fix ("dismiss" is an alias for
+        # false-positive) are deliberately excluded from this family list
+        # (issue #769): dismiss-body-finding already owns the reply and the
+        # feedback-store write for the whole verdict family on this event
+        # type, for both BODY and INLINE F-ids. Including them here produced
+        # a second store write and a second, differently-worded reply for
+        # every verdict. "fixed" was already excluded before #769, unrelated
+        # reason: it's never a verdict on validity, so it must never reach
+        # the feedback store at all -- see `SlashCommand.is_feedback_command`.
         id: list
         if: steps.endpoints.outputs.is_review_comment == 'false'
         env:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
         run: |
-          commands_json=$(ai-pr-review list-commands --families false-positive,wont-fix,feedback)
+          commands_json=$(ai-pr-review list-commands --families feedback)
           echo "commands=${commands_json}" >> "$GITHUB_OUTPUT"
 
       - name: Invoke Python slash handler (loop, top-level)
@@ -1390,11 +1445,18 @@ jobs:
       # `dismiss-finding` job instead (same trigger condition, now widened to
       # match all three command names), which resolves the thread AND
       # dismisses the review AND (issue #590) approves the PR when
-      # everything is now clear. `dismiss-finding` has no `needs:` on this
-      # job, so both still react/reply independently for a review-thread
-      # false-positive/wont-fix, but the persist-plus-resolve step below
-      # remains this job's own responsibility (learning-loop storage);
-      # dismiss-finding no longer needs duplicating here.
+      # everything is now clear.
+      #
+      # Superseded (issue #769): the paragraph above described a state where
+      # `dismiss-finding` and this job both still reacted/replied
+      # independently for a review-thread false-positive/wont-fix, with the
+      # feedback-store write remaining this job's own responsibility. That
+      # was exactly the double-reply/double-write bug #769 fixed -- this job
+      # no longer reacts, replies, or writes to the feedback store for
+      # dismiss/false-positive/wont-fix/fixed at all (see the step-level
+      # command exclusion above and the job-header comment at the top of
+      # this job). `dismiss-finding` is now the sole owner of both the reply
+      # and the store write for those commands on this event type.
 
       - name: React — done
         if: |

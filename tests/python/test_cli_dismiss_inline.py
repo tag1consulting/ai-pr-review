@@ -16,7 +16,8 @@ from click.testing import CliRunner
 
 import ai_pr_review.vcs as vcs_module
 from ai_pr_review.cli import cli
-from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
+from ai_pr_review.findings.models import Finding
+from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import INLINE_MARKER
 
@@ -59,12 +60,16 @@ def _inline_thread(
     body: str,
     comment_db_id: int | None = None,
     review_db_id: int | None = None,
+    path: str | None = None,
 ) -> dict:
     inner: dict = {"body": body, "author": {"login": "github-actions[bot]"}}
     if comment_db_id is not None:
         inner["databaseId"] = comment_db_id
     inner["pullRequestReview"] = {"databaseId": review_db_id} if review_db_id is not None else None
-    return {"id": tid, "isResolved": resolved, "comments": {"nodes": [inner]}}
+    node: dict = {"id": tid, "isResolved": resolved, "comments": {"nodes": [inner]}}
+    if path is not None:
+        node["path"] = path
+    return node
 
 
 def _threads_response(nodes: list[dict]) -> dict:
@@ -743,3 +748,306 @@ def test_approve_allowed_explicit_false_string_env_var_no_approval(monkeypatch) 
     assert result.exit_code == 0, result.output
     assert "resolved the thread" in result.stdout
     assert "approved" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Issue #769: this command previously never touched the feedback store at
+# all -- the now-removed `feedback-command` workflow job's `slash`
+# invocation was the only writer for any inline verdict. `dismiss-inline` is
+# now the sole owner of both the reply and the store write on this event
+# path.
+# ---------------------------------------------------------------------------
+
+
+def test_feedback_store_write_full_context_from_thread(monkeypatch) -> None:
+    """Full context (source, file, rule_id) comes from the thread already
+    fetched for resolution -- no extra API call (no separate fetch of the
+    parent comment, unlike `context_from_parent_comment`)."""
+    f = Finding(
+        severity="medium",
+        confidence=80,
+        finding="unsafe eval",
+        source="code-reviewer",
+        file="src/foo.py",
+        line=12,
+    )
+    body = _build_inline_comment_body(f, finding_id=None)
+    nodes = [
+        _inline_thread(
+            "T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py"
+        )
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        # No singular parent-comment fetch (that would be
+        # context_from_parent_comment's route) -- dismiss_inline_reply
+        # already has the thread's first comment in hand.
+        if req.method == "GET" and "/pulls/comments/" in url and url.rstrip("/").endswith(str(55)):
+            raise AssertionError("must not make a redundant parent-comment fetch for context")
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    appended: list = []
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: (appended.append(entry), True)[1])})(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41) + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert len(appended) == 1
+    assert appended[0].source == "code-reviewer"
+    assert appended[0].file == "src/foo.py"
+    assert appended[0].command == "false-positive"
+
+
+def test_feedback_write_allowed_false_blocks_store_write(monkeypatch) -> None:
+    f = Finding(
+        severity="medium", confidence=80, finding="unsafe eval", source="code-reviewer", file="src/foo.py", line=12
+    )
+    body = _build_inline_comment_body(f, finding_id=None)
+    nodes = [_inline_thread("T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py")]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    def _boom(config):
+        raise AssertionError("make_store should not be called when the actor is not trusted")
+
+    monkeypatch.setattr("ai_pr_review.feedback.store.make_store", _boom)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, _base_args(55, review_id=41) + ["--enable-feedback-loop", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "OWNER or MEMBER" in result.stdout
+
+
+def test_fixed_inline_never_writes_feedback_store(monkeypatch) -> None:
+    f = Finding(
+        severity="medium", confidence=80, finding="unsafe eval", source="code-reviewer", file="src/foo.py", line=12
+    )
+    body = _build_inline_comment_body(f, finding_id=None)
+    nodes = [_inline_thread("T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py")]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    def _boom(config):
+        raise AssertionError("`fixed` must never write to the feedback store")
+
+    monkeypatch.setattr("ai_pr_review.feedback.store.make_store", _boom)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41, command="fixed")
+        + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+
+
+def test_feedback_loop_disabled_takes_precedence_over_write_allowed(monkeypatch) -> None:
+    """`--enable-feedback-loop` is a brand-new option on `dismiss-inline`
+    (issue #769 -- this command never touched the feedback store before).
+    Its CLI wiring in isolation deserves direct coverage: loop-disabled must
+    win over write-allowed, matching the BODY path's
+    test_body_finding_feedback_loop_disabled_skips_store."""
+    f = Finding(
+        severity="medium", confidence=80, finding="unsafe eval", source="code-reviewer", file="src/foo.py", line=12
+    )
+    body = _build_inline_comment_body(f, finding_id=None)
+    nodes = [_inline_thread("T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py")]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    def _boom(config):
+        raise AssertionError("make_store should not be called when the feedback loop is disabled")
+
+    monkeypatch.setattr("ai_pr_review.feedback.store.make_store", _boom)
+
+    runner = CliRunner()
+    # --enable-feedback-loop omitted (defaults False); --feedback-write-allowed
+    # explicitly true, to prove loop-disabled is checked first.
+    result = runner.invoke(cli, _base_args(55, review_id=41) + ["--feedback-write-allowed", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "feedback loop disabled" in result.stdout
+    assert "OWNER or MEMBER" not in result.stdout
+
+
+def test_feedback_store_failure_reported_honestly_with_no_stable_id(monkeypatch) -> None:
+    """The "could not persist" fallback reply's F<n> citation falls back to
+    "this finding" only when no F-token could be parsed from the thread body
+    -- exercise that fallback text directly, and confirm a store-append
+    failure on this path (never covered before) surfaces honestly rather
+    than claiming success."""
+    # No **[F<n>]** token in this body -- a legacy inline comment predating
+    # F-ids on inline findings, or a malformed/hand-crafted one.
+    body = f"🔵 **[Medium]** [code-reviewer] unsafe eval\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py")]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: False)})(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41) + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The store-failure reply replaces result.reply entirely (it's the
+    # "honest about what happened" message _persist_verdict returns instead
+    # of echoing the thread-resolved confirmation) -- see cli.py's
+    # _persist_verdict failure branch.
+    assert "this finding" in result.stdout
+    assert "could not persist it" in result.stdout
+
+
+def test_dedup_key_finding_id_from_body_prevents_cross_finding_collision(monkeypatch) -> None:
+    """Direct regression test for the bug two independent reviewers of this
+    PR flagged: before dismiss_inline threaded a real finding_id through,
+    every verdict on this path shared the same
+    (command, source, file, rule_id, None) dedup key, so dismissing two
+    DIFFERENT findings in the same file/source within the dedup window would
+    collapse the second onto the first and silently drop it. This asserts
+    the actual store append receives distinct finding_id extras for two
+    different F-ids named in two different comment bodies."""
+    f = Finding(
+        severity="medium", confidence=80, finding="unsafe eval", source="code-reviewer", file="src/foo.py", line=12
+    )
+    body1 = _build_inline_comment_body(f, finding_id=7)
+    body2 = _build_inline_comment_body(f, finding_id=8)
+
+    appended: list = []
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: (appended.append(entry), True)[1])})(),
+    )
+
+    for comment_id, body in ((55, body1), (66, body2)):
+        nodes = [
+            _inline_thread(
+                "T1", resolved=False, body=body, comment_db_id=comment_id, review_db_id=41, path="src/foo.py"
+            )
+        ]
+
+        def handler(req: httpx.Request, nodes=nodes) -> httpx.Response:
+            url = str(req.url)
+            if req.method == "GET" and url.endswith("/reviews/41"):
+                return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+            if req.method == "POST" and url.endswith("/graphql"):
+                gql_body = _json.loads(req.content)
+                if "resolveReviewThread" in gql_body.get("query", ""):
+                    return httpx.Response(
+                        200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                    )
+                return httpx.Response(200, json=_threads_response(nodes))
+            if req.method == "PUT" and "/dismissals" in url:
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        provider, _ = _make_provider(handler)
+        monkeypatch.setattr(vcs_module, "provider_from_env", lambda p=provider: p)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            _base_args(comment_id, review_id=41)
+            + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+        )
+        assert result.exit_code == 0, result.output
+
+    assert len(appended) == 2
+    assert appended[0].extras.get("finding_id") == 7
+    assert appended[1].extras.get("finding_id") == 8

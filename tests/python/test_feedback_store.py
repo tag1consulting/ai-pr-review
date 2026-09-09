@@ -313,3 +313,279 @@ def test_append_http_error_logs_standard_warning(caplog: pytest.LogCaptureFixtur
 
     assert result is False
     assert any("[ai-pr-review] WARNING:" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Dedup guard (issue #769) — two independent writers producing the same
+# verdict seconds apart (the double-write bug) must not both land in the
+# store. Loud by design: a WARNING + ::warning:: on skip, not a silent drop,
+# so a future recurrence of the underlying double-write bug still surfaces.
+# ---------------------------------------------------------------------------
+
+
+class _FakeAppendClient:
+    """Minimal client stub: GET returns *existing_jsonl* (base64, oldest-first
+    as the real file is), PUT records the call and succeeds."""
+
+    def __init__(self, existing_jsonl: str) -> None:
+        import base64 as _b64
+
+        self._b64 = _b64.b64encode(existing_jsonl.encode()).decode()
+        self.put_calls: list[dict] = []
+
+    def get(self, url, headers):
+        import httpx
+
+        return httpx.Response(
+            200, json={"sha": "abc123", "content": self._b64}, request=httpx.Request("GET", url)
+        )
+
+    def put(self, url, headers, json):
+        import httpx
+
+        self.put_calls.append(json)
+        return httpx.Response(200, json={"content": {"sha": "def456"}}, request=httpx.Request("PUT", url))
+
+
+def test_dedup_skips_append_within_window(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:53:26Z",
+        command="wont-fix",
+        reason="original reason",
+        source="sarif:Semgrep OSS",
+        file="ai_pr_review/analyzers/native/phpstan.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    duplicate = FeedbackEntry(
+        ts="2026-09-09T22:54:04Z",  # 38s later -- inside the 10-minute window
+        command="wont-fix",
+        reason="different reason text from the other writer",  # reason excluded from the key
+        source="sarif:Semgrep OSS",
+        file="ai_pr_review/analyzers/native/phpstan.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.feedback.store"):
+        result = store.append(duplicate)
+
+    assert result is True  # the verdict IS in the store (via the earlier write) -- honest to the caller
+    assert client.put_calls == []  # no second JSONL line written
+    assert any("skipped a duplicate append" in r.message for r in caplog.records)
+
+
+def test_dedup_does_not_fire_outside_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    existing = FeedbackEntry(
+        ts="2026-08-01T00:00:00Z",
+        command="wont-fix",
+        reason="original",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    later = FeedbackEntry(
+        ts="2026-09-09T22:54:04Z",  # weeks later -- a genuine re-dismissal, not this bug
+        command="wont-fix",
+        reason="recurred",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    result = store.append(later)
+
+    assert result is True
+    assert len(client.put_calls) == 1  # a real new line was written
+
+
+def test_dedup_does_not_fire_for_different_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:53:26Z",
+        command="wont-fix",
+        reason="original",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    different_finding = FeedbackEntry(
+        ts="2026-09-09T22:53:28Z",
+        command="wont-fix",
+        reason="a different finding entirely",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 1},  # different finding_id -- must not be deduped against F2
+    )
+    result = store.append(different_finding)
+
+    assert result is True
+    assert len(client.put_calls) == 1
+
+
+def test_dedup_boundary_exactly_at_window_still_dedupes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the dedup window's comparison as exclusive-greater-than: a gap of
+    exactly _DEDUP_WINDOW (10 minutes) is still "within" the window and gets
+    deduped. Catches a future off-by-one if the operator changes."""
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:50:00Z",
+        command="wont-fix",
+        reason="original",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    exactly_at_window = FeedbackEntry(
+        ts="2026-09-09T23:00:00Z",  # exactly 10:00 later
+        command="wont-fix",
+        reason="different text",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    result = store.append(exactly_at_window)
+
+    assert result is True
+    assert client.put_calls == []  # deduped -- gap is not > the window
+
+
+def test_dedup_boundary_just_over_window_does_not_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:50:00Z",
+        command="wont-fix",
+        reason="original",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    just_over_window = FeedbackEntry(
+        ts="2026-09-09T23:00:01Z",  # 10:01 later -- one second past the window
+        command="wont-fix",
+        reason="different text",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    result = store.append(just_over_window)
+
+    assert result is True
+    assert len(client.put_calls) == 1  # not deduped -- gap exceeds the window
+
+
+def test_dedup_skips_when_new_entry_has_malformed_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_find_recent_duplicate` returns None immediately when the new entry's
+    own `ts` can't be parsed -- matches `_parse_ts`'s "keep the entry" (never
+    treat an unparseable timestamp as grounds to drop data) philosophy."""
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:53:26Z",
+        command="wont-fix",
+        reason="original",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    malformed_ts_entry = FeedbackEntry(
+        ts="not-a-timestamp",
+        command="wont-fix",
+        reason="different text",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    result = store.append(malformed_ts_entry)
+
+    assert result is True
+    assert len(client.put_calls) == 1  # not deduped -- can't compare against an unparseable new ts
+
+
+def test_dedup_skips_when_existing_entry_has_malformed_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing entry with an unparseable `ts` is never treated as recent
+    (matches apply_retention's identical fail-safe), so a genuine duplicate
+    against it is NOT deduped -- the safer failure direction (two writes
+    survive) rather than silently dropping data based on an untrustworthy
+    old record."""
+    existing = FeedbackEntry(
+        ts="also-not-a-timestamp",
+        command="wont-fix",
+        reason="original",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    duplicate_key_entry = FeedbackEntry(
+        ts="2026-09-09T22:53:28Z",
+        command="wont-fix",
+        reason="different text",
+        source="sarif:Semgrep OSS",
+        file="foo.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    result = store.append(duplicate_key_entry)
+
+    assert result is True
+    assert len(client.put_calls) == 1  # existing entry's malformed ts means it's never "recent"
+
+
+def test_dedup_never_fires_for_bare_feedback_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #769 follow-up (found independently by two reviewers of this
+    fix): the dedup guard is scoped to _DEDUP_ELIGIBLE_COMMANDS
+    (false-positive/wont-fix only) precisely so two genuinely distinct
+    `feedback` notes -- which have no file/source/finding_id identity beyond
+    free-form `reason` text, deliberately excluded from the dedup key -- are
+    never collapsed onto each other just because they share the same empty
+    source/file within the window."""
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:53:26Z",
+        command="feedback",
+        reason="please check the caching logic in this module",
+        source="",
+        file="",
+        rule_id="",
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    another_feedback_note = FeedbackEntry(
+        ts="2026-09-09T22:53:40Z",  # 14 seconds later -- well within the dedup window
+        command="feedback",
+        reason="unrelated: please update the docs for the new flag",
+        source="",
+        file="",
+        rule_id="",
+    )
+    result = store.append(another_feedback_note)
+
+    assert result is True
+    assert len(client.put_calls) == 1  # both notes must land -- bare feedback is never deduped

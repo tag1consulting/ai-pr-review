@@ -11,9 +11,9 @@ The learning loop allows human reviewers to feed signals back to the AI agents b
 ## How it works
 
 1. A reviewer posts `/ai-pr-review false-positive This is an intentional use of MD5 for checksums only.` as a **reply on the AI's inline review-comment thread** for that finding. (Top-level PR comments are also accepted for cases where there's no specific finding to attach to — see [Where to post commands](#where-to-post-commands) below.)
-2. The `slash-commands.yml` workflow invokes the Python `ai-pr-review slash` CLI subcommand. For review-thread replies it first auto-extracts the source / file / rule_id from the parent comment so the `FeedbackEntry` has proper context.
+2. `slash-commands.yml` routes the command by family. `false-positive` / `wont-fix` / `dismiss` (the alias) / `fixed` go to the `dismiss-body-finding` (top-level) or `dismiss-finding` (review-thread reply) job, which invokes the Python `ai-pr-review dismiss` / `dismiss-inline` CLI subcommand. `feedback` / `explain` / `revise` go to the separate `feedback-command` job, which invokes `ai-pr-review slash`. Both paths auto-extract the source / file / rule_id for the finding being acted on — from the thread's own comment (review-thread reply) or from the F<n> token's classification (top-level comment naming an inline or body finding) — so the `FeedbackEntry` has proper context either way, with no extra API call.
 3. The subcommand parses and sanitizes the comment body, then writes a `FeedbackEntry` to the **GitBranchStore** — a JSONL file on the dedicated `ai-pr-review-bot` branch.
-4. For `false-positive` and `wont-fix` posted as review-thread replies, the workflow also resolves the review thread on success — same UX as `/ai-pr-review dismiss`.
+4. For `false-positive` and `wont-fix`, the same job also resolves the review thread on success (for an inline finding) — same UX as `/ai-pr-review dismiss`. A single job owns both the reply and the store write for the whole verdict family, on both event types (issue #769) — no other job also acts on these commands.
 5. On the next review run (with `AI_FEEDBACK_LOOP=true`), the store loads recent entries, ranks them by relevance (file path match, rule ID match), and injects a `<repo-feedback>` XML block into each agent's system prompt.
 6. Agents use this context to avoid re-raising the same finding in similar situations.
 
@@ -21,13 +21,13 @@ The learning loop allows human reviewers to feed signals back to the AI agents b
 
 | Command | Review-thread reply | Top-level PR comment |
 |---------|---------------------|----------------------|
-| `false-positive [reason]` | ✅ recommended (resolves thread) | ✅ accepted (no thread resolution) |
-| `wont-fix [reason]` | ✅ recommended (resolves thread) | ✅ accepted (no thread resolution) |
+| `false-positive [reason]` | ✅ recommended (resolves thread) | ✅ accepted (resolves thread too, if `F<n>` names an inline finding) |
+| `wont-fix [reason]` | ✅ recommended (resolves thread) | ✅ accepted (resolves thread too, if `F<n>` names an inline finding) |
 | `feedback <text>` | ✅ free-form, finding context auto-extracted | ✅ recommended for repo-wide notes |
 | `explain` | ✅ acts on the parent finding (stub) | ✅ (stub) |
 | `revise <hint>` | ✅ acts on the parent finding (stub) | ✅ (stub) |
 
-When posted as a review-thread reply, the workflow auto-extracts `source` / `file` / `rule_id` from the parent comment, so the resulting `FeedbackEntry` has accurate context with no extra typing from the reviewer.
+When posted as a review-thread reply, the workflow auto-extracts `source` / `file` / `rule_id` from the thread's own comment, so the resulting `FeedbackEntry` has accurate context with no extra typing from the reviewer. A top-level comment naming an `F<n>` gets the same treatment: `source` / `file` / `rule_id` are extracted whether the finding is a body-level bullet or an inline finding, so there's no accuracy reason to prefer replying in-thread over a top-level comment for `false-positive` / `wont-fix` / `dismiss`.
 
 ## Storage (ADR-0001)
 
@@ -110,6 +110,8 @@ The `reason` text is sanitized before storage:
 ## Access control
 
 Feedback-writing commands (`false-positive`, `wont-fix`, `feedback`, plus the `dismiss` alias) are restricted to users with `OWNER` or `MEMBER` association. `COLLABORATOR` is intentionally excluded — these commands persist data that influences every future review repo-wide, so we apply the same trust level GitHub uses to gate "approve workflow runs from forks". Transient commands like `/ai-pr-review rescan` and `/ai-pr-review skip` continue to accept `COLLABORATOR` per the existing `handle-command` job.
+
+This is enforced by `SLASH_FEEDBACK_WRITE_ALLOWED` on both `dismiss-body-finding` and `dismiss-finding` (issue #769) — before this, a `COLLABORATOR`'s top-level `false-positive`/`wont-fix` was persisted to the store despite `dismiss-body-finding` itself admitting `COLLABORATOR`, because the OWNER/MEMBER bar was only enforced by `feedback-command`'s own admission gate on the now-removed second write path. `dismiss-body-finding`/`dismiss-finding` still admit `COLLABORATOR` for the resolve/dismiss/reply side effects; only the store write requires OWNER/MEMBER, the same relationship `--approve-allowed` already has to those jobs' own admission gate.
 
 ## Defensive prompt framing
 
