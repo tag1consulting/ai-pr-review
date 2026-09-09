@@ -1494,6 +1494,137 @@ def test_carried_forward_thread_without_finding_id_omits_fid_token() -> None:
     assert "README.md:3" in posted_body
 
 
+def test_carried_forward_thread_path_with_backtick_cannot_break_code_span() -> None:
+    """A PR author fully controls the diff's file paths, and both backticks
+    and newlines are valid in a filename on most filesystems. The rendered
+    location is wrapped in a single Markdown code span (`` `{location}` ``);
+    a raw backtick or newline in the path must not be able to close that
+    span early and let attacker-chosen text render as live Markdown (e.g. a
+    fake link) under the bot's own trusted identity."""
+    evil_path = "src/x`[Approved by maintainer](https://evil.example)`.py"
+    open_finding = _finding("evil path finding", severity="Low", file=evil_path, line=1)
+    open_comment_body = _build_inline_comment_body(open_finding, finding_id=9)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th-evil", comment_id=1, review_id=5,
+                    body=open_comment_body, path=evil_path, line=1,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 44, "state": "APPROVED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    posted_body = posts[0][2]["body"]
+    section = posted_body.split("### Still open from earlier reviews")[1]
+    bullet_line = next(line for line in section.splitlines() if line.startswith("- "))
+    # The payload's own raw backticks would otherwise close the code span
+    # early and let "[Approved by maintainer](https://evil.example)" parse
+    # as a real Markdown link outside it. Exactly two backticks total means
+    # the span was never broken, so that text -- still present, just inert
+    # -- renders as plain monospace, not a clickable link.
+    assert "`" in evil_path
+    assert bullet_line.count("`") == 2
+    span = bullet_line.split("`")[1]
+    assert "[Approved by maintainer](https://evil.example)" in span
+
+
+def test_carried_forward_incomplete_thread_fetch_blocks_approve_when_canonical_exists() -> None:
+    """An incomplete thread fetch must not be treated as "found nothing to
+    carry forward": if a canonical review already exists (this bot has an
+    active review on this PR), a failed GraphQL fetch could easily be
+    hiding one of its still-open Critical/High threads. Must downgrade to
+    COMMENT exactly as if that thread had actually been found."""
+    canonical_body = _footer_body()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "APPROVED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return httpx.Response(500, text="internal error")
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            raise AssertionError("must not PUT an already-submitted review's state away")
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 45, "state": "COMMENTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    assert result.event == "COMMENT"
+    assert result.degraded_to_comment is True
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    assert puts == []
+
+
+def test_carried_forward_incomplete_thread_fetch_does_not_block_first_ever_approve() -> None:
+    """The incomplete-fetch guard is deliberately narrower than "any fetch
+    failure blocks approval": with no canonical review at all (this PR has
+    never had a bot review before), there is nothing to carry forward
+    regardless of whether the thread fetch succeeded, so a transient
+    GraphQL blip must not needlessly downgrade this PR's first-ever clean
+    APPROVE to a COMMENT."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return httpx.Response(500, text="internal error")
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 46, "state": "APPROVED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    assert result.event == "APPROVE"
+    assert result.degraded_to_comment is False
+
+
 def test_carried_forward_high_thread_forces_post_over_put() -> None:
     """`action == "put"` only ever PATCHes an existing review's body --
     GitHub's PUT /reviews/{id} cannot change a review's already-submitted

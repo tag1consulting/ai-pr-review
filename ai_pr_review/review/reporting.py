@@ -518,13 +518,33 @@ def write_step_summary(
         )
         if degraded:
             assert result.findings_post is not None
+            # `degraded_to_comment` has two distinct causes that must not be
+            # conflated in this message: `error` set means GitHub itself
+            # rejected the intended event (an HTTP failure, detailed in the
+            # job log); `error` unset means a policy decision downgraded it
+            # with no failure at all -- e.g. #766's carried-forward
+            # Critical/High-thread check, which forces COMMENT specifically
+            # because there was nothing wrong with posting APPROVE, it would
+            # just have been the wrong call.
+            if result.findings_post.error:
+                cause = (
+                    "GitHub rejected the intended review event and "
+                    "ai-pr-review fell back to a plain comment. See the job "
+                    "log for the underlying HTTP error."
+                )
+            else:
+                cause = (
+                    "ai-pr-review deliberately posted a plain comment instead "
+                    "of the intended review event -- most likely because a "
+                    "still-open Critical/High finding from an earlier review "
+                    "made approving this run's outcome unsafe -- rather than "
+                    "because of an HTTP failure."
+                )
             lines += [
                 f"### ⚠️ Review posted as {result.findings_post.event}, "
                 f"not {result.outcome.event}",
                 "",
-                "GitHub rejected the intended review event and ai-pr-review "
-                "fell back to a plain comment. **This PR was NOT approved by "
-                "ai-pr-review.** See the job log for the underlying HTTP error.",
+                f"**This PR was NOT approved by ai-pr-review.** {cause}",
                 "",
             ]
 

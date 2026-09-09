@@ -871,7 +871,18 @@ class GitHubProvider:
             parts = [severity_icon(sev), f"**[{sev}]**"]
             if t.finding_id is not None:
                 parts.append(f"**[F{t.finding_id}]**")
-            location = sanitize_display_text(t.path)
+            # `t.path` is a real filename from the PR diff, so a PR author
+            # controls it, and both backticks and newlines are valid on most
+            # filesystems. sanitize_display_text() only defangs
+            # structure-breaking HTML, not Markdown -- a raw backtick would
+            # terminate the code span early and let the rest of the path
+            # render as live Markdown (arbitrary link text/URL) under the
+            # bot's own trusted identity. Neutralize both before the path
+            # ever reaches the code span.
+            safe_path = (
+                t.path.replace("\r", "").replace("\n", " ").replace("`", "'")
+            )
+            location = sanitize_display_text(safe_path)
             if t.line is not None:
                 location = f"{location}:{t.line}"
             link = _discussion_link(
@@ -1083,13 +1094,43 @@ class GitHubProvider:
         # separately visible COMMENT review in the PR timeline naming what's
         # still open, matching the language `_render_review_body` renders
         # for `render_event`.
-        carried_forward_blocks_approval = event == "APPROVE" and any(
-            (t.severity or "Low") in ("Critical", "High") for t in carried_forward
+        #
+        # `not threads_fetch_complete` (an incomplete GraphQL fetch, e.g. a
+        # transient HTTP error -- never true just because `canonical_reuse`
+        # is off, which sets it True with an intentionally empty
+        # `all_threads`) also forces the downgrade, but *only* when
+        # `canonical is not None` -- i.e. only when we already know this bot
+        # has an existing active review on this PR, so an incomplete fetch
+        # could genuinely be hiding one of its still-open threads. Without
+        # that qualifier, a transient GraphQL blip on this PR's very *first*
+        # review (nothing to carry forward, ever) would needlessly downgrade
+        # every clean APPROVE to COMMENT -- a regression against this
+        # method's existing fail-soft design (`_load_prior_state`'s own
+        # docstring: any fetch error degrades to "no prior state", never to
+        # blocking the post itself) and the far more common case in
+        # practice. This still isn't airtight (a canonical-less PR whose
+        # only prior reviews are all `DISMISSED` could theoretically still
+        # carry an unresolved thread), but it targets the realistic #766
+        # scenario -- a rerun against an existing active review -- without
+        # trading a rare compound failure for a common one.
+        carried_forward_blocks_approval = event == "APPROVE" and (
+            (not threads_fetch_complete and canonical is not None)
+            or any((t.severity or "Low") in ("Critical", "High") for t in carried_forward)
         )
         render_event: PostEvent
         if carried_forward_blocks_approval:
             action = "post"
             render_event = "COMMENT"
+            # The decision=%s logged just above (before this override can
+            # run) would otherwise claim "put" on a run that's actually
+            # about to POST a fresh COMMENT review -- log the override
+            # explicitly rather than leaving that log line stale.
+            _log.info(
+                "github: carried-forward Critical/High thread (or incomplete "
+                "thread fetch) forces action=post, render_event=COMMENT "
+                "(intended event was %s)",
+                event,
+            )
         else:
             render_event = event
 
