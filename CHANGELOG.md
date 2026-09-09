@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **GitHub: a run with no new findings but a still-open bot-owned thread from an earlier run could post a review headline claiming a nonzero finding count with nothing anywhere in the body to back it (issue #766)** — e.g. `Findings: 1 (0 inline)` with no finding text, no link, and an empty id-map. `post_findings` synthesizes a stub for every unresolved thread this run's classification pass didn't touch so the headline count/risk reflect the PR's true current state, but that stub was never rendered and was excluded from the inline count. The review body now includes a "Still open from earlier reviews" section (severity, F-ID when known, `path:line`, and a permalink to the thread) whenever such a thread exists, and the inline count includes it. Separately, a still-open Critical/High thread now forces a would-be `APPROVE` down to `COMMENT` instead — on GitHub a newer `APPROVE` from the same reviewer supersedes an older `CHANGES_REQUESTED` review, so posting one over a known-unresolved Critical/High finding would have silently unblocked a PR that should stay blocked. GitHub-only; GitLab and Bitbucket have no canonical-review-reuse mechanism to carry a thread forward from.
+
 ## [2.9.0] - 2026-09-05
 
 ### Fixed

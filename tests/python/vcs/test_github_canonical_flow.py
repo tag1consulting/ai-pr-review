@@ -1347,3 +1347,208 @@ def test_escalate_patch_failure_does_not_count_updated_or_send_notification() ->
     assert result.inline_updated == 0
     replies = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/comments/1/replies")]
     assert replies == []
+
+
+# ---------------------------------------------------------------------------
+# Carried-forward findings (#766): counted-but-invisible headline fix
+# ---------------------------------------------------------------------------
+
+
+def test_carried_forward_medium_thread_rendered_and_stays_approved() -> None:
+    """Reproduces the reported bug: this run finds nothing new, but a
+    Medium-severity bot-owned thread from an earlier run is still open and
+    untouched. Before #766 the headline claimed "Findings: 1 (0 inline)"
+    with no finding text and no link anywhere in the body. The count must
+    now be backed by a visible, linked bullet, the inline count must count
+    the thread it's actually counting, and Medium must not force the
+    APPROVE away (only Critical/High does)."""
+    open_finding = _finding("pin apt versions", severity="Medium", file="Dockerfile", line=44)
+    open_comment_body = _build_inline_comment_body(open_finding, finding_id=2)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th-open", comment_id=3919758142, review_id=5,
+                    body=open_comment_body, path="Dockerfile", line=44,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 40, "state": "APPROVED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    assert result.event == "APPROVE"
+    assert result.degraded_to_comment is False
+
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+    posted_body = posts[0][2]["body"]
+    assert "**Findings:** 1 (1 inline)" in posted_body
+    assert "### Still open from earlier reviews (1)" in posted_body
+    assert "**[F2]**" in posted_body
+    assert "Dockerfile:44" in posted_body
+    assert "#discussion_r3919758142" in posted_body
+    assert "https://github.com/o/r/pull/1#discussion_r3919758142" in posted_body
+
+
+def test_carried_forward_critical_thread_downgrades_approve_to_comment() -> None:
+    """A still-open Critical thread must block a fresh APPROVE: on GitHub a
+    newer APPROVE from the same reviewer supersedes an older
+    CHANGES_REQUESTED review, so posting one here would silently unblock a
+    PR that should stay blocked. `post_findings` must downgrade to COMMENT
+    (a no-op on review state) and flag `degraded_to_comment` so
+    reporting.py's existing "intended event was APPROVE but posted as
+    COMMENT" warning fires."""
+    open_finding = _finding("SQL built from request input", severity="Critical", file="app.py", line=12)
+    open_comment_body = _build_inline_comment_body(open_finding, finding_id=1)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th-crit", comment_id=555, review_id=5,
+                    body=open_comment_body, path="app.py", line=12,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            posted = _j.loads(req.content)
+            assert posted["event"] == "COMMENT"
+            return httpx.Response(201, json={"id": 41, "state": "COMMENTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    assert result.event == "COMMENT"
+    assert result.degraded_to_comment is True
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+    posted_body = posts[0][2]["body"]
+    assert "## AI Review Findings" in posted_body
+    assert "### Still open from earlier reviews (1)" in posted_body
+    assert "**[Critical]**" in posted_body
+
+
+def test_carried_forward_thread_without_finding_id_omits_fid_token() -> None:
+    """A legacy thread (posted before the F-ID feature, or whose finding_id
+    can't be recovered) must still render -- just without inventing an
+    `[F<n>]` token."""
+    open_finding = _finding("legacy finding", severity="Low", file="README.md", line=3)
+    open_comment_body = _build_inline_comment_body(open_finding)  # no finding_id
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th-legacy", comment_id=99, review_id=5,
+                    body=open_comment_body, path="README.md", line=3,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 42, "state": "APPROVED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    posted_body = posts[0][2]["body"]
+    assert "### Still open from earlier reviews (1)" in posted_body
+    assert "**[F" not in posted_body.split("### Still open")[1]
+    assert "README.md:3" in posted_body
+
+
+def test_carried_forward_high_thread_forces_post_over_put() -> None:
+    """`action == "put"` only ever PATCHes an existing review's body --
+    GitHub's PUT /reviews/{id} cannot change a review's already-submitted
+    state. If a High/Critical carried-forward thread would normally have
+    let this run reuse an already-`APPROVED` canonical review (`put`), that
+    reuse must be abandoned in favor of a fresh `post`: PUTting a
+    findings-flavored body under a badge that still says "Approved" would
+    be a worse, self-contradicting state than either alone."""
+    canonical_body = _footer_body()
+    open_finding = _finding("hardcoded credential", severity="High", file="config.py", line=8)
+    open_comment_body = _build_inline_comment_body(open_finding, finding_id=3)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "APPROVED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th-high", comment_id=77, review_id=10,
+                    body=open_comment_body, path="config.py", line=8,
+                )]
+            )
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "APPROVED", "body": canonical_body})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            raise AssertionError("must not PUT an already-submitted review's state away")
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 43, "state": "COMMENTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="APPROVE",
+    )
+
+    assert result.ok
+    assert result.reused_review is False
+    assert result.event == "COMMENT"
+    assert result.degraded_to_comment is True
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert puts == []
+    assert len(posts) == 1
