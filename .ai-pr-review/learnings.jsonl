@@ -136,3 +136,4 @@
 {"ts": "2026-09-09T22:53:26Z", "command": "wont-fix", "reason": "", "source": "sarif:Semgrep OSS", "file": "ai_pr_review/analyzers/native/phpstan.py", "rule_id": "sarif:Semgrep OSS", "finding_id": 2}
 {"ts": "2026-09-09T22:53:28Z", "command": "wont-fix", "reason": "", "source": "docs-api-check", "file": "/workspace/ai_pr_review/vcs/github.py", "rule_id": "docs-api-check", "finding_id": 1}
 {"ts": "2026-09-09T22:53:28Z", "command": "wont-fix", "reason": "", "source": "docs-api-check", "file": "/workspace/ai_pr_review/vcs/github.py", "rule_id": "docs-api-check", "finding_id": 1}
+{"ts": "2026-09-09T22:54:04Z", "command": "wont-fix", "reason": "", "source": "sarif:Semgrep OSS", "file": "ai_pr_review/analyzers/native/phpstan.py", "rule_id": "sarif:Semgrep OSS", "finding_id": 2}
