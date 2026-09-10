@@ -161,6 +161,88 @@ def test_dismiss_by_finding_id_unknown_id() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue #775 — static-analyzer findings get a durable-suppression pointer,
+# LLM-agent findings do not (their soft suppression is the learning-loop's
+# <repo-feedback> injection instead, and the note would be misleading there).
+# ---------------------------------------------------------------------------
+
+
+def test_dismiss_by_finding_id_body_analyzer_source_gets_suppression_hint() -> None:
+    """A BODY finding sourced from a native static analyzer (trufflehog) gets
+    the issue #775 pointer toward `.github/ai-pr-review/suppressions.json`."""
+    f = _finding("HubSpot form UUID misidentified as a secret", source="trufflehog", file="app.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/1"):
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 3, actor="alice", command="false-positive")
+
+    assert "suppressions.json" in result.reply
+    assert "this exact occurrence only" in result.reply
+
+
+def test_dismiss_by_finding_id_body_agent_source_no_suppression_hint() -> None:
+    """A BODY finding sourced from an LLM agent (code-reviewer) must NOT get
+    the issue #775 pointer -- it already benefits from the learning-loop's
+    soft suppression via <repo-feedback> injection."""
+    f = _finding("possible race condition", source="code-reviewer", file="app.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/1"):
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 3, actor="alice", command="false-positive")
+
+    assert "suppressions.json" not in result.reply
+
+
+def test_dismiss_by_finding_id_body_fixed_no_suppression_hint() -> None:
+    """`fixed` is not a verdict on validity (SlashCommand.is_feedback_command),
+    so even a static-analyzer-sourced finding must not get the #775 hint
+    appended to a `fixed` reply."""
+    f = _finding("HubSpot form UUID misidentified as a secret", source="trufflehog", file="app.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/1"):
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 3, actor="alice", command="fixed")
+
+    assert "suppressions.json" not in result.reply
+
+
+# ---------------------------------------------------------------------------
 # dismiss_by_finding_id — INLINE case
 # ---------------------------------------------------------------------------
 
@@ -207,6 +289,81 @@ def test_dismiss_by_finding_id_inline_resolves_and_dismisses_review() -> None:
     assert result.review_dismissed is True
     assert dismissed == ["https://api.github.com/repos/o/r/pulls/1/reviews/41/dismissals"]
     assert result.errors == ()
+
+
+def _inline_reviews_and_thread(
+    f: Finding, *, finding_id: int, review_id: int = 41, thread_id: str = "T1"
+) -> tuple[dict, list[dict]]:
+    """Build a (review-for-classification, thread-nodes) pair from a realistic
+    rendered inline comment body for `f`, so source parsing in
+    `_inline_feedback_context`/`parse_inline_comment_header` sees the same
+    text a live bot comment would carry."""
+    comment_body = _build_inline_comment_body(f, finding_id=finding_id)
+    id_map = {f"{f.source}|{f.file}|{f.line}|abc123456789": finding_id}
+    review_body = comment_body + "\n" + build_id_map_marker(id_map)
+    nodes = [_inline_thread(thread_id, resolved=False, body=comment_body, comment_db_id=55, review_db_id=review_id)]
+    review = {"id": review_id, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body}
+    return review, nodes
+
+
+def test_dismiss_by_finding_id_inline_analyzer_source_gets_suppression_hint() -> None:
+    """An INLINE finding sourced from a native static analyzer (trufflehog)
+    gets the issue #775 pointer toward suppressions.json, in the same reply
+    that confirms the thread was resolved."""
+    f = _finding("HubSpot form UUID misidentified as a secret", source="trufflehog", file="app.py", line=10)
+    review, nodes = _inline_reviews_and_thread(f, finding_id=4)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[review])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 4, actor="alice", command="dismiss")
+
+    assert result.thread_resolved is True
+    assert result.feedback_source == "trufflehog"
+    assert "suppressions.json" in result.reply
+    assert "and resolved the thread" in result.reply
+
+
+def test_dismiss_by_finding_id_inline_agent_source_no_suppression_hint() -> None:
+    """An INLINE finding sourced from an LLM agent (adversarial-general) must
+    NOT get the issue #775 pointer."""
+    f = _finding("missing input validation", source="adversarial-general", file="app.py", line=10)
+    review, nodes = _inline_reviews_and_thread(f, finding_id=4)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[review])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 4, actor="alice", command="dismiss")
+
+    assert result.thread_resolved is True
+    assert result.feedback_source == "adversarial-general"
+    assert "suppressions.json" not in result.reply
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +657,82 @@ def test_dismiss_inline_reply_graphql_style_author_still_owned() -> None:
     result = dismiss_inline_reply(prov, 66, None, actor="alice", command="dismiss")
 
     assert result.thread_resolved is True
+
+
+def test_dismiss_inline_reply_analyzer_source_gets_suppression_hint() -> None:
+    """Issue #775: replying directly on the inline thread (rather than naming
+    F<n> from a top-level comment) must also get the suppression pointer when
+    the finding's source is a native static analyzer."""
+    f = _finding("HubSpot form UUID misidentified as a secret", source="trufflehog", file="app.py", line=10)
+    comment_body = _build_inline_comment_body(f, finding_id=4)
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=66, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body_json = _json.loads(req.content)
+            if "resolveReviewThread" in body_json.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_inline_reply(prov, 66, None, actor="alice", command="wont-fix")
+
+    assert result.thread_resolved is True
+    assert result.feedback_source == "trufflehog"
+    assert "suppressions.json" in result.reply
+
+
+def test_dismiss_inline_reply_agent_source_no_suppression_hint() -> None:
+    """Issue #775: an LLM-agent-sourced finding must NOT get the suppression
+    pointer when dismissed via a direct reply on its inline thread."""
+    f = _finding("missing input validation", source="adversarial-general", file="app.py", line=10)
+    comment_body = _build_inline_comment_body(f, finding_id=4)
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=66, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body_json = _json.loads(req.content)
+            if "resolveReviewThread" in body_json.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_inline_reply(prov, 66, None, actor="alice", command="wont-fix")
+
+    assert result.thread_resolved is True
+    assert result.feedback_source == "adversarial-general"
+    assert "suppressions.json" not in result.reply
+
+
+def test_dismiss_inline_reply_fixed_no_suppression_hint() -> None:
+    """`fixed` must never get the #775 hint even for an analyzer source --
+    it's not a verdict on validity, and `_inline_feedback_context` already
+    gates eligibility on `command != "fixed"`."""
+    f = _finding("HubSpot form UUID misidentified as a secret", source="trufflehog", file="app.py", line=10)
+    comment_body = _build_inline_comment_body(f, finding_id=4)
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=66, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and str(req.url).endswith("/graphql"):
+            body_json = _json.loads(req.content)
+            if "resolveReviewThread" in body_json.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and "/reviews" in str(req.url):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_inline_reply(prov, 66, None, actor="alice", command="fixed")
+
+    assert result.thread_resolved is True
+    assert "suppressions.json" not in result.reply
 
 
 # ---------------------------------------------------------------------------

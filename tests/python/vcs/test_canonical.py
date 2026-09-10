@@ -541,6 +541,41 @@ def test_classify_open_thread_escalated_severity_is_escalate() -> None:
     assert result.thread is thread
 
 
+def test_classify_open_thread_matches_across_source_types_by_design() -> None:
+    """Characterization test for issue #776's root cause: `classify()`'s
+    fuzzy-open-thread match (`_fuzzy_open_match`) keys purely on
+    `(file, +/-PROXIMITY_LINES, compatible category)` and never inspects
+    `Finding.source` at all -- an LLM-agent-sourced thread and a later
+    static-analyzer-sourced finding at a nearby line with a compatible
+    category fuzzy-match each other exactly like same-source findings would.
+
+    This is deliberate (the whole point of the provenance/corroboration
+    system -- see findings/provenance.py -- is cross-source agreement), but
+    it has a side effect: `_apply_thread_update` (vcs/github.py) then PATCHes
+    the existing thread's comment in place with the new finding's rendered
+    content -- same GitHub comment id, same **[F<n>]** token, completely
+    different `source` in the header. `feedback-context`'s
+    `context_from_parent_comment` (slash/dismiss.py) reads that comment's
+    *current* body by exact comment id with a single synchronous REST GET,
+    so a `/ai-pr-review feedback` command run before vs. after such an
+    in-place update sees a different, but individually accurate, `source` --
+    not a race or a parsing bug, just two truthful point-in-time reads of a
+    resource that legitimately changed underneath them.
+    """
+    agent_thread = _thread(path="app.py", line=30, severity="Medium", category="secret")
+    analyzer_finding = _finding(
+        "HubSpot form UUID misidentified as a secret",
+        source="trufflehog",
+        file="app.py",
+        line=31,
+        severity="Medium",
+        category="secret",
+    )
+    result = classify(analyzer_finding, verdicts={}, all_threads=[agent_thread])
+    assert result.kind == "update"
+    assert result.thread is agent_thread
+
+
 def test_classify_open_thread_multiple_candidates_prefers_closest_line() -> None:
     """Two open threads both fall within PROXIMITY_LINES of the new finding
     -- the closer one (by line distance) must win, not the first one in

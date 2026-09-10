@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from ai_pr_review.findings.scope import is_analyzer_source
 from ai_pr_review.vcs._body import TRUNCATION_MARKER
 from ai_pr_review.vcs._finding_ids import (
     _ID_RE,
@@ -477,6 +478,22 @@ _FIXED_NO_APPROVE_NOTE = (
     "auto-approved for a `fixed` claim."
 )
 
+# Issue #775: a verdict (dismiss/false-positive/wont-fix) on a static-analyzer
+# finding is scoped to that exact fingerprint (file + line + code) -- it can
+# never stop the same analyzer pattern from recurring in a different file,
+# since analyzer findings never pass through an LLM-agent prompt and the
+# learning-loop store is advisory-only for agents (feedback/inject.py). The
+# only durable suppression mechanism for analyzer findings is a repo-level
+# suppressions.json rule. Appended only when `is_analyzer_source` matches the
+# finding's source -- LLM-agent findings already benefit from the soft
+# suppression the learning-loop's <repo-feedback> injection provides, so this
+# note would be misleading there and is deliberately left off.
+_ANALYZER_SUPPRESSION_HINT = (
+    " This dismissal applies to this exact occurrence only. If this analyzer "
+    "keeps flagging the same pattern in other files, add a rule to "
+    "`.github/ai-pr-review/suppressions.json` (see docs/suppression.md)."
+)
+
 
 def _sha_citation(commit_sha: str) -> str:
     """Render " in <sha>" for the reply, or "" if no SHA was supplied.
@@ -778,11 +795,14 @@ def dismiss_by_finding_id(
                 errors=tuple(errors),
             )
         _record_verdict(provider, reviews, fingerprint, "dismissed")
+        reply = (
+            f"@{actor} marked **F{finding_id}** as `{command}`. "
+            "This finding will be suppressed on future review runs."
+        )
+        if is_analyzer_source(classified.source):
+            reply += _ANALYZER_SUPPRESSION_HINT
         return DismissResult(
-            reply=(
-                f"@{actor} marked **F{finding_id}** as `{command}`. "
-                "This finding will be suppressed on future review runs."
-            ),
+            reply=reply,
             feedback_source=classified.source,
             feedback_file=classified.file,
             feedback_rule_id=classified.rule_id,
@@ -882,6 +902,24 @@ def dismiss_by_finding_id(
             errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
+
+    # Full-context feedback entry for an INLINE finding named on a top-level
+    # comment (issue #769): the thread carries its own source/rule_id/file
+    # with no extra API call, since `target_thread` is already in hand -- see
+    # `_inline_feedback_context`'s docstring. Computed before the reply text
+    # below so a static-analyzer source (issue #775) can append the durable-
+    # suppression hint to that same reply; `inline_feedback_eligible` already
+    # encodes "thread actually resolved and command is a real verdict", which
+    # is exactly the gate the hint needs too.
+    (
+        inline_feedback_eligible,
+        inline_source,
+        inline_rule_id,
+        inline_finding_id,
+    ) = _inline_feedback_context(
+        _first_comment_body(target_thread), resolved=resolved, command=command
+    )
+
     sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
     if resolved and pr_approved:
         reply = (
@@ -900,19 +938,9 @@ def dismiss_by_finding_id(
             f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
+    if inline_feedback_eligible and is_analyzer_source(inline_source):
+        reply += _ANALYZER_SUPPRESSION_HINT
 
-    # Full-context feedback entry for an INLINE finding named on a top-level
-    # comment (issue #769): the thread carries its own source/rule_id/file
-    # with no extra API call, since `target_thread` is already in hand -- see
-    # `_inline_feedback_context`'s docstring.
-    (
-        inline_feedback_eligible,
-        inline_source,
-        inline_rule_id,
-        inline_finding_id,
-    ) = _inline_feedback_context(
-        _first_comment_body(target_thread), resolved=resolved, command=command
-    )
     return DismissResult(
         reply=reply,
         thread_resolved=resolved,
@@ -1257,6 +1285,22 @@ def dismiss_inline_reply(
             errors.extend(dismiss_errors)
 
     errors.extend(provider._errors[errors_before:])
+
+    # Full-context feedback entry (issue #769): this function already has the
+    # thread's first-comment body and its `path` in hand -- no extra API call
+    # needed, unlike `context_from_parent_comment`'s separate
+    # fetch_review_comment. See `_inline_feedback_context`'s docstring.
+    # Computed before the reply text below so a static-analyzer source
+    # (issue #775) can append the durable-suppression hint to that same
+    # reply; `inline_feedback_eligible` already encodes "thread actually
+    # resolved and command is a real verdict", the same gate the hint needs.
+    (
+        inline_feedback_eligible,
+        inline_source,
+        inline_rule_id,
+        inline_finding_id,
+    ) = _inline_feedback_context(body, resolved=resolved, command=command)
+
     sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
     if resolved and pr_approved:
         reply = (
@@ -1272,17 +1316,9 @@ def dismiss_inline_reply(
             f"@{actor} marked as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
+    if inline_feedback_eligible and is_analyzer_source(inline_source):
+        reply += _ANALYZER_SUPPRESSION_HINT
 
-    # Full-context feedback entry (issue #769): this function already has the
-    # thread's first-comment body and its `path` in hand -- no extra API call
-    # needed, unlike `context_from_parent_comment`'s separate
-    # fetch_review_comment. See `_inline_feedback_context`'s docstring.
-    (
-        inline_feedback_eligible,
-        inline_source,
-        inline_rule_id,
-        inline_finding_id,
-    ) = _inline_feedback_context(body, resolved=resolved, command=command)
     return DismissResult(
         reply=reply,
         thread_resolved=resolved,
