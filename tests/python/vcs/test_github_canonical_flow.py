@@ -103,10 +103,12 @@ def _thread_node(
     path: str = "app.py",
     line: int = 5,
     start_line: int | None = None,
+    resolved_by: str | None = None,
 ) -> dict:
     return {
         "id": thread_id,
         "isResolved": is_resolved,
+        "resolvedBy": {"login": resolved_by} if resolved_by is not None else None,
         "isOutdated": is_outdated,
         "path": path,
         "line": line,
@@ -742,6 +744,287 @@ def test_recurred_finding_replies_and_unresolves_thread() -> None:
     # resurrect).
     from ai_pr_review.vcs.marker import extract_verdicts
     assert extract_verdicts(puts[0][2]["body"])[fp] == "recurred"
+
+
+def test_resolved_unverdicted_thread_triggers_reincarnation_note_on_repost() -> None:
+    """Issue #779: a human resolved a bot-owned thread via GitHub's native
+    "Resolve conversation" button, with no verdict command ever recorded
+    against it. classify() correctly still returns "new" for the reappearing
+    finding (there is no verdict to suppress or recur against, and #771/ADR
+    0003 already settled that a heuristic that can't reliably tell "resolved
+    because handled" from "resolved for any other reason" must never
+    silently drop it) -- but the freshly posted inline comment must explain
+    why, not just look like an unexplained duplicate."""
+    f = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    resolved_comment_body = _build_inline_comment_body(f, finding_id=1)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=resolved_comment_body, line=5, is_resolved=True,
+                    resolved_by="a-human",
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [f],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+    comments = posts[0][2]["comments"]
+    assert len(comments) == 1
+    assert "previously resolved without a" in comments[0]["body"]
+    assert "verdict command" in comments[0]["body"]
+
+
+def test_bot_resolved_stale_thread_does_not_trigger_reincarnation_note() -> None:
+    """Issue #779's precision requirement: resolve_stale()'s own routine
+    housekeeping resolves any unresolved bot-owned thread whose finding
+    didn't reappear in a given run, on every successful run, recording no
+    verdict -- the identical is_resolved=True + no-verdict shape a human's
+    native resolve produces. A finding that returns after that kind of
+    resolve (a transient analyzer/agent gap, not a human decision) must not
+    be told it was "previously resolved without a verdict command" -- nobody
+    made that decision."""
+    f = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    resolved_comment_body = _build_inline_comment_body(f, finding_id=1)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=resolved_comment_body, line=5, is_resolved=True,
+                    resolved_by="github-actions",
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [f],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+    comments = posts[0][2]["comments"]
+    assert len(comments) == 1
+    assert "previously resolved" not in comments[0]["body"]
+
+
+def test_dedupe_demoted_finding_still_checked_for_reincarnation() -> None:
+    """`reincarnated_fps` (post_findings, github.py) is computed against the
+    *post*-`dedupe_thread_claims` classified list. A finding that loses its
+    fuzzy claim on a still-open thread to a higher-severity sibling is
+    demoted from "escalate"/"update" back to "new" by dedupe -- this checks
+    that demoted finding is still evaluated against find_resolved_match (a
+    genuinely reachable case: it independently exact-fingerprint-matches an
+    unrelated, already-resolved thread), not silently skipped just because
+    it briefly claimed a different thread this run."""
+    low = _finding("nit", severity="Low", line=99, category="other")
+    high = _finding("real bug", severity="Critical", line=101, category="other")
+    open_thread_body = _build_inline_comment_body(
+        _finding("existing", severity="Low", line=100, category="other")
+    )
+    resolved_comment_body = _build_inline_comment_body(low, finding_id=2)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([
+                _thread_node(
+                    thread_id="open1", comment_id=1, review_id=10,
+                    body=open_thread_body, line=100,
+                ),
+                _thread_node(
+                    thread_id="resolved1", comment_id=2, review_id=10,
+                    body=resolved_comment_body, line=99,
+                    is_resolved=True, resolved_by="a-human",
+                ),
+            ])
+        if req.method == "PATCH" and url.endswith("/pulls/comments/1"):
+            return httpx.Response(200, json={"id": 1})
+        if req.method == "POST" and url.endswith("/pulls/1/comments/1/replies"):
+            return httpx.Response(201, json={"id": 3})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [low, high],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    # "high" keeps the escalate claim on open1 (PATCH + reply); "low" is
+    # demoted to "new" by dedupe_thread_claims and must still pick up the
+    # reincarnation note from its own, unrelated resolved-thread match.
+    patches = [c for c in rec.calls if c[0] == "PATCH" and c[1].endswith("/pulls/comments/1")]
+    assert len(patches) == 1
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+    posted_body = posts[0][2]["body"]
+    assert "resolved earlier with no verdict recorded" in posted_body
+
+
+def test_fixed_verdict_body_level_recurrence_never_gets_reincarnation_note() -> None:
+    """`reincarnated_fps` (post_findings, github.py) only ever considers
+    `kind == "new"` findings -- a body-level "recurred" finding (a `fixed`
+    verdict whose finding came back, with no thread to reopen) must never
+    also pick up the #779 note. Regression guard for the invariant the #779
+    fix depends on, distinct from #771's own "fixed"->"recurred" coverage:
+    that one never reaches `_render_body_bullets` at all, since it's a
+    thread-anchored recurrence handled by reply/unresolve, not a body
+    bullet."""
+    f = _finding(
+        "structural issue with no diff anchor", severity="Critical",
+        file="unrelated_file.py", line=1,
+    )
+    fp = fingerprint(f)
+    canonical_body = _footer_body() + "\n" + build_verdicts_marker({fp: "fixed"})
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "reviewThreads"):
+            # Body-level recurrence: no inline thread ever existed for this
+            # finding, so nothing here for find_resolved_match to match
+            # against even if the "new"-only guard were removed.
+            return _threads_response([])
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [f],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    assert result.reused_review is True
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    assert len(puts) == 1
+    posted_body = puts[0][2]["body"]
+    assert "*(recurred)*" in posted_body
+    assert "resolved earlier with no verdict recorded" not in posted_body
+
+
+def test_genuinely_new_finding_has_no_reincarnation_note() -> None:
+    """Negative case for #779: a finding with no prior thread at all (the
+    ordinary "new" path) must not carry the reincarnation note -- it isn't
+    reappearing from anywhere."""
+    f = _finding("brand new issue", severity="Medium", line=5)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response([])
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [f],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    comments = posts[0][2]["comments"]
+    assert len(comments) == 1
+    assert "previously resolved" not in comments[0]["body"]
+
+
+def test_resolved_unverdicted_thread_triggers_reincarnation_note_body_level() -> None:
+    """Same #779 scenario as the inline case above, but for a finding with
+    no diff anchor that falls to a body bullet instead of an inline comment
+    -- _render_body_bullets is a separate render path from
+    _build_inline_comment_body and needs its own coverage."""
+    f = _finding(
+        "structural issue with no diff anchor", severity="Critical",
+        file="unrelated_file.py", line=1,
+    )
+    resolved_comment_body = _build_inline_comment_body(f, finding_id=1)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=resolved_comment_body, line=1, path="unrelated_file.py",
+                    is_resolved=True, resolved_by="a-human",
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [f],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    assert len(posts) == 1
+    posted_body = posts[0][2]["body"]
+    assert "resolved earlier with no verdict recorded" in posted_body
 
 
 def test_reopened_recurrence_thread_protects_canonical_from_dismissal() -> None:
