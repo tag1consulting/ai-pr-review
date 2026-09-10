@@ -139,3 +139,4 @@
 {"ts": "2026-09-09T22:54:04Z", "command": "wont-fix", "reason": "", "source": "sarif:Semgrep OSS", "file": "ai_pr_review/analyzers/native/phpstan.py", "rule_id": "sarif:Semgrep OSS", "finding_id": 2}
 {"ts": "2026-09-10T06:41:02Z", "command": "wont-fix", "reason": "", "source": "sarif:Semgrep OSS", "file": "ai_pr_review/analyzers/native/phpstan.py", "rule_id": "sarif:Semgrep OSS", "finding_id": 1}
 {"ts": "2026-09-10T06:41:08Z", "command": "wont-fix", "reason": "", "source": "sarif:Semgrep OSS", "file": "ai_pr_review/analyzers/native/phpstan.py", "rule_id": "sarif:Semgrep OSS", "finding_id": 1}
+{"ts": "2026-09-10T20:33:58Z", "command": "wont-fix", "reason": "pre-existing on main, unrelated to this PR&#x27;s diff (same finding already addressed on PR #770)", "source": "sarif:Semgrep OSS", "file": "ai_pr_review/analyzers/native/phpstan.py", "rule_id": "sarif:Semgrep OSS", "finding_id": 1}
