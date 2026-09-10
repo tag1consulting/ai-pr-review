@@ -729,6 +729,28 @@ class GitHubProvider:
         for c in classified:
             if c.kind == "suppressed":
                 suppressed_count += 1
+                # Observability for the actual harm surface identified in
+                # #771's review: neither this branch nor merge_verdicts'
+                # passive warning (_canonical.py) can distinguish a
+                # legitimate dismissal from a phantom verdict entry of
+                # unknown origin (#755) -- classify() has already made that
+                # call by the time a finding reaches here, and does so via
+                # an exact OR fuzzy dismissed/fixed match, so a corrupted
+                # entry could suppress a different, nearby finding than the
+                # one it was originally attached to. This INFO log is not a
+                # guard -- it changes nothing -- it exists so "why did this
+                # finding disappear" has a fingerprint to grep for. Kept at
+                # INFO, not WARNING, because a legitimately-dismissed
+                # finding is suppressed again on every subsequent run for as
+                # long as it keeps recurring in the diff, so this fires on
+                # routine operation constantly; INFO is where high-volume,
+                # investigate-on-demand signal belongs, not an alerting
+                # channel.
+                _log.info(
+                    "github: finding fp=%r suppressed by verdict marker "
+                    "(file=%s line=%s)",
+                    fingerprint(c.finding), c.finding.file, c.finding.line,
+                )
             elif c.kind == "new":
                 # Invariant: classify() only returns "new" after checking
                 # verdicts.get(fp) is neither "dismissed" nor "fixed" (see
@@ -743,8 +765,17 @@ class GitHubProvider:
                 # logs). Rather than trust that invariant silently, enforce
                 # it here: strip any contradictory carried-forward entry so a
                 # never-dismissed finding can never render as "dismissed" in
-                # the marker this run writes, and log loudly so a recurrence
-                # has an actual stack/context to debug from.
+                # the marker THIS run writes, and log loudly so a recurrence
+                # has an actual stack/context to debug from. This is now the
+                # SOLE guard against the #755 symptom (issue #771 / ADR 0003
+                # removed the read-time counterpart in `_canonical
+                # .merge_verdicts`, which could not distinguish a genuinely
+                # corrupted body from a review a human had since legitimately
+                # patched a verdict onto -- both produce the identical
+                # shape). This guard has no such ambiguity: it only ever
+                # inspects output THIS run is about to construct, before it
+                # is posted, so there is nothing for a later human patch to
+                # be confused with.
                 fp = fingerprint(c.finding)
                 stale_verdict = updated_verdicts.get(fp)
                 if stale_verdict in ("dismissed", "fixed"):

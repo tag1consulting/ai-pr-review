@@ -197,45 +197,45 @@ def test_merge_verdicts_empty() -> None:
     assert merge_verdicts([]) == {}
 
 
-def test_merge_verdicts_drops_dismissed_entry_contradicted_by_own_id_map() -> None:
-    """Issue #755: a review whose own body renders a finding (id-map entry)
-    cannot legitimately also claim, in that same body's verdicts marker,
-    that the identical fingerprint is "dismissed" -- classify() excludes a
-    truly-dismissed finding from rendering entirely. A body making both
-    claims at once is self-contradictory; the rendered claim (visible to a
-    human) wins and the "dismissed" entry must not be trusted, since
-    trusting it would permanently suppress a finding no human ever acted on."""
-    contradictory_body = (
+def test_merge_verdicts_preserves_dismissed_entry_despite_own_id_map() -> None:
+    """Issue #771 / ADR 0003: a review's own id-map still listing a
+    fingerprint while its verdicts marker claims "dismissed" for that same
+    fingerprint is the EXPECTED shape produced by an ordinary, correct
+    dismissal -- `slash.dismiss._record_verdict` PATCHes a verdict onto the
+    canonical review without touching its id-map, by design. merge_verdicts
+    must trust and return this verdict rather than discard it (the #755
+    guard this once did discard it, which is what #771 was about: every
+    dismissal whose canonical review was also the one that first rendered
+    the finding -- the common case -- silently evaporated on the next
+    read)."""
+    body_after_dismiss = (
         build_id_map_marker({"fp-a": 1, "fp-b": 2})
         + "\n"
         + build_verdicts_marker({"fp-a": "dismissed", "fp-c": "dismissed"})
     )
-    reviews = [{"id": 1, "body": contradictory_body}]
-    # fp-a: dropped (rendered in this same body's id-map -- contradiction).
-    # fp-c: kept ("dismissed" and never rendered here -- no contradiction).
-    assert merge_verdicts(reviews) == {"fp-c": "dismissed"}
+    reviews = [{"id": 1, "body": body_after_dismiss}]
+    assert merge_verdicts(reviews) == {"fp-a": "dismissed", "fp-c": "dismissed"}
 
 
-def test_merge_verdicts_drops_fixed_entry_contradicted_by_own_id_map() -> None:
-    """Same self-consistency guard, "fixed" variant: a recurring finding's
-    verdict is overwritten to the "recurred" tombstone in the same call that
-    renders it (github.py's _apply_classification_side_effects), so a body
-    that renders a fingerprint while its own marker still claims "fixed" for
-    it is equally contradictory."""
-    contradictory_body = (
+def test_merge_verdicts_preserves_fixed_entry_despite_own_id_map() -> None:
+    """Same case, "fixed" variant: a "fixed" verdict PATCHed onto a review
+    that still renders the fingerprint in its own id-map must also be
+    trusted, not discarded."""
+    body = (
         build_id_map_marker({"fp-a": 1})
         + "\n"
         + build_verdicts_marker({"fp-a": "fixed"})
     )
-    reviews = [{"id": 1, "body": contradictory_body}]
-    assert merge_verdicts(reviews) == {}
+    reviews = [{"id": 1, "body": body}]
+    assert merge_verdicts(reviews) == {"fp-a": "fixed"}
 
 
-def test_merge_verdicts_recurred_not_contradicted_by_own_id_map() -> None:
+def test_merge_verdicts_recurred_coexists_with_own_id_map() -> None:
     """The "recurred" tombstone is expected to coexist with a rendered
     id-map entry in the very same body (that's exactly how it gets written
     -- github.py sets it in the same pass that renders the recurrence as a
-    body bullet), so it must never trip the self-consistency guard."""
+    body bullet); unaffected by the #771 change since it was never dropped
+    either way."""
     body = (
         build_id_map_marker({"fp-a": 1})
         + "\n"
@@ -243,6 +243,77 @@ def test_merge_verdicts_recurred_not_contradicted_by_own_id_map() -> None:
     )
     reviews = [{"id": 1, "body": body}]
     assert merge_verdicts(reviews) == {"fp-a": "recurred"}
+
+
+def test_merge_verdicts_logs_info_on_id_map_coexistence_without_dropping(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The passive observability kept for #755 forensics (ADR 0003): the
+    co-occurrence is still logged -- at INFO, not WARNING/ERROR, since it
+    fires on the routine/correct dismissal path too (see the merge_verdicts
+    docstring) -- but never affects the returned verdict.
+
+    Scopes the logger explicitly per ai_pr_review/logging.py's documented
+    caplog convention (propagate=False in production; caplog only sees
+    records with an explicit `logger=` or via the autouse
+    `_reset_pkg_logger` fixture), so this test's correctness doesn't depend
+    on that fixture's teardown discipline holding for every other test in
+    the suite forever."""
+    body = (
+        build_id_map_marker({"fp-a": 1})
+        + "\n"
+        + build_verdicts_marker({"fp-a": "dismissed"})
+    )
+    reviews = [{"id": 1, "body": body}]
+    with caplog.at_level("INFO", logger="ai_pr_review.vcs._canonical"):
+        result = merge_verdicts(reviews)
+    assert result == {"fp-a": "dismissed"}
+    assert any("fp-a" in rec.message for rec in caplog.records)
+    assert all(rec.levelname == "INFO" for rec in caplog.records)
+
+
+def test_merge_verdicts_contradiction_check_is_scoped_per_review_body() -> None:
+    """The coexistence check in merge_verdicts computes `verdicts` and
+    `rendered_fps` from the SAME body inside the per-review loop (issue
+    #771's review, pr-test-analyzer gap #1) -- that per-body scoping is
+    exactly what makes it safe to log-and-keep rather than drop: a
+    dismissal recorded in one review's verdicts marker, with the id-map
+    rendering for the SAME fingerprint sitting in a DIFFERENT review, must
+    never be treated as the coexistence case (nothing to warn about) and
+    must still be returned. This pins that scoping down so a future
+    "refactor" that hoists rendered_fps to accumulate across all folded
+    reviews can't silently reintroduce cross-review false positives."""
+    review_with_id_map = {
+        "id": 1,
+        "body": build_id_map_marker({"fp-a": 1}),
+    }
+    review_with_verdict = {
+        "id": 2,
+        "body": build_verdicts_marker({"fp-a": "dismissed"}),
+    }
+    reviews = [review_with_id_map, review_with_verdict]
+    assert merge_verdicts(reviews) == {"fp-a": "dismissed"}
+
+
+def test_merge_verdicts_no_warning_for_clean_review_alongside_coexistence() -> None:
+    """Multi-review fold: one review has the coexistence shape (fp-a), a
+    second, unrelated review does not (fp-b). Both fingerprints must merge
+    correctly and the clean review's fingerprint must never appear in a
+    coexistence log line (pr-test-analyzer gap #2)."""
+    review_coexisting = {
+        "id": 1,
+        "body": (
+            build_id_map_marker({"fp-a": 1})
+            + "\n"
+            + build_verdicts_marker({"fp-a": "dismissed"})
+        ),
+    }
+    review_clean = {
+        "id": 2,
+        "body": build_verdicts_marker({"fp-b": "dismissed"}),
+    }
+    reviews = [review_coexisting, review_clean]
+    assert merge_verdicts(reviews) == {"fp-a": "dismissed", "fp-b": "dismissed"}
 
 
 # ---------------------------------------------------------------------------
