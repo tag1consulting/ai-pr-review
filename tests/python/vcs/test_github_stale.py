@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
+import json as _json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
 
+from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import INLINE_MARKER
+from ai_pr_review.vcs.protocol import DiffContext
+
+_DIFF = """diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1,3 +1,6 @@
+ context_line_1
+ context_line_2
+ context_line_3
++added_line_4
++added_line_5
++added_line_6
+"""
+_VALID_SHA = "abc1234def5678abc1234def5678abc1234def56"
 
 
 @dataclass
@@ -471,3 +487,87 @@ def test_dismiss_stale_reviews_paginates_reviews_list() -> None:
     assert result.reviews_dismissed == 1
     assert any("/reviews/41/dismissals" in d for d in dismissed)
     assert not any("/reviews/42/dismissals" in d for d in dismissed)
+
+
+def test_newly_created_thread_survives_same_run_resolve_stale() -> None:
+    """Issue #774: a review thread `post_findings` creates in THIS run must
+    not be immediately resolved by the `resolve_stale()` call orchestrate.py
+    runs right after it, in the same process — mirrors GitLab's identical
+    regression test (`test_gitlab_dedup.py
+    ::test_newly_created_discussion_survives_same_run_resolve_stale`).
+
+    GitHub can't register the new thread the instant it's created (unlike
+    GitLab's one-POST-per-discussion API): `POST .../pulls/1/reviews`
+    returns no per-comment id, and even a comment id wouldn't be the
+    GraphQL `PullRequestReviewThread` node id `resolve_stale` keys its
+    skip-check on. So the fix (`_register_new_review_threads_as_kept_alive`)
+    re-fetches threads via the same GraphQL query `resolve_stale` uses,
+    filtering to the ones authored by the review just created. This test
+    exercises that by making the GraphQL `reviewThreads` handler stateful:
+    empty before the POST (no thread exists yet), returning the new thread
+    once the POST has happened — the same way the real GitHub API would
+    only show the thread to a subsequent query, never to one made before
+    the review existed.
+    """
+    finding = Finding(
+        severity="High", confidence=80, finding="issue", source="code-reviewer",
+        file="app.py", line=5, category="other",
+    )
+    posted_review_id: dict[str, int] = {}
+    resolve_mutations: list[str] = []
+
+    def _thread_for_posted_review() -> dict:
+        return {
+            "id": "th_new",
+            "isResolved": False,
+            "path": "app.py",
+            "line": 5,
+            "originalLine": 5,
+            "startLine": None,
+            "isOutdated": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "databaseId": 1,
+                        "body": f"[High] issue\n{INLINE_MARKER}",
+                        "author": {"login": "github-actions"},
+                        "pullRequestReview": {"databaseId": posted_review_id["id"]},
+                    }
+                ]
+            },
+        }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "POST" and url.endswith("/graphql") and body:
+            q = body.get("query") or ""
+            if "resolveReviewThread" in q:
+                resolve_mutations.append(body["variables"]["id"])
+                return httpx.Response(
+                    200,
+                    json={"data": {"resolveReviewThread": {"thread": {"id": body["variables"]["id"], "isResolved": True}}}},
+                )
+            if "reviewThreads" in q:
+                nodes = [_thread_for_posted_review()] if posted_review_id else []
+                return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            posted_review_id["id"] = 20
+            return httpx.Response(200, json={"id": 20})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, _ = _make_provider(handler)
+    post_result = prov.post_findings(
+        [finding],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+    assert post_result.inline_posted == 1
+
+    stale_result = prov.resolve_stale()
+    assert resolve_mutations == []
+    assert stale_result.threads_resolved == 0

@@ -252,6 +252,10 @@ class GitHubProvider:
     # thread canonical-review reuse just deliberately kept alive -- see
     # issue #718. Reset at the top of every post_findings call, not
     # accumulated across calls.
+    # NOTE: unlike GitLab's `_kept_alive_discussion_ids` (gitlab.py), a
+    # brand-new GitHub inline comment cannot register itself here directly
+    # at creation time -- see `_register_new_review_threads_as_kept_alive`
+    # below for why (issue #774).
     _kept_alive_thread_ids: set[str] = field(
         default_factory=set, init=False, repr=False
     )
@@ -1269,6 +1273,43 @@ class GitHubProvider:
             reused_review=False,
         )
 
+    def _register_new_review_threads_as_kept_alive(self, review_id: int | None) -> None:
+        """After successfully posting a review that created brand-new inline
+        comments, register those comments' GraphQL review-thread ids into
+        `_kept_alive_thread_ids` so `resolve_stale` (run immediately after
+        `post_findings` by `orchestrate.py`, in this same process) doesn't
+        resolve a thread this same run just created before a human ever
+        sees it as open (issue #774).
+
+        GitLab's equivalent (`gitlab.py:571`) can register immediately: its
+        one-discussion-per-POST API returns the new discussion's id directly
+        in the response it already has in hand. GitHub's review-creation API
+        does not: `POST .../pulls/{n}/reviews` returns a Pull Request Review
+        object with no per-comment id array (confirmed against the live API
+        during the `ai-pr-review-e2e` workflow's own verify step, which has
+        to fall back to a separate `GET .../reviews/{id}/comments` call for
+        the same reason), and even that REST comment id is not the GraphQL
+        `PullRequestReviewThread` node id `resolve_stale` actually keys its
+        skip-check on -- a review thread only exists as a GraphQL-level
+        grouping. So this re-fetches threads via the same GraphQL query
+        `resolve_stale` itself uses (`fetch_review_threads`), and keeps only
+        the ones whose comments were authored by the review this call just
+        created (matched via `pullRequestReview.databaseId`). One extra
+        GraphQL round trip, paid only when a review that created new inline
+        comments was actually posted.
+        """
+        if review_id is None:
+            return
+        for thread in self.fetch_review_threads():
+            comments = (thread.get("comments") or {}).get("nodes") or []
+            for c in comments:
+                pr_review = c.get("pullRequestReview") or {}
+                if pr_review.get("databaseId") == review_id:
+                    thread_id = thread.get("id")
+                    if isinstance(thread_id, str):
+                        self._kept_alive_thread_ids.add(thread_id)
+                    break
+
     def _post_new_review(
         self,
         *,
@@ -1307,6 +1348,10 @@ class GitHubProvider:
                 inline_posted_count = 0
             else:
                 inline_posted_count = len(inline_comments)
+                pre_data = resp_pre.json() or {}
+                self._register_new_review_threads_as_kept_alive(
+                    int(pre_data.get("id", 0)) or None
+                )
             # Keep a copy for the fallback path — fallback needs the original
             # inline findings even after inline_comments is cleared below.
             original_inline_comments = inline_comments
@@ -1324,8 +1369,11 @@ class GitHubProvider:
         resp = self.client.request("POST", self._reviews_url(), json_body=review_payload)
         if resp.status_code < 400:
             data = resp.json() or {}
+            new_review_id = int(data.get("id", 0)) or None
+            if inline_comments:
+                self._register_new_review_threads_as_kept_alive(new_review_id)
             return FindingsResult(
-                review_id=int(data.get("id", 0)) or None,
+                review_id=new_review_id,
                 inline_posted=inline_posted_count + len(inline_comments),
                 body_findings=body_bullets_count,
                 event=event,
@@ -1382,8 +1430,11 @@ class GitHubProvider:
             )
             if resp2.status_code < 400:
                 data = resp2.json() or {}
+                retry_review_id = int(data.get("id", 0)) or None
+                if inline_comments:
+                    self._register_new_review_threads_as_kept_alive(retry_review_id)
                 return FindingsResult(
-                    review_id=int(data.get("id", 0)) or None,
+                    review_id=retry_review_id,
                     inline_posted=inline_posted_count + len(inline_comments),
                     body_findings=body_bullets_count,
                     event="COMMENT",
