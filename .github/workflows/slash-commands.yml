@@ -370,6 +370,13 @@ jobs:
           COMMENT: ${{ inputs.comment-body }}
         run: |
           bad_token=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          # A comment that's just the bare prefix with nothing after (e.g.
+          # "/ai-pr-review" alone) has no second token -- awk yields an
+          # empty string. Falls back to a placeholder so the reply reads as
+          # "I did not recognize `(nothing)` as a command" instead of
+          # rendering broken-looking empty backticks (review finding F4,
+          # PR #782).
+          [[ -z "$bad_token" ]] && bad_token="(nothing)"
           # printf with the token as a %s argument (not interpolated into
           # the format string) so its content -- unsanitized user input,
           # though limited to one whitespace-delimited word by the awk
@@ -1414,6 +1421,18 @@ jobs:
               echo "::notice::not a recognized command for line: $line"
               if [[ -n "$reply" ]]; then
                 replies+=("$reply")
+                parse_error_seen=true
+              else
+                # `ai-pr-review slash` always prints a user-facing message
+                # before exiting 2 on a genuine ParseError (see cli.py), so
+                # $reply empty here means something unexpected happened
+                # between the process exiting and this script capturing its
+                # stdout. Falling through silently here would reproduce the
+                # exact issue #772 symptom this PR exists to close (review
+                # finding F3, PR #782) -- surface a generic fallback and a
+                # loud warning instead of trusting the missing reply.
+                echo "::warning::exit code 2 (parse error) but no reply captured for line: $line -- this should not happen; falling back to a generic message"
+                replies+=("**AI Review**: I could not process this line as a command: \`${line}\`. See https://tag1consulting.github.io/ai-pr-review/slash-commands for the supported commands.")
                 parse_error_seen=true
               fi
               continue
