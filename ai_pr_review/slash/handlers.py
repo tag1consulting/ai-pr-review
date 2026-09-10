@@ -27,9 +27,13 @@ from typing import Any
 
 from ai_pr_review.feedback.models import FeedbackEntry
 from ai_pr_review.feedback.store import FeedbackStore
-from ai_pr_review.slash.parser import SlashCommand
+from ai_pr_review.slash.parser import ParseError, SlashCommand
 
 logger = logging.getLogger(__name__)
+
+# Published docs site (docs/_config.yml); README.md links to the same host
+# for external-facing doc references.
+_SLASH_COMMANDS_DOC_URL = "https://tag1consulting.github.io/ai-pr-review/slash-commands"
 
 
 def build_entry(
@@ -151,11 +155,46 @@ def handle_command(
 # ---------------------------------------------------------------------------
 
 def _feedback_reply(command: SlashCommand) -> str:
+    reason_part = f": {command.reason}" if command.reason else ""
+
+    if command.canonical_name == "feedback":
+        # Issue #773: "feedback" only ever writes an advisory note to the
+        # learning-loop store -- it never resolves a thread, dismisses a
+        # review, or clears a blocking finding (unlike false-positive/
+        # wont-fix/dismiss, whose reply lives separately in
+        # ai_pr_review/slash/dismiss.py and is NOT changed by this branch).
+        # The old wording ("recorded ... Thank you for the feedback.") read
+        # as confirmation that the finding was handled, which is exactly
+        # what caused a PR to sit blocked for hours with the reporter
+        # believing "feedback" had cleared it. State plainly that it hasn't.
+        return (
+            f"**AI Review**: recorded as *feedback*{reason_part}. This is advisory "
+            "only -- the finding remains open and still blocks the review. Reply "
+            "with `/ai-pr-review false-positive` (or `dismiss`/`wont-fix`) to "
+            "clear it."
+        )
+
     label = {
         "false-positive": "false positive",
         "wont-fix": "won't fix",
-        "feedback": "feedback",
     }.get(command.canonical_name, command.canonical_name)
-
-    reason_part = f": {command.reason}" if command.reason else ""
     return f"**AI Review**: recorded as *{label}*{reason_part}. Thank you for the feedback."
+
+
+def parse_error_reply(error: ParseError) -> str:
+    """Build a user-facing reply for a ``ParseError`` (issue #772).
+
+    A malformed ``/ai-pr-review`` command previously failed completely
+    silently: the CLI exited non-zero with a technical message on stderr,
+    the calling workflow logged a notice and discarded it, and the only
+    reaction the commenter ever saw was the unconditional "eyes" reaction
+    posted before parsing even ran. This gives the commenter something to
+    act on: the token that wasn't recognized, and where to find the
+    supported grammar.
+    """
+    token = error.unknown_token or "that"
+    return (
+        f"**AI Review**: I didn't recognize `{token}` as a command. See "
+        f"{_SLASH_COMMANDS_DOC_URL} for the supported commands, or reply "
+        "with `/ai-pr-review help` for a quick summary."
+    )

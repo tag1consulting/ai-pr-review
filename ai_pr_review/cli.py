@@ -584,8 +584,15 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
     Exit codes:
       0 — handled (or no-op / not a slash command)
       2 — parse error (unknown command / malformed)
+
+    On a parse error, a short user-facing message (naming the unrecognized
+    token and pointing at the documented grammar) is printed to stdout in
+    addition to the technical message on stderr, so the calling workflow
+    step can post it back as a reply instead of discarding the failure
+    silently (issue #772). The technical stderr message is unchanged and
+    still intended for the job log, not the PR comment.
     """
-    from ai_pr_review.slash.handlers import build_entry, handle_command
+    from ai_pr_review.slash.handlers import build_entry, handle_command, parse_error_reply
     from ai_pr_review.slash.parser import ParseError, parse_command
 
     if not body:
@@ -600,6 +607,7 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
 
     if isinstance(result, ParseError):
         click.echo(f"slash: {result.message}", err=True)
+        click.echo(parse_error_reply(result))
         sys.exit(2)
 
     try:

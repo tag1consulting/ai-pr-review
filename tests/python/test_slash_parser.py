@@ -297,6 +297,34 @@ def test_unknown_command_returns_parse_error() -> None:
     assert result.raw_body == "/ai-pr-review frobnicate"
 
 
+def test_unknown_command_populates_unknown_token() -> None:
+    """Issue #772: the offending token must be available on its own field,
+    not just embedded in the free-text message, so a caller can build a
+    user-facing reply without re-parsing `message`."""
+    result = parse_command("/ai-pr-review frobnicate something")
+    assert isinstance(result, ParseError)
+    assert result.unknown_token == "frobnicate"
+
+
+def test_unknown_command_token_is_lowercased() -> None:
+    """The parser lowercases the command token before the KNOWN_COMMANDS
+    check; unknown_token should reflect that same lowercased value."""
+    result = parse_command("/ai-pr-review FROBNICATE")
+    assert isinstance(result, ParseError)
+    assert result.unknown_token == "frobnicate"
+
+
+def test_argument_order_repro_from_issue_772() -> None:
+    """Live repro from issue #772: '/ai-pr-review F2 dismiss <reason>' has
+    the verb and the F-id token swapped. The parser has no way to know the
+    user meant 'dismiss F2 ...' -- it just sees 'F2' as the command name --
+    but it must still name that exact token so the reply can point the user
+    at the correct grammar."""
+    result = parse_command("/ai-pr-review F2 dismiss we don't care about this")
+    assert isinstance(result, ParseError)
+    assert result.unknown_token == "f2"
+
+
 # ---------------------------------------------------------------------------
 # _sanitize_reason
 # ---------------------------------------------------------------------------

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from ai_pr_review.feedback.models import FeedbackEntry
-from ai_pr_review.slash.handlers import build_entry, handle_command
-from ai_pr_review.slash.parser import SlashCommand
+from ai_pr_review.slash.handlers import build_entry, handle_command, parse_error_reply
+from ai_pr_review.slash.parser import ParseError, SlashCommand
 
 
 class _RecordingStore:
@@ -155,6 +155,86 @@ def test_revise_command_returns_stub_reply() -> None:
     assert reply
     assert "focus on line 42" in reply or "not yet implemented" in reply.lower()
     assert store.appended == []
+
+
+def test_feedback_reply_states_finding_remains_open() -> None:
+    """Issue #773: 'feedback' only writes an advisory note -- it never
+    resolves a thread, dismisses a review, or clears a blocking finding.
+    The old wording ("recorded ... Thank you for the feedback.") read as
+    confirmation of exactly that, which caused a real PR to sit blocked for
+    hours with the reporter believing 'feedback' had cleared it. The reply
+    must now say plainly that the finding stays open/blocking and name a
+    command that would actually clear it."""
+    store = _RecordingStore(store_ok=True)
+    cmd = _cmd("feedback", "this is a false positive")
+    entry = build_entry(cmd)
+
+    reply = handle_command(cmd, entry, store)
+
+    assert "remains open" in reply.lower() or "still block" in reply.lower()
+    assert "false-positive" in reply
+    assert "this is a false positive" in reply  # reason is still echoed
+
+
+def test_feedback_reply_no_longer_reads_as_confirmation() -> None:
+    """Regression guard for the exact misleading phrase issue #773 reported."""
+    store = _RecordingStore(store_ok=True)
+    cmd = _cmd("feedback", "noise reduction please")
+    entry = build_entry(cmd)
+
+    reply = handle_command(cmd, entry, store)
+
+    assert reply != (
+        "**AI Review**: recorded as *feedback*: noise reduction please. "
+        "Thank you for the feedback."
+    )
+
+
+def test_false_positive_reply_wording_unchanged() -> None:
+    """Regression guard: issue #773 explicitly says do NOT change the
+    false-positive/wont-fix reply text, which is accurate as-is (unlike
+    feedback's, these commands really do resolve/dismiss elsewhere)."""
+    store = _RecordingStore(store_ok=True)
+    cmd = _cmd("false-positive", "looks fine to me")
+    entry = build_entry(cmd)
+
+    reply = handle_command(cmd, entry, store)
+
+    assert reply == (
+        "**AI Review**: recorded as *false positive*: looks fine to me. "
+        "Thank you for the feedback."
+    )
+
+
+def test_wont_fix_reply_wording_unchanged() -> None:
+    """Regression guard, same rationale as the false-positive case above."""
+    store = _RecordingStore(store_ok=True)
+    cmd = _cmd("wont-fix", "intentional design choice")
+    entry = build_entry(cmd)
+
+    reply = handle_command(cmd, entry, store)
+
+    assert reply == (
+        "**AI Review**: recorded as *won't fix*: intentional design choice. "
+        "Thank you for the feedback."
+    )
+
+
+def test_parse_error_reply_names_the_unknown_token() -> None:
+    error = ParseError(message="Unknown command 'frobnicate'. Known: [...]", unknown_token="frobnicate")
+    reply = parse_error_reply(error)
+    assert "frobnicate" in reply
+    assert "slash-commands" in reply  # points at the documented grammar
+    assert "/ai-pr-review help" in reply
+
+
+def test_parse_error_reply_falls_back_without_a_token() -> None:
+    """Defensive: if some future ParseError construction site omits
+    unknown_token, the reply must still render sensibly rather than showing
+    an empty pair of backticks."""
+    error = ParseError(message="malformed")
+    reply = parse_error_reply(error)
+    assert "`that`" in reply
 
 
 def test_fixed_command_never_writes_to_feedback_store() -> None:
