@@ -54,6 +54,8 @@ from ai_pr_review.vcs import ProviderConfigError
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
     from ai_pr_review.review.runtime import ReviewRuntime
+    from ai_pr_review.slash.dismiss import DismissResult
+    from ai_pr_review.slash.parser import SlashCommand
     from ai_pr_review.vcs import GitHubProvider
     from ai_pr_review.vcs.protocol import VcsProvider
 
@@ -724,6 +726,81 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     return provider
 
 
+def _persist_verdict(
+    result: DismissResult,
+    *,
+    actor: str,
+    command_name: str,
+    finding_id: int | None,
+    comment_body: str,
+    parsed_command: SlashCommand | None,
+    enable_feedback_loop: bool,
+    feedback_write_allowed: bool,
+) -> str:
+    """Persist a feedback-store entry for a dismiss/false-positive/wont-fix
+    verdict and return the reply text to echo.
+
+    Shared by `dismiss` (top-level, BODY and INLINE F-ids) and `dismiss-inline`
+    (issue #769 -- previously the only writer for any inline verdict was the
+    now-removed `feedback-command` workflow job's `slash` invocation; this
+    makes the dismiss commands the sole owner of both the reply and the store
+    write for the whole verdict family, on both event paths).
+
+    `result.feedback_eligible` gates whether there's anything to persist at
+    all (False for `fixed` and for UNKNOWN/not-found -- see DismissResult's
+    docstring). Two independent knobs then gate the write itself:
+    `enable_feedback_loop` (AI_FEEDBACK_LOOP -- the feature is on at all) and
+    `feedback_write_allowed` (SLASH_FEEDBACK_WRITE_ALLOWED -- the actor is
+    trusted per docs/learning-loop.md's OWNER/MEMBER bar, mirroring the
+    existing SLASH_APPROVE_ALLOWED precedent). Three distinct replies so none
+    of them lies about what happened.
+    """
+    if not result.feedback_eligible:
+        return result.reply
+
+    if not enable_feedback_loop:
+        return f"{result.reply} (feedback loop disabled — not persisted to learning store)"
+
+    if not feedback_write_allowed:
+        return (
+            f"{result.reply} (not persisted to learning store — recording feedback "
+            "requires OWNER or MEMBER association)"
+        )
+
+    from ai_pr_review.feedback.store import make_store
+    from ai_pr_review.slash.handlers import build_entry
+    from ai_pr_review.slash.parser import SlashCommand
+
+    command_for_entry = parsed_command or SlashCommand(
+        name=command_name, reason="", raw_body=comment_body, finding_id=finding_id
+    )
+
+    class _DismissConfig:
+        vcs_provider = "github"
+
+    entry = build_entry(
+        command_for_entry,
+        source=result.feedback_source,
+        file=result.feedback_file,
+        rule_id=result.feedback_rule_id,
+    )
+    stored = make_store(_DismissConfig()).append(entry)
+    if stored:
+        return result.reply
+
+    logger.warning(
+        "dismiss: feedback store failed to persist entry for F%s (command=%r)",
+        finding_id,
+        command_name,
+    )
+    finding_ref = f"F{finding_id}" if finding_id is not None else "this finding"
+    return (
+        f"@{actor} marked **{finding_ref}** as `{command_name}`, but the feedback store "
+        "could not persist it (network error or unsupported VCS). "
+        "Please retry later or check the workflow logs for details."
+    )
+
+
 @cli.command()
 @click.option(
     "--finding-id",
@@ -788,6 +865,21 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     "skipped. Always forced False for `fixed` regardless of this flag -- a "
     "fix claim is not a maintainer verdict and must not trigger approval.",
 )
+@click.option(
+    "--feedback-write-allowed",
+    envvar="SLASH_FEEDBACK_WRITE_ALLOWED",
+    default=False,
+    type=bool,
+    help="Whether the actor is trusted to persist a feedback-store entry "
+    "(defaults to SLASH_FEEDBACK_WRITE_ALLOWED env var). Per "
+    "docs/learning-loop.md, learning-store writes require OWNER/MEMBER -- "
+    "tighter than this job's own OWNER/MEMBER/COLLABORATOR admission bar, "
+    "the same relationship --approve-allowed already has to that bar. When "
+    "false and --enable-feedback-loop is true, the finding is still "
+    "resolved/dismissed normally; only the store write is skipped, with a "
+    "reply that says so honestly rather than the misleading 'feedback loop "
+    "disabled' message.",
+)
 def dismiss(
     finding_id: int | None,
     actor: str,
@@ -796,15 +888,21 @@ def dismiss(
     comment_body: str,
     enable_feedback_loop: bool,
     approve_allowed: bool,
+    feedback_write_allowed: bool,
 ) -> None:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed [F<n>]`
     posted as a top-level PR comment.
 
     Classifies F<n> as a BODY or INLINE finding, resolves/dismisses the
     backing review thread when applicable, records a feedback-store entry
-    for BODY findings (when the feedback loop is enabled), and prints the
+    for any real verdict (BODY or INLINE, when the feedback loop is enabled
+    and the actor is trusted -- see --feedback-write-allowed), and prints the
     reply to stdout. GitHub-only: F-IDs and the id-map only exist on the
     GitHub provider.
+
+    Sole owner of the reply and the feedback-store write for the whole verdict
+    family, on both event paths (issue #769) -- the `feedback-command`
+    workflow job no longer handles dismiss/false-positive/wont-fix at all.
 
     `fixed` never writes to the feedback store and never auto-approves,
     regardless of --enable-feedback-loop / --approve-allowed -- see
@@ -865,21 +963,12 @@ def dismiss(
     )
 
     # A genuine miss (UNKNOWN classification, or an INLINE token that could
-    # not be matched to a thread) gets a "confused" reaction. This is a
-    # deliberate divergence from the bash job's prior behavior: the old
-    # inline_fid-gated logic suppressed the confused reaction for an
-    # unmatched inline token (it set inline_fid before attempting thread
-    # resolution, so React-not-applicable never fired for that case) even
-    # though no action was taken. The new behavior reacts confused whenever
-    # nothing was actually resolved/dismissed/recorded, regardless of why.
-    acted = bool(
-        result.feedback_source
-        or result.feedback_file
-        or result.thread_resolved
-        or result.review_dismissed
-        or result.pr_approved
-    )
-    click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+    # not be matched to a thread) gets a "confused" reaction; result.acted is
+    # explicit (issue #769) rather than derived from feedback_source/
+    # feedback_file, which are now also populated for a resolved INLINE
+    # finding and would otherwise make a successful command look identical to
+    # a miss only by coincidence of which fields happen to be non-empty.
+    click.echo(f"::notice::reaction={'done' if result.acted else 'confused'}", err=True)
     for error in result.errors:
         logger.warning("dismiss: %s", error)
         click.echo(f"::warning::dismiss: {error}", err=True)
@@ -887,50 +976,18 @@ def dismiss(
         "dismiss", result.errors, thread_resolved=result.thread_resolved
     )
 
-    # For command_name == "fixed", dismiss_by_finding_id's BODY branch never
-    # populates feedback_source/feedback_file (see its docstring), so
-    # is_body_finding is always False here and the store-write path below is
-    # unreachable for "fixed" -- it never gets a chance to record a verdict
-    # the finding was invalid, which is the whole point of that command.
-    is_body_finding = bool(result.feedback_source or result.feedback_file)
-    if not is_body_finding:
-        click.echo(result.reply)
-        return
-
-    if not enable_feedback_loop:
-        click.echo(f"{result.reply} (feedback loop disabled — not persisted to learning store)")
-        return
-
-    from ai_pr_review.feedback.store import make_store
-    from ai_pr_review.slash.handlers import build_entry
-
-    command_for_entry = parsed_command or SlashCommand(
-        name=command_name, reason="", raw_body=comment_body, finding_id=finding_id
-    )
-
-    class _DismissConfig:
-        vcs_provider = "github"
-
-    entry = build_entry(
-        command_for_entry,
-        source=result.feedback_source,
-        file=result.feedback_file,
-        rule_id=result.feedback_rule_id,
-    )
-    stored = make_store(_DismissConfig()).append(entry)
-    if stored:
-        click.echo(result.reply)
-    else:
-        logger.warning(
-            "dismiss: feedback store failed to persist entry for F%s (command=%r)",
-            finding_id,
-            command_name,
+    click.echo(
+        _persist_verdict(
+            result,
+            actor=actor,
+            command_name=command_name,
+            finding_id=finding_id,
+            comment_body=comment_body,
+            parsed_command=parsed_command,
+            enable_feedback_loop=enable_feedback_loop,
+            feedback_write_allowed=feedback_write_allowed,
         )
-        click.echo(
-            f"@{actor} marked **F{finding_id}** as `{command_name}`, but the feedback store "
-            "could not persist it (network error or unsupported VCS). "
-            "Please retry later or check the workflow logs for details."
-        )
+    )
 
 
 @cli.command("dismiss-inline")
@@ -996,6 +1053,30 @@ def dismiss(
     "skipped. Always forced False for `fixed` regardless of this flag -- a "
     "fix claim is not a maintainer verdict and must not trigger approval.",
 )
+@click.option(
+    "--enable-feedback-loop",
+    envvar="AI_FEEDBACK_LOOP",
+    default=False,
+    type=bool,
+    help="Whether to persist this verdict to the feedback store (defaults to "
+    "AI_FEEDBACK_LOOP env var). Ignored for `fixed`, which never writes to "
+    "the feedback store regardless. New in issue #769 -- this command "
+    "previously never touched the store at all; the now-removed "
+    "`feedback-command` workflow job was the only writer for an inline "
+    "verdict.",
+)
+@click.option(
+    "--feedback-write-allowed",
+    envvar="SLASH_FEEDBACK_WRITE_ALLOWED",
+    default=False,
+    type=bool,
+    help="Whether the actor is trusted to persist a feedback-store entry "
+    "(defaults to SLASH_FEEDBACK_WRITE_ALLOWED env var). Per "
+    "docs/learning-loop.md, learning-store writes require OWNER/MEMBER, "
+    "verified via the API (author_association is unreliable on this event "
+    "type -- see the `authorize` job / issue #732), unlike this command's "
+    "own OWNER/MEMBER/COLLABORATOR admission bar.",
+)
 def dismiss_inline(
     parent_comment_id: int,
     review_id: int | None,
@@ -1004,17 +1085,27 @@ def dismiss_inline(
     pr_number: int,
     comment_body: str,
     approve_allowed: bool,
+    enable_feedback_loop: bool,
+    feedback_write_allowed: bool,
 ) -> None:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed` posted as
     a reply to an inline review comment (`pull_request_review_comment` event).
 
-    Resolves the review thread owning the parent comment and, if `review_id`
-    is given and its own threads are now all resolved, dismisses that review.
-    Prints the reply to stdout and emits a `::notice::reaction=` line to
-    stderr so the calling workflow step can react to the triggering comment.
-    GitHub-only: inline review threads only exist on the GitHub provider.
+    Resolves the review thread owning the parent comment, records a
+    feedback-store entry for a real verdict (when the feedback loop is
+    enabled and the actor is trusted -- see --feedback-write-allowed) and, if
+    `review_id` is given and its own threads are now all resolved, dismisses
+    that review. Prints the reply to stdout and emits a
+    `::notice::reaction=` line to stderr so the calling workflow step can
+    react to the triggering comment. GitHub-only: inline review threads only
+    exist on the GitHub provider.
 
-    `fixed` never auto-approves regardless of --approve-allowed -- see
+    Sole owner of the reply and the feedback-store write for the whole verdict
+    family on this event path (issue #769) -- the `feedback-command` workflow
+    job no longer handles dismiss/false-positive/wont-fix at all.
+
+    `fixed` never auto-approves regardless of --approve-allowed, and never
+    writes to the feedback store regardless of --enable-feedback-loop -- see
     dismiss_inline_reply's docstring.
 
     Exit codes:
@@ -1027,7 +1118,8 @@ def dismiss_inline(
     os.environ["PR_NUMBER"] = str(pr_number)
 
     parsed = parse_command(comment_body) if comment_body else None
-    commit_sha = parsed.commit_sha if isinstance(parsed, SlashCommand) else ""
+    parsed_command = parsed if isinstance(parsed, SlashCommand) else None
+    commit_sha = parsed_command.commit_sha if parsed_command is not None else ""
 
     if command_name == "fixed":
         # A fix claim is not a maintainer verdict on the finding -- never let
@@ -1047,15 +1139,34 @@ def dismiss_inline(
         commit_sha=commit_sha,
     )
 
-    acted = bool(result.thread_resolved or result.review_dismissed or result.pr_approved)
-    click.echo(f"::notice::reaction={'done' if acted else 'confused'}", err=True)
+    click.echo(f"::notice::reaction={'done' if result.acted else 'confused'}", err=True)
     for error in result.errors:
         logger.warning("dismiss-inline: %s", error)
         click.echo(f"::warning::dismiss-inline: {error}", err=True)
     _emit_dismiss_failure_annotation(
         "dismiss-inline", result.errors, thread_resolved=result.thread_resolved
     )
-    click.echo(result.reply)
+
+    # result.feedback_finding_id comes from the **[F<n>]** token
+    # dismiss_inline_reply already parsed out of the comment body (issue
+    # #769's silent-failure fix): passing a real id here, not a hard-coded
+    # None, is what lets the feedback-store dedup key (feedback/store.py's
+    # _dedup_key) tell two DIFFERENT findings apart on this path. It also
+    # feeds the "could not persist" fallback reply's F<n> citation below,
+    # which falls back to "this finding" only for a legacy inline comment
+    # posted before F-ids covered inline findings.
+    click.echo(
+        _persist_verdict(
+            result,
+            actor=actor,
+            command_name=command_name,
+            finding_id=result.feedback_finding_id,
+            comment_body=comment_body,
+            parsed_command=parsed_command,
+            enable_feedback_loop=enable_feedback_loop,
+            feedback_write_allowed=feedback_write_allowed,
+        )
+    )
 
 
 def _emit_dismiss_failure_annotation(

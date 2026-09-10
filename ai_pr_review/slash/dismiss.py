@@ -101,6 +101,35 @@ class DismissResult:
     feedback_source: str = ""
     feedback_file: str = ""
     feedback_rule_id: str = ""
+    # The F<n> this verdict is for, when known. Threaded into the feedback-
+    # store entry's dedup key (see feedback/store.py's _dedup_key) -- without
+    # it, dismissing two DIFFERENT findings that share command/source/file
+    # within the dedup window would collide on the same key and the second
+    # one would be silently dropped as a false-positive "duplicate". Always
+    # known on the top-level (dismiss_by_finding_id) path, since the caller
+    # supplies finding_id directly; on the inline-reply
+    # (dismiss_inline_reply) path it comes from the `**[F<n>]**` token this
+    # bot embeds in every inline comment it posts (present for effectively
+    # every real finding since F-ids were extended to inline findings), so
+    # this is empty only for a legacy inline comment posted before that.
+    feedback_finding_id: int | None = None
+    # True only for a dismiss/false-positive/wont-fix verdict that actually
+    # took effect (BODY or INLINE) -- never for `fixed` (not a maintainer
+    # verdict on validity) or UNKNOWN (nothing to record). This is the caller's
+    # single signal for whether to persist a feedback-store entry -- see
+    # cli.py's `_persist_verdict`. Kept distinct from
+    # feedback_source/feedback_file being non-empty because those are also
+    # (ab)used as BODY-vs-INLINE classification signals elsewhere; this field
+    # exists so that distinction never has to double as "should we write".
+    feedback_eligible: bool = False
+    # True whenever this call resolved/dismissed/recorded/approved something
+    # real -- drives the done/confused reaction. Explicit rather than derived
+    # from the fields above (issue #769): a successful BODY `fixed` sets none
+    # of feedback_source/feedback_file/thread_resolved/review_dismissed/
+    # pr_approved (there's no thread to resolve for a body-level finding), so
+    # a derived expression reacted "confused" to a command that fully
+    # succeeded.
+    acted: bool = False
     active_body_ids: tuple[int, ...] = ()
     errors: tuple[str, ...] = field(default_factory=tuple)
 
@@ -744,6 +773,7 @@ def dismiss_by_finding_id(
                     "body-level finding to resolve; it will be re-evaluated on the "
                     "next review run."
                 ),
+                acted=True,
                 active_body_ids=tuple(list_active_body_ids(bodies)),
                 errors=tuple(errors),
             )
@@ -756,6 +786,9 @@ def dismiss_by_finding_id(
             feedback_source=classified.source,
             feedback_file=classified.file,
             feedback_rule_id=classified.rule_id,
+            feedback_finding_id=finding_id,
+            feedback_eligible=True,
+            acted=True,
             active_body_ids=tuple(list_active_body_ids(bodies)),
             errors=tuple(errors),
         )
@@ -867,11 +900,30 @@ def dismiss_by_finding_id(
             f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
+
+    # Full-context feedback entry for an INLINE finding named on a top-level
+    # comment (issue #769): the thread carries its own source/rule_id/file
+    # with no extra API call, since `target_thread` is already in hand -- see
+    # `_inline_feedback_context`'s docstring.
+    (
+        inline_feedback_eligible,
+        inline_source,
+        inline_rule_id,
+        inline_finding_id,
+    ) = _inline_feedback_context(
+        _first_comment_body(target_thread), resolved=resolved, command=command
+    )
     return DismissResult(
         reply=reply,
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         pr_approved=pr_approved,
+        feedback_source=inline_source,
+        feedback_file=str(target_thread.get("path") or "") if inline_feedback_eligible else "",
+        feedback_rule_id=inline_rule_id,
+        feedback_finding_id=inline_finding_id,
+        feedback_eligible=inline_feedback_eligible,
+        acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
 
@@ -905,6 +957,38 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
     source = brackets[1].split(",")[0].strip()
     rule_id = source if source.startswith("sarif:") else ""
     return ClassifiedFinding(location=FindingLocation.INLINE, source=source, rule_id=rule_id)
+
+
+def _inline_feedback_context(
+    body: str, *, resolved: bool, command: str
+) -> tuple[bool, str, str, int | None]:
+    """Compute ``(feedback_eligible, source, rule_id, finding_id)`` for an
+    INLINE finding's feedback-store entry.
+
+    Shared by `dismiss_by_finding_id`'s INLINE branch (top-level comment
+    naming an inline F<n>) and `dismiss_inline_reply` (reply on the inline
+    thread itself) -- both had near-identical logic here before this was
+    extracted. `file` isn't returned: it's a trivial `target_thread.get(
+    "path")` each caller already has in hand and reads directly.
+
+    Eligible whenever the thread actually resolved and the command is a real
+    verdict (never `fixed` -- not a maintainer verdict on validity), even if
+    the header fails to parse a source tag -- `file` alone is still useful
+    context to the caller, matching `context_from_parent_comment`'s same
+    fallback.
+
+    `finding_id` comes from the `**[F<n>]**` token this bot embeds in every
+    inline comment it posts (issue #769's dedup-key fix: without a real id
+    here, two DIFFERENT findings dismissed within the feedback store's dedup
+    window would collide on the same key and the second would be silently
+    dropped -- see `feedback/store.py`'s `_dedup_key`).
+    """
+    if not (resolved and command != "fixed"):
+        return False, "", "", None
+    classified = parse_inline_comment_header(body)
+    finding_id_match = _ID_RE.search(body)
+    finding_id = int(finding_id_match.group(1)) if finding_id_match is not None else None
+    return True, classified.source, classified.rule_id, finding_id
 
 
 _BOT_LOGIN: Final[str] = "github-actions[bot]"
@@ -1188,10 +1272,27 @@ def dismiss_inline_reply(
             f"@{actor} marked as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
+
+    # Full-context feedback entry (issue #769): this function already has the
+    # thread's first-comment body and its `path` in hand -- no extra API call
+    # needed, unlike `context_from_parent_comment`'s separate
+    # fetch_review_comment. See `_inline_feedback_context`'s docstring.
+    (
+        inline_feedback_eligible,
+        inline_source,
+        inline_rule_id,
+        inline_finding_id,
+    ) = _inline_feedback_context(body, resolved=resolved, command=command)
     return DismissResult(
         reply=reply,
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         pr_approved=pr_approved,
+        feedback_source=inline_source,
+        feedback_file=str(target_thread.get("path") or "") if inline_feedback_eligible else "",
+        feedback_rule_id=inline_rule_id,
+        feedback_finding_id=inline_finding_id,
+        feedback_eligible=inline_feedback_eligible,
+        acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )

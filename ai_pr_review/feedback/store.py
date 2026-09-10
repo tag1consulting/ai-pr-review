@@ -17,7 +17,9 @@ feedback is silently dropped with a WARNING log).
 from __future__ import annotations
 
 import base64
+import datetime
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -26,13 +28,34 @@ from typing import Protocol, runtime_checkable
 import httpx
 
 from ai_pr_review.feedback.models import FeedbackEntry
-from ai_pr_review.feedback.retention import apply_retention
+from ai_pr_review.feedback.retention import _parse_ts, apply_retention
 
 logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _RETRY_BASE_S = 0.5
 _STORE_PATH = ".ai-pr-review/learnings.jsonl"
+
+# Issue #769: the append path has no dedup at all, so two independent callers
+# writing the same verdict seconds apart (the double-write bug this window
+# guards against) produced two identical JSONL lines differing only in `ts`.
+# A short window rather than "ever seen this key" is deliberate: re-dismissing
+# the same finding weeks later on a genuinely new run is real signal and must
+# not be silently absorbed, whereas two writes seconds apart are a bug. Loud
+# by design (WARNING + ::warning::) rather than a silent skip, so a future
+# recurrence of the underlying double-write bug still surfaces somewhere.
+_DEDUP_WINDOW = datetime.timedelta(minutes=10)
+
+# Only the commands issue #769's double-write bug actually applied to.
+# Deliberately excludes bare `feedback` (free-form text notes with no
+# structural identity beyond `reason`, which _dedup_key excludes by design --
+# two distinct feedback notes posted minutes apart with no file/source
+# context would otherwise collide on the same key and the second would be
+# silently dropped, a real regression two independent reviewers of this PR
+# flagged) and `fixed` (never reaches the store at all -- see
+# DismissResult.feedback_eligible). Narrowing to this set means the dedup
+# guard can only ever fire for the bug class it exists to catch.
+_DEDUP_ELIGIBLE_COMMANDS = frozenset({"false-positive", "wont-fix"})
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +94,55 @@ class UnsupportedVcsStore:
 
     def load_recent(self) -> list[FeedbackEntry]:
         return []
+
+
+def _dedup_key(entry: FeedbackEntry) -> tuple[str, str, str, str, object]:
+    """Identity used to detect a duplicate append (issue #769).
+
+    `reason` is deliberately excluded: the two writers that produced this
+    bug's duplicate pairs (`dismiss`/`dismiss-inline` vs. the now-removed
+    `feedback-command` `slash` write) rendered different reason text for the
+    same verdict, so keying on `reason` would have let the exact bug this
+    guards against slip through.
+    """
+    return (entry.command, entry.source, entry.file, entry.rule_id, entry.extras.get("finding_id"))
+
+
+def _find_recent_duplicate(
+    entry: FeedbackEntry, existing_entries: list[FeedbackEntry]
+) -> FeedbackEntry | None:
+    """Return the existing entry `entry` duplicates within `_DEDUP_WINDOW`, if any.
+
+    Only considers `entry.command in _DEDUP_ELIGIBLE_COMMANDS` -- see that
+    constant's docstring for why this must stay narrow.
+
+    `existing_entries` is newest-first (as returned by `_parse_jsonl`), but
+    that ordering is not scanned as a hard invariant: this walks the full
+    list rather than breaking on the first out-of-window entry, since a
+    manually edited file or a genuine clock-skew race between two writers
+    (the exact scenario issue #769 exists because of) could put an
+    out-of-order entry ahead of the true in-window duplicate, and an early
+    break would silently miss it -- undercutting this guard's own "a
+    recurrence still surfaces" purpose. Bounded by retention_count regardless
+    (500 by default), so the extra scan cost is negligible.
+    """
+    if entry.command not in _DEDUP_ELIGIBLE_COMMANDS:
+        return None
+    new_dt = _parse_ts(entry.ts)
+    if new_dt is None:
+        return None
+    key = _dedup_key(entry)
+    for existing in existing_entries:
+        if existing.command not in _DEDUP_ELIGIBLE_COMMANDS:
+            continue
+        existing_dt = _parse_ts(existing.ts)
+        if existing_dt is None:
+            continue
+        if abs(new_dt - existing_dt) > _DEDUP_WINDOW:
+            continue
+        if _dedup_key(existing) == key:
+            return existing
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +331,24 @@ class GitBranchStore:
 
         # Parse existing (file is oldest-first; _parse_jsonl returns newest-first)
         existing_entries = self._parse_jsonl(existing)
+
+        duplicate_of = _find_recent_duplicate(entry, existing_entries)
+        if duplicate_of is not None:
+            message = (
+                f"feedback store: skipped a duplicate append for "
+                f"command={entry.command!r} finding_id={entry.extras.get('finding_id')!r} "
+                f"-- an entry at {duplicate_of.ts} already recorded this verdict; "
+                f"new entry was at {entry.ts}."
+            )
+            # Emit a GitHub Actions ::warning:: annotation only when running
+            # inside GitHub Actions to avoid polluting local/test output --
+            # same gating convention as vcs/github.py's prior-reviews-fetch
+            # warning.
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                print(f"::warning::{message}", flush=True)
+            logger.warning(message)
+            return
+
         # Prepend the new entry to keep newest-first semantics
         all_entries = [entry, *existing_entries]
         kept = apply_retention(

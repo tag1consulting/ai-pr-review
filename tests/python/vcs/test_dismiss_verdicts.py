@@ -644,9 +644,16 @@ def test_dismiss_by_finding_id_moved_to_inline_resolves_and_dismisses() -> None:
     assert result.errors == ()
     assert result.thread_resolved is True
     assert result.review_dismissed is True
-    # BODY-branch side effects (feedback-store routing) must NOT have fired --
-    # this is the INLINE path.
-    assert result.feedback_source == ""
+    # Issue #769: the INLINE branch now populates feedback context too (from
+    # the thread's own comment header, not from a body-bullet scan), so
+    # cli.py's dismiss command can persist a full-context entry for an inline
+    # F-id named on a top-level comment. This is still provably the INLINE
+    # path, not a misclassification into the BODY branch: BODY would have
+    # taken a completely different code path (no thread fetch/resolve/dismiss
+    # at all, asserted above via thread_resolved/review_dismissed), and would
+    # never reach review 9's PUT the way this test asserts below.
+    assert result.feedback_eligible is True
+    assert result.feedback_source == "trufflehog"
 
     puts = _put_bodies(rec, "/reviews/9")
     assert len(puts) == 1
