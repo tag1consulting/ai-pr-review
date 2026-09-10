@@ -305,8 +305,30 @@ jobs:
                 echo "finding_id=" >> "$GITHUB_OUTPUT"
               fi
               ;;
-            *)
+            feedback)
+              # Recognized command (ai_pr_review/slash/parser.py's
+              # KNOWN_COMMANDS), but owned entirely by the feedback-command
+              # job (OWNER/MEMBER-gated persistent side effects, issue #769)
+              # -- this job has nothing to do for it. Not an error: must NOT
+              # fall into the `*)` unrecognized-command branch below, or
+              # every legitimate `/ai-pr-review feedback ...` comment would
+              # get a bogus "unrecognized command" reply on top of its
+              # correct handling elsewhere (issue #772).
+              #
+              # IMPORTANT for future maintainers: if a new command is ever
+              # added to KNOWN_COMMANDS that isn't already recognized by one
+              # of the case arms above, it must be added here too (or its
+              # own arm) -- otherwise it silently falls into `*)` and this
+              # job will incorrectly tell the user it's "unrecognized" even
+              # though another job handles it correctly. This coupling is
+              # enforced by test_slash_commands_workflow.py's
+              # test_handle_command_recognizes_every_known_command, which
+              # fails loudly if the two ever drift apart.
               echo "valid=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "valid=false"      >> "$GITHUB_OUTPUT"
+              echo "unrecognized=true" >> "$GITHUB_OUTPUT"
               ;;
           esac
 
@@ -320,6 +342,51 @@ jobs:
           gh api \
             "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=eyes
+
+      - name: React — confused (unrecognized command)
+        # Issue #772: a top-level comment whose command doesn't match any
+        # known verb (e.g. a typo, or the real-world repro's inverted
+        # argument order -- "/ai-pr-review F2 dismiss ..." parses "F2" as
+        # the command) used to fall straight through with no reaction and no
+        # reply at all. React distinctly from the "eyes" a valid command
+        # gets, so "acknowledged and processing" is never confused with
+        # "silently discarded".
+        if: steps.cmd.outputs.unrecognized == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=confused
+
+      - name: Reply — unrecognized command
+        if: steps.cmd.outputs.unrecognized == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          COMMENT: ${{ inputs.comment-body }}
+        run: |
+          bad_token=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
+          # printf with the token as a %s argument (not interpolated into
+          # the format string) so its content -- unsanitized user input,
+          # though limited to one whitespace-delimited word by the awk
+          # extraction above -- can't be misread as a format specifier.
+          #
+          # The format string is deliberately SINGLE-quoted, not double --
+          # it contains literal backticks for markdown code-spans, and
+          # backticks inside DOUBLE quotes are legacy command-substitution
+          # syntax in bash (executed just like `$(...)`). Double-quoting
+          # this would try to actually run `/ai-pr-review help` as a shell
+          # command. Do not "fix" the shellcheck SC2016 info-level note
+          # below by switching to double quotes -- that note is a false
+          # positive here; the single quotes are load-bearing.
+          body=$(printf '**AI Review**: I did not recognize `%s` as a command. See https://tag1consulting.github.io/ai-pr-review/slash-commands for the supported commands, or reply with `/ai-pr-review help` for a quick summary.' "$bad_token")
+          gh pr comment "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body "$body"
 
       - name: Reply with help text
         if: steps.cmd.outputs.command == 'help'
@@ -1243,6 +1310,17 @@ jobs:
           if [[ $exit_code -eq 2 ]]; then
             echo "::notice::Not a recognized slash command; skipping."
             echo "is_command=false" >> "$GITHUB_OUTPUT"
+            # Issue #772: a malformed command used to be discarded here with
+            # no reaction or reply beyond the unconditional "eyes" reaction
+            # posted before parsing. `ai-pr-review slash` now also prints a
+            # user-facing explanation to stdout on a ParseError (captured
+            # above as $reply) -- surface it via a distinct "confused"
+            # reaction + reply instead of the silent skip.
+            if [[ -n "$reply" ]]; then
+              encoded=$(printf '%s' "$reply" | base64 -w0)
+              echo "reply_b64=${encoded}"  >> "$GITHUB_OUTPUT"
+              echo "parse_error=true"      >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
           if [[ $exit_code -ne 0 ]]; then
@@ -1304,6 +1382,7 @@ jobs:
           hard_failure=""
           attempted_count=0
           failure_count=0
+          parse_error_seen=false
           while IFS= read -r entry; do
             line=$(jq -r '.line' <<<"$entry")
             ctx=$(GH_TOKEN="$ACTIONS_GH_TOKEN" SLASH_PR_NUMBER="$SLASH_PR_NUMBER" \
@@ -1323,8 +1402,20 @@ jobs:
             fi
             if [[ $exit_code -eq 2 ]]; then
               # list-commands already filtered to feedback-family lines, so
-              # this should never happen -- defensive, not a real failure.
+              # this should never happen in practice for a line that made it
+              # into $COMMANDS_JSON -- defensive, not the primary fix for
+              # issue #772 (a genuinely malformed top-level line is dropped
+              # earlier, by `list-commands` itself, before it ever reaches
+              # this loop; widening that filter to surface parse errors too
+              # is a larger change than this fix's scope -- see PR
+              # description). Still: if this ever does fire, surface it the
+              # same way a hard failure above does, rather than silently
+              # discarding the one line that failed to parse.
               echo "::notice::not a recognized command for line: $line"
+              if [[ -n "$reply" ]]; then
+                replies+=("$reply")
+                parse_error_seen=true
+              fi
               continue
             fi
             attempted_count=$((attempted_count + 1))
@@ -1358,12 +1449,17 @@ jobs:
           encoded=$(printf '%s' "$combined" | base64 -w0)
           echo "reply_b64=${encoded}" >> "$GITHUB_OUTPUT"
           echo "is_command=true" >> "$GITHUB_OUTPUT"
+          if [[ "$parse_error_seen" == "true" ]]; then
+            echo "parse_error=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Post reply (review-thread)
         # Reply in-thread when triggered from a review-thread comment, so the
         # confirmation lands next to the AI finding the reviewer was acting on.
+        # Also fires on a parse error (issue #772) so a malformed command
+        # gets the same in-thread reply treatment as a handled one.
         if: |
-          steps.handler.outputs.is_command == 'true' &&
+          (steps.handler.outputs.is_command == 'true' || steps.handler.outputs.parse_error == 'true') &&
           steps.endpoints.outputs.is_review_comment == 'true'
         env:
           GH_TOKEN: ${{ secrets.actions-token || github.token }}
@@ -1371,7 +1467,10 @@ jobs:
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENT_ID: ${{ inputs.comment-id }}
           REPLY_B64: ${{ steps.handler.outputs.reply_b64 }}
-          CONTEXT_MISSING_REASON: ${{ steps.context.outputs.context_missing_reason }}
+          # Suppress the context-missing note entirely on a parse error: it
+          # claims "the feedback was still persisted", which is false when
+          # the comment never parsed as a command in the first place.
+          CONTEXT_MISSING_REASON: ${{ steps.handler.outputs.parse_error != 'true' && steps.context.outputs.context_missing_reason || '' }}
         run: |
           set -e
           reply_file=$(mktemp)
@@ -1471,6 +1570,31 @@ jobs:
           gh api \
             "repos/${REPOSITORY}/${REACTIONS_PATH}/${COMMENT_ID}/reactions" \
             -f content="+1"
+
+      - name: React — confused (parse error)
+        # Issue #772: a malformed `feedback`/`explain`/`revise` (or any other
+        # unrecognized-verb) command reaching this job -- on either the
+        # review-thread single-shot path or the top-level loop -- used to be
+        # discarded with no signal beyond the unconditional "eyes" reaction
+        # above. `steps.handler.outputs.is_command` stays 'false' for a pure
+        # parse error (see the "Invoke Python slash handler" step), so this
+        # never doubles up with "React — done" for that path. The top-level
+        # loop's `is_command` can legitimately be 'true' alongside
+        # `parse_error` in a mixed batch (some lines succeeded, one didn't
+        # parse) -- both reactions firing together is correct there, not a
+        # bug: something worked AND something else was malformed.
+        if: |
+          (steps.handler.outputs.parse_error == 'true' || steps.handler_multi.outputs.parse_error == 'true') &&
+          success()
+        env:
+          GH_TOKEN: ${{ secrets.actions-token || github.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMENT_ID: ${{ inputs.comment-id }}
+          REACTIONS_PATH: ${{ steps.endpoints.outputs.reactions_path }}
+        run: |
+          gh api \
+            "repos/${REPOSITORY}/${REACTIONS_PATH}/${COMMENT_ID}/reactions" \
+            -f content=confused
 
       - name: React — failed
         if: failure()

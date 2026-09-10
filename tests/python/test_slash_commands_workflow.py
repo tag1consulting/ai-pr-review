@@ -28,9 +28,16 @@ from typing import Any
 
 import yaml
 
+from ai_pr_review.slash.parser import KNOWN_COMMANDS
+
 _WORKFLOW_PATH = (
     Path(__file__).resolve().parents[2] / ".github" / "workflows" / "slash-commands.yml"
 )
+
+# Commands handle-command's bash pre-parse recognizes that ai_pr_review.slash.
+# parser never sees at all -- rescan/review-full/skip/help are a bash-only
+# vocabulary this job fully owns, not part of KNOWN_COMMANDS.
+_BASH_ONLY_COMMANDS = {"rescan", "review-full", "skip", "help"}
 
 # `dismiss`/canonical `false-positive` are the same family everywhere in this
 # repo (ai_pr_review/slash/parser.py's SlashCommand.canonical_name); normalize
@@ -150,6 +157,52 @@ def test_no_overlap_between_dismiss_finding_and_feedback_command_review_thread()
         "path does not exclude them -- both jobs would reply (and, per cli.py's "
         "dismiss-inline, both could write to the feedback store) for the same inline "
         "verdict comment"
+    )
+
+
+def _handle_command_recognized_commands(jobs: dict[str, Any]) -> set[str]:
+    """Every literal command token appearing in a non-wildcard `case` arm of
+    handle-command's "Parse command" step, across ALL arms (including a
+    no-op arm like `feedback)` that exists purely so the catch-all below
+    doesn't misfire on it)."""
+    step = _step(jobs["handle-command"], "Parse command")
+    arms = re.findall(r"^\s*([a-zA-Z][\w-]*(?:\|[a-zA-Z][\w-]*)*)\)\s*$", step["run"], re.MULTILINE)
+    assert arms, "could not find any case arms in handle-command's Parse command step"
+    recognized: set[str] = set()
+    for arm in arms:
+        recognized |= set(arm.split("|"))
+    return recognized
+
+
+def test_handle_command_recognizes_every_known_command() -> None:
+    """Issue #772: handle-command's bash `case` pre-parse must have SOME arm
+    (a real one, or a documented no-op like `feedback)`) for every command
+    name in ai_pr_review.slash.parser.KNOWN_COMMANDS. Anything without a
+    matching arm falls into the `*)` catch-all, which (as of #772) reacts
+    with a confused emoji and posts an "I didn't recognize this command"
+    reply -- correct for a genuinely malformed command, but wrong for a
+    command this job simply doesn't act on itself (e.g. `feedback`, owned
+    entirely by the feedback-command job). If a future command is added to
+    KNOWN_COMMANDS without a matching update here, this test catches the gap
+    before a legitimate command starts getting a bogus "unrecognized"
+    reply -- the exact dual-maintenance risk this fix's `feedback)` no-op
+    arm exists to close.
+    """
+    jobs = _workflow_jobs()
+    recognized = _handle_command_recognized_commands(jobs)
+    bash_only_recognized = recognized & _BASH_ONLY_COMMANDS
+    python_facing_recognized = recognized - _BASH_ONLY_COMMANDS
+
+    assert bash_only_recognized == _BASH_ONLY_COMMANDS, (
+        "handle-command no longer recognizes its bash-only vocabulary "
+        f"(rescan/review-full/skip/help): missing {_BASH_ONLY_COMMANDS - bash_only_recognized}"
+    )
+    missing = KNOWN_COMMANDS - python_facing_recognized
+    assert missing == set(), (
+        f"KNOWN_COMMANDS has {missing} with no matching case arm in handle-command's "
+        "Parse command step -- these will incorrectly fall into the `*)` catch-all "
+        "and get a bogus 'unrecognized command' reply even though they're valid "
+        "commands handled by another job"
     )
 
 

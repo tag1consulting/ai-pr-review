@@ -125,6 +125,13 @@ class ParseError:
 
     message: str
     raw_body: str = field(default="")
+    # The offending first token (the would-be command name), e.g. "frobnicate"
+    # or "F2" (issue #772's real-world repro: inverted argument order made the
+    # finding-ID token look like the command). Empty only if some future
+    # ParseError construction site doesn't have a single bad token to name.
+    # Populated so callers can build a user-facing reply naming exactly what
+    # wasn't recognized, instead of failing completely silently.
+    unknown_token: str = field(default="")
 
 
 def _sanitize_reason(raw: str) -> str:
@@ -190,6 +197,7 @@ def parse_command(body: str) -> SlashCommand | ParseError | None:
         return ParseError(
             message=f"Unknown command {command!r}. Known: {sorted(KNOWN_COMMANDS)}",
             raw_body=body,
+            unknown_token=command,
         )
 
     # For feedback/action commands — extract optional F<n> finding ID so
