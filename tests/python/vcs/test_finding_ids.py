@@ -6,6 +6,7 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs._finding_ids import (
     _ends_body_section,
+    _pick_primary_source,
     assemble_id_map,
     fingerprint,
     known_fingerprints,
@@ -75,6 +76,45 @@ def test_fingerprint_none_line() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _pick_primary_source() — issue #776, direct unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_pick_primary_source_single_name() -> None:
+    assert _pick_primary_source("code-reviewer") == "code-reviewer"
+
+
+def test_pick_primary_source_empty_string() -> None:
+    assert _pick_primary_source("") == ""
+
+
+def test_pick_primary_source_all_agents_falls_back_to_first() -> None:
+    assert _pick_primary_source("code-reviewer, security-reviewer") == "code-reviewer"
+
+
+def test_pick_primary_source_analyzer_first() -> None:
+    assert _pick_primary_source("trufflehog, adversarial-general") == "trufflehog"
+
+
+def test_pick_primary_source_analyzer_last() -> None:
+    assert _pick_primary_source("adversarial-general, trufflehog") == "trufflehog"
+
+
+def test_pick_primary_source_whitespace_variation() -> None:
+    assert _pick_primary_source("adversarial-general,  trufflehog ") == "trufflehog"
+
+
+def test_pick_primary_source_multiple_analyzers_picks_alphabetically_first() -> None:
+    """Documents the current, deliberately-unresolved analyzer-vs-analyzer
+    tie-break -- see `_pick_primary_source`'s docstring."""
+    assert _pick_primary_source("adversarial-general, semgrep, trufflehog") == "semgrep"
+
+
+def test_pick_primary_source_sarif_prefix_counts_as_analyzer() -> None:
+    assert _pick_primary_source("code-reviewer, sarif:bandit") == "sarif:bandit"
+
+
+# ---------------------------------------------------------------------------
 # assemble_id_map() — no prior reviews
 # ---------------------------------------------------------------------------
 
@@ -119,6 +159,51 @@ def test_existing_ids_preserved_across_reviews() -> None:
     assert id_map[fingerprint(fa)] == 1
     assert id_map[fingerprint(fb)] == 2
     assert id_map[fingerprint(fc)] == 3
+
+
+def test_legacy_reconstruction_corroborated_finding_preserves_id_across_reviews() -> None:
+    """Issue #776 (and its own follow-up correction): built via the *real*
+    merge pipeline, not hand-picked field values -- an earlier version of
+    this test hand-set `source="trufflehog"` alongside
+    `sources=["adversarial-general", "trufflehog"]`, a combination
+    `merge_findings()` never actually produces, and which happened to pass
+    regardless of whether the fix under test was even correct.
+
+    Live-verified via `merge_findings()`: for a same-severity, same-location
+    agent+analyzer corroboration (agent dispatched before the analyzer,
+    `orchestrate.py`), `_collapse_cluster`'s `best = min(cluster,
+    key=severity)` tie-breaks by original list order and keeps the AGENT's
+    `source` -- `"adversarial-general"` here, matching the real merged
+    finding's actual `fingerprint()`. Legacy bullet-reconstruction
+    (`_parse_existing_ids`'s fallback, no id-map marker) deliberately does
+    NOT use `_pick_primary_source`'s analyzer-preference for exactly this
+    reason -- doing so would reconstruct `"trufflehog"` instead, mismatching
+    the real fingerprint and silently resetting the F-ID. Plain first-name
+    parsing gets this real, common case right because the real winning
+    source (`"adversarial-general"`) also happens to be the alphabetically
+    first name in this instance; see `_pick_primary_source`'s docstring and
+    `_parse_existing_ids`'s call-site comment for the fuller reasoning on
+    why this call site was deliberately left alone."""
+    from ai_pr_review.findings.merge import merge_findings
+
+    agent = Finding(
+        severity="high", confidence=90, finding="hardcoded secret in template",
+        source="adversarial-general", file="src/contact/index.njk", line=30,
+        category="secret",
+    )
+    analyzer = Finding(
+        severity="high", confidence=90, finding="hardcoded secret in template",
+        source="trufflehog", file="src/contact/index.njk", line=30,
+        category="secret",
+    )
+    [f] = merge_findings([agent, analyzer])
+    assert f.source == "adversarial-general"  # sanity: matches the real pipeline
+
+    body_a = _render_body([f])
+
+    id_map = assemble_id_map([body_a], [f])
+
+    assert id_map[fingerprint(f)] == 1
 
 
 def test_dismissed_gap_preserved_new_finding_gets_next_after_max() -> None:
