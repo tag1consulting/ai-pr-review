@@ -187,24 +187,42 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     `ai_pr_review.slash.dismiss._record_verdict` seeds from this same
     union rather than from the canonical body alone).
 
-    Self-consistency guard (issue #755): every legitimate code path that
-    renders a finding in a review's own body also guarantees that same
-    body's verdicts marker does not claim `"dismissed"`/`"fixed"` for it --
+    Observation only, not a guard (issue #755, revisited by #771 / ADR 0003):
+    a review whose own id-map shows a fingerprint as rendered, while that
+    same body's verdicts marker simultaneously claims that identical
+    fingerprint `"dismissed"` or `"fixed"`, LOOKS self-contradictory --
     `classify()` excludes an exact-or-fuzzy `"dismissed"` match from
-    rendering entirely (`kind="suppressed"`), and a `"fixed"` match that
-    recurs gets its verdict overwritten to the `"recurred"` tombstone in the
-    very same `_apply_classification_side_effects` call that renders it
-    (`ai_pr_review.vcs.github`). So a review whose own id-map shows a
-    fingerprint as rendered, and whose own verdicts marker simultaneously
-    claims that identical fingerprint `"dismissed"` or `"fixed"`, is
-    self-contradictory -- one of the two claims within that single body is
-    wrong, and trusting the "dismissed" claim risks permanently, silently
-    suppressing a finding no human ever acted on (`classify()` short-circuits
-    to `"suppressed"` before a human ever sees it again). The rendered
-    content is the stronger signal (a human could see it), so a
-    contradictory dismissed/fixed entry is dropped rather than trusted, with
-    a loud log line since this observably happened once (#755) with no
-    located write path.
+    rendering entirely, and a `"fixed"` match that recurs gets its verdict
+    overwritten to the `"recurred"` tombstone in the same
+    `_apply_classification_side_effects` call that renders it
+    (`ai_pr_review.vcs.github`) -- but this exact shape is also produced by
+    every ordinary, correct dismissal: `ai_pr_review.slash.dismiss
+    ._record_verdict` PATCHes a verdict onto a review whose id-map was
+    already rendered, by design, and does not touch the id-map. This
+    function cannot tell a genuinely corrupted body (#755's single
+    unexplained occurrence) apart from a body a human has since legitimately
+    patched -- both produce the identical co-occurrence -- so it no longer
+    drops the verdict on this basis (#771: dropping here discarded every
+    ordinary dismissal whose canonical review was also the one that first
+    rendered the finding, which is the common case, not an edge case).
+    `ai_pr_review.vcs.github`'s `_apply_classification_side_effects` runs at
+    construction time, before a new review is ever posted, so it guarantees
+    no *future* review can be *posted* self-contradictory. It does NOT cover
+    the suppression path: `classify()` (below) short-circuits an exact or
+    fuzzy `"dismissed"` match straight to `kind="suppressed"`, and a finding
+    classified `"suppressed"` never reaches that construction-time check at
+    all -- so a phantom `"dismissed"` entry of unknown origin (#755's own
+    trigger was never confirmed) can still cause a live finding to vanish
+    with no automated guard catching it, only the `_log.info` at the actual
+    suppression site (`github.py`'s `kind == "suppressed"` branch) as a
+    forensic trail. This is a deliberately accepted residual risk (ADR 0003)
+    given the old guard's false-positive cost (silently eating real
+    dismissals, #771) outweighed a suspected corruption bug that was never
+    reproduced. The `_log.info` below fires on the same shape logged there
+    but earlier in the pipeline (id-map co-occurrence, not the classify()
+    decision itself) and, per its own docstring, on the routine/correct
+    path too -- kept at INFO, not WARNING, since a log line indistinguishable
+    from noise does not belong on any alerting-facing level.
     """
     ordered = sorted(reviews, key=safe_review_id)
     result: dict[str, str] = {}
@@ -214,15 +232,15 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
         rendered_fps = extract_id_map(body).keys()
         for fp, verdict in verdicts.items():
             if verdict in ("dismissed", "fixed") and fp in rendered_fps:
-                _log.error(
-                    "github: self-contradictory verdicts marker (issue #755) "
-                    "-- review %r renders fingerprint %r in its own id-map "
-                    "while its verdicts marker claims %r for the same "
-                    "fingerprint; dropping the contradictory verdict rather "
-                    "than risk permanently suppressing an un-dismissed finding",
+                _log.info(
+                    "github: review %r renders fingerprint %r in its own "
+                    "id-map while its verdicts marker also claims %r for the "
+                    "same fingerprint -- expected shape for an ordinary "
+                    "dismissal that patched this review after it was posted "
+                    "(see ADR 0003); logged only, verdict is trusted and "
+                    "kept",
                     r.get("id"), fp, verdict,
                 )
-                continue
             result[fp] = verdict
     return result
 

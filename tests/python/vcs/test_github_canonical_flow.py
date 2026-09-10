@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
+import pytest
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._finding_ids import fingerprint
@@ -885,7 +886,9 @@ def test_canonical_reuse_false_always_posts_fresh_review() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dismissed_finding_is_suppressed_not_reposted() -> None:
+def test_dismissed_finding_is_suppressed_not_reposted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     f = _finding("style nit", severity="Low", line=5)
     fp = fingerprint(f)
     canonical_body = _footer_body() + "\n" + build_verdicts_marker({fp: "dismissed"})
@@ -919,14 +922,23 @@ def test_dismissed_finding_is_suppressed_not_reposted() -> None:
         return httpx.Response(404, text=f"unrouted: {req.method} {url}")
 
     prov, rec = _make_provider(handler)
-    result = prov.post_findings(
-        [f],
-        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
-        event="REQUEST_CHANGES",
-    )
+    with caplog.at_level("INFO", logger="ai_pr_review.vcs.github"):
+        result = prov.post_findings(
+            [f],
+            DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+            event="REQUEST_CHANGES",
+        )
 
     assert result.ok
     assert result.suppressed == 1
+    # #771 review finding: classify()'s suppression decision (the actual
+    # harm surface -- a live finding silently vanishing) had zero logging
+    # anywhere. Pin down that the new observability point fires with the
+    # fingerprint, since it's the only forensic trail for a suppression
+    # that turns out to be spurious.
+    assert any(
+        rec.levelname == "INFO" and fp in rec.message for rec in caplog.records
+    )
 
 
 def test_dismissed_finding_stays_suppressed_after_fuzzy_update_drift() -> None:
