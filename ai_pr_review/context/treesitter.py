@@ -13,7 +13,6 @@ invoking; this module does not re-check it.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -307,34 +306,4 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
     if root is None:
         return []
     _walk(root)
-    return refs
-
-
-# ---------------------------------------------------------------------------
-# Lightweight fallback: regex-based extraction when tree-sitter is unavailable
-# ---------------------------------------------------------------------------
-
-_IDENTIFIER_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{1,})\b")
-
-
-def extract_symbol_refs_fallback(diff_hunk: str) -> list[SymbolRef]:
-    """Regex fallback for symbol extraction when tree-sitter is unavailable.
-
-    Less precise than tree-sitter — does not distinguish node types — but
-    provides basic enrichment support for any language.  Not called by default;
-    callers may invoke this when ``extract_symbol_refs`` returns empty due to a
-    missing grammar.
-    """
-    refs: list[SymbolRef] = []
-    seen: set[str] = set()
-    for lineno, raw in enumerate(diff_hunk.splitlines(), start=1):
-        if raw.startswith(("@@", "---", "+++")):
-            continue
-        if not (raw.startswith("+") or raw.startswith(" ")):
-            continue
-        for m in _IDENTIFIER_RE.finditer(raw[1:]):
-            name = m.group(1)
-            if name not in _STOP_WORDS and name not in seen:
-                seen.add(name)
-                refs.append(SymbolRef(name=name, kind="identifier", line=lineno))
     return refs

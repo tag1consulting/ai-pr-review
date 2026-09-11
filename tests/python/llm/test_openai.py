@@ -91,6 +91,35 @@ def test_body_caching_disabled_openai(monkeypatch):
     assert messages[1] == {"role": "user", "content": "User msg."}
 
 
+def test_body_system_prefix_reaches_shared_layout(monkeypatch):
+    """#F2: feedback addendum / language profiles (system_prefix) must not be
+    silently dropped on OpenAI, matching Anthropic's prefix-first ordering."""
+    monkeypatch.setenv("LLM_PROMPT_CACHING", "auto")
+    req = make_request(
+        system_prompt="Agent instructions.",
+        user_message="Code context.",
+        system_prefix="Maintainer feedback: avoid X.",
+    )
+    body = _build_body(req, provider="openai")
+    system_content = body["messages"][0]["content"]
+    assert "Maintainer feedback: avoid X." in system_content
+    # Prefix precedes the agent's own instructions, matching anthropic.py's order.
+    assert system_content.index("Maintainer feedback") < system_content.index("Agent instructions.")
+
+
+def test_body_system_prefix_reaches_legacy_layout(monkeypatch):
+    """#F2: same guarantee for the legacy (openai-compatible) layout."""
+    req = make_request(
+        system_prompt="Agent instructions.",
+        user_message="User msg.",
+        system_prefix="Maintainer feedback: avoid X.",
+    )
+    body = _build_body(req, provider="openai-compatible")
+    system_content = body["messages"][0]["content"]
+    assert "Maintainer feedback: avoid X." in system_content
+    assert system_content.index("Maintainer feedback") < system_content.index("Agent instructions.")
+
+
 # ---------------------------------------------------------------------------
 # HTTP integration
 # ---------------------------------------------------------------------------

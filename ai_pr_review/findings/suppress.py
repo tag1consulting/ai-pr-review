@@ -224,20 +224,25 @@ def _verify_version(finding: Finding, verify_type: str) -> bool:
     """
     text = f"{finding.finding} {finding.remediation}"
     try:
-        if verify_type == "github-releases":
+        # #789-follow-up (F3): config/suppressions.json shipped "github-release"
+        # and "go-module" while this dispatch only ever recognized
+        # "github-releases" and "go", so those two rules could never fire.
+        # The config is now normalized to the code's spelling; the old
+        # spellings stay accepted here for one release so a downstream
+        # consumer who copied the old shipped config into a repo-level
+        # suppressions.json override does not silently lose the rule.
+        if verify_type in ("github-releases", "github-release"):
             return _verify_github_release(text)
         if verify_type == "npm":
             return _verify_npm(text)
         if verify_type == "pypi":
             return _verify_pypi(text)
-        if verify_type == "go":
+        if verify_type in ("go", "go-module"):
             return _verify_go(text)
         if verify_type == "cargo":
             return _verify_cargo(text)
         if verify_type == "docker-hub":
             return _verify_docker_hub(text)
-        if verify_type == "ruby-org":
-            return _verify_ruby(text)
     except Exception as exc:  # noqa: BLE001
         print(
             f"WARNING: suppression verify ({verify_type}) error ({type(exc).__name__}: {exc!r}); keeping finding.",
@@ -330,15 +335,3 @@ def _verify_docker_hub(text: str) -> bool:
         url = f"https://hub.docker.com/v2/repositories/{image}/tags/{tag}/"
     resp = _get(url)
     return resp.status_code == 200
-
-
-def _verify_ruby(text: str) -> bool:
-    m = re.search(r"([a-zA-Z0-9_-]+)\s+([0-9][0-9a-zA-Z._-]*)", text)
-    if not m:
-        return False
-    gem, ver = m.group(1), m.group(2)
-    resp = _get(f"https://rubygems.org/api/v1/versions/{gem}.json")
-    if resp.status_code != 200:
-        return False
-    versions = [v.get("number", "") for v in resp.json()]
-    return ver in versions

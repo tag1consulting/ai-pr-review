@@ -94,18 +94,17 @@ real typo or malicious downgrade.
 | `go` | `module@vX.Y.Z` | `proxy.golang.org/{module}/@v/{version}.info` |
 | `cargo` | `pkg = "version"` or `pkg@version` | `crates.io` |
 | `docker-hub` | `image:tag` or `ns/image:tag` | `hub.docker.com` |
-| `ruby-org` | Ruby `X.Y.Z` MRI version | `cache.ruby-lang.org/pub/ruby/{MAJ.MIN}/ruby-{MAJ.MIN.PATCH}.tar.gz` |
 
 Example:
 
 ```json
 {
-  "id": "allow-ruby-4.0.3",
-  "reason": "Model keeps flagging Ruby 4.0.3 as unreleased; verify against ruby-lang.org",
+  "id": "allow-serde-1.0.197",
+  "reason": "Model keeps flagging serde 1.0.197 as unreleased; verify against crates.io",
   "match": {
-    "pattern": "Ruby.*4\\.0\\.3.*not.*(valid|released|exist)"
+    "pattern": "serde.*1\\.0\\.197.*not.*(valid|released|exist)"
   },
-  "verify": "ruby-org"
+  "verify": "cargo"
 }
 ```
 

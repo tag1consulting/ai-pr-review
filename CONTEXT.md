@@ -27,3 +27,11 @@ _Avoid_: assuming "canonical" means "currently active" — a dismissed review ca
 **Construction-time guard / read-time guard**:
 Two different moments at which a review body's internal self-consistency can be checked. A construction-time guard runs inside the code about to POST a brand-new body, so it can prevent a contradiction from ever being written. A read-time guard re-derives state from bodies already posted — possibly since patched by a legitimate human command — and structurally cannot distinguish "corrupted at creation" from "correctly patched afterward," since both produce the identical shape (see issue #771, ADR 0003).
 _Avoid_: calling either one "self-contradictory" without saying which — that ambiguity is what let a destructive read-time guard and a safe construction-time guard, added in the same commit for the same symptom, go undistinguished long enough for the read-time one to start discarding legitimate verdicts unnoticed.
+
+**Severity** (of a finding):
+The blocking contract: what a finding's level obliges the review verdict to do. `Critical` and `High` produce `REQUEST_CHANGES`; `Medium` and `Low` produce `APPROVE` with the finding still surfaced (`review/outcome.py`). Severity answers "must this stop the merge?" Harm is the input an agent reasons from when choosing a level, but the level itself is a commitment about the verdict, not a description of the code.
+_Avoid_: deriving severity from confidence. They are independent axes, and a prompt that maps high confidence to `High` turns any assured-but-harmless observation into a merge block (see ADR 0004).
+
+**Confidence** (of a finding):
+An agent's self-reported certainty that the finding is real, 0-100. It gates *existence*, never severity: `findings/merge.py` drops anything below `confidence_threshold` (default 75, `AI_CONFIDENCE_THRESHOLD`) before findings reach the verdict stage. A finding that survives the floor is treated as true, and its severity is then decided by the blocking contract alone, not recomputed from confidence.
+_Avoid_: reading a surviving finding's confidence as a severity signal, or expecting the judge pass's "below 60" downrank rule to fire — the confidence floor has already removed everything that rule describes.

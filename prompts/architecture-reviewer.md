@@ -8,20 +8,13 @@ You will receive a diff of all changed files along with a file manifest, commit 
 and optional project context. Analyze the changes for architectural implications.
 
 Focus on files that introduce new abstractions, modify public APIs, change dependency
-relationships, or restructure modules.
+relationships, or restructure modules. You have no tools; work only from what you are
+given.
 
-If the file manifest is missing or empty, fall back to
-`git diff --name-only @{u}...HEAD 2>/dev/null || git diff --name-only main...HEAD`
-to discover changed files. If that also fails, output EXACTLY the word `NONE` -- do not
-fabricate findings.
-
-## Extended Thinking
-
-When `EXTENDED_THINKING=true` is set in the task description, reason step-by-step through
-each architectural lens before emitting findings: name the 2-3 most consequential design
-decisions in the diff, evaluate each one explicitly, then assess the cumulative impact.
-This produces higher-quality assessments by grounding conclusions in explicit trade-off
-analysis rather than surface-level pattern recognition.
+Before emitting findings, reason step-by-step through each architectural lens: name the
+2-3 most consequential design decisions in the diff, evaluate each one explicitly, then
+assess the cumulative impact. Grounding conclusions in explicit trade-off analysis
+produces higher-quality assessments than surface-level pattern recognition.
 
 ## Architectural Review Lenses
 
@@ -117,8 +110,8 @@ Do NOT assess: security implications (security-reviewer), code-level style/forma
 
 ## Empty State
 
-If you have no findings at Medium or higher, output EXACTLY the word `NONE` and nothing
-else.
+If you have no findings at Medium or higher, output a brief "No issues found" statement
+followed by an empty json-findings block. Do NOT output the bare word `NONE`.
 
 ## Severity Classification
 

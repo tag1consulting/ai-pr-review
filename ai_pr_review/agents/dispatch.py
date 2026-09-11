@@ -144,7 +144,6 @@ class DispatchContext:
     standard_model: str = ""
     premium_model: str = ""
     enable_suggestions: bool = True
-    cache_priming_env: str = "false"
     prompt_caching_env: str = "auto"
     # --- Context enrichment ---
     enable_context_enrichment: bool = False
@@ -320,35 +319,6 @@ def effective_prompt(
             Path(tmp_path).unlink(missing_ok=True)
         raise
     return Path(tmp_path), degraded
-
-
-# ---------------------------------------------------------------------------
-# Cache priming
-# ---------------------------------------------------------------------------
-
-def cache_priming_effective(
-    provider: str,
-    cache_priming_env: str,
-    prompt_caching_env: str,
-) -> bool:
-    """Return True only when conditions for cache priming are all met.
-
-    Logs a warning to stderr when cache priming is requested
-    (``cache_priming_env`` is truthy) but the provider does not support it —
-    this surfaces typos in ``AI_PROVIDER`` (e.g. ``"antrhopic"``) that would
-    otherwise silently disable priming.
-    """
-    if cache_priming_env.lower() not in ("true", "1"):
-        return False
-    if provider not in ("anthropic", "bedrock-proxy"):
-        print(
-            f"WARNING: cache priming requested but provider {provider!r} does not "
-            "support it (expected 'anthropic' or 'bedrock-proxy'); "
-            "cache priming will not run",
-            file=sys.stderr,
-        )
-        return False
-    return prompt_caching_env.lower() not in ("false", "0")
 
 
 def _format_exception_chain(exc: BaseException) -> str:

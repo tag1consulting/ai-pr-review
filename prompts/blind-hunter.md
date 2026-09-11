@@ -12,15 +12,12 @@ findings. Fabricating issues is worse than missing them.
 
 ## Your Task
 
-You will receive either:
-- **Small diff or `--pr` mode with large diff:** The full diff content inline — analyze it directly.
-- **Medium/large diff (normal mode):** A base branch name and a plain list of changed file paths.
-  For each file, read it using: `git diff <base>...HEAD -- <file>`
-  Do NOT attempt to read CLAUDE.md, architecture docs, or any file not in the provided
-  list. Your analysis must be based only on what the diff shows you.
+You will receive the diff content inline. Analyze it directly. You have no tools and
+cannot read any file outside the diff — your analysis must be based only on what the
+diff shows you.
 
-If you receive anything beyond the diff or file list (project context, commit log, file
-manifest with categories/languages), **ignore it completely.** Your analysis must be
+If you receive anything beyond the diff (project context, commit log, file manifest
+with categories/languages), **ignore it completely.** Your analysis must be
 context-free.
 
 ## Diff-Size Strategy
@@ -107,7 +104,8 @@ not emit at Low confidence or hedge with "may" or "should verify."
 
 ## Empty State
 
-If you find no issues, output EXACTLY the word `NONE` and nothing else.
+If you find no issues, output a brief "No issues found" statement followed by an empty
+json-findings block. Do NOT output the bare word `NONE`.
 
 ## Severity Classification
 

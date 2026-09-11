@@ -17,6 +17,7 @@ from ai_pr_review.review.runtime import (
     ReviewRuntime,
     SkipPlan,
     _merge_allowlist,
+    _warn_if_context_enrichment_inert,
     build_review_runtime,
 )
 from ai_pr_review.vcs.protocol import (
@@ -141,6 +142,84 @@ def _make_fake_provider(last_sha: str | None = None) -> _FakeProvider:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+class TestWarnIfContextEnrichmentInert:
+    """#F10: AI_CONTEXT_ENRICHMENT defaults on but silently does nothing when
+    its dependencies are absent. This is a startup-time check, independent of
+    the per-agent, per-diff WARNING already in context/treesitter.py and
+    context/symbols.py (which only fire when a diff actually has extractable
+    refs — never on a docs-only diff or an all-missing-deps environment)."""
+
+    def test_warns_when_both_deps_missing(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            patch("shutil.which", return_value=None),
+            caplog.at_level("WARNING"),
+        ):
+            _warn_if_context_enrichment_inert()
+        assert "context enrichment is enabled" in caplog.text
+        assert "tree-sitter-language-pack" in caplog.text
+        assert "ripgrep" in caplog.text
+
+    def test_warns_when_only_ripgrep_missing(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("importlib.util.find_spec", return_value=object()),
+            patch("shutil.which", return_value=None),
+            caplog.at_level("WARNING"),
+        ):
+            _warn_if_context_enrichment_inert()
+        assert "ripgrep" in caplog.text
+        assert "tree-sitter-language-pack" not in caplog.text
+
+    def test_no_warning_when_both_deps_present(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch("importlib.util.find_spec", return_value=object()),
+            patch("shutil.which", return_value="/usr/bin/rg"),
+            caplog.at_level("WARNING"),
+        ):
+            _warn_if_context_enrichment_inert()
+        assert caplog.text == ""
+
+    @pytest.mark.anyio
+    async def test_build_review_runtime_warns_when_enrichment_inert(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config = _make_config(enable_context_enrichment=True)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            patch("importlib.util.find_spec", return_value=None),
+            patch("shutil.which", return_value=None),
+            caplog.at_level("WARNING"),
+        ):
+            await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert "context enrichment is enabled" in caplog.text
+
+    @pytest.mark.anyio
+    async def test_build_review_runtime_silent_when_enrichment_disabled(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config = _make_config(enable_context_enrichment=False)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            patch("importlib.util.find_spec", return_value=None),
+            patch("shutil.which", return_value=None),
+            caplog.at_level("WARNING"),
+        ):
+            await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert "context enrichment is enabled" not in caplog.text
 
 
 class TestBuildReviewRuntimeFullPath:

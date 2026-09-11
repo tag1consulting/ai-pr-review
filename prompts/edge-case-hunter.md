@@ -14,10 +14,9 @@ You will receive the diff of all changed files along with a file manifest. Analy
 branching construct in the changed code. Focus on source files with control flow — skip
 docs, configs, and prompts unless they contain executable logic.
 
-When you need to examine surrounding code context outside the diff to rule out a candidate
-gap, use the Read tool. **Cap Read usage at 10 total calls per run, at most 200 lines per
-call.** Prefer reading only the specific changed lines and their immediate callers rather
-than full files.
+You have no tools and cannot read any file outside the diff. When you cannot rule a
+candidate gap in or out without seeing surrounding code you do not have, say so in the
+finding rather than guessing, and lower your confidence accordingly.
 
 ## Two-Pass Analysis
 
@@ -85,7 +84,8 @@ at Low confidence or hedge with "may" or "should verify."
 
 ## Empty State
 
-If no gaps survive Pass 2, output EXACTLY the word `NONE` and nothing else.
+If no gaps survive Pass 2, output a brief "No issues found" statement followed by an
+empty json-findings block. Do NOT output the bare word `NONE`.
 
 ## Severity Classification
 

@@ -49,12 +49,18 @@ def _build_body(req: LLMRequest, *, provider: str) -> dict[str, Any]:
     # openai-compatible uses max_tokens; first-party openai uses max_completion_tokens.
     token_field = "max_tokens" if provider == "openai-compatible" else "max_completion_tokens"
 
+    # OpenAI has no multi-breakpoint caching support, so system_prefix (feedback
+    # addendum, language profiles) is prepended to system_prompt in the same
+    # order Anthropic's single-breakpoint layout uses. Without this, agents on
+    # this provider never see the feedback addendum or profiles.
+    agent_prompt = f"{req.system_prefix}\n\n{req.system_prompt}" if req.system_prefix else req.system_prompt
+
     if shared:
         system_text = (
             req.user_message
             + "\n\n===AGENT_INSTRUCTIONS===\n\n"
             "You are a specialized review agent. Follow these instructions:\n\n"
-            + req.system_prompt
+            + agent_prompt
         )
         messages = [
             {"role": "system", "content": system_text},
@@ -62,7 +68,7 @@ def _build_body(req: LLMRequest, *, provider: str) -> dict[str, Any]:
         ]
     else:
         messages = [
-            {"role": "system", "content": req.system_prompt},
+            {"role": "system", "content": agent_prompt},
             {"role": "user", "content": req.user_message},
         ]
 

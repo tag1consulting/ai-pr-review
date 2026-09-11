@@ -542,16 +542,62 @@ class TestVerifyVersion:
         captured = capsys.readouterr()
         assert "RuntimeError" in captured.err
 
-    def test_ruby_verified(self) -> None:
-        f = _finding(finding="nokogiri 1.15.0 has security issue")
-        body = [{"number": "1.15.0"}, {"number": "1.14.0"}]
-        with patch("ai_pr_review.findings.suppress._get", return_value=_resp(200, body)):
-            result = _verify_version(f, "ruby-org")
+    def test_github_release_singular_spelling_still_dispatches(self) -> None:
+        """#F3 backward compat: config/suppressions.json shipped this spelling
+        for a while; a downstream consumer's repo-level override may have
+        copied it verbatim, so the old spelling stays accepted for one
+        release alongside the normalized "github-releases"."""
+        f = _finding(finding="owner/repo@v1.0.0")
+        with patch("ai_pr_review.findings.suppress._get", return_value=_resp(200)):
+            result = _verify_version(f, "github-release")
         assert result is True
 
-    def test_ruby_not_found(self) -> None:
-        f = _finding(finding="nokogiri 9.99.9 has security issue")
-        body = [{"number": "1.15.0"}]
-        with patch("ai_pr_review.findings.suppress._get", return_value=_resp(200, body)):
-            result = _verify_version(f, "ruby-org")
+    def test_go_module_spelling_still_dispatches(self) -> None:
+        """#F3 backward compat, same reasoning as above for "go-module"."""
+        f = _finding(finding="github.com/foo/bar@v1.2.3")
+        with patch("ai_pr_review.findings.suppress._get", return_value=_resp(200)):
+            result = _verify_version(f, "go-module")
+        assert result is True
+
+    def test_shipped_config_verify_types_are_all_handled(self) -> None:
+        """#F3: config/suppressions.json's verify values must actually
+        dispatch to a real verifier in suppress.py. Loads the shipped config
+        directly, unlike the rest of this test class (which only ever
+        exercised the code's own spellings and would not have caught the
+        "github-release"/"go-module" mismatch that let two rules never
+        fire)."""
+        repo_root = Path(__file__).resolve().parents[2]
+        rules_data = json.loads((repo_root / "config" / "suppressions.json").read_text())
+        verify_types = {r["verify"] for r in rules_data if r.get("verify")}
+        assert verify_types, "expected at least one verify-gated rule in the shipped config"
+
+        handlers = {
+            "github-releases": "_verify_github_release",
+            "npm": "_verify_npm",
+            "pypi": "_verify_pypi",
+            "go": "_verify_go",
+            "cargo": "_verify_cargo",
+            "docker-hub": "_verify_docker_hub",
+        }
+        f = _finding(finding="placeholder 1.0.0")
+        for verify_type in verify_types:
+            assert verify_type in handlers, (
+                f"config/suppressions.json uses verify={verify_type!r}, which "
+                "_verify_version does not dispatch to any handler — the rule "
+                "can never fire"
+            )
+            target = f"ai_pr_review.findings.suppress.{handlers[verify_type]}"
+            with patch(target, return_value=True) as mock_handler:
+                result = _verify_version(f, verify_type)
+            mock_handler.assert_called_once()
+            assert result is True
+
+    def test_ruby_org_no_longer_dispatches(self) -> None:
+        """#F3 follow-up: _verify_ruby was dead (no config rule ever set
+        verify: ruby-org, and its extraction regex did not reliably match the
+        Gemfile.lock `name (version)` syntax this repo's own cve_check.py
+        parses). Removed rather than given an unvalidated match pattern;
+        "ruby-org" now falls through like any other unrecognized verify type."""
+        f = _finding(finding="nokogiri 1.15.0 has security issue")
+        result = _verify_version(f, "ruby-org")
         assert result is False
