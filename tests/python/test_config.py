@@ -193,6 +193,20 @@ def test_review_target_pr_does_not_warn(
     assert "standalone" not in captured.err
 
 
+@pytest.mark.parametrize("raw", ["Standalone", "STANDALONE", "  Standalone\t"])
+def test_review_target_standalone_mixed_case_still_warns_and_normalizes(
+    raw: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#629: REVIEW_TARGET must be case-normalized before either the
+    deprecation-warning check or diff/compute.py's merge-filter check sees
+    it, so mixed-case input doesn't silently fall through to 'pr' behavior."""
+    monkeypatch.setenv("REVIEW_TARGET", raw)
+    cfg = ReviewConfig.from_env()
+    assert cfg.review_target == "standalone"
+    captured = capsys.readouterr()
+    assert "REVIEW_TARGET=standalone" in captured.err
+
+
 def test_deprecated_alias_does_not_raise(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
