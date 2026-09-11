@@ -224,7 +224,7 @@ def _verify_version(finding: Finding, verify_type: str) -> bool:
     """
     text = f"{finding.finding} {finding.remediation}"
     try:
-        # #789-follow-up (F3): config/suppressions.json shipped "github-release"
+        # #796 (F3): config/suppressions.json shipped "github-release"
         # and "go-module" while this dispatch only ever recognized
         # "github-releases" and "go", so those two rules could never fire.
         # The config is now normalized to the code's spelling; the old
