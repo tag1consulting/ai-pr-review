@@ -48,6 +48,14 @@ SKIP_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-skip)"
 # exists in `full` mode.
 USAGE_MARKER: Final[str] = "<!-- ai-pr-review-usage -->"
 USAGE_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-usage)"
+# Precedes the body-findings section (#711) that GitLab's summary-note
+# upsert appends for findings that couldn't be anchored to an inline diff
+# line (out-of-diff, or over max_inline) -- GitHub and Bitbucket already
+# render these; GitLab silently dropped them entirely before this marker
+# existed. A stable anchor lets the upsert truncate and replace this section
+# on every run the same way it already does for USAGE_MARKER, without
+# needing GitLab's own F-ID/fingerprint infrastructure (which doesn't exist).
+GITLAB_BODY_FINDINGS_MARKER: Final[str] = "<!-- ai-pr-review-gitlab-body-findings -->"
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
