@@ -297,13 +297,219 @@ def _inline_reviews_and_thread(
     """Build a (review-for-classification, thread-nodes) pair from a realistic
     rendered inline comment body for `f`, so source parsing in
     `_inline_feedback_context`/`parse_inline_comment_header` sees the same
-    text a live bot comment would carry."""
+    text a live bot comment would carry.
+
+    The id-map key uses the real `fingerprint(f)` (matching what
+    `assemble_id_map` actually writes in production), not an arbitrary
+    stand-in -- `_build_inline_comment_body` embeds this same fingerprint in
+    the comment's own metadata marker, and #787's fingerprint-based thread
+    lookup in `dismiss_by_finding_id` compares the two, so a mismatched key
+    here would make every fingerprint match fail even for a single,
+    unambiguous thread."""
     comment_body = _build_inline_comment_body(f, finding_id=finding_id)
-    id_map = {f"{f.source}|{f.file}|{f.line}|abc123456789": finding_id}
+    id_map = {fingerprint(f): finding_id}
     review_body = comment_body + "\n" + build_id_map_marker(id_map)
     nodes = [_inline_thread(thread_id, resolved=False, body=comment_body, comment_db_id=55, review_db_id=review_id)]
     review = {"id": review_id, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body}
     return review, nodes
+
+
+def test_dismiss_by_finding_id_inline_duplicate_thread_resolves_the_open_one() -> None:
+    """Regression guard for #787, confirmed live on
+    tag1consulting/tag1.com-11ty-website#1529: a thread resolved without a
+    verdict (#779) can recur as a brand-new duplicate thread on a later
+    rescan, and both independently render `[F1]` in their own review's
+    numbering even though they're separate GitHub threads. `T1` (already
+    resolved, oldest -- GraphQL's `reviewThreads` returns creation order with
+    no explicit ordering) is listed FIRST in the thread nodes, exactly as
+    GitHub returned them in the live incident, to prove the fix doesn't
+    depend on list order. Before #787's fix, `dismiss_by_finding_id` took
+    the first `[F1]`-labeled match unconditionally and reported false
+    success against the already-resolved `T1`, never touching the
+    genuinely-open `T2`."""
+    f = _finding("HubSpotApiKey secret", source="trufflehog", file="src/contact/index.njk", line=30)
+    comment_body = _build_inline_comment_body(f, finding_id=1)
+    id_map = {fingerprint(f): 1}
+    review_body = comment_body + "\n" + build_id_map_marker(id_map)
+    nodes = [
+        _inline_thread("T1", resolved=True, body=comment_body, comment_db_id=1, review_db_id=41),
+        _inline_thread("T2", resolved=False, body=comment_body, comment_db_id=2, review_db_id=41),
+    ]
+    review = {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body}
+    resolve_calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[review])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            query = body.get("query", "")
+            if "resolveReviewThread" in query:
+                thread_id = body["variables"]["id"]
+                resolve_calls.append(thread_id)
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": thread_id, "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 1, actor="alice", command="false-positive")
+
+    assert resolve_calls == ["T2"]
+    assert result.thread_resolved is True
+    assert "resolved the thread" in result.reply
+
+
+def test_dismiss_by_finding_id_inline_duplicate_thread_all_resolved_is_noop_success() -> None:
+    """When every duplicate-fingerprint thread is already resolved (a
+    same-command re-run, or a rescan reaching this finding after both
+    threads were separately closed), the fallback to the first match keeps
+    the existing idempotent no-mutation success behavior -- no
+    `resolveReviewThread` call is issued, and this stays a success reply
+    rather than degrading to `_not_found_reply`."""
+    f = _finding("HubSpotApiKey secret", source="trufflehog", file="src/contact/index.njk", line=30)
+    comment_body = _build_inline_comment_body(f, finding_id=1)
+    id_map = {fingerprint(f): 1}
+    review_body = comment_body + "\n" + build_id_map_marker(id_map)
+    nodes = [
+        _inline_thread("T1", resolved=True, body=comment_body, comment_db_id=1, review_db_id=41),
+        _inline_thread("T2", resolved=True, body=comment_body, comment_db_id=2, review_db_id=41),
+    ]
+    review = {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body}
+    resolve_calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[review])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            query = body.get("query", "")
+            if "resolveReviewThread" in query:
+                resolve_calls.append(body["variables"]["id"])
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 1, actor="alice", command="false-positive")
+
+    assert resolve_calls == []
+    assert result.thread_resolved is True
+    assert "resolved the thread" in result.reply
+
+
+def test_dismiss_by_finding_id_inline_legacy_markerless_duplicate_not_confused_with_unrelated_marked_thread() -> None:
+    """A realistic migration-era duplicate: a pre-marker legacy thread (no
+    `<!-- ai-pr-review-finding -->` at all -- predates that marker's
+    introduction) carries the same `[F1]` text as an unrelated *different*
+    finding that happened to also render as F1 in its own review's
+    numbering and does have a marker. The legacy thread must be matched via
+    the `[F<n>]` text fallback (its `meta` is `None`); the unrelated marked
+    thread must be excluded because its fingerprint doesn't match `target_fp`
+    -- text-matching alone (the pre-#787 behavior) would have confused the
+    two just because both happen to say `[F1]`."""
+    f = _finding("HubSpotApiKey secret", source="trufflehog", file="src/contact/index.njk", line=30)
+    id_map = {fingerprint(f): 1}
+    review_body = "Some review body.\n" + build_id_map_marker(id_map)
+
+    legacy_body = f"[High] leak\n**[F1]**\n{INLINE_MARKER}"
+    other_finding = _finding("unrelated XSS", source="semgrep", file="web/index.js", line=99)
+    unrelated_marked_body = _build_inline_comment_body(other_finding, finding_id=1)
+
+    # T_unrelated listed FIRST: pre-#787 first-`[F1]`-match-wins logic would
+    # pick it (it has no way to tell it's a different finding), so this
+    # ordering is what makes the test actually discriminate old vs new
+    # behavior rather than passing by luck of list order.
+    nodes = [
+        _inline_thread("T_unrelated", resolved=False, body=unrelated_marked_body, comment_db_id=2, review_db_id=41),
+        _inline_thread("T_legacy", resolved=False, body=legacy_body, comment_db_id=1, review_db_id=41),
+    ]
+    review = {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body}
+    resolve_calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[review])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            query = body.get("query", "")
+            if "resolveReviewThread" in query:
+                thread_id = body["variables"]["id"]
+                resolve_calls.append(thread_id)
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": thread_id, "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 1, actor="alice", command="false-positive")
+
+    assert resolve_calls == ["T_legacy"]
+    assert result.thread_resolved is True
+
+
+def test_dismiss_by_finding_id_inline_matches_via_prior_fingerprint_after_fuzzy_update() -> None:
+    """#720 drift interaction: a thread whose comment was PATCHed in place by
+    a fuzzy update/escalate match now carries a *different* current
+    fingerprint, but its marker's `prior_fps` still lists the original one
+    that `target_fp` resolves to (the id-map key a verdict command reads
+    never moves). The thread must still be matched via `prior_fps`, and a
+    second, wholly unrelated thread (no fingerprint or prior_fps overlap at
+    all) must be excluded."""
+    f_original = _finding("HubSpotApiKey secret", source="trufflehog", file="src/contact/index.njk", line=30)
+    fp_original = fingerprint(f_original)
+    id_map = {fp_original: 1}
+    review_body = "Some review body.\n" + build_id_map_marker(id_map)
+
+    f_drifted = _finding("HubSpotApiKey secret (reworded)", source="trufflehog", file="src/contact/index.njk", line=30)
+    drifted_body = _build_inline_comment_body(f_drifted, finding_id=1, prior_fingerprints=[fp_original])
+
+    unrelated_finding = _finding("unrelated XSS", source="semgrep", file="web/index.js", line=99)
+    unrelated_body = _build_inline_comment_body(unrelated_finding, finding_id=1)
+
+    nodes = [
+        _inline_thread("T_unrelated", resolved=False, body=unrelated_body, comment_db_id=1, review_db_id=41),
+        _inline_thread("T_drifted", resolved=False, body=drifted_body, comment_db_id=2, review_db_id=41),
+    ]
+    review = {"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}, "body": review_body}
+    resolve_calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(200, json=[review])
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            query = body.get("query", "")
+            if "resolveReviewThread" in query:
+                thread_id = body["variables"]["id"]
+                resolve_calls.append(thread_id)
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": thread_id, "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 1, actor="alice", command="false-positive")
+
+    assert resolve_calls == ["T_drifted"]
+    assert result.thread_resolved is True
 
 
 def test_dismiss_by_finding_id_inline_analyzer_source_gets_suppression_hint() -> None:

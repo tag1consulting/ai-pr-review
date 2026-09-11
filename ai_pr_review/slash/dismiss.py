@@ -39,7 +39,7 @@ from ai_pr_review.vcs._finding_ids import (
     safe_review_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
-from ai_pr_review.vcs.marker import extract_id_map, upsert_verdicts_marker
+from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, upsert_verdicts_marker
 
 if TYPE_CHECKING:
     from ai_pr_review.vcs.github import GitHubProvider
@@ -814,19 +814,42 @@ def dismiss_by_finding_id(
             errors=tuple(errors),
         )
 
-    # INLINE: find the thread carrying this F-id token, gated by our own
-    # inline marker (never touch another bot's or human's thread).
+    # INLINE: find the thread carrying this finding, gated by our own inline
+    # marker (never touch another bot's or human's thread).
+    #
+    # F-ids are assigned fresh per review run, not globally unique (#787): a
+    # thread resolved without a verdict (#779) can recur as a brand-new
+    # duplicate thread on a later rescan, and both may independently render
+    # as `[F1]` in their own review's numbering even though they're separate
+    # GitHub threads. Matching on that visible label alone can silently
+    # resolve a stale duplicate while leaving the genuinely open thread
+    # untouched. So candidates are matched by fingerprint first (decoded
+    # from each thread's own metadata marker via `extract_inline_meta`,
+    # checking `prior_fps` too for #720 drift) and only fall back to the
+    # `[F<n>]` substring for a legacy/markerless comment that predates the
+    # marker or when `target_fp` itself couldn't be resolved. Among
+    # candidates, an unresolved thread is preferred over an already-resolved
+    # one -- picking a resolved match instead would repeat exactly the #787
+    # bug this exists to fix.
     threads = provider.fetch_review_threads()
-    target_thread: dict[str, Any] | None = None
+    target_fp = _fingerprint_for_finding_id(bodies, finding_id)
+    candidates: list[dict[str, Any]] = []
     for t in threads:
         body = _first_comment_body(t)
         author = _first_comment_author_login(t) or None
         if not is_owned_by_us(body, author, None, kind="inline"):
             continue
-        if f"[F{finding_id}]" not in body:
+        meta = extract_inline_meta(body)
+        if target_fp is not None and meta is not None:
+            if meta.fp != target_fp and target_fp not in meta.prior_fps:
+                continue
+        elif f"[F{finding_id}]" not in body:
             continue
-        target_thread = t
-        break
+        candidates.append(t)
+
+    target_thread = next((t for t in candidates if not t.get("isResolved")), None)
+    if target_thread is None and candidates:
+        target_thread = candidates[0]
 
     if target_thread is None:
         errors.extend(provider._errors[errors_before:])
@@ -859,7 +882,7 @@ def dismiss_by_finding_id(
         _record_verdict(
             provider,
             reviews,
-            _fingerprint_for_finding_id(bodies, finding_id),
+            target_fp,
             "fixed" if command == "fixed" else "dismissed",
         )
         # Try the PR-wide approve path FIRST: it is the sole dismisser for
