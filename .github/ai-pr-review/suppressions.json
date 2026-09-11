@@ -21,5 +21,14 @@
     "match": {
       "pattern": "python-logger-credential-disclosure|python.lang.security.audit.logging.logger-credential-leak"
     }
+  },
+  {
+    "id": "phpstan-subprocess-tainted-env-false-positive",
+    "reason": "Semgrep's dangerous-subprocess-use-tainted-env-args rule flags the subprocess.run(args, ...) call in phpstan.py as unsafe because PHPSTAN_LEVEL (an env var) reaches it. Not exploitable: the call uses list-form args with no shell=True, PHPSTAN_LEVEL is validated against _VALID_LEVEL_RE (a single digit, 0-9) before use, and the changed-file paths appended afterward are guarded by an explicit '--' argv separator. An inline `# nosemgrep` comment was tried first (#789 / #790) but was found to be unreliable: Semgrep does not consistently honor it when this file is scanned alongside others, as this repo's own CI does. This rule is the deterministic fallback — it matches on the already-extracted Finding, after Semgrep has run, so it is unaffected by Semgrep's own inline-suppression behavior. Scoped to this exact file+line so a future unsafe subprocess.run added elsewhere in phpstan.py is not silently hidden; if this line number shifts, the suppression stops matching and the finding resurfaces rather than staying hidden.",
+    "match": {
+      "file": "ai_pr_review/analyzers/native/phpstan.py",
+      "line": 116,
+      "pattern": "dangerous-subprocess-use-tainted-env-args"
+    }
   }
 ]
