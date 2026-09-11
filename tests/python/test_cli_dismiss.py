@@ -18,6 +18,7 @@ import ai_pr_review.vcs as vcs_module
 from ai_pr_review.cli import cli
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
+from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import build_id_map_marker
@@ -281,10 +282,16 @@ def test_top_level_inline_finding_writes_full_context_feedback(monkeypatch) -> N
     # classify_finding resolves it as INLINE -- see
     # test_inline_finding_classifies_via_id_map_not_bullet in
     # tests/python/slash/test_dismiss.py for the minimal fixture this mirrors.
-    id_map = {"code-reviewer|src/foo.py|12|abc123456789": finding_id}
+    #
+    # The id-map key must be the real `fingerprint(f)` (what `assemble_id_map`
+    # actually writes in production), not an arbitrary stand-in:
+    # `_build_inline_comment_body` embeds this same fingerprint in the
+    # comment's own metadata marker, and #787's fingerprint-based thread
+    # lookup in `dismiss_by_finding_id` compares the two.
+    f = _finding("unsafe eval", source="code-reviewer", file="src/foo.py", line=12)
+    id_map = {fingerprint(f): finding_id}
     review_body = "Some review body.\n" + build_id_map_marker(id_map)
 
-    f = _finding("unsafe eval", source="code-reviewer", file="src/foo.py", line=12)
     thread_body = _build_inline_comment_body(f, finding_id=finding_id)
     thread_node = {
         "id": "T1",
