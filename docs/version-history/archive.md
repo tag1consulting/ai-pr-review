@@ -8,7 +8,13 @@ render_with_liquid: false
 
 # Older releases
 
-v2.4.5 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.4.6 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.4.6
+
+**Fixed the review body's "Overall Risk" headline silently contradicting the review's own decision.** A judge-downranked High-severity finding could vanish from the headline ("Overall Risk: None") on GitHub and Bitbucket even though the review still correctly requested changes and posted the finding inline. Fixed with a shared headline calculation both providers now use, plus two related fixes: a prompt-injection path that let an untrusted agent hide its own finding was closed, and a Bitbucket-specific bug that could blank the entire findings section when every finding happened to be out-of-diff was fixed.
+
+`REVIEW_TARGET=standalone` now emits a runtime deprecation warning — its original behavior (posting findings to an issue) was never carried over to the Python engine, and the value now only affects merge-commit filtering. `github_repository` is now stripped of whitespace like every other environment-sourced value. A VCS API error during `/ai-pr-review dismiss`/`false-positive`/`wont-fix` now surfaces as a Checks-tab annotation instead of only a run-log warning, so a failed dismiss is no longer indistinguishable from a successful one at a glance.
 
 ## v2.4.5
 
