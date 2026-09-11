@@ -50,6 +50,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.findings.scope import is_analyzer_source
 
 _log = logging.getLogger(__name__)
 
@@ -79,6 +80,53 @@ _ID_RE = re.compile(r"\*\*\[F(\d+)\]\*\*", re.IGNORECASE)
 
 # Matches the source tag, e.g. [code-reviewer] or [code-reviewer, security-reviewer]
 _SOURCE_RE = re.compile(r"\[([^\]]+)\]")
+
+
+def _pick_primary_source(sources: str) -> str:
+    """Pick the source name to *attribute* a finding to, out of a rendered
+    `[a, b, ...]` tag's comma-joined contents (issue #776).
+
+    Scope, read carefully before reusing this: this answers "which tool
+    should a human-facing message credit for this finding" -- it does NOT
+    answer "what is this finding's real `fingerprint()` source component."
+    Those are different questions with different right answers, and this
+    function is only for the first one. It backs `ai_pr_review.slash.
+    dismiss`'s two call sites (the learning-store entry and the
+    `/ai-pr-review dismiss`-family reply text, including the analyzer
+    suppression-hint gate), where "which analyzer flagged this" is exactly
+    the useful answer for a human deciding what to do next. It is
+    deliberately NOT used by this module's own `_parse_existing_ids`
+    fingerprint-reconstruction fallback just above -- see the comment at
+    that call site for why using it there was tried, live-verified via
+    `merge_findings()` to be wrong more often than the plain first-name
+    fallback it would have replaced, and reverted before merge.
+
+    A corroborated finding (`findings/provenance.py`: independently
+    confirmed by both an LLM agent and a static analyzer) renders every
+    source name it carries, alphabetically sorted (`findings/merge.py`'s
+    `_collapse_cluster` sorts the union). Naively taking the first name
+    silently prefers whichever name sorts first alphabetically -- observed
+    live as `adversarial-general` beating `trufflehog` for the same finding,
+    purely because "a" < "t", not because either is more "the" source.
+    Preferring a static-analyzer name when one is present fixes exactly that:
+    for attribution purposes, the deterministic, rule-based analyzer is
+    always the more informative name to surface to a human, regardless of
+    which finding happened to win `_collapse_cluster`'s internal severity
+    selection for the merged representative's severity/fingerprint. Falls
+    back to the first name when no analyzer is present at all (an all-agent
+    or a single-source tag) -- arbitrary but no worse than before, since
+    there's nothing to prefer. The identical arbitrary-by-alphabet fallback
+    also still applies, one level down, when *multiple* analyzers
+    corroborate together (`is_corroborated` only requires >=1 analyzer and
+    >=1 agent, not exactly one of each): whichever analyzer name sorts first
+    among the analyzers present wins, with no further tie-break.
+    """
+    names = [s.strip() for s in sources.split(",")]
+    for name in names:
+        if is_analyzer_source(name):
+            return name
+    return names[0]
+
 
 # Matches file:line location at end of bullet, e.g. *(at `foo.py:10`...)*
 _LOCATION_RE = re.compile(r"\*\(at `([^`]+)`")
@@ -226,7 +274,27 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
                 continue
             finding_id = int(id_match.group(1))
 
-            # Reconstruct fingerprint from bullet.
+            # Reconstruct fingerprint from bullet. Deliberately NOT
+            # `_pick_primary_source` (issue #776's analyzer-preference rule):
+            # this must match `fingerprint()`'s real `source` (singular)
+            # component exactly, which `merge.py`'s `_collapse_cluster` sets
+            # to whichever cluster member won by *severity* -- with ties
+            # (the common case: an analyzer and an agent independently
+            # flagging the same thing tend to agree on severity) broken by
+            # original list order, where agent findings are dispatched
+            # before analyzer findings (`orchestrate.py`), so the agent wins
+            # more often than not. `_pick_primary_source`'s "prefer any
+            # analyzer" rule has no visibility into that severity/order
+            # tie-break at all -- live-verified via `merge_findings()` that
+            # for the exact same-severity, agent-and-analyzer-corroborated
+            # shape #776 was filed against, the real `source` is the AGENT
+            # name, which `_pick_primary_source` would get wrong here more
+            # often than the plain first-name fallback it would replace.
+            # `_pick_primary_source` stays correctly scoped to
+            # `slash.dismiss`'s two call sites, where "which analyzer
+            # flagged this" for attribution/reply-text purposes is the right
+            # question to ask -- this call site's question ("what string
+            # produces this exact fingerprint") is a different one.
             source = ""
             after_id = stripped[id_match.end():]
             src_m = _SOURCE_RE.search(after_id)

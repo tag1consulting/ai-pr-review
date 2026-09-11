@@ -34,6 +34,7 @@ from ai_pr_review.vcs._finding_ids import (
     _SOURCE_RE,
     BODY_SECTION_START_MARKERS,
     _ends_body_section,
+    _pick_primary_source,
     fingerprint_for_finding_id,
     safe_review_id,
 )
@@ -173,7 +174,7 @@ def _scan_body_bullets_one(body: str) -> dict[int, ClassifiedFinding]:
         source = ""
         src_m = _SOURCE_RE.search(after_id)
         if src_m:
-            source = src_m.group(1).split(",")[0].strip()
+            source = _pick_primary_source(src_m.group(1))
 
         file_ = ""
         line_no = ""
@@ -966,11 +967,12 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
     [{source}] {text}``, no leading severity bracket), so `_SOURCE_RE`'s
     first-match behavior used by `_scan_body_bullets_one` does not apply here.
     For multi-source findings (e.g. ``[code-reviewer, security-reviewer]``),
-    only the first source tag is kept, matching the body-level convention.
-    Matches `_scan_body_bullets_one`'s existing rule_id convention: for a SARIF
-    source (e.g. ``sarif:bandit``), `rule_id` is the full source string, not
-    a separately-rendered bracket — no render path emits a distinct third
-    bracket group for the rule ID.
+    `_pick_primary_source` picks a static-analyzer name over an LLM agent's
+    when both are present (issue #776), matching `_scan_body_bullets_one`'s
+    identical convention. Matches `_scan_body_bullets_one`'s existing rule_id
+    convention too: for a SARIF source (e.g. ``sarif:bandit``), `rule_id` is
+    the full source string, not a separately-rendered bracket — no render
+    path emits a distinct third bracket group for the rule ID.
 
     Returns `ClassifiedFinding(location=UNKNOWN)` (empty source) if no
     source tag could be parsed, so callers can distinguish a parse failure
@@ -982,7 +984,7 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
     if len(brackets) < 2:
         return ClassifiedFinding(location=FindingLocation.UNKNOWN)
 
-    source = brackets[1].split(",")[0].strip()
+    source = _pick_primary_source(brackets[1])
     rule_id = source if source.startswith("sarif:") else ""
     return ClassifiedFinding(location=FindingLocation.INLINE, source=source, rule_id=rule_id)
 

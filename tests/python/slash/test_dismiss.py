@@ -46,6 +46,28 @@ def test_body_bullet_in_diff_section_classifies_as_body() -> None:
     assert result.line == "42"
 
 
+def test_body_bullet_corroborated_prefers_analyzer_over_agent() -> None:
+    """Issue #776, body-bullet path: `_scan_body_bullets_one` shares the
+    same "take-first-in-the-comma-list" logic `parse_inline_comment_header`
+    had, so a corroborated body-level finding must also prefer the analyzer
+    name over an LLM agent's alphabetically-earlier one."""
+    f = Finding(
+        severity="high",
+        confidence=90,
+        finding="secret detected",
+        sources=["adversarial-general", "trufflehog"],
+        file="src/contact/index.njk",
+        line=30,
+    )
+    bullet = format_body_finding(f, finding_id=3)
+    body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    result = classify_finding([body], 3)
+
+    assert result.location is FindingLocation.BODY
+    assert result.source == "trufflehog"
+
+
 def test_out_of_diff_bullet_classifies_as_body() -> None:
     """Issue #550 regression: a finding rendered only in the out-of-diff
     <details> block (no in-diff heading at all) must still classify as BODY,
@@ -419,6 +441,11 @@ def test_parse_inline_comment_header_extracts_sarif_rule_id() -> None:
 
 
 def test_parse_inline_comment_header_multi_source_keeps_first_only() -> None:
+    """No analyzer present among the sources (both are LLM agents), so
+    `_pick_primary_source` falls through to its pre-#776 fallback: the first
+    name in render order, arbitrarily. This pins that fallback branch
+    specifically -- it does not exercise the analyzer-preference path the
+    `corroborated_*` tests below cover."""
     f = Finding(
         severity="medium",
         confidence=80,
@@ -432,6 +459,129 @@ def test_parse_inline_comment_header_multi_source_keeps_first_only() -> None:
     result = parse_inline_comment_header(body)
 
     assert result.source == "code-reviewer"
+
+
+def test_parse_inline_comment_header_corroborated_prefers_analyzer_over_agent() -> None:
+    """Issue #776: a corroborated finding (independently flagged by both an
+    LLM agent and a static analyzer) renders every source, alphabetically
+    sorted (findings/merge.py). Naively taking the first name silently
+    prefers whichever sorts first -- observed live as `adversarial-general`
+    beating `trufflehog` for the identical finding purely because "a" < "t".
+    The analyzer name must win regardless of where it falls alphabetically."""
+    f = Finding(
+        severity="high",
+        confidence=90,
+        finding="secret detected",
+        sources=["adversarial-general", "trufflehog"],
+        file="src/contact/index.njk",
+        line=30,
+    )
+    body = _build_inline_comment_body(f, finding_id=1)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "trufflehog"
+
+
+def test_parse_inline_comment_header_corroborated_prefers_analyzer_already_first() -> None:
+    """Sanity check only, not an independent regression guard: with the
+    analyzer already first, the old take-first code would coincidentally
+    produce the same answer, so this alone would not catch a revert of the
+    fix -- `..._prefers_analyzer_over_agent` above is what actually pins the
+    bug fix. This just confirms source order in the rendered tag has no
+    bearing on the outcome either way."""
+    f = Finding(
+        severity="high",
+        confidence=90,
+        finding="secret detected",
+        sources=["trufflehog", "adversarial-general"],
+        file="src/contact/index.njk",
+        line=30,
+    )
+    body = _build_inline_comment_body(f, finding_id=1)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "trufflehog"
+
+
+def test_parse_inline_comment_header_multiple_analyzers_deterministic() -> None:
+    """Three-way corroboration (two analyzers + one agent): the tie-break
+    among multiple analyzer names is "first analyzer encountered in
+    `_pick_primary_source`'s iteration order" -- given `_collapse_cluster`'s
+    alphabetical sort, that's the alphabetically-first analyzer name, not any
+    signal of which analyzer is more relevant. Deterministic today, but an
+    emergent property of alphabetical-sort + first-match iteration rather
+    than a deliberate rule -- this pins the current concrete behavior so a
+    future change to the iteration (e.g. switching to a set) can't silently
+    make the tie-break non-deterministic without a test noticing."""
+    f = Finding(
+        severity="high",
+        confidence=90,
+        finding="secret detected",
+        sources=["adversarial-general", "semgrep", "trufflehog"],
+        file="src/contact/index.njk",
+        line=30,
+    )
+    body = _build_inline_comment_body(f, finding_id=1)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "semgrep"
+
+
+def test_parse_inline_comment_header_accepted_limitation_agent_is_true_winner() -> None:
+    """Documents, deliberately, a case this fix does NOT get right: when the
+    real fingerprint-relevant `source` (the cluster member `_collapse_cluster`
+    picked as `best` by severity) is actually the LLM agent -- its assigned
+    severity for this instance outranked the analyzer's, even though the
+    analyzer also corroborated at a lower severity -- `_pick_primary_source`
+    still always returns the analyzer name, because it has no severity
+    information to break the tie correctly (the rendered comment only ever
+    carries the merged survivor's one overall severity, never a per-source
+    breakdown). This is the exact inverse of the bug #776 fixed, kept
+    deliberately unresolved (see `_pick_primary_source`'s docstring): fixing
+    it isn't possible from rendered text alone, and the issue's own stated
+    impact is low (an advisory learning-store entry, not a suppression or
+    dismissal decision). This test exists so a future reader finds an
+    explicit, intentional acknowledgment here instead of silently
+    discovering the gap as if it were an oversight."""
+    f = Finding(
+        severity="high",
+        confidence=90,
+        # The real `source` would be "adversarial-general" here (it was the
+        # true severity winner); the rendered tag can't express that.
+        finding="secret detected",
+        sources=["adversarial-general", "trufflehog"],
+        file="src/contact/index.njk",
+        line=30,
+    )
+    body = _build_inline_comment_body(f, finding_id=1)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "trufflehog"  # known-wrong for this scenario, accepted
+
+
+def test_parse_inline_comment_header_corroborated_sarif_beats_agent() -> None:
+    """A SARIF-sourced corroboration must also win over an agent name, and
+    still recover the full sarif: rule_id -- previously an agent name
+    sorting earlier ("code-reviewer" < "sarif:bandit") would have silently
+    discarded the SARIF rule_id along with mis-attributing the source."""
+    f = Finding(
+        severity="high",
+        confidence=90,
+        finding="insecure hash",
+        sources=["code-reviewer", "sarif:bandit"],
+        file="crypto.py",
+        line=8,
+    )
+    body = _build_inline_comment_body(f, finding_id=1)
+
+    result = parse_inline_comment_header(body)
+
+    assert result.source == "sarif:bandit"
+    assert result.rule_id == "sarif:bandit"
 
 
 def test_parse_inline_comment_header_no_id_token_still_parses() -> None:
