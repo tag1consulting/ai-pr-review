@@ -1027,6 +1027,71 @@ def test_resolved_unverdicted_thread_triggers_reincarnation_note_body_level() ->
     assert "resolved earlier with no verdict recorded" in posted_body
 
 
+def test_recurred_with_thread_finding_counts_toward_inline_headline() -> None:
+    """Issue #767: a `recurred` finding with `c.thread is not None` (a
+    `fixed`-verdicted finding that came back on its original still-existing
+    inline comment) is folded into `headline_findings` (counts toward
+    `finding_total`) but, pre-fix, was never added to `headline_inline_count`
+    -- producing the same "count > 0, inline == 0" contradiction #766 fixed
+    for carried-forward threads, via a different classification path #766
+    didn't touch. A run whose only classified activity is a single
+    recurred-with-thread finding must render "1 (1 inline)", not
+    "1 (0 inline)", since it does correspond to a live inline comment (this
+    run's own fresh reply on it)."""
+    f = _finding("leaked key", severity="High", line=5, source="code-reviewer", category="secret")
+    fp = fingerprint(f)
+    resolved_comment_body = _build_inline_comment_body(f)
+    canonical_body = _footer_body() + "\n" + build_verdicts_marker({fp: "fixed"})
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+
+        body = _j.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 10, "state": "CHANGES_REQUESTED",
+                        "user": {"login": "github-actions[bot]"},
+                        "body": canonical_body,
+                    }
+                ],
+            )
+        if _is_graphql(req, body, "unresolveReviewThread"):
+            return httpx.Response(200, json={"data": {"unresolveReviewThread": {"thread": {"id": "th1", "isResolved": False}}}})
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10,
+                    body=resolved_comment_body, line=5, is_resolved=True,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/comments/1/replies"):
+            return httpx.Response(201, json={"id": 2})
+        if req.method == "GET" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"state": "CHANGES_REQUESTED", "body": canonical_body})
+        if req.method == "GET" and url.endswith("/pulls/1"):
+            return httpx.Response(200, json={"head": {"sha": _VALID_SHA}})
+        if req.method == "PUT" and url.endswith("/reviews/10"):
+            return httpx.Response(200, json={"id": 10})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [f],
+        DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA),
+        event="REQUEST_CHANGES",
+    )
+
+    assert result.ok
+    puts = [c for c in rec.calls if c[0] == "PUT" and c[1].endswith("/reviews/10")]
+    assert len(puts) == 1
+    posted_body = puts[0][2]["body"]
+    assert "**Findings:** 1 (1 inline)" in posted_body
+
+
 def test_reopened_recurrence_thread_protects_canonical_from_dismissal() -> None:
     """A recurrence reopens th1 on canonical review 10 via unresolveReviewThread.
     The same run also has a brand-new Critical finding, which forces

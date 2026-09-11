@@ -1170,10 +1170,22 @@ class GitHubProvider:
         headline_findings.extend(_carried_forward_finding(t) for t in carried_forward)
         # A carried-forward thread *is* a live inline comment on the PR --
         # omitting it here (pre-#766) made "(0 inline)" false whenever it was
-        # the only thing behind a nonzero count.
+        # the only thing behind a nonzero count. Issue #767: a `recurred`
+        # finding with `c.thread is not None` (a `fixed`-verdicted finding
+        # that came back, on its original still-existing inline comment) is
+        # the same shape -- it's in `headline_findings` above, and it *is* a
+        # live inline comment (this run posts a fresh reply on it via
+        # `_notify_recurrence`), so omitting it here left the exact same
+        # "count > 0, inline == 0" contradiction #766 fixed for carried-
+        # forward threads, just via a different classification path #766
+        # didn't touch. A body-level `recurred` (`c.thread is None`, nothing
+        # to reopen) is unaffected -- it already renders in
+        # `body_findings_text` via `render_findings`, so it correctly counts
+        # as a body finding, not an inline one.
         headline_inline_count = (
             len(inline_comments)
             + sum(1 for c in classified if c.kind in ("update", "escalate"))
+            + sum(1 for c in classified if c.kind == "recurred" and c.thread is not None)
             + len(carried_forward)
         )
 
