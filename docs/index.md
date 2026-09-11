@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.10.0
+
+**A chain of bugs surfaced while investigating why one PR stayed blocked despite an apparently-correct false-positive dismissal — the biggest was a dropped-verdict bug that could silently discard a `dismiss`/`false-positive`/`wont-fix`/`fixed` verdict in the common case, not an edge case (issue #771).** The PR's actual root cause turned out to be different: a human resolving a bot-owned thread via GitHub's native "Resolve conversation" button, with no verdict command, reappeared on a later rescan as an apparently-brand-new duplicate comment with no explanation (issue #779) — now explained instead of silently reposted. A batch of adjacent slash-command UX fixes lands alongside these: malformed commands now signal clearly instead of failing silently (issue #772), `feedback`'s reply no longer reads as confirmation when it isn't (issue #773), and a corroborated finding's source attribution, a duplicate-reply bug, and two headline-count contradictions are also fixed.
+
+See [Version History → v2.10.0](version-history/v2.10.0) for details.
+
 ## What's new in v2.9.0
 
 **The token usage table moves out of the review comment by default, and a follow-up sweep closes container-action env passthrough gaps.** The full `Token usage by agent` breakdown was reference material, not review content, and its in-comment copy had caused two shipped bugs on Bitbucket (issue #758). The review comment now carries a single compact cost line plus an optional high-usage warning; the full table is always in the CI job log and, on GitHub, `GITHUB_STEP_SUMMARY`. Separately, `container-action/action.yml`'s docker env passthrough was missing `GITHUB_ACTIONS` (issue #759) and, in a follow-up sweep, 24 further documented vars including the `AI_CANONICAL_REUSE`/`AI_GITLAB_CROSS_RUN_DEDUP` incident-response kill switches (issue #761) — all silently inert on the container path despite being set. A new regression test guards against this class of gap recurring.
@@ -79,12 +85,6 @@ See [Version History → v2.9.0](version-history/v2.9.0) for details.
 **GitLab reruns stop duplicating findings, and a batch of canonical-review correctness fixes lands on GitHub.** GitLab's `post_findings` now fuzzy-matches each finding against this bot's still-open prior discussions and skips reposting a match, closing the gap with GitHub's canonical-review reuse (issue #710). On GitHub, canonical-review selection no longer picks an empty-body auto-created review (which broke every subsequent `dismiss`/`false-positive`/`wont-fix`/`fixed` with an HTTP 422), the `/ai-pr-review dismiss` family no longer leaks a raw `::warning::` annotation into its reply text, and a review's verdicts marker is no longer trusted when it self-contradicts what that same review actually rendered (issue #755) — closing a path that could have permanently and silently suppressed a finding no human ever dismissed. On GitLab, a `resolve_stale` reintroduction of the "resolves its own just-posted comment" bug (previously fixed on GitHub, issue #718) is now fixed there too. The Anthropic premium default also moves to `claude-opus-5`, with an adaptive-thinking effort cap so it stays under the client timeout.
 
 See [Version History → v2.8.0](version-history/v2.8.0) for details.
-
-## What's new in v2.7.0
-
-**Canonical-review reuse (GitHub) plus a security hardening pass.** Rerunning the review no longer always posts a new review object — a quiet rerun updates the existing review in place instead of piling up noise. This release also closes a code-execution path reopened by fork-PR checkout: `phpstan`, `checkov`, and `tflint` no longer auto-discover config/plugin content from the analyzed workspace (a project's own `phpstan.neon` is no longer honored, even on trusted runs — `PHPSTAN_LEVEL` always applies now).
-
-See [Version History → v2.7.0](version-history/v2.7.0) for details.
 
 ## Learn more
 

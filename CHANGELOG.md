@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-09-11
+
 ### Added
 
 - **Dismissing/marking-false-positive/wont-fixing a static-analyzer finding now points at the durable suppression mechanism (issue #775)**. A verdict on a finding sourced from a native analyzer (trufflehog, semgrep, phpcs, etc.) only ever suppresses that exact fingerprint (file + line + code) — the same false positive recurring in a different file was never affected by any number of prior verdicts, and nothing in the bot's reply said so or pointed at the fix. The confirmation reply for `dismiss`/`false-positive`/`wont-fix` (both the top-level `F<n>` and inline-thread-reply paths) now appends a short note when the finding's source is a static analyzer, directing the user to add a rule to `.github/ai-pr-review/suppressions.json` (see `docs/suppression.md`) if the same pattern keeps recurring elsewhere. LLM-agent-sourced findings are unchanged — they already benefit from the learning-loop's soft suppression via `<repo-feedback>` prompt injection, so the note would be misleading there. `fixed` is also unchanged (it's not a verdict on validity).
