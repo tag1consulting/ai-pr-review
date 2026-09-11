@@ -30,7 +30,7 @@ _Avoid_: calling either one "self-contradictory" without saying which — that a
 
 **Severity** (of a finding):
 The blocking contract: what a finding's level obliges the review verdict to do. `Critical` and `High` produce `REQUEST_CHANGES`; `Medium` and `Low` produce `APPROVE` with the finding still surfaced (`review/outcome.py`). Severity answers "must this stop the merge?" Harm is the input an agent reasons from when choosing a level, but the level itself is a commitment about the verdict, not a description of the code.
-_Avoid_: deriving severity from confidence. They are independent axes, and a prompt that maps high confidence to `High` turns any assured-but-harmless observation into a merge block (see ADR 0004).
+_Avoid_: deriving severity from confidence. They are independent axes, and a prompt that maps high confidence to `High` turns any assured-but-harmless observation into a merge block (see issue #798).
 
 **Confidence** (of a finding):
 An agent's self-reported certainty that the finding is real, 0-100. It gates *existence*, never severity: `findings/merge.py` drops anything below `confidence_threshold` (default 75, `AI_CONFIDENCE_THRESHOLD`) before findings reach the verdict stage. A finding that survives the floor is treated as true, and its severity is then decided by the blocking contract alone, not recomputed from confidence.
