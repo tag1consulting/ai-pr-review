@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import quote
@@ -854,8 +855,25 @@ class GitHubProvider:
         recurred_body_fps: set[str],
         head_sha: str,
         id_map: dict[str, int],
+        reincarnated_fps: AbstractSet[str] = frozenset(),
     ) -> list[str]:
-        """Render one column (in-diff or out-of-diff) of body-level findings."""
+        """Render one column (in-diff or out-of-diff) of body-level findings.
+
+        `reincarnated_fps` (issue #779): fingerprints `find_resolved_match()`
+        matched against a thread a human resolved without ever recording a
+        verdict. A short annotation, same style as `*(recurred)*`/`*(line not
+        in diff)*` below, rather than the fuller `_REINCARNATION_NOTE` prose
+        used for an inline comment -- a body bullet is already terse by
+        convention. Deliberately worded without "reopened"/"recurred": unlike
+        the `*(recurred)*` case just above (a `fixed` verdict whose finding
+        came back, which really does reopen the original thread via
+        `_notify_recurrence`), nothing is reopened here -- the old thread
+        stays resolved and this is a brand-new bullet. A finding that stays
+        body-level forever (out-of-diff, or past `max_inline`) re-earns this
+        annotation on every run for as long as the resolved thread keeps
+        exact-fingerprint-matching it and no verdict is recorded -- an
+        intentional, if repetitive, nudge rather than a one-time notice.
+        """
         from ai_pr_review.vcs._body import format_body_finding
         from ai_pr_review.vcs._finding_ids import fingerprint
 
@@ -866,6 +884,12 @@ class GitHubProvider:
                 loc_note = " *(line not in diff)*"
             if fingerprint(f) in recurred_body_fps:
                 loc_note += " *(recurred)*"
+            if fingerprint(f) in reincarnated_fps:
+                loc_note += (
+                    " *(resolved earlier with no verdict recorded — reply "
+                    "`/ai-pr-review false-positive`, `wont-fix`, or `dismiss` "
+                    "to suppress for good)*"
+                )
             if f.file:
                 url = _blob_link(
                     owner=self.config.owner, repo=self.config.repo,
@@ -942,7 +966,12 @@ class GitHubProvider:
     ) -> FindingsResult:
         from ai_pr_review.diff.linemap import parse_diff_sets
         from ai_pr_review.vcs._body import join_findings
-        from ai_pr_review.vcs._canonical import classify, decide_action, dedupe_thread_claims
+        from ai_pr_review.vcs._canonical import (
+            classify,
+            decide_action,
+            dedupe_thread_claims,
+            find_resolved_match,
+        )
         from ai_pr_review.vcs._finding_ids import fingerprint
 
         _added, _new_file = parse_diff_sets(diff.diff_text)
@@ -960,6 +989,40 @@ class GitHubProvider:
         classified = dedupe_thread_claims(
             [classify(f, verdicts=verdicts, all_threads=all_threads) for f in findings]
         )
+
+        # Issue #779: a "new"-classified finding may actually be reappearing
+        # at the exact spot a human resolved a bot-owned thread through the
+        # native GitHub UI, without ever running a verdict command. classify()
+        # already filters resolved threads out of open-thread matching before
+        # even looking at verdicts (that's what makes a resolve-without-verdict
+        # different from a dismiss/false-positive/wont-fix), so by design it
+        # cannot tell that case apart from a genuinely brand-new finding.
+        # find_resolved_match() runs only against this run's own "new" results,
+        # using the pre-side-effects thread snapshot (a thread this run itself
+        # resolves happens in _apply_classification_side_effects below and is
+        # irrelevant here -- only a thread that was *already* resolved before
+        # this run started can mean "posting this would look like an
+        # unexplained duplicate"). Recorded as a set of fingerprints, not
+        # threaded through Classified, so classify()'s decision table and
+        # GitLab's identical call (verdicts={}) stay entirely unaware of it.
+        # find_resolved_match() itself only matches a thread confirmed
+        # resolved by someone other than this bot -- resolve_stale()'s own
+        # routine housekeeping produces the identical resolved+no-verdict
+        # shape on every run for an unrelated reason, and must not be
+        # reported here as if a human had made a decision.
+        reincarnated_fps = {
+            fingerprint(c.finding)
+            for c in classified
+            if c.kind == "new"
+            and find_resolved_match(fingerprint(c.finding), all_threads) is not None
+        }
+        for fp in reincarnated_fps:
+            match = next(c for c in classified if fingerprint(c.finding) == fp)
+            _log.info(
+                "github: finding fp=%r reappearing at a thread resolved without "
+                "a verdict (issue #779); annotating repost (file=%s line=%s)",
+                fp, match.finding.file, match.finding.line,
+            )
 
         # #720 fix, part 2: a fuzzy "update"/"escalate" match keeps the
         # matched thread's visible **[F<n>]** token (thread.finding_id is
@@ -1025,6 +1088,7 @@ class GitHubProvider:
                 eligible_context=eligible_ctx,
                 enable_suggestions=enable_suggestions,
                 finding_id=id_map.get(fingerprint(f)),
+                reincarnated=fingerprint(f) in reincarnated_fps,
             )
             if payload is not None:
                 inline_comments.append(payload)
@@ -1066,6 +1130,7 @@ class GitHubProvider:
             recurred_body_fps=recurred_body_fps,
             head_sha=diff.head_sha,
             id_map=id_map,
+            reincarnated_fps=reincarnated_fps,
         )
         ood_bullets = self._render_body_bullets(
             ood_body,
@@ -1073,6 +1138,7 @@ class GitHubProvider:
             recurred_body_fps=recurred_body_fps,
             head_sha=diff.head_sha,
             id_map=id_map,
+            reincarnated_fps=reincarnated_fps,
         )
 
         # The headline must describe the PR's current state, not just this
@@ -1792,7 +1858,7 @@ class GitHubProvider:
             "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
             "reviewThreads(first:100,after:$after){"
             "pageInfo{hasNextPage endCursor}"
-            "nodes{id isResolved path line originalLine startLine isOutdated "
+            "nodes{id isResolved resolvedBy{login} path line originalLine startLine isOutdated "
             "comments(first:100){nodes{databaseId body author{login} "
             "pullRequestReview{databaseId}}}}}}}}"
         )
@@ -2360,12 +2426,28 @@ def _render_review_body(
     return body
 
 
+# Issue #779: appended to a fresh inline comment when find_resolved_match()
+# (in post_findings, _canonical.py) determines this "new"-classified finding
+# is reappearing at the exact spot a prior thread was resolved with no
+# verdict command ever recorded against it -- so a human sees why an
+# apparently-brand-new comment showed up for something they thought they'd
+# already handled, instead of silently either dropping it (the #771/ADR 0003
+# risk) or reposting with no explanation at all.
+_REINCARNATION_NOTE = (
+    "**Note:** a similar finding here was previously resolved without a "
+    "verdict command, so it was not permanently suppressed and has "
+    "reappeared on this run. Reply with `/ai-pr-review false-positive`, "
+    "`wont-fix`, or `dismiss` if it should stay suppressed for good."
+)
+
+
 def _build_inline_comment_body(
     f: Finding,
     *,
     finding_id: int | None = None,
     include_suggestion_fence: bool = True,
     prior_fingerprints: Sequence[str] = (),
+    reincarnated: bool = False,
 ) -> str:
     """Render the markdown body for a GitHub inline review comment.
 
@@ -2394,6 +2476,14 @@ def _build_inline_comment_body(
         marker so a verdict recorded against one of them can still locate
         this thread later (`_canonical._find_thread_by_fingerprint`). Empty
         for a first-time render, which keeps the marker's pre-#720 shape.
+    reincarnated:
+        Set `True` when this comment is reappearing at the exact fingerprint
+        of a thread a human resolved with no verdict command recorded
+        (issue #779). Appends `_REINCARNATION_NOTE` after the header/
+        remediation text. Only ever meaningful for a first-time render (the
+        `update`/`escalate` PATCH paths never set it -- there is no "new"
+        classification to reincarnate from once a thread is still open and
+        being matched against).
     """
     from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
     from ai_pr_review.vcs._finding_ids import fingerprint
@@ -2409,6 +2499,8 @@ def _build_inline_comment_body(
     if f.suggested_code and "```" not in f.suggested_code:
         fence = "suggestion" if include_suggestion_fence else ""
         parts.append(f"\n```{fence}\n{f.suggested_code}\n```")
+    if reincarnated:
+        parts.append(f"\n{_REINCARNATION_NOTE}")
     body = "".join(parts)
     # Attach inline marker so resolve_stale can identify ownership later,
     # then the per-comment metadata marker (canonical-review reuse, read
@@ -2453,16 +2545,19 @@ def _build_inline_comment_payload(
     eligible_context: set[tuple[str, int]],
     enable_suggestions: bool,
     finding_id: int | None = None,
+    reincarnated: bool = False,
 ) -> dict[str, Any] | None:
     """Return a GitHub reviews-API inline-comment dict, or None if ineligible.
 
     Eligibility logic delegated to ai_pr_review.vcs._inline so all providers
     share identical diff-anchor / suggestion-range / fence-escape rules.
+    `reincarnated` is passed straight through to `_build_inline_comment_body`
+    -- see its docstring (issue #779).
     """
     if not is_inline_eligible(f, eligible_new):
         return None
 
-    body = _build_inline_comment_body(f, finding_id=finding_id)
+    body = _build_inline_comment_body(f, finding_id=finding_id, reincarnated=reincarnated)
     payload: dict[str, Any] = {"path": f.file, "line": f.line, "body": body}
 
     if (

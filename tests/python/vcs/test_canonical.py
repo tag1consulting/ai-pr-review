@@ -18,6 +18,7 @@ from ai_pr_review.vcs._canonical import (
     classify,
     decide_action,
     dedupe_thread_claims,
+    find_resolved_match,
     fingerprint_location,
     merge_verdicts,
     parse_gitlab_prior_thread,
@@ -72,6 +73,7 @@ def _thread(
     fp: str | None = None,
     finding_id: int | None = None,
     prior_fingerprints: frozenset[str] = frozenset(),
+    resolved_by_bot: bool | None = None,
 ) -> PriorThread:
     return PriorThread(
         thread_id=thread_id,
@@ -87,6 +89,7 @@ def _thread(
         fingerprint=fp,
         finding_id=finding_id,
         prior_fingerprints=prior_fingerprints,
+        resolved_by_bot=resolved_by_bot,
     )
 
 
@@ -748,6 +751,92 @@ def test_classify_resolved_non_fixed_thread_is_not_a_fuzzy_open_match() -> None:
 
 
 # ---------------------------------------------------------------------------
+# find_resolved_match — issue #779 (resolved-without-verdict reincarnation)
+# ---------------------------------------------------------------------------
+
+
+def test_find_resolved_match_exact_fingerprint_on_resolved_thread() -> None:
+    f = _finding(file="app.py", line=10)
+    fp = fingerprint(f)
+    thread = _thread(path="app.py", line=10, is_resolved=True, fp=fp, resolved_by_bot=False)
+    result = find_resolved_match(fp, [thread])
+    assert result is thread
+
+
+def test_find_resolved_match_ignores_open_thread() -> None:
+    """A still-open thread carrying the same fingerprint is classify()'s own
+    "update"/"escalate" territory, not a #779 reincarnation -- classify()
+    never even reaches "new" for it, so find_resolved_match must not
+    consider it a match either."""
+    f = _finding(file="app.py", line=10)
+    fp = fingerprint(f)
+    thread = _thread(path="app.py", line=10, is_resolved=False, fp=fp, resolved_by_bot=False)
+    assert find_resolved_match(fp, [thread]) is None
+
+
+def test_find_resolved_match_ignores_bot_resolved_thread() -> None:
+    """resolve_stale()'s own routine housekeeping resolves any unresolved
+    bot-owned thread whose finding didn't reappear in a given run, on every
+    successful run, recording no verdict -- the identical is_resolved=True +
+    no-verdict shape a human's native resolve produces, for a completely
+    unrelated and unsurprising reason. find_resolved_match must not
+    misattribute the bot's own cleanup to a human decision."""
+    f = _finding(file="app.py", line=10)
+    fp = fingerprint(f)
+    thread = _thread(path="app.py", line=10, is_resolved=True, fp=fp, resolved_by_bot=True)
+    assert find_resolved_match(fp, [thread]) is None
+
+
+def test_find_resolved_match_ignores_unknown_resolver() -> None:
+    """resolved_by_bot=None (GraphQL's resolvedBy wasn't populated, e.g. a
+    fetch that predates this field) must not match either -- unable to
+    confirm a human resolved it, so this stays silent rather than risk the
+    same misattribution as the bot-resolved case."""
+    f = _finding(file="app.py", line=10)
+    fp = fingerprint(f)
+    thread = _thread(path="app.py", line=10, is_resolved=True, fp=fp, resolved_by_bot=None)
+    assert find_resolved_match(fp, [thread]) is None
+
+
+def test_find_resolved_match_no_match_returns_none() -> None:
+    thread = _thread(
+        path="app.py", line=10, is_resolved=True,
+        fp="other|app.py|10|deadbeef0000", resolved_by_bot=False,
+    )
+    assert find_resolved_match("code-reviewer|app.py|10|abc123abc123", [thread]) is None
+
+
+def test_find_resolved_match_checks_prior_fingerprints_too() -> None:
+    """#720 drift: a thread's comment can be PATCHed in place by an
+    update/escalate match, replacing its current fingerprint while
+    prior_fingerprints retains the superseded one(s). A verdict-less resolve
+    of that thread must still be found via either."""
+    thread = _thread(
+        path="app.py", line=10, is_resolved=True,
+        fp="code-reviewer|app.py|10|newfp000000",
+        prior_fingerprints=frozenset({"code-reviewer|app.py|10|oldfp000000"}),
+        resolved_by_bot=False,
+    )
+    result = find_resolved_match("code-reviewer|app.py|10|oldfp000000", [thread])
+    assert result is thread
+
+
+def test_find_resolved_match_does_not_fuzzy_match_nearby_line() -> None:
+    """Deliberately exact-fingerprint-only (unlike _fuzzy_open_match/
+    _fuzzy_dismissed_match): this only annotates a comment that posts either
+    way, so there is no reason to risk misattributing the note to an
+    unrelated nearby finding the way a location-based fuzzy match could."""
+    thread = _thread(
+        path="app.py", line=10, is_resolved=True,
+        fp="code-reviewer|app.py|10|deadbeef0000",
+        resolved_by_bot=False,
+    )
+    f = _finding(file="app.py", line=11)  # within PROXIMITY_LINES, different fingerprint
+    result = find_resolved_match(fingerprint(f), [thread])
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
 # parse_prior_thread — meta marker fast path + legacy fallback
 # ---------------------------------------------------------------------------
 
@@ -765,10 +854,12 @@ def _thread_node(
     line: int | None = 10,
     original_line: int | None = None,
     start_line: int | None = None,
+    resolved_by: str | None = None,
 ) -> dict:
     return {
         "id": thread_id,
         "isResolved": is_resolved,
+        "resolvedBy": {"login": resolved_by} if resolved_by is not None else None,
         "isOutdated": is_outdated,
         "path": path,
         "line": line,
@@ -806,6 +897,30 @@ def test_parse_prior_thread_reads_meta_marker() -> None:
 def test_parse_prior_thread_not_owned_by_us_returns_none() -> None:
     node = _thread_node(body="some comment", author="someone-else")
     assert parse_prior_thread(node, bot_login="github-actions") is None
+
+
+_OWNED_BODY = "some finding\n<!-- ai-pr-review-inline -->"
+
+
+def test_parse_prior_thread_resolved_by_bot_login_is_bot() -> None:
+    node = _thread_node(body=_OWNED_BODY, is_resolved=True, resolved_by="github-actions")
+    thread = parse_prior_thread(node, bot_login="github-actions")
+    assert thread is not None
+    assert thread.resolved_by_bot is True
+
+
+def test_parse_prior_thread_resolved_by_other_login_is_not_bot() -> None:
+    node = _thread_node(body=_OWNED_BODY, is_resolved=True, resolved_by="a-human")
+    thread = parse_prior_thread(node, bot_login="github-actions")
+    assert thread is not None
+    assert thread.resolved_by_bot is False
+
+
+def test_parse_prior_thread_unresolved_has_no_resolver() -> None:
+    node = _thread_node(body=_OWNED_BODY, is_resolved=False, resolved_by=None)
+    thread = parse_prior_thread(node, bot_login="github-actions")
+    assert thread is not None
+    assert thread.resolved_by_bot is None
 
 
 def test_parse_prior_thread_non_int_comment_database_id_returns_none() -> None:

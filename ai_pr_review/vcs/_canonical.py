@@ -294,6 +294,21 @@ class PriorThread:
     # this alongside `fingerprint` so a verdict recorded against a
     # since-superseded fingerprint can still locate the thread.
     prior_fingerprints: frozenset[str] = frozenset()
+    # Issue #779: who resolved this thread, from GraphQL's `resolvedBy`
+    # field -- `True` when it was this bot's own login (routine
+    # `resolve_stale()` housekeeping, which resolves any unresolved
+    # bot-owned thread whose finding didn't reappear in a given run, on
+    # every successful run, recording no verdict), `False` when it was
+    # confirmed to be someone else (a human clicking "Resolve conversation"
+    # natively, with likewise no verdict), `None` when unresolved or the
+    # field wasn't populated (GitLab's `parse_gitlab_prior_thread` never
+    # sets this; legacy/incomplete data). `find_resolved_match` treats only
+    # the confirmed-`False` case as issue #779's scenario -- resolve_stale's
+    # own routine cleanup produces the identical `is_resolved=True` +
+    # no-verdict shape for a completely different, non-surprising reason,
+    # and warning about it would be actively misleading (nobody dismissed
+    # anything to reason about "recording a verdict" over).
+    resolved_by_bot: bool | None = None
 
 
 def parse_prior_thread(
@@ -368,6 +383,11 @@ def parse_prior_thread(
     path_raw = node.get("path")
     path = path_raw if isinstance(path_raw, str) else ""
 
+    resolved_by_login = ((node.get("resolvedBy") or {}) or {}).get("login")
+    resolved_by_bot: bool | None = None
+    if isinstance(resolved_by_login, str) and resolved_by_login:
+        resolved_by_bot = resolved_by_login == bot_login
+
     return PriorThread(
         thread_id=thread_id,
         comment_id=comment_id,
@@ -382,6 +402,7 @@ def parse_prior_thread(
         fingerprint=fp,
         finding_id=finding_id,
         prior_fingerprints=prior_fingerprints,
+        resolved_by_bot=resolved_by_bot,
     )
 
 
@@ -513,6 +534,50 @@ class Classified:
             raise ValueError(
                 f"Classified(kind={self.kind!r}) must not carry a thread"
             )
+
+
+def find_resolved_match(fp: str, all_threads: Sequence[PriorThread]) -> PriorThread | None:
+    """Locate a thread *a human resolved without a verdict* that currently or
+    previously carried fingerprint `fp`, or `None`.
+
+    A separate, opt-in check a caller runs only against its own `"new"`
+    results -- not a branch of `classify()`'s decision table, and `classify()`
+    itself stays entirely unaware of it. This keeps the platform-agnostic
+    core (shared with GitLab's dedup, which always passes `verdicts={}`)
+    free of a check that would fire on *every* resolved-and-refound thread
+    when there is no verdict system to have ever recorded one against it.
+    GitHub's `post_findings` calls this directly on its own `"new"`-classified
+    findings to detect issue #779: a human resolved a bot-owned thread via the
+    native "Resolve conversation" button (not a verdict slash command), so no
+    verdict was ever recorded, and the finding fell through to `"new"` on a
+    later run and is about to be reposted as an apparently-brand-new
+    duplicate.
+
+    Filters to `resolved_by_bot is False` (confirmed resolved by someone
+    other than this bot), not merely `is_resolved`: `resolve_stale()`'s own
+    routine housekeeping sweep resolves any unresolved bot-owned thread whose
+    finding didn't reappear in a given run, on *every* successful run,
+    recording no verdict either -- the identical `is_resolved=True` +
+    no-verdict shape this function exists to detect, for a completely
+    unrelated and unsurprising reason. Warning that "this was previously
+    resolved without a verdict command" about the bot's own housekeeping
+    would misattribute an ordinary lifecycle event to a human decision that
+    never happened. `resolved_by_bot is None` (unresolved, or the field
+    wasn't populated -- e.g. GitLab, or a fetch that predates this field)
+    also does not match: unable to confirm a human resolved it, so this
+    stays silent rather than risk the same misattribution.
+
+    Exact-fingerprint match only (via `_find_thread_by_fingerprint`, so
+    `prior_fingerprints` drift (#720) still resolves) -- deliberately not the
+    fuzzy `(file, ±PROXIMITY_LINES, compatible category)` match
+    `_fuzzy_open_match`/`_fuzzy_dismissed_match` use, because this only
+    annotates a comment that is being posted either way (see #771/ADR 0003
+    on why a heuristic that can misfire must never be trusted to silently
+    drop or, here, misattribute data) rather than deciding whether to
+    suppress it.
+    """
+    candidates = [t for t in all_threads if t.is_resolved and t.resolved_by_bot is False]
+    return _find_thread_by_fingerprint(candidates, fp)
 
 
 def _find_thread_by_fingerprint(
