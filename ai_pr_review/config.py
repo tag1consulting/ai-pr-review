@@ -483,7 +483,8 @@ class ReviewConfig(BaseModel):
         """Load config from environment variables. Raises ConfigError on unknown AI_* vars."""
         _check_unknown_ai_vars()
 
-        _check_deprecated_review_target(os.environ.get("REVIEW_TARGET", "pr").strip())
+        review_target = os.environ.get("REVIEW_TARGET", "pr").strip().lower()
+        _check_deprecated_review_target(review_target)
 
         def _bool(key: str, default: bool = False) -> bool:
             return os.environ.get(key, "true" if default else "false").lower() in (
@@ -526,7 +527,7 @@ class ReviewConfig(BaseModel):
             head_ref=os.environ.get("HEAD_REF", ""),
             head_sha=os.environ.get("HEAD_SHA", ""),
             vcs_provider=os.environ.get("VCS_PROVIDER", "github").strip(),
-            review_target=os.environ.get("REVIEW_TARGET", "pr").strip(),
+            review_target=review_target,
             force_full_diff=_bool("FORCE_FULL_DIFF"),
             standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
