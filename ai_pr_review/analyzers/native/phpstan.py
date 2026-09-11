@@ -108,8 +108,12 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
 
     try:
         try:
+            # List-form args, no shell=True: no shell to inject into. `level`
+            # (the one env-derived value reaching args) is regex-validated to
+            # a single digit above, so it can't smuggle an extra flag or path
+            # either. See #789.
             result = subprocess.run(
-                args,
+                args,  # nosemgrep: dangerous-subprocess-use-tainted-env-args
                 capture_output=True,
                 text=True,
                 timeout=_TIMEOUT_SECS,
