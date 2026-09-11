@@ -590,3 +590,148 @@ def test_post_findings_token_table_http_error_is_failsoft() -> None:
     # Review still completes despite PUT failure
     assert result.error is None
     assert result.inline_posted == 1
+
+
+# ---------------------------------------------------------------------------
+# #711: body_findings (out-of-diff / over max_inline) rendered in summary note
+# ---------------------------------------------------------------------------
+
+
+def test_post_findings_body_findings_rendered_in_summary_note() -> None:
+    """A finding that can't be anchored inline must still be rendered
+    somewhere visible -- GitLab used to compute body_findings and drop the
+    text entirely (#711)."""
+    import json
+
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": _EXISTING_NOTE_BODY}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    # line 99 is not in the diff -> falls to body_findings, never POSTed inline.
+    findings = [
+        Finding(
+            severity="Medium", confidence=70, finding="stale lint warning",
+            source="ruff", file="app.py", line=99, remediation="fix it",
+        )
+    ]
+    result = prov.post_findings(
+        findings, DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT"
+    )
+    assert result.inline_posted == 0
+    assert result.body_findings == 1
+    assert put_bodies, "PUT to update summary note must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "## PR Summary" in new_body, "original summary content must survive"
+    assert "### Findings not attached to specific lines" in new_body
+    assert "stale lint warning" in new_body
+    assert "fix it" in new_body
+    assert "*(line not in diff)*" in new_body
+
+
+def test_post_findings_body_findings_replaces_prior_run() -> None:
+    """A previous run's body-findings section must be replaced, not doubled,
+    when the set of un-anchored findings changes."""
+    import json
+
+    from ai_pr_review.vcs.marker import GITLAB_BODY_FINDINGS_MARKER
+
+    stored = (
+        f"{_SUMMARY_MARKER}\n## PR Summary\n\n"
+        f"{GITLAB_BODY_FINDINGS_MARKER}\n### Findings not attached to specific lines\n"
+        "- old stale finding text"
+    )
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": stored}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [
+        Finding(severity="Low", confidence=60, finding="fresh finding", file="app.py", line=99)
+    ]
+    prov.post_findings(
+        findings, DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT"
+    )
+
+    assert put_bodies, "PUT must have been called"
+    new_body = put_bodies[-1]["body"]
+    assert "old stale finding text" not in new_body
+    assert "fresh finding" in new_body
+    assert "## PR Summary" in new_body
+
+
+def test_post_findings_body_findings_cleared_when_none_this_run() -> None:
+    """A run with zero un-anchored findings must clear a stale body-findings
+    section from a prior run, not leave it permanently visible."""
+    import json
+
+    from ai_pr_review.vcs.marker import GITLAB_BODY_FINDINGS_MARKER
+
+    stored = (
+        f"{_SUMMARY_MARKER}\n## PR Summary\n\n"
+        f"{GITLAB_BODY_FINDINGS_MARKER}\n### Findings not attached to specific lines\n"
+        "- old stale finding text"
+    )
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": stored}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    prov.post_findings(
+        [], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="APPROVE"
+    )
+
+    assert put_bodies, "PUT must have been called to clear the stale section"
+    new_body = put_bodies[-1]["body"]
+    assert "old stale finding text" not in new_body
+    assert "## PR Summary" in new_body
+
+
+def test_post_findings_body_findings_precede_usage_block() -> None:
+    """When both a body-findings section and a usage block are present in
+    the same run, the findings must appear before the usage block."""
+    import json
+
+    put_bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/notes" in str(req.url):
+            return httpx.Response(200, json=[{"id": 55, "body": _EXISTING_NOTE_BODY}])
+        if req.method == "PUT" and "/notes/55" in str(req.url):
+            put_bodies.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [
+        Finding(severity="Low", confidence=60, finding="out of diff finding", file="app.py", line=99)
+    ]
+    prov.post_findings(
+        findings,
+        DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="COMMENT",
+        usage_block="<details>\n<summary>Token usage by agent</summary>\n\ntable\n</details>",
+    )
+
+    new_body = put_bodies[-1]["body"]
+    findings_idx = new_body.index("### Findings not attached to specific lines")
+    usage_idx = new_body.index("Token usage by agent")
+    assert findings_idx < usage_idx

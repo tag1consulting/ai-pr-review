@@ -26,6 +26,7 @@ import httpx
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import (
     TOKEN_TABLE_OPEN_MARKER,
+    format_body_finding,
     format_source_tag,
     sanitize_display_text,
     severity_icon,
@@ -40,6 +41,7 @@ from ai_pr_review.vcs._inline import (
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.http import RecordingClient, RetryExhaustedError, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
+    GITLAB_BODY_FINDINGS_MARKER,
     SUMMARY_MARKER_PREFIX,
     USAGE_MARKER,
     append_inline_marker,
@@ -498,13 +500,15 @@ class GitLabProvider:
         max_inline: int = 25,
         enable_suggestions: bool = True,
     ) -> FindingsResult:
-        """Post inline discussions for eligible findings; return overflow body
-        text via the body_overflow attribute on FindingsResult-style logic.
+        """Post inline discussions for eligible findings.
 
-        On GitLab, the summary note already carries findings/body content (see
-        `post_summary`), so this method's primary job is the inline discussions.
-        Overflow is logged to errors when posting fails — the orchestrator can
-        choose to retry as plain body content.
+        Findings that can't be anchored inline (out-of-diff, or over
+        `max_inline`) are rendered as a bullet list and appended into the
+        summary note by this same method (#711) — GitLab has no separate
+        review-body concept the way GitHub does, and `post_summary` (which
+        runs before this method, per orchestrate.py's call order) has no
+        knowledge of findings at all. Posting-failure errors are logged to
+        `self._errors` for the caller to inspect via `FindingsResult.error`.
         """
         from ai_pr_review.diff.linemap import parse_diff_sets
         from ai_pr_review.vcs._canonical import classify, dedupe_thread_claims
@@ -578,6 +582,26 @@ class GitLabProvider:
                 )
                 body_findings.append(f)
 
+        # #711: GitHub and Bitbucket render findings that can't be anchored
+        # to an inline diff line (out-of-diff, or over max_inline) somewhere
+        # visible in the review body/summary. GitLab used to compute this
+        # same body_findings list and then just drop the text -- nothing
+        # ever rendered it. GitLab has no F-ID/fingerprint infrastructure
+        # (unlike GitHub/Bitbucket), so this is a plain bullet list, not the
+        # richer id_map-annotated rendering those providers use.
+        body_findings_section = ""
+        if body_findings:
+            bullets = []
+            for f in body_findings:
+                loc_note = ""
+                if f.file and f.line is not None and (f.file, f.line) not in eligible_new:
+                    loc_note = " *(line not in diff)*"
+                bullets.append(format_body_finding(f, location_note=loc_note))
+            body_findings_section = (
+                f"{GITLAB_BODY_FINDINGS_MARKER}\n"
+                "### Findings not attached to specific lines\n" + "\n".join(bullets)
+            )
+
         # GitLab has no separate review-body concept: append the usage block
         # (and, separately, any high-usage warning -- #758, never concatenated
         # into usage_block itself) to the summary note. Fail-soft -- a failure
@@ -646,9 +670,15 @@ class GitLabProvider:
             # form, and without this fallback the first post-upgrade run
             # would append a new usage block after it rather than
             # replacing it, doubling the content once.
+            #
+            # GITLAB_BODY_FINDINGS_MARKER (#711) joins the same min() so a
+            # prior run's body-findings section is replaced, not
+            # accumulated, on every subsequent run -- the set of findings
+            # that missed an inline anchor can change from run to run.
             details_idx = min(
                 (
                     idx for idx in (
+                        old_body.find(GITLAB_BODY_FINDINGS_MARKER),
                         old_body.find(USAGE_MARKER),
                         old_body.find(TOKEN_TABLE_OPEN_MARKER),
                     )
@@ -656,13 +686,17 @@ class GitLabProvider:
                 ),
                 default=-1,
             )
-            if details_idx == -1 and not usage_payload:
+            if details_idx == -1 and not usage_payload and not body_findings_section:
                 # Nothing to add and no stale marker/content to strip --
                 # the one no-op case where skipping the PUT is genuinely free.
                 pass
             else:
                 base_body = old_body[:details_idx].rstrip() if details_idx != -1 else old_body.rstrip()
-                new_body = base_body + (f"\n\n{usage_payload}" if usage_payload else "")
+                new_body = base_body
+                if body_findings_section:
+                    new_body += f"\n\n{body_findings_section}"
+                if usage_payload:
+                    new_body += f"\n\n{usage_payload}"
                 try:
                     resp = self.client.request(
                         "PUT", self._note_url(keep_id), json_body={"body": new_body}
@@ -676,14 +710,13 @@ class GitLabProvider:
                     logger.warning(
                         "gitlab: token usage: could not PUT summary note: %s", exc, exc_info=True,
                     )
-        elif usage_payload:
+        elif usage_payload or body_findings_section:
             logger.warning(
-                "gitlab: token usage: no summary note found; skipping usage-block append"
+                "gitlab: token usage: no summary note found; skipping usage-block/body-findings append"
             )
 
-        # The provider returns counts; orchestrator decides what to do with
-        # the body_findings list (typically: inject into the summary note via
-        # post_summary on the same run before this call). We surface counts.
+        # body_findings text is already rendered and appended above (#711);
+        # the count returned here is for telemetry/step-summary reporting.
         if not findings:
             return FindingsResult(
                 review_id=None,
