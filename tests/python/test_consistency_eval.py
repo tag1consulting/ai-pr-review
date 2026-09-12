@@ -158,3 +158,105 @@ def test_coarse_key_excludes_line_and_confidence() -> None:
     a = _f("High", 80, "x", line=100)
     b = _f("High", 20, "x", line=250)
     assert ce._coarse_key(a) == ce._coarse_key(b) == ("x.yml", "High", "authz")
+
+
+# ---------------------------------------------------------------------------
+# Corpus-mode additions (issue #800): diff-to-changed-files parsing and the
+# free, deterministic gate-firing readout. Both run with zero network access,
+# unlike the model-dispatch path these feed into.
+# ---------------------------------------------------------------------------
+
+
+def test_changed_files_from_diff_extracts_post_image_paths() -> None:
+    diff_text = (
+        "diff --git a/src/a.py b/src/a.py\n"
+        "index abc..def 100644\n"
+        "--- a/src/a.py\n"
+        "+++ b/src/a.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "+new line\n"
+        "diff --git a/docs/b.md b/docs/b.md\n"
+        "--- a/docs/b.md\n"
+        "+++ b/docs/b.md\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    assert ce._changed_files_from_diff(diff_text) == ["src/a.py", "docs/b.md"]
+
+
+def test_changed_files_from_diff_skips_deleted_files() -> None:
+    """A deleted file's post-image is /dev/null -- there is no content left to
+    review, so it must not appear in the changed-files list gate evaluation
+    and manifest categorization act on."""
+    diff_text = (
+        "diff --git a/old.py b/old.py\n"
+        "deleted file mode 100644\n"
+        "--- a/old.py\n"
+        "+++ /dev/null\n"
+        "@@ -1,1 +0,0 @@\n"
+        "-gone\n"
+    )
+    assert ce._changed_files_from_diff(diff_text) == []
+
+
+def test_changed_files_from_diff_new_file_has_no_a_prefix_to_strip() -> None:
+    """A new file's pre-image is /dev/null; the post-image path still uses the
+    'b/' prefix this parser strips."""
+    diff_text = (
+        "diff --git a/new.go b/new.go\n"
+        "new file mode 100644\n"
+        "index 0000000..1111111\n"
+        "--- /dev/null\n"
+        "+++ b/new.go\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+package main\n"
+    )
+    assert ce._changed_files_from_diff(diff_text) == ["new.go"]
+
+
+def test_gate_report_for_diff_docs_only_fires_no_content_gates(tmp_path: Path) -> None:
+    """A pure-markdown diff should not trip has_code_or_infra, has_control_flow,
+    has_error_patterns, or has_security_patterns -- confirms the corpus's
+    docs-only fixture actually exercises the cheap-diff path it's there for."""
+    diff_file = tmp_path / "docs_only.diff"
+    diff_file.write_text(
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1,1 +1,2 @@\n"
+        " # Title\n"
+        "+A new line of prose.\n"
+    )
+    fired, would_run = ce._gate_report_for_diff(diff_file)
+    assert "has_code_or_infra" not in fired
+    assert "has_error_patterns" not in fired
+    assert "has_security_patterns" not in fired
+    assert "code-reviewer" in would_run  # always-eligible agent, no conditional_trigger
+
+
+def test_gate_report_for_diff_security_path_fires_security_gate(tmp_path: Path) -> None:
+    """A diff touching a dependency manifest should fire has_security_patterns,
+    confirming the corpus's real security-relevant fixtures actually promote
+    security-reviewer the way production would."""
+    diff_file = tmp_path / "security.diff"
+    diff_file.write_text(
+        "diff --git a/package.json b/package.json\n"
+        "--- a/package.json\n"
+        "+++ b/package.json\n"
+        "@@ -1,3 +1,3 @@\n"
+        " {\n"
+        '-  \"lodash\": \"4.17.20\"\n'
+        '+  \"lodash\": \"4.17.21\"\n'
+        " }\n"
+    )
+    fired, _ = ce._gate_report_for_diff(diff_file)
+    assert "has_security_patterns" in fired
+
+
+def test_as_finding_like_adapter_bridges_severity_only() -> None:
+    """The Protocol adapter classify_review_outcome needs must expose exactly
+    the severity string, unchanged, regardless of the finding's other fields."""
+    f = _f("Critical", 90, "something bad")
+    adapted = ce._AsFindingLike(f)
+    assert adapted.severity == "Critical"

@@ -1,0 +1,53 @@
+diff --git a/src/Controller/ProfileController.php b/src/Controller/ProfileController.php
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/Controller/ProfileController.php
+@@ -0,0 +1,47 @@
++<?php
++
++namespace App\Controller;
++
++use PDO;
++
++class ProfileController
++{
++    private PDO $db;
++
++    public function __construct(PDO $db)
++    {
++        $this->db = $db;
++    }
++
++    /**
++     * Renders a public profile page for the given username.
++     */
++    public function show(string $usernameParam): string
++    {
++        $stmt = $this->db->prepare('SELECT display_name, bio FROM users WHERE username = :u');
++        $stmt->execute([':u' => $usernameParam]);
++        $user = $stmt->fetch();
++
++        if (!$user) {
++            return '<p>User not found.</p>';
++        }
++
++        // Render the profile. The display name comes from user-controlled
++        // registration data, so it can contain arbitrary HTML/script.
++        $html = '<div class="profile">';
++        $html .= '<h1>' . $user['display_name'] . '</h1>';
++        $html .= '<p>' . $user['bio'] . '</p>';
++        $html .= '</div>';
++
++        return $html;
++    }
++
++    /**
++     * Updates the bio field from a form submission.
++     */
++    public function updateBio(string $usernameParam, string $newBio): void
++    {
++        $sql = "UPDATE users SET bio = '$newBio' WHERE username = '$usernameParam'";
++        $this->db->exec($sql);
++    }
++}
