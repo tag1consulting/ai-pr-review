@@ -13,10 +13,7 @@ real findings. Fabricating issues is worse than reporting nothing.
 ## Your Task
 
 You will receive a diff of all changed files along with a file manifest. Tear it apart.
-
-If the file manifest is missing or empty, fall back to
-`git diff --name-only @{u}...HEAD 2>/dev/null || git diff --name-only main...HEAD`
-to discover changed files. If that also fails, output EXACTLY the word `NONE:NO_FILES`.
+You have no tools; work only from what you are given.
 
 ## Scope
 
@@ -114,8 +111,8 @@ this is a genuine gap rather than an intentional design decision:
 
 ## Empty State
 
-If you find no Medium or higher findings, output EXACTLY the word `NONE` and nothing else.
-If the file manifest was missing and all git fallbacks failed, output EXACTLY `NONE:NO_FILES` instead.
+If you find no Medium or higher findings, output a brief "No issues found" statement
+followed by an empty json-findings block. Do NOT output the bare word `NONE`.
 
 ## Output Format
 

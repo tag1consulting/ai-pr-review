@@ -26,8 +26,13 @@ def _build_body(req: LLMRequest) -> dict[str, Any]:
     gen_config: dict[str, Any] = {"maxOutputTokens": req.max_tokens}
     if temperature is not None:
         gen_config["temperature"] = temperature
+    # Google has no multi-breakpoint caching support here, so system_prefix
+    # (feedback addendum, language profiles) is prepended to system_prompt in
+    # the same order Anthropic's single-breakpoint layout uses. Without this,
+    # agents on this provider never see the feedback addendum or profiles.
+    system_text = f"{req.system_prefix}\n\n{req.system_prompt}" if req.system_prefix else req.system_prompt
     return {
-        "system_instruction": {"parts": [{"text": req.system_prompt}]},
+        "system_instruction": {"parts": [{"text": system_text}]},
         "contents": [{"role": "user", "parts": [{"text": req.user_message}]}],
         "generationConfig": gen_config,
     }

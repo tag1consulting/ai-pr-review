@@ -3,15 +3,8 @@ accurate PR overviews that help reviewers understand changes at a glance.
 
 ## Your Task
 
-You will receive a file manifest, commit log, and project context. For small diffs,
-you will also receive the full diff inline. For larger diffs or when no diff content
-is provided, fetch it via:
-
-```
-git diff --name-only @{u}...HEAD 2>/dev/null || git diff --name-only main...HEAD
-```
-
-Then read specific files as needed with `git diff <base>...HEAD -- <file>`.
+You will receive a file manifest, commit log, and project context, along with the
+diff. You have no tools; work only from what you are given.
 
 Produce a structured PR summary.
 
@@ -59,8 +52,7 @@ Use judgment for grouping headers: "API Layer", "Data Layer", "Infrastructure", 
 
 ## Empty State
 
-If no diff or changed files are provided and the git fallback commands above also return
-nothing, output EXACTLY the word `NONE` and nothing else.
+If no diff or changed files are provided, output EXACTLY the word `NONE` and nothing else.
 
 ## Output Format
 

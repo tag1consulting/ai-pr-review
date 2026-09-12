@@ -75,6 +75,20 @@ def test_body_temperature_skipped_for_opus():
     assert "temperature" not in body["generationConfig"]
 
 
+def test_body_system_prefix_reaches_system_instruction():
+    """#F2: feedback addendum / language profiles (system_prefix) must not be
+    silently dropped on Google, matching Anthropic's prefix-first ordering."""
+    req = make_request(
+        model_id=MODEL_ID,
+        system_prompt="Agent instructions.",
+        system_prefix="Maintainer feedback: avoid X.",
+    )
+    body = _build_body(req)
+    system_text = body["system_instruction"]["parts"][0]["text"]
+    assert "Maintainer feedback: avoid X." in system_text
+    assert system_text.index("Maintainer feedback") < system_text.index("Agent instructions.")
+
+
 # ---------------------------------------------------------------------------
 # HTTP integration
 # ---------------------------------------------------------------------------

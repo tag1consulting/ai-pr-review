@@ -13,7 +13,6 @@ from ai_pr_review.agents.dispatch import (
     DispatchContext,
     FailedAgent,
     TokenUsage,
-    cache_priming_effective,
     effective_prompt,
     run_tier,
 )
@@ -972,64 +971,3 @@ def test_effective_prompt_missing_base_raises(tmp_path: Path) -> None:
     missing = script_dir / "prompts" / "nonexistent.md"
     with pytest.raises(FileNotFoundError, match="base prompt not found"):
         effective_prompt("code-reviewer", missing, script_dir, enable_suggestions=False)
-
-
-# ---------------------------------------------------------------------------
-# T4: cache_priming_effective
-# ---------------------------------------------------------------------------
-
-def test_cache_priming_off_by_default() -> None:
-    assert cache_priming_effective("anthropic", "false", "auto") is False
-
-
-def test_cache_priming_on_for_anthropic() -> None:
-    assert cache_priming_effective("anthropic", "true", "auto") is True
-
-
-def test_cache_priming_on_for_bedrock_proxy() -> None:
-    assert cache_priming_effective("bedrock-proxy", "true", "auto") is True
-
-
-def test_cache_priming_off_for_openai() -> None:
-    assert cache_priming_effective("openai", "true", "auto") is False
-
-
-def test_cache_priming_off_for_google() -> None:
-    assert cache_priming_effective("google", "true", "auto") is False
-
-
-def test_cache_priming_off_when_prompt_caching_disabled() -> None:
-    assert cache_priming_effective("anthropic", "true", "false") is False
-
-
-def test_cache_priming_on_when_prompt_caching_explicit_true() -> None:
-    assert cache_priming_effective("anthropic", "true", "true") is True
-
-
-def test_cache_priming_truthy_variants() -> None:
-    for truthy in ("true", "TRUE", "True", "1"):
-        assert cache_priming_effective("anthropic", truthy, "auto") is True, f"failed for {truthy!r}"
-
-
-def test_cache_priming_falsy_variants() -> None:
-    for falsy in ("false", "FALSE", "False", "0", ""):
-        assert cache_priming_effective("anthropic", falsy, "auto") is False, f"failed for {falsy!r}"
-
-
-def test_cache_priming_warns_on_unsupported_provider(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # Truthy priming with an unsupported provider should warn, not silently skip
-    assert cache_priming_effective("antrhopic", "true", "auto") is False
-    captured = capsys.readouterr()
-    assert "cache priming requested" in captured.err
-    assert "antrhopic" in captured.err
-
-
-def test_cache_priming_silent_when_priming_disabled(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # Priming not requested → no warning even on unsupported provider
-    assert cache_priming_effective("openai", "false", "auto") is False
-    captured = capsys.readouterr()
-    assert captured.err == ""

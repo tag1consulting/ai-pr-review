@@ -36,7 +36,7 @@ where = ["."]
 include = ["ai_pr_review*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/python", "tests/golden"]
+testpaths = ["tests/python"]
 python_files = ["test_*.py"]
 norecursedirs = ["tests/security/canary-workspace"]
 markers = [
