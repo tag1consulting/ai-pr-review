@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
@@ -104,6 +105,52 @@ def _discussion_link(*, owner: str, repo: str, pr_number: int, comment_id: int) 
     from an earlier review is one click away instead of buried in history.
     """
     return f"https://github.com/{owner}/{repo}/pull/{pr_number}#discussion_r{comment_id}"
+
+
+_CARRIED_FORWARD_SECTION_RE = re.compile(
+    r"\n\n### Still open from earlier reviews \((\d+)\)\n((?:- .+\n?)+)"
+)
+
+
+def strip_carried_forward_entry(body: str, comment_id: int) -> str:
+    """Remove one bullet from a review body's "Still open from earlier
+    reviews" section (`_render_carried_forward_section`), keyed by the inline
+    comment id its `#discussion_r{id}` link points at, and update or remove
+    the section header's count to match.
+
+    `_record_verdict` (slash/dismiss.py) calls this when a human resolves the
+    exact thread a carried-forward bullet still names: the invisible verdict
+    marker gets updated in the same PUT via `upsert_verdicts_marker`, but
+    without this, the *visible* markdown would still read "Still open from
+    earlier reviews (1)" for a finding that was just marked fixed/dismissed —
+    stale until the next full review run re-renders the body from scratch.
+    Found live on PR #811: a `/ai-pr-review fixed` reply correctly resolved
+    the thread and recorded the verdict, but the canonical review's own
+    posted text kept naming that same finding as still open.
+
+    No-op (returns `body` unchanged) if the section is absent, or present but
+    doesn't name this comment id — this must never raise or corrupt a body it
+    doesn't fully recognize; the verdict marker update is the operation that
+    actually matters, this is a best-effort cosmetic follow-on to it.
+    """
+    match = _CARRIED_FORWARD_SECTION_RE.search(body)
+    if match is None:
+        return body
+    bullets_block = match.group(2)
+    lines = [ln for ln in bullets_block.splitlines() if ln.strip()]
+    anchor = f"#discussion_r{comment_id})"
+    remaining = [ln for ln in lines if anchor not in ln]
+    if len(remaining) == len(lines):
+        return body  # this bullet isn't in the section; nothing to change
+    if not remaining:
+        # That was the only bullet -- drop the whole section (header, blank
+        # separators, and all), not just the now-empty bullet block.
+        return body[: match.start()] + body[match.end():]
+    new_section = (
+        f"\n\n### Still open from earlier reviews ({len(remaining)})\n"
+        + "\n".join(remaining)
+    )
+    return body[: match.start()] + new_section + body[match.end():]
 
 
 def _parse_next_link(link_header: str) -> str | None:

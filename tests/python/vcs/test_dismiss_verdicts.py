@@ -25,7 +25,12 @@ from ai_pr_review.slash.dismiss import (
 )
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs._finding_ids import fingerprint
-from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _build_inline_comment_body
+from ai_pr_review.vcs.github import (
+    GitHubConfig,
+    GitHubProvider,
+    _build_inline_comment_body,
+    strip_carried_forward_entry,
+)
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     build_id_map_marker,
@@ -446,6 +451,98 @@ def test_dismiss_inline_reply_records_verdict_from_comments_own_fid() -> None:
     puts = _put_bodies(rec, "/reviews/41")
     assert len(puts) == 1
     assert extract_verdicts(puts[0]) == {fingerprint(f): "dismissed"}
+
+
+def test_dismiss_inline_reply_strips_own_bullet_from_carried_forward_section() -> None:
+    """#811: resolving a thread via `/ai-pr-review fixed|dismiss|...` must not
+    leave the canonical review's own visible "Still open from earlier
+    reviews" text still naming that same finding -- the verdict marker
+    getting updated in the same PUT isn't enough on its own, since nothing
+    else in the codebase re-renders that section from scratch afterwards."""
+    f = _finding("leaked secret", source="security-reviewer", file="config.py", line=3)
+    comment_body = _build_inline_comment_body(f, finding_id=6)
+    nodes = [_inline_thread("T1", resolved=False, body=comment_body, comment_db_id=77, review_db_id=41)]
+    review_body = (
+        "## AI Review Findings\n\n"
+        + comment_body
+        + "\n\n### Still open from earlier reviews (1)\n"
+        "- \U0001f534 **[High]** **[F6]** `config.py:3` — "
+        "[open thread](https://github.com/o/r/pull/1#discussion_r77)\n"
+        + build_id_map_marker({fingerprint(f): 6})
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            if "resolveReviewThread" in body.get("query", ""):
+                return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}})
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "COMMENTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 41, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = dismiss_inline_reply(prov, 77, None, actor="alice", command="fixed", commit_sha="abc123")
+
+    assert result.thread_resolved is True
+    puts = _put_bodies(rec, "/reviews/41")
+    assert len(puts) == 1
+    assert extract_verdicts(puts[0]) == {fingerprint(f): "fixed"}
+    assert "Still open from earlier reviews" not in puts[0]
+    assert "discussion_r77" not in puts[0]
+    # The original finding's own inline comment text is untouched -- only the
+    # separate carried-forward bullet naming the same thread is removed.
+    assert comment_body.strip() in puts[0]
+
+
+def test_strip_carried_forward_entry_removes_one_of_several_bullets() -> None:
+    body = (
+        "## AI Review Findings\n\n"
+        "### Still open from earlier reviews (2)\n"
+        "- \U0001f534 **[High]** **[F2]** `a.py:1` — [open thread](https://x/pull/1#discussion_r10)\n"
+        "- \U0001f7e1 **[Medium]** **[F3]** `b.py:2` — [open thread](https://x/pull/1#discussion_r20)\n"
+        "\n<!-- ai-pr-review-usage -->"
+    )
+    result = strip_carried_forward_entry(body, 10)
+    assert "discussion_r10" not in result
+    assert "discussion_r20" in result
+    assert "Still open from earlier reviews (1)" in result
+    assert "<!-- ai-pr-review-usage -->" in result
+
+
+def test_strip_carried_forward_entry_removes_whole_section_when_last_bullet() -> None:
+    body = (
+        "## AI Review Findings\n\n"
+        "### Still open from earlier reviews (1)\n"
+        "- \U0001f534 **[High]** **[F2]** `a.py:1` — [open thread](https://x/pull/1#discussion_r10)\n"
+        "\n<!-- ai-pr-review-usage -->"
+    )
+    result = strip_carried_forward_entry(body, 10)
+    assert "Still open from earlier reviews" not in result
+    assert "<!-- ai-pr-review-usage -->" in result
+    assert result == "## AI Review Findings\n<!-- ai-pr-review-usage -->"
+
+
+def test_strip_carried_forward_entry_noop_when_comment_id_not_named() -> None:
+    body = (
+        "## AI Review Findings\n\n"
+        "### Still open from earlier reviews (1)\n"
+        "- \U0001f534 **[High]** **[F2]** `a.py:1` — [open thread](https://x/pull/1#discussion_r10)\n"
+    )
+    assert strip_carried_forward_entry(body, 999) == body
+
+
+def test_strip_carried_forward_entry_noop_when_no_section_present() -> None:
+    body = "## AI Review Findings\n\nNo findings above the confidence threshold."
+    assert strip_carried_forward_entry(body, 10) == body
 
 
 def test_dismiss_inline_reply_verdict_lookup_list_reviews_raising_is_swallowed(caplog) -> None:
