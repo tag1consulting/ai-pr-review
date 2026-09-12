@@ -256,6 +256,16 @@ def effective_prompt(
     return "\n".join(parts), degraded
 
 
+def _is_uncatchable(exc: BaseException) -> bool:
+    """True for exceptions that must always propagate rather than becoming a
+    FailedAgent: KeyboardInterrupt (so Ctrl-C still aborts the run) and the
+    current async backend's task-cancellation exception (so anyio/asyncio
+    structured-concurrency cancellation isn't swallowed and converted into a
+    plain failure result, which would block sibling tasks from actually
+    cancelling). See #810 review finding F2."""
+    return isinstance(exc, (KeyboardInterrupt, anyio.get_cancelled_exc_class()))
+
+
 def _format_exception_chain(exc: BaseException) -> str:
     """Render an exception and its __cause__/__context__ chain into one string.
 
@@ -554,8 +564,8 @@ async def _run_single_agent(
                         # instead of letting a bare exception propagate to the
                         # outer handler where a post-mortem reader couldn't
                         # tell this apart from a first-attempt failure (#810
-                        # review finding F1). KeyboardInterrupt still aborts.
-                        if isinstance(fallback_exc, KeyboardInterrupt):
+                        # review finding F1).
+                        if _is_uncatchable(fallback_exc):
                             raise
                         _log.warning(
                             "agent %r: standard-model fallback (after premium "
@@ -608,8 +618,10 @@ async def _run_single_agent(
         # — raised on auth failure (exit 1), retry exhaustion (exit 2), or
         # content-filter block (exit 3) — is isolated to a single FailedAgent
         # instead of cancelling sibling tasks in the anyio task group.
-        # KeyboardInterrupt is re-raised so Ctrl-C still aborts the run.
-        if isinstance(exc, KeyboardInterrupt):
+        # _is_uncatchable() re-raises KeyboardInterrupt (Ctrl-C) and the
+        # async backend's own cancellation exception (#810 review finding
+        # F2) so structured-concurrency cancellation still propagates.
+        if _is_uncatchable(exc):
             raise
         elapsed = int((time.monotonic() - start) * 1000)
         exit_code = 1

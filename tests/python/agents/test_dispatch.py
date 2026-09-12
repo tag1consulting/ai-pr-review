@@ -652,6 +652,108 @@ async def test_run_tier_isolates_systemexit_from_llm_call(tmp_path: Path) -> Non
 
 
 @pytest.mark.anyio
+async def test_is_uncatchable_identifies_keyboard_interrupt_and_cancellation() -> None:
+    """#810 review finding F2: the same predicate both exception handlers use
+    to decide what must always propagate, tested directly against the two
+    exception types it must recognize. Gets a real cancellation-exception
+    instance from an actual cancelled scope rather than constructing one by
+    hand: trio.Cancelled has no public constructor, so manual instantiation
+    (which works fine on asyncio) is a TypeError on trio."""
+    from ai_pr_review.agents.dispatch import _is_uncatchable
+
+    assert _is_uncatchable(KeyboardInterrupt())
+    assert not _is_uncatchable(SystemExit(3))
+    assert not _is_uncatchable(RuntimeError("ordinary failure"))
+
+    caught: BaseException | None = None
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        try:
+            await anyio.sleep(0)  # checkpoint inside a cancelled scope
+        except BaseException as exc:
+            caught = exc
+            raise
+    assert caught is not None
+    assert _is_uncatchable(caught)
+
+
+@pytest.mark.anyio
+async def test_run_single_agent_propagates_cancellation_instead_of_swallowing_it(
+    tmp_path: Path,
+) -> None:
+    """#810 review finding F2: catching bare BaseException must not swallow
+    the async backend's own cancellation exception — doing so would convert
+    a structured-concurrency cancel into a plain FailedAgent result. Cancels
+    a real task group scope while llm_call is in flight, rather than
+    manually raising the cancellation exception class: trio.Cancelled has no
+    public constructor (raising it by hand is a TypeError), so genuine
+    cancellation is the only portable way to exercise this on both backends.
+    A real, correctly-propagated cancellation is absorbed cleanly by the
+    scope that issued it (that's the whole point of structured concurrency)
+    -- the property under test is that _run_single_agent's except block
+    didn't intercept it and record a spurious FailedAgent first."""
+    from ai_pr_review.agents.dispatch import _run_single_agent
+
+    ctx = _make_context(tmp_path)
+    spec = get_agent("code-reviewer")
+    limiter = anyio.CapacityLimiter(1)
+    results: list[AgentResult | FailedAgent] = []
+    entered = anyio.Event()
+
+    async def mock_llm(request: object) -> LLMResponse:
+        entered.set()
+        await anyio.sleep_forever()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            _run_single_agent, spec, mock_llm, ctx, limiter, "diff text", results,
+        )
+        await entered.wait()
+        tg.cancel_scope.cancel()
+
+    assert results == []  # not swallowed into a FailedAgent
+
+
+@pytest.mark.anyio
+async def test_run_single_agent_propagates_cancellation_from_fallback_retry(
+    tmp_path: Path,
+) -> None:
+    """Same as above, but the cancellation lands specifically on the
+    standard-model retry after a premium content-filter refusal — the new
+    inner handler this PR adds must apply the same rule as the outer one."""
+    from ai_pr_review.agents.dispatch import _run_single_agent
+
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    spec = get_agent("security-reviewer")
+    limiter = anyio.CapacityLimiter(1)
+    results: list[AgentResult | FailedAgent] = []
+    entered_fallback = anyio.Event()
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        if request.model_id == "claude-premium":
+            raise SystemExit(3)
+        entered_fallback.set()
+        await anyio.sleep_forever()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            _run_single_agent, spec, mock_llm, ctx, limiter, "diff text", results,
+        )
+        await entered_fallback.wait()
+        tg.cancel_scope.cancel()
+
+    assert results == []
+
+
+@pytest.mark.anyio
 async def test_run_tier_falls_back_to_standard_model_on_content_filter(
     tmp_path: Path,
 ) -> None:
