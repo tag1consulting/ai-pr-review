@@ -64,6 +64,12 @@ class AgentResult:
     """Raw provider stop/finish reason (e.g. "end_turn", "max_tokens").
     See #592: surfaced so telemetry can alert on truncation rates without
     a human reading container logs after the fact."""
+    fallback_from_model: str | None = None
+    """Set when the premium model's call was blocked by the provider's
+    content filter (exit code 3, e.g. Anthropic stop_reason="refusal") and
+    this result came from a same-agent retry on the standard model instead.
+    None when no fallback occurred. See #810: an isolated refusal on one
+    model must not silently drop an agent's coverage for the whole review."""
 
 
 @dataclass(frozen=True)
@@ -248,6 +254,16 @@ def effective_prompt(
             )
 
     return "\n".join(parts), degraded
+
+
+def _is_uncatchable(exc: BaseException) -> bool:
+    """True for exceptions that must always propagate rather than becoming a
+    FailedAgent: KeyboardInterrupt (so Ctrl-C still aborts the run) and the
+    current async backend's task-cancellation exception (so anyio/asyncio
+    structured-concurrency cancellation isn't swallowed and converted into a
+    plain failure result, which would block sibling tasks from actually
+    cancelling). See #810 review finding F2."""
+    return isinstance(exc, (KeyboardInterrupt, anyio.get_cancelled_exc_class()))
 
 
 def _format_exception_chain(exc: BaseException) -> str:
@@ -506,8 +522,75 @@ async def _run_single_agent(
             temperature=context.temperature,
             system_prefix=system_prefix,
         )
+        fallback_from_model: str | None = None
         async with limiter:
-            response = await llm_call(request)
+            try:
+                response = await llm_call(request)
+            except SystemExit as exc:
+                # exit_code 3 == content-filter block (llm/client.py). Only a
+                # premium-tier call blocked this way retries, on the standard
+                # model — see #810: the standard model handled every corpus
+                # diff that made the premium model refuse. A standard-model
+                # call that is itself blocked, or any non-content-filter
+                # failure (auth, transient exhaustion), falls straight
+                # through to the outer handler instead of retrying again.
+                if (
+                    use_premium
+                    and isinstance(exc.code, int)
+                    and exc.code == 3
+                    and context.standard_model
+                    and context.standard_model != model_id
+                ):
+                    _log.warning(
+                        "agent %r: premium model %r blocked by provider content "
+                        "filter; retrying once on standard model %r",
+                        spec.name, model_id, context.standard_model,
+                    )
+                    fallback_from_model = model_id
+                    model_id = context.standard_model
+                    request = LLMRequest(
+                        model_id=model_id,
+                        system_prompt=system_prompt,
+                        user_message=user_message,
+                        max_tokens=max_tokens,
+                        temperature=context.temperature,
+                        system_prefix=system_prefix,
+                    )
+                    try:
+                        response = await llm_call(request)
+                    except BaseException as fallback_exc:
+                        # The retry itself failed. Build the FailedAgent here,
+                        # with the fallback context included in `reason`,
+                        # instead of letting a bare exception propagate to the
+                        # outer handler where a post-mortem reader couldn't
+                        # tell this apart from a first-attempt failure (#810
+                        # review finding F1).
+                        if _is_uncatchable(fallback_exc):
+                            raise
+                        _log.warning(
+                            "agent %r: standard-model fallback (after premium "
+                            "model %r was content-filtered) also failed: %s",
+                            spec.name, fallback_from_model, fallback_exc,
+                        )
+                        fb_exit_code = 1
+                        if isinstance(fallback_exc, SystemExit) and isinstance(
+                            fallback_exc.code, int
+                        ):
+                            fb_exit_code = fallback_exc.code
+                        elapsed = int((time.monotonic() - start) * 1000)
+                        results.append(FailedAgent(
+                            name=spec.name,
+                            reason=(
+                                f"content-filter fallback from "
+                                f"{fallback_from_model!r} to {model_id!r} "
+                                f"also failed: {_format_exception_chain(fallback_exc)}"
+                            ),
+                            exit_code=fb_exit_code,
+                            elapsed_ms=elapsed,
+                        ))
+                        return
+                else:
+                    raise
         usage = TokenUsage(
             input=response.input_tokens,
             output=response.output_tokens,
@@ -528,14 +611,17 @@ async def _run_single_agent(
             profile_tokens_used=profile_tokens_used,
             elapsed_ms=elapsed,
             stop_reason=response.stop_reason,
+            fallback_from_model=fallback_from_model,
         ))
     except BaseException as exc:
         # Catch BaseException (not Exception) so SystemExit from llm/client.py
         # — raised on auth failure (exit 1), retry exhaustion (exit 2), or
         # content-filter block (exit 3) — is isolated to a single FailedAgent
         # instead of cancelling sibling tasks in the anyio task group.
-        # KeyboardInterrupt is re-raised so Ctrl-C still aborts the run.
-        if isinstance(exc, KeyboardInterrupt):
+        # _is_uncatchable() re-raises KeyboardInterrupt (Ctrl-C) and the
+        # async backend's own cancellation exception (#810 review finding
+        # F2) so structured-concurrency cancellation still propagates.
+        if _is_uncatchable(exc):
             raise
         elapsed = int((time.monotonic() - start) * 1000)
         exit_code = 1

@@ -652,6 +652,213 @@ async def test_run_tier_isolates_systemexit_from_llm_call(tmp_path: Path) -> Non
 
 
 @pytest.mark.anyio
+async def test_is_uncatchable_identifies_keyboard_interrupt_and_cancellation() -> None:
+    """#810 review finding F2: the same predicate both exception handlers use
+    to decide what must always propagate, tested directly against the two
+    exception types it must recognize. Gets a real cancellation-exception
+    instance from an actual cancelled scope rather than constructing one by
+    hand: trio.Cancelled has no public constructor, so manual instantiation
+    (which works fine on asyncio) is a TypeError on trio."""
+    from ai_pr_review.agents.dispatch import _is_uncatchable
+
+    assert _is_uncatchable(KeyboardInterrupt())
+    assert not _is_uncatchable(SystemExit(3))
+    assert not _is_uncatchable(RuntimeError("ordinary failure"))
+
+    caught: BaseException | None = None
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        try:
+            await anyio.sleep(0)  # checkpoint inside a cancelled scope
+        except BaseException as exc:
+            caught = exc
+            raise
+    assert caught is not None
+    assert _is_uncatchable(caught)
+
+
+@pytest.mark.anyio
+async def test_run_single_agent_propagates_cancellation_instead_of_swallowing_it(
+    tmp_path: Path,
+) -> None:
+    """#810 review finding F2: catching bare BaseException must not swallow
+    the async backend's own cancellation exception — doing so would convert
+    a structured-concurrency cancel into a plain FailedAgent result. Cancels
+    a real task group scope while llm_call is in flight, rather than
+    manually raising the cancellation exception class: trio.Cancelled has no
+    public constructor (raising it by hand is a TypeError), so genuine
+    cancellation is the only portable way to exercise this on both backends.
+    A real, correctly-propagated cancellation is absorbed cleanly by the
+    scope that issued it (that's the whole point of structured concurrency)
+    -- the property under test is that _run_single_agent's except block
+    didn't intercept it and record a spurious FailedAgent first."""
+    from ai_pr_review.agents.dispatch import _run_single_agent
+
+    ctx = _make_context(tmp_path)
+    spec = get_agent("code-reviewer")
+    limiter = anyio.CapacityLimiter(1)
+    results: list[AgentResult | FailedAgent] = []
+    entered = anyio.Event()
+
+    async def mock_llm(request: object) -> LLMResponse:
+        entered.set()
+        await anyio.sleep_forever()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            _run_single_agent, spec, mock_llm, ctx, limiter, "diff text", results,
+        )
+        await entered.wait()
+        tg.cancel_scope.cancel()
+
+    assert results == []  # not swallowed into a FailedAgent
+
+
+@pytest.mark.anyio
+async def test_run_single_agent_propagates_cancellation_from_fallback_retry(
+    tmp_path: Path,
+) -> None:
+    """Same as above, but the cancellation lands specifically on the
+    standard-model retry after a premium content-filter refusal — the new
+    inner handler this PR adds must apply the same rule as the outer one."""
+    from ai_pr_review.agents.dispatch import _run_single_agent
+
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    spec = get_agent("security-reviewer")
+    limiter = anyio.CapacityLimiter(1)
+    results: list[AgentResult | FailedAgent] = []
+    entered_fallback = anyio.Event()
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        if request.model_id == "claude-premium":
+            raise SystemExit(3)
+        entered_fallback.set()
+        await anyio.sleep_forever()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            _run_single_agent, spec, mock_llm, ctx, limiter, "diff text", results,
+        )
+        await entered_fallback.wait()
+        tg.cancel_scope.cancel()
+
+    assert results == []
+
+
+@pytest.mark.anyio
+async def test_run_tier_falls_back_to_standard_model_on_content_filter(
+    tmp_path: Path,
+) -> None:
+    """#810: a premium-model content-filter refusal (exit 3) must not drop the
+    agent's coverage entirely. dispatch retries once on the standard model and
+    records fallback_from_model so the substitution is never silent."""
+    ctx = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=ctx.script_dir,
+        mode="full",
+        diff_path=ctx.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    agents = [get_agent("security-reviewer")]  # tier=2, premium-eligible
+    seen_models: list[str] = []
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        seen_models.append(request.model_id)
+        if request.model_id == "claude-premium":
+            raise SystemExit(3)  # content-filter block, per llm/client.py
+        return _make_response("ok")
+
+    successes, failures = await run_tier(
+        agents=agents, llm_call=mock_llm, context=ctx, semaphore_size=1,
+    )
+    assert failures == []
+    assert len(successes) == 1
+    assert seen_models == ["claude-premium", "claude-standard"]
+    assert successes[0].fallback_from_model == "claude-premium"
+    assert successes[0].token_log is not None
+    assert successes[0].token_log.model == "claude-standard"
+
+
+@pytest.mark.anyio
+async def test_run_tier_no_fallback_when_standard_model_also_refused(
+    tmp_path: Path,
+) -> None:
+    """A retry happens at most once. If the standard model is also blocked,
+    the agent is recorded as failed rather than looping indefinitely, and the
+    failure reason names both models so a post-mortem reader can tell this
+    apart from a first-attempt failure (#810 review finding F1)."""
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    agents = [get_agent("security-reviewer")]
+    call_count = 0
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        nonlocal call_count
+        call_count += 1
+        raise SystemExit(3)
+
+    successes, failures = await run_tier(
+        agents=agents, llm_call=mock_llm, context=ctx, semaphore_size=1,
+    )
+    assert successes == []
+    assert len(failures) == 1
+    assert failures[0].exit_code == 3
+    assert call_count == 2  # premium attempt + one standard-model retry, no more
+    assert "claude-premium" in failures[0].reason
+    assert "claude-standard" in failures[0].reason
+    assert "fallback" in failures[0].reason
+
+
+@pytest.mark.anyio
+async def test_run_tier_no_fallback_on_non_content_filter_exit(tmp_path: Path) -> None:
+    """Only exit code 3 (content filter) triggers a fallback. Auth failures
+    (1) and transient-retry exhaustion (2) must not retry on another model —
+    retrying an auth failure on a different model can't help, and retrying a
+    transient failure defeats llm/client.py's own retry/backoff contract."""
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    agents = [get_agent("security-reviewer")]
+    call_count = 0
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        nonlocal call_count
+        call_count += 1
+        raise SystemExit(2)
+
+    successes, failures = await run_tier(
+        agents=agents, llm_call=mock_llm, context=ctx, semaphore_size=1,
+    )
+    assert successes == []
+    assert len(failures) == 1
+    assert failures[0].exit_code == 2
+    assert call_count == 1  # no retry attempted
+
+
+@pytest.mark.anyio
 async def test_run_tier_propagates_thinking_tokens_to_token_usage(tmp_path: Path) -> None:
     """#592: LLMResponse.thinking_tokens must reach AgentResult.token_log so a
     telemetry consumer can see thinking-budget exhaustion without reading

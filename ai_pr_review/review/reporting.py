@@ -743,3 +743,27 @@ def emit_review_result(
             err=True,
         )
 
+    # Model fallback activity (#810): a premium-model content-filter refusal
+    # degraded one or more agents to the standard model for this run.
+    # AgentResult.fallback_from_model is the only trace of this once the run
+    # completes — click.echo(err=True) is what makes it visible to a human
+    # scanning the job log rather than only to whoever reads structured
+    # telemetry, matching the canonical-reuse line just above. Always echoed
+    # (unlike the degrade-to-comment ::warning:: above, which is Actions-only
+    # workflow-command syntax); the `::warning::` prefix is added on top when
+    # running in Actions so it also surfaces as a job annotation.
+    fallbacks = [
+        (r.name, r.fallback_from_model)
+        for r in result.agent_results
+        if r.fallback_from_model is not None
+    ]
+    if fallbacks:
+        details = ", ".join(f"{name} (from {model})" for name, model in fallbacks)
+        prefix = "::warning::ai-pr-review: " if os.environ.get("GITHUB_ACTIONS") == "true" else ""
+        click.echo(
+            f"{prefix}Model fallback: {len(fallbacks)} agent(s) fell back to "
+            f"the standard model after a premium-model content-filter "
+            f"refusal: {details}",
+            err=True,
+        )
+

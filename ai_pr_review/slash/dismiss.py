@@ -317,8 +317,19 @@ def _record_verdict(
     reviews: Sequence[dict[str, Any]],
     fingerprint: str | None,
     verdict: str,
+    *,
+    resolved_comment_id: int | None = None,
 ) -> None:
     """Best-effort: patch the canonical review's verdict marker.
+
+    `resolved_comment_id`, when given, is the databaseId of the inline
+    comment whose thread was just resolved by this same call — if the
+    canonical body's "Still open from earlier reviews" section still names
+    it (via `github.strip_carried_forward_entry`), that bullet is removed in
+    the same PUT so the visible text doesn't contradict the verdict marker
+    it sits next to (#811: a resolved thread's own review kept reading
+    "Still open" until the next full review run). `None` for a body-level
+    finding, which was never rendered there in the first place.
 
     "Canonical" = the most recently posted bot review (highest `id`) with a
     non-empty body among `reviews`, regardless of its current state (a
@@ -388,6 +399,10 @@ def _record_verdict(
     verdicts = merge_verdicts(reviews)
     verdicts[fingerprint] = verdict
     new_body = upsert_verdicts_marker(canonical.body, verdicts)
+    if resolved_comment_id is not None:
+        from ai_pr_review.vcs.github import strip_carried_forward_entry
+
+        new_body = strip_carried_forward_entry(new_body, resolved_comment_id)
     try:
         ok, status, snippet = provider.update_review_body(canonical_id, new_body)
     except httpx.HTTPError as exc:
@@ -440,6 +455,11 @@ def _thread_review_id(thread: dict[str, Any]) -> int | None:
     review = (_first_comment(thread).get("pullRequestReview")) or {}
     rid = review.get("databaseId")
     return int(rid) if isinstance(rid, int) else None
+
+
+def _first_comment_id(thread: dict[str, Any]) -> int | None:
+    cid = _first_comment(thread).get("databaseId")
+    return int(cid) if isinstance(cid, int) else None
 
 
 def _thread_by_comment_id(
@@ -884,6 +904,7 @@ def dismiss_by_finding_id(
             reviews,
             target_fp,
             "fixed" if command == "fixed" else "dismissed",
+            resolved_comment_id=_first_comment_id(target_thread),
         )
         # Try the PR-wide approve path FIRST: it is the sole dismisser for
         # the reviews it clears (it dismisses each CHANGES_REQUESTED review
@@ -1277,6 +1298,7 @@ def dismiss_inline_reply(
                 reviews_for_verdict,
                 fingerprint,
                 "fixed" if command == "fixed" else "dismissed",
+                resolved_comment_id=_first_comment_id(target_thread),
             )
         # Try the PR-wide approve path FIRST — see dismiss_by_finding_id's
         # identical ordering comment: _approve_if_pr_fully_resolved must run

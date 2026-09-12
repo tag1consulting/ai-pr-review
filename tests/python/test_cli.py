@@ -464,7 +464,7 @@ class TestEmitReviewResult:
     """
 
     def _make_result(self, *, outcome_event: str, posted_event: str | None,
-                      degraded: bool = False) -> object:
+                      degraded: bool = False, agent_results: list | None = None) -> object:
         from unittest.mock import MagicMock
 
         from ai_pr_review.review.outcome import ReviewOutcome
@@ -474,6 +474,7 @@ class TestEmitReviewResult:
         result.skipped = False
         result.findings = []
         result.failed_agents = []
+        result.agent_results = agent_results if agent_results is not None else []
         result.outcome = ReviewOutcome(
             risk="Low", event=outcome_event, may_approve=(outcome_event == "APPROVE"),
             incomplete=False, finding_total=0,
@@ -571,6 +572,85 @@ class TestEmitReviewResult:
         err = capsys.readouterr().err
         assert "::warning::" not in err
         assert "event=APPROVE" in err
+
+    def _agent_result(self, name: str, fallback_from_model: str | None) -> object:
+        from ai_pr_review.agents.dispatch import AgentResult
+
+        return AgentResult(
+            name=name, output="", token_log=None, truncated=False,
+            fallback_from_model=fallback_from_model,
+        )
+
+    def test_logs_model_fallback_in_github_actions(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#810/#811: a premium->standard fallback must be visible to a human
+        scanning the job log, as a workflow annotation when running in CI."""
+        from ai_pr_review.review.reporting import emit_review_result
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="APPROVE",
+            agent_results=[self._agent_result("security-reviewer", "claude-opus-5")],
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" in err
+        assert "Model fallback" in err
+        assert "security-reviewer" in err
+        assert "claude-opus-5" in err
+
+    def test_logs_model_fallback_outside_github_actions_without_annotation_syntax(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unlike the degrade-to-comment warning, this must still be visible
+        on a local/non-Actions run -- just without the ::warning:: syntax,
+        which would otherwise print as literal noise instead of an
+        annotation."""
+        from ai_pr_review.review.reporting import emit_review_result
+
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="APPROVE",
+            agent_results=[self._agent_result("security-reviewer", "claude-opus-5")],
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "::warning::" not in err
+        assert "Model fallback" in err
+
+    def test_no_fallback_line_when_no_agent_fell_back(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from ai_pr_review.review.reporting import emit_review_result
+
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="APPROVE",
+            agent_results=[self._agent_result("security-reviewer", None)],
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "Model fallback" not in err
+
+    def test_logs_multiple_fallbacks_together(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from ai_pr_review.review.reporting import emit_review_result
+
+        result = self._make_result(
+            outcome_event="APPROVE", posted_event="APPROVE",
+            agent_results=[
+                self._agent_result("security-reviewer", "claude-opus-5"),
+                self._agent_result("code-reviewer", "claude-opus-5"),
+                self._agent_result("edge-case-hunter", None),
+            ],
+        )
+        emit_review_result(result, base_ref="main", head="abc1234")
+        err = capsys.readouterr().err
+        assert "2 agent(s)" in err
+        assert "security-reviewer" in err
+        assert "code-reviewer" in err
+        assert "edge-case-hunter" not in err
 
 
 class TestWriteStepSummary:
