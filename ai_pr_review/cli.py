@@ -37,9 +37,6 @@ from ai_pr_review.review.reporting import (
 from ai_pr_review.review.reporting import (
     build_token_table_accordion as _build_token_table_accordion,
 )
-from ai_pr_review.review.reporting import (
-    build_token_usage_line as _build_token_usage_line,
-)
 from ai_pr_review.review.reporting import ci_run_url as _ci_run_url
 from ai_pr_review.review.reporting import (
     compute_token_totals as _compute_token_totals,
@@ -48,6 +45,9 @@ from ai_pr_review.review.reporting import (
     emit_post_failure_annotation as _emit_post_failure_annotation,
 )
 from ai_pr_review.review.reporting import emit_review_result as _emit_review_result
+from ai_pr_review.review.reporting import (
+    render_token_usage_block as _render_token_usage_block,
+)
 from ai_pr_review.review.reporting import write_step_summary as _write_step_summary
 from ai_pr_review.vcs import ProviderConfigError
 
@@ -298,30 +298,22 @@ async def _run_review_async(config: ReviewConfig) -> int:
         is applied per-provider, not here (each provider decides its own
         marker form and where it belongs relative to any provider-specific
         transform, e.g. Bitbucket's accordion-stripping).
+
+        Delegates the actual per-mode branching to
+        reporting.render_token_usage_block (#802), which consolidates what
+        used to be duplicated inline here.
         """
-        if rc.token_usage_display == "off":
-            return ""
-        if rc.token_usage_display == "full":
-            return _build_token_table_accordion(
-                successes, runtime.sarif_elapsed_s, runtime.script_dir,
-                effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
-                judge_input_tokens=judge_input_tokens,
-                judge_output_tokens=judge_output_tokens,
-                judge_cache_creation_tokens=judge_cache_creation_tokens,
-                judge_cache_read_tokens=judge_cache_read_tokens,
-                judge_model=judge_model,
-            )
-        # "compact" (default)
-        totals = _compute_token_totals(
-            successes, runtime.script_dir,
+        return _render_token_usage_block(
+            successes, runtime.sarif_elapsed_s, runtime.script_dir,
+            mode=rc.token_usage_display,
             effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
             judge_input_tokens=judge_input_tokens,
             judge_output_tokens=judge_output_tokens,
             judge_cache_creation_tokens=judge_cache_creation_tokens,
             judge_cache_read_tokens=judge_cache_read_tokens,
             judge_model=judge_model,
+            run_url=_ci_run_url(),
         )
-        return _build_token_usage_line(totals, run_url=_ci_run_url())
 
     def _usage_warning_renderer(
         successes: Sequence[_AgentResult],

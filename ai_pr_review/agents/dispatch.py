@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import sys
-import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -13,7 +11,7 @@ from pathlib import Path
 
 import anyio
 
-from ai_pr_review.agents.roster import AgentSpec
+from ai_pr_review.agents.roster import AgentSpec, get_agent
 from ai_pr_review.languages import detect_language
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
@@ -183,142 +181,73 @@ class DispatchContext:
 # Prompt composition
 # ---------------------------------------------------------------------------
 
-_AGENTS_WITH_FINDINGS_TRAILER: frozenset[str] = frozenset({
-    "code-reviewer",
-    "silent-failure-hunter",
-    "security-reviewer",
-    "edge-case-hunter",
-    "blind-hunter",
-    "architecture-reviewer",
-    "adversarial-general",
-})
-
-_AGENTS_WITH_SUGGESTION_ADDENDUM: frozenset[str] = frozenset({
-    "code-reviewer",
-    "edge-case-hunter",
-    "security-reviewer",
-    "silent-failure-hunter",
-    "blind-hunter",
-})
-
-
 def effective_prompt(
     agent_name: str,
     base_prompt_path: Path,
     script_dir: Path,
     enable_suggestions: bool,
     shared_fragments: _SharedPromptFragments | None = None,
-) -> tuple[Path, bool]:
-    """Compose the effective prompt path and a degraded-flag for an agent.
+) -> tuple[str, bool]:
+    """Compose the effective prompt text and a degraded-flag for an agent.
 
-    Returns ``(path, degraded)``. ``degraded=True`` signals that a non-fatal
-    prompt fragment was skipped — currently only the suggestion-addendum. The
-    agent can still run; callers may want to surface this to operators.
+    Returns ``(prompt_text, degraded)``. ``degraded=True`` signals that a
+    non-fatal prompt fragment was skipped — currently only the
+    suggestion-addendum. The agent can still run; callers may want to
+    surface this to operators.
 
     Raises ``FileNotFoundError`` when a required fragment is missing (base
     prompt, knowledge-cutoff, or findings trailer).
 
-    Tempfile ownership: when the returned path differs from ``base_prompt_path``,
-    it is a caller-owned tempfile created under ``/tmp``. The caller is
-    responsible for unlinking it after use. Inside ``run_tier`` this is handled
-    by the ``finally`` block in ``_run_single_agent``; external callers must
-    perform their own cleanup (``Path(p).unlink(missing_ok=True)``) to avoid
-    leaks.
+    Whether an agent gets the governance/knowledge-cutoff/findings-trailer
+    tail at all, and whether it's further eligible for the suggestion
+    addendum, is read from its ``AgentSpec`` (``has_findings_trailer`` /
+    ``suggestion_eligible`` — #802; formerly two module-level frozensets
+    here).
 
-    Performance: when ``shared_fragments`` is provided (pre-loaded once per run
-    via ``load_shared_prompt_fragments``), the four shared files are read from
-    memory rather than disk.  When it is None, they are read from disk as
-    before (backward-compatible fallback used by tests and callers that
-    construct DispatchContext without populating _shared_prompt_fragments).
+    Performance: when ``shared_fragments`` is provided (pre-loaded once per
+    run via ``load_shared_prompt_fragments``), the four shared files are read
+    from memory rather than disk. When it is None, this loads them from disk
+    itself via ``load_shared_prompt_fragments`` (used by tests and callers
+    that construct DispatchContext without populating
+    _shared_prompt_fragments) — same required-fragment checks and error
+    messages, just no longer duplicated inline.
     """
-    if agent_name not in _AGENTS_WITH_FINDINGS_TRAILER:
-        return base_prompt_path, False
+    spec = get_agent(agent_name)
+    if not spec.has_findings_trailer:
+        return base_prompt_path.read_text(), False
 
     if not base_prompt_path.exists():
         raise FileNotFoundError(
             f"base prompt not found for agent '{agent_name}': {base_prompt_path}"
         )
 
+    if shared_fragments is None:
+        shared_fragments = load_shared_prompt_fragments(script_dir, enable_suggestions)
+
     # Composition order: base → _governance → _knowledge-cutoff → _trailer-findings → (suggestion).
     # Governance leads the shared tail; cutoff/trailer/suggestion bytes stay
     # byte-identical to preserve prompt-cache locality.
-    if shared_fragments is not None:
-        # Fast path: use pre-loaded fragments (no disk I/O for shared files).
-        parts = [
-            base_prompt_path.read_text(),
-            shared_fragments.governance,
-            shared_fragments.knowledge_cutoff,
-            shared_fragments.findings_trailer,
-        ]
-        degraded = False
-        if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
-            if shared_fragments.suggestion_addendum:
-                parts.append(shared_fragments.suggestion_addendum)
-            else:
-                degraded = True
-                prompts_dir = script_dir / "prompts"
-                suggestion_path = prompts_dir / "suggestion-addendum.md"
-                print(
-                    f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
-                    f"agent '{agent_name}' will run without suggestion instructions",
-                    file=sys.stderr,
-                )
-    else:
-        # Fallback: read all fragments from disk (backward-compatible path for
-        # tests and callers that do not pre-populate _shared_prompt_fragments).
-        prompts_dir = script_dir / "prompts"
-        governance_path = prompts_dir / "_governance.md"
-        cutoff_path = prompts_dir / "_knowledge-cutoff.md"
-        trailer_path = prompts_dir / "_trailer-findings.md"
-        suggestion_path = prompts_dir / "suggestion-addendum.md"
-
-        if not governance_path.exists():
-            raise FileNotFoundError(
-                f"governance fragment not found: {governance_path}; "
-                "this file is required for agents that produce findings"
-            )
-        if not trailer_path.exists():
-            raise FileNotFoundError(
-                f"findings trailer not found: {trailer_path}; "
-                "this file is required for agents that emit json-findings blocks"
-            )
-        if not cutoff_path.exists():
-            raise FileNotFoundError(
-                f"knowledge-cutoff fragment not found: {cutoff_path}; "
-                "this file is required for agents that produce findings"
+    parts = [
+        base_prompt_path.read_text(),
+        shared_fragments.governance,
+        shared_fragments.knowledge_cutoff,
+        shared_fragments.findings_trailer,
+    ]
+    degraded = False
+    if enable_suggestions and spec.suggestion_eligible:
+        if shared_fragments.suggestion_addendum:
+            parts.append(shared_fragments.suggestion_addendum)
+        else:
+            degraded = True
+            prompts_dir = script_dir / "prompts"
+            suggestion_path = prompts_dir / "suggestion-addendum.md"
+            print(
+                f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
+                f"agent '{agent_name}' will run without suggestion instructions",
+                file=sys.stderr,
             )
 
-        parts = [
-            base_prompt_path.read_text(),
-            governance_path.read_text(),
-            cutoff_path.read_text(),
-            trailer_path.read_text(),
-        ]
-
-        degraded = False
-        if enable_suggestions and agent_name in _AGENTS_WITH_SUGGESTION_ADDENDUM:
-            if suggestion_path.exists():
-                parts.append(suggestion_path.read_text())
-            else:
-                degraded = True
-                print(
-                    f"\n[ai-pr-review] WARNING: suggestion-addendum fragment missing at {suggestion_path}; "
-                    f"agent '{agent_name}' will run without suggestion instructions",
-                    file=sys.stderr,
-                )
-
-    fd, tmp_path = tempfile.mkstemp(
-        suffix=".md",
-        prefix=f"effective-prompt-{agent_name}-",
-    )
-    try:
-        with open(fd, "w") as fh:
-            fh.write("\n".join(parts))
-    except Exception:
-        with contextlib.suppress(OSError):
-            Path(tmp_path).unlink(missing_ok=True)
-        raise
-    return Path(tmp_path), degraded
+    return "\n".join(parts), degraded
 
 
 def _format_exception_chain(exc: BaseException) -> str:
@@ -496,7 +425,6 @@ async def _run_single_agent(
     enrichment: _EnrichmentBlock | None = None,
 ) -> None:
     start = time.monotonic()
-    tmp_prompt: Path | None = None
     try:
         # pr-summarizer composes its own prompt + user message (manifest +
         # commit log + diff) via ai_pr_review.agents.summarizer.*. The generic
@@ -512,15 +440,13 @@ async def _run_single_agent(
             )
 
         base_path = context.script_dir / spec.prompt_path
-        prompt_path, prompt_degraded = effective_prompt(
+        system_prompt, prompt_degraded = effective_prompt(
             spec.name,
             base_path,
             context.script_dir,
             context.enable_suggestions,
             shared_fragments=context._shared_prompt_fragments,
         )
-        if prompt_path != base_path:
-            tmp_prompt = prompt_path
 
         use_premium = spec.tier == 2 and context.mode == "full" and bool(context.premium_model)
         model_id = context.premium_model if use_premium else context.standard_model
@@ -531,8 +457,6 @@ async def _run_single_agent(
         user_message, context_tokens_used = _build_user_message(
             diff_text, spec, context, enrichment=enrichment,
         )
-
-        system_prompt = prompt_path.read_text()
 
         # Run-shared system tail: feedback addendum + language profiles. These
         # are byte-identical across every agent in a run, so they go into
@@ -623,10 +547,6 @@ async def _run_single_agent(
             exit_code=exit_code,
             elapsed_ms=elapsed,
         ))
-    finally:
-        if tmp_prompt is not None:
-            with contextlib.suppress(OSError):
-                tmp_prompt.unlink(missing_ok=True)
 
 
 async def run_tier(

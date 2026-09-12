@@ -369,6 +369,57 @@ def build_token_usage_line(totals: TokenTotals | None, *, run_url: str = "") -> 
     return f"_{line}_"
 
 
+def render_token_usage_block(
+    successes: Sequence[object],
+    sarif_elapsed_s: float | None,
+    script_dir: Path,
+    *,
+    mode: str,
+    effective_max_tokens: int = 0,
+    judge_input_tokens: int = 0,
+    judge_output_tokens: int = 0,
+    judge_cache_creation_tokens: int = 0,
+    judge_cache_read_tokens: int = 0,
+    judge_model: str = "",
+    run_url: str = "",
+) -> str:
+    """Render the review-comment token-usage payload for one
+    ``token-usage-display`` mode (#802): consolidates cli.py's previous
+    per-mode branching (formerly duplicated between its own
+    ``_token_renderer`` closure and this module's separate builders) into
+    one call.
+
+    Output is unchanged for every mode: ``"off"`` -> ``""``; ``"full"`` ->
+    ``build_token_table_accordion``'s ``<details>`` block; anything else
+    (``"compact"``, the default) -> ``build_token_usage_line`` over
+    ``compute_token_totals``. Byte-stable by construction: this only
+    relocates the existing mode-selection branch, it does not change what
+    either builder returns.
+    """
+    if mode == "off":
+        return ""
+    if mode == "full":
+        return build_token_table_accordion(
+            successes, sarif_elapsed_s, script_dir,
+            effective_max_tokens=effective_max_tokens,
+            judge_input_tokens=judge_input_tokens,
+            judge_output_tokens=judge_output_tokens,
+            judge_cache_creation_tokens=judge_cache_creation_tokens,
+            judge_cache_read_tokens=judge_cache_read_tokens,
+            judge_model=judge_model,
+        )
+    totals = compute_token_totals(
+        successes, script_dir,
+        effective_max_tokens=effective_max_tokens,
+        judge_input_tokens=judge_input_tokens,
+        judge_output_tokens=judge_output_tokens,
+        judge_cache_creation_tokens=judge_cache_creation_tokens,
+        judge_cache_read_tokens=judge_cache_read_tokens,
+        judge_model=judge_model,
+    )
+    return build_token_usage_line(totals, run_url=run_url)
+
+
 def build_high_usage_warning(totals: TokenTotals | None, warn_usd: float) -> str:
     """Return a one-line warning when the run's estimated cost crosses
     ``warn_usd``, or "" when it doesn't (or the check is disabled).

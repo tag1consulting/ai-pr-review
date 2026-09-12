@@ -11,6 +11,7 @@ import math
 import re
 import sys
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 
@@ -34,7 +35,31 @@ class TokenEntry:
     max_output_tokens: int = 0  # 0 means no cap shown
 
 
+@cache
 def load_pricing(pricing_file: str) -> list[dict[str, object]]:
+    """Load and parse the model-pricing JSON file, cached per path (#802).
+
+    The pricing file is static config bundled with the image; a single
+    process never needs to re-read it from disk more than once per unique
+    path. Before this cache, every token-usage rendering call (the review
+    comment's usage block, the high-usage warning, the job-log echo, the
+    step-summary table) re-read and re-parsed the same file independently —
+    up to four disk reads per review run. Callers that need to defeat the
+    cache in tests should patch this function directly (as the existing
+    reporting/pricing tests already do) rather than rely on cache eviction.
+
+    Safety: `ai_pr_review.cli`'s `review`/`compute`/`slash` commands are each
+    a fresh, single-shot process (Click entry points that `sys.exit()` when
+    done; see cli.py) — the file cannot change mid-process, so caching by
+    path introduces no staleness within a run. Different tests use different
+    `pricing_file` paths (typically a fresh `tmp_path` per test), so the
+    cache never serves one test's data to another; the only tests that share
+    a path (`_REAL_PRICING_FILE` in `tests/python/test_pricing.py`) read it
+    read-only. A hypothetical future long-lived server mode reusing this
+    process across repos would need to revisit this (as
+    `context/symbols.py`'s per-run `_reset_cache()` already anticipates for
+    its own cache), but no such mode exists today.
+    """
     path = Path(pricing_file)
     if not path.is_file():
         print(
