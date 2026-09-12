@@ -138,11 +138,11 @@ Add unit-test coverage in `tests/python/agents/` for any custom gate logic.
 
 ### 5. Wire up governance
 
-Add the agent name to `_AGENTS_WITH_FINDINGS_TRAILER` in `ai_pr_review/agents/dispatch.py`. This frozenset is what actually injects `prompts/_governance.md` (the Three Laws and the five governance rules), `prompts/_knowledge-cutoff.md`, and `prompts/_trailer-findings.md` into the agent's prompt. An agent omitted from it runs with no governance, no version-hallucination guard, and no findings-schema instruction, and will silently emit unparseable output.
+Set `has_findings_trailer=True` on the agent's `AgentSpec` entry (#802; formerly membership in a `_AGENTS_WITH_FINDINGS_TRAILER` frozenset in `ai_pr_review/agents/dispatch.py`). This is what actually makes `dispatch.effective_prompt()` inject `prompts/_governance.md` (the Three Laws and the five governance rules), `prompts/_knowledge-cutoff.md`, and `prompts/_trailer-findings.md` into the agent's prompt. An agent left at the default `has_findings_trailer=False` runs with no governance, no version-hallucination guard, and no findings-schema instruction, and will silently emit unparseable output.
 
 ### 6. Enable suggestions (optional)
 
-If your agent produces concrete line-level fixes, ensure the prompt includes the suggestion addendum instructions or reference `prompts/suggestion-addendum.md` from the agent's prompt.
+If your agent produces concrete line-level fixes, set `suggestion_eligible=True` on its `AgentSpec` entry (only meaningful alongside `has_findings_trailer=True`) so `dispatch.effective_prompt()` appends `prompts/suggestion-addendum.md` when suggestions are enabled.
 
 ## Adding a language profile
 

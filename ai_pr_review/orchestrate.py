@@ -42,6 +42,24 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class TokenReport:
+    """A run's judge-pass token usage, as one value object (#802).
+
+    Built once in ``run_review``'s Phase 2.75 (judge pass) and threaded
+    through Phase 3.5's renderer calls and the final ``ReviewResult``,
+    replacing four separate ints + a model string that were previously
+    tracked as individual local variables and passed as separate positional
+    arguments end to end.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    model: str = ""
+
+
+@dataclass(frozen=True)
 class ReviewResult:
     """Aggregate outcome of a single end-to-end review run."""
 
@@ -82,8 +100,7 @@ class OrchestrationConfig:
     suppression_rules: tuple[SuppressionRule, ...] = ()
     # Pre-computed findings to inject alongside LLM findings (e.g. from
     # native static analyzers and SARIF, assembled by the caller).
-    # Typed as tuple[object,...] to avoid a circular import at module level.
-    extra_findings: tuple[object, ...] = ()
+    extra_findings: tuple[Finding, ...] = ()
     # Controls how out-of-diff native-analyzer findings are handled.
     # Mirrors ReviewConfig.analyzer_diff_scope ("cap" / "drop" / "off").
     analyzer_diff_scope: str = "cap"
@@ -94,18 +111,17 @@ class OrchestrationConfig:
     judge_prompt_path: Path | None = None
 
 
-TokenTableRenderer = Callable[
+TokenRenderer = Callable[
     [Sequence[AgentResult], float | None, int, int, int, int, str], str
 ]
-# Same call shape as TokenTableRenderer (#758): kept deliberately independent
-# rather than folded into a single return value, since the two payloads must
-# never be concatenated into one string -- see protocol.py's post_findings
-# docstring for why (a warning inside a collapsed <details> block is
-# invisible, and combining them would break Bitbucket's accordion-stripping
-# regex).
-UsageWarningRenderer = Callable[
-    [Sequence[AgentResult], float | None, int, int, int, int, str], str
-]
+# Shared shape (#802; previously TokenTableRenderer and UsageWarningRenderer
+# were two separately-declared aliases with an identical signature) for both
+# run_review's token_table_renderer and usage_warning_renderer parameters.
+# Kept as two distinct *parameters* -- not folded into a single renderer
+# returning one payload -- since the two payloads must never be concatenated
+# into one string; see protocol.py's post_findings docstring for why (a
+# warning inside a collapsed <details> block is invisible, and combining
+# them would break Bitbucket's accordion-stripping regex).
 
 
 async def run_review(
@@ -118,8 +134,8 @@ async def run_review(
     provider: VcsProvider,
     config: OrchestrationConfig | None = None,
     skip_reason: str = "",
-    token_table_renderer: TokenTableRenderer | None = None,
-    usage_warning_renderer: UsageWarningRenderer | None = None,
+    token_table_renderer: TokenRenderer | None = None,
+    usage_warning_renderer: TokenRenderer | None = None,
 ) -> ReviewResult:
     """End-to-end review: compute is upstream; this runs dispatch + post.
 
@@ -179,18 +195,8 @@ async def run_review(
     raw_findings: list[Finding] = []
     sarif_elapsed_s: float | None = None
     if cfg.extra_findings:
-        from ai_pr_review.findings.models import Finding as _Finding
-        injected = 0
-        for f in cfg.extra_findings:
-            if isinstance(f, _Finding):
-                raw_findings.append(f)
-                injected += 1
-            else:
-                logger.warning(
-                    "orchestrate: dropped extra_finding of unexpected type %s",
-                    type(f).__name__,
-                )
-        logger.info("analyzers: injected %d pre-computed finding(s)", injected)
+        raw_findings.extend(cfg.extra_findings)
+        logger.info("analyzers: injected %d pre-computed finding(s)", len(cfg.extra_findings))
 
     # Phase 2: extract + merge + suppress
     for s in successes:
@@ -226,11 +232,7 @@ async def run_review(
     # Runs after merge/suppress/scope/rollup; before outcome classification.
     # The judge uses a cheap model and sends only the candidate list (no diff).
     # Fail-soft: any error returns kept unchanged. Corroborated findings exempt.
-    judge_input_tokens = 0
-    judge_output_tokens = 0
-    judge_cache_creation_tokens = 0
-    judge_cache_read_tokens = 0
-    judge_model_used = ""
+    judge_tokens = TokenReport()
     if cfg.enable_judge_pass and kept and cfg.judge_model and cfg.judge_prompt_path:
         from ai_pr_review.findings.judge import judge_findings
         try:
@@ -241,11 +243,13 @@ async def run_review(
                 prompt_path=cfg.judge_prompt_path,
             )
             kept = judge_result.findings
-            judge_input_tokens = judge_result.input_tokens
-            judge_output_tokens = judge_result.output_tokens
-            judge_cache_creation_tokens = judge_result.cache_creation_tokens
-            judge_cache_read_tokens = judge_result.cache_read_tokens
-            judge_model_used = cfg.judge_model
+            judge_tokens = TokenReport(
+                input_tokens=judge_result.input_tokens,
+                output_tokens=judge_result.output_tokens,
+                cache_creation_tokens=judge_result.cache_creation_tokens,
+                cache_read_tokens=judge_result.cache_read_tokens,
+                model=cfg.judge_model,
+            )
         except Exception as exc:
             logger.warning(
                 "judge pass raised unexpectedly (fail-soft): %s", exc, exc_info=True
@@ -268,9 +272,9 @@ async def run_review(
         try:
             usage_block = token_table_renderer(
                 successes, sarif_elapsed_s,
-                judge_input_tokens, judge_output_tokens,
-                judge_cache_creation_tokens, judge_cache_read_tokens,
-                judge_model_used,
+                judge_tokens.input_tokens, judge_tokens.output_tokens,
+                judge_tokens.cache_creation_tokens, judge_tokens.cache_read_tokens,
+                judge_tokens.model,
             )
         except Exception as exc:
             logger.warning(
@@ -283,9 +287,9 @@ async def run_review(
         try:
             usage_warning = usage_warning_renderer(
                 successes, sarif_elapsed_s,
-                judge_input_tokens, judge_output_tokens,
-                judge_cache_creation_tokens, judge_cache_read_tokens,
-                judge_model_used,
+                judge_tokens.input_tokens, judge_tokens.output_tokens,
+                judge_tokens.cache_creation_tokens, judge_tokens.cache_read_tokens,
+                judge_tokens.model,
             )
         except Exception as exc:
             logger.warning(
@@ -417,11 +421,11 @@ async def run_review(
         stale=stale_result,
         agent_results=successes,
         sarif_elapsed_s=sarif_elapsed_s,
-        judge_input_tokens=judge_input_tokens,
-        judge_output_tokens=judge_output_tokens,
-        judge_cache_creation_tokens=judge_cache_creation_tokens,
-        judge_cache_read_tokens=judge_cache_read_tokens,
-        judge_model=judge_model_used,
+        judge_input_tokens=judge_tokens.input_tokens,
+        judge_output_tokens=judge_tokens.output_tokens,
+        judge_cache_creation_tokens=judge_tokens.cache_creation_tokens,
+        judge_cache_read_tokens=judge_tokens.cache_read_tokens,
+        judge_model=judge_tokens.model,
     )
 
 
@@ -431,6 +435,17 @@ class _AsFindingLike:
     Outcome's Protocol declares `severity: str`; Finding's
     `Literal["Critical","High","Medium","Low"]` is a subtype but mypy treats
     Protocol attrs as invariant. This adapter is a one-line bridge.
+
+    #802 asked to delete this alongside the (unrelated) extra_findings
+    circular-import cleanup. Kept deliberately: outcome.py's `severity: str`
+    is intentionally loose, not an oversight -- `tests/python/review/
+    test_outcome.py` relies on it accepting arbitrary non-canonical severity
+    strings (e.g. "info", "warning") via its own local fixture class, so
+    narrowing the Protocol to Finding's `Literal` to allow passing `Finding`
+    directly would either break that test's typing or require touching
+    outcome.py's public contract -- both outside this issue's dispatch/
+    orchestration/token-reporting scope. Verified removing this class
+    outright fails mypy (`list[Finding]` vs `Sequence[_FindingLike]`).
     """
 
     __slots__ = ("severity",)
