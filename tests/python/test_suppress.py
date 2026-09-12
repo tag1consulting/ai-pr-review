@@ -475,6 +475,18 @@ class TestVerifyVersion:
         result = _verify_version(f, "unknown-registry")
         assert result is False
 
+    def test_unknown_verify_type_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Silent-failure review finding: an unrecognized verify type used to
+        fall through to `return False` with no diagnostic, indistinguishable
+        from a real verifier confirming nothing. Now warns once."""
+        f = _finding(finding="some package 1.2.3")
+        result = _verify_version(f, "unknown-registry")
+        assert result is False
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "unrecognized verify type" in captured.err
+        assert "unknown-registry" in captured.err
+
     def test_exception_in_verify_returns_false(self, capsys: pytest.CaptureFixture[str]) -> None:
         f = _finding(finding="owner/repo@v1.0.0")
         with patch(
@@ -592,12 +604,17 @@ class TestVerifyVersion:
             mock_handler.assert_called_once()
             assert result is True
 
-    def test_ruby_org_no_longer_dispatches(self) -> None:
+    def test_ruby_org_no_longer_dispatches(self, capsys: pytest.CaptureFixture[str]) -> None:
         """#F3 follow-up: _verify_ruby was dead (no config rule ever set
         verify: ruby-org, and its extraction regex did not reliably match the
         Gemfile.lock `name (version)` syntax this repo's own cve_check.py
         parses). Removed rather than given an unvalidated match pattern;
-        "ruby-org" now falls through like any other unrecognized verify type."""
+        "ruby-org" now falls through and warns like any other unrecognized
+        verify type (silent-failure review finding: a stale "verify":
+        "ruby-org" rule in a repo-level suppressions.json override must not
+        silently never fire)."""
         f = _finding(finding="nokogiri 1.15.0 has security issue")
         result = _verify_version(f, "ruby-org")
         assert result is False
+        captured = capsys.readouterr()
+        assert "unrecognized verify type 'ruby-org'" in captured.err

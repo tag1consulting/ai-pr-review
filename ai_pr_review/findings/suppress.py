@@ -243,6 +243,21 @@ def _verify_version(finding: Finding, verify_type: str) -> bool:
             return _verify_cargo(text)
         if verify_type == "docker-hub":
             return _verify_docker_hub(text)
+        # Silent-failure review finding (Medium, #796 follow-up): every prior
+        # branch above returns; falling through here means verify_type named
+        # something no registered verifier handles (a typo, or a removed
+        # verifier like the old "ruby-org" — see docs/suppression.md). That
+        # used to return False with zero diagnostic, identical in outward
+        # behavior to "confirmed unconfirmed, keeping the finding" — a rule
+        # that can never suppress anything looks the same as one that fires
+        # correctly and finds nothing. Warn once so a stale or misspelled
+        # verify type in a repo-level suppressions.json override is visible.
+        print(
+            f"WARNING: suppression rule uses unrecognized verify type {verify_type!r}; "
+            "no registered verifier handles it, so this rule can never suppress a "
+            "finding. Keeping finding.",
+            file=sys.stderr,
+        )
     except Exception as exc:  # noqa: BLE001
         print(
             f"WARNING: suppression verify ({verify_type}) error ({type(exc).__name__}: {exc!r}); keeping finding.",

@@ -125,21 +125,40 @@ def _warn_if_context_enrichment_inert() -> None:
     nothing on every single review, with no signal anywhere that it is on.
     This check runs once per review, before dispatch, regardless of diff
     content.
-    """
-    import importlib.util
-    import shutil
 
-    missing = []
-    if importlib.util.find_spec("tree_sitter_language_pack") is None:
-        missing.append("tree-sitter-language-pack (pip install 'ai-pr-review[context]')")
-    if shutil.which("rg") is None:
-        missing.append("ripgrep (rg)")
-    if missing:
+    Fail-soft by design (review-quality PR feedback): this is a diagnostic
+    warning, not a required step, and it runs before the provider is even
+    constructed. `importlib.util.find_spec` does import parent packages
+    under the hood and can raise on a broken/partial package on sys.path; a
+    bare exception here would otherwise propagate out of
+    `build_review_runtime` and abort the entire review with nothing posted —
+    a worse outcome than the silently-inert feature this check exists to
+    surface. Any failure is logged and swallowed, matching the fail-soft
+    convention `context/treesitter.py` and `context/symbols.py` already use
+    for the same two dependency checks.
+    """
+    try:
+        import importlib.util
+        import shutil
+
+        missing = []
+        if importlib.util.find_spec("tree_sitter_language_pack") is None:
+            missing.append("tree-sitter-language-pack (pip install 'ai-pr-review[context]')")
+        if shutil.which("rg") is None:
+            missing.append("ripgrep (rg)")
+        if missing:
+            logger.warning(
+                "[ai-pr-review] WARNING: context enrichment is enabled (default) but "
+                "will do nothing this run — missing: %s. Set AI_CONTEXT_ENRICHMENT=false "
+                "to silence this warning, or install the missing dependencies.",
+                "; ".join(missing),
+            )
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "[ai-pr-review] WARNING: context enrichment is enabled (default) but "
-            "will do nothing this run — missing: %s. Set AI_CONTEXT_ENRICHMENT=false "
-            "to silence this warning, or install the missing dependencies.",
-            "; ".join(missing),
+            "[ai-pr-review] WARNING: could not check context-enrichment dependencies "
+            "(%s: %s); continuing without the inert-feature warning.",
+            type(exc).__name__,
+            exc,
         )
 
 

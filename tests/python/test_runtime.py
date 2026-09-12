@@ -151,6 +151,23 @@ class TestWarnIfContextEnrichmentInert:
     context/symbols.py (which only fire when a diff actually has extractable
     refs — never on a docs-only diff or an all-missing-deps environment)."""
 
+    def test_swallows_exception_from_dependency_check(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Silent-failure review finding (High): importlib.util.find_spec can
+        raise (e.g. a broken/partial package on sys.path), and this function
+        runs unconditionally in build_review_runtime before the provider is
+        even constructed — an uncaught exception here would abort the whole
+        review with nothing posted, worse than the inert-feature bug this
+        check exists to surface. Must degrade to a warning, never propagate."""
+        with (
+            patch("importlib.util.find_spec", side_effect=RuntimeError("broken package")),
+            caplog.at_level("WARNING"),
+        ):
+            _warn_if_context_enrichment_inert()  # must not raise
+        assert "could not check context-enrichment dependencies" in caplog.text
+        assert "RuntimeError" in caplog.text
+
     def test_warns_when_both_deps_missing(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             patch("importlib.util.find_spec", return_value=None),
