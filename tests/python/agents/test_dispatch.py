@@ -652,6 +652,106 @@ async def test_run_tier_isolates_systemexit_from_llm_call(tmp_path: Path) -> Non
 
 
 @pytest.mark.anyio
+async def test_run_tier_falls_back_to_standard_model_on_content_filter(
+    tmp_path: Path,
+) -> None:
+    """#810: a premium-model content-filter refusal (exit 3) must not drop the
+    agent's coverage entirely. dispatch retries once on the standard model and
+    records fallback_from_model so the substitution is never silent."""
+    ctx = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=ctx.script_dir,
+        mode="full",
+        diff_path=ctx.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    agents = [get_agent("security-reviewer")]  # tier=2, premium-eligible
+    seen_models: list[str] = []
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        seen_models.append(request.model_id)
+        if request.model_id == "claude-premium":
+            raise SystemExit(3)  # content-filter block, per llm/client.py
+        return _make_response("ok")
+
+    successes, failures = await run_tier(
+        agents=agents, llm_call=mock_llm, context=ctx, semaphore_size=1,
+    )
+    assert failures == []
+    assert len(successes) == 1
+    assert seen_models == ["claude-premium", "claude-standard"]
+    assert successes[0].fallback_from_model == "claude-premium"
+    assert successes[0].token_log is not None
+    assert successes[0].token_log.model == "claude-standard"
+
+
+@pytest.mark.anyio
+async def test_run_tier_no_fallback_when_standard_model_also_refused(
+    tmp_path: Path,
+) -> None:
+    """A retry happens at most once. If the standard model is also blocked,
+    the agent is recorded as failed rather than looping indefinitely."""
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    agents = [get_agent("security-reviewer")]
+    call_count = 0
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        nonlocal call_count
+        call_count += 1
+        raise SystemExit(3)
+
+    successes, failures = await run_tier(
+        agents=agents, llm_call=mock_llm, context=ctx, semaphore_size=1,
+    )
+    assert successes == []
+    assert len(failures) == 1
+    assert failures[0].exit_code == 3
+    assert call_count == 2  # premium attempt + one standard-model retry, no more
+
+
+@pytest.mark.anyio
+async def test_run_tier_no_fallback_on_non_content_filter_exit(tmp_path: Path) -> None:
+    """Only exit code 3 (content filter) triggers a fallback. Auth failures
+    (1) and transient-retry exhaustion (2) must not retry on another model —
+    retrying an auth failure on a different model can't help, and retrying a
+    transient failure defeats llm/client.py's own retry/backoff contract."""
+    base = _make_context(tmp_path)
+    ctx = DispatchContext(
+        script_dir=base.script_dir,
+        mode="full",
+        diff_path=base.diff_path,
+        provider="anthropic",
+        standard_model="claude-standard",
+        premium_model="claude-premium",
+    )
+    agents = [get_agent("security-reviewer")]
+    call_count = 0
+
+    async def mock_llm(request: Any) -> LLMResponse:
+        nonlocal call_count
+        call_count += 1
+        raise SystemExit(2)
+
+    successes, failures = await run_tier(
+        agents=agents, llm_call=mock_llm, context=ctx, semaphore_size=1,
+    )
+    assert successes == []
+    assert len(failures) == 1
+    assert failures[0].exit_code == 2
+    assert call_count == 1  # no retry attempted
+
+
+@pytest.mark.anyio
 async def test_run_tier_propagates_thinking_tokens_to_token_usage(tmp_path: Path) -> None:
     """#592: LLMResponse.thinking_tokens must reach AgentResult.token_log so a
     telemetry consumer can see thinking-budget exhaustion without reading

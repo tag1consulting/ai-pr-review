@@ -3,16 +3,7 @@ new file mode 100644
 index 0000000..1111111
 --- /dev/null
 +++ b/infra/data_layer.tf
-@@ -0,0 +1,38 @@
-+resource "aws_s3_bucket" "uploads" {
-+  bucket = "app-user-uploads-prod"
-+}
-+
-+resource "aws_s3_bucket_acl" "uploads_acl" {
-+  bucket = aws_s3_bucket.uploads.id
-+  acl    = "public-read"
-+}
-+
+@@ -0,0 +1,25 @@
 +resource "aws_db_instance" "primary" {
 +  identifier        = "app-primary-db"
 +  engine            = "postgres"
@@ -25,11 +16,6 @@ index 0000000..1111111
 +
 +  publicly_accessible = true
 +  skip_final_snapshot = true
-+
-+  tags = {
-+    Environment = "production"
-+    ManagedBy   = "terraform"
-+  }
 +}
 +
 +resource "aws_security_group" "db_access" {

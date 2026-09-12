@@ -64,6 +64,12 @@ class AgentResult:
     """Raw provider stop/finish reason (e.g. "end_turn", "max_tokens").
     See #592: surfaced so telemetry can alert on truncation rates without
     a human reading container logs after the fact."""
+    fallback_from_model: str | None = None
+    """Set when the premium model's call was blocked by the provider's
+    content filter (exit code 3, e.g. Anthropic stop_reason="refusal") and
+    this result came from a same-agent retry on the standard model instead.
+    None when no fallback occurred. See #810: an isolated refusal on one
+    model must not silently drop an agent's coverage for the whole review."""
 
 
 @dataclass(frozen=True)
@@ -506,8 +512,43 @@ async def _run_single_agent(
             temperature=context.temperature,
             system_prefix=system_prefix,
         )
+        fallback_from_model: str | None = None
         async with limiter:
-            response = await llm_call(request)
+            try:
+                response = await llm_call(request)
+            except SystemExit as exc:
+                # exit_code 3 == content-filter block (llm/client.py). Only a
+                # premium-tier call blocked this way retries, on the standard
+                # model — see #810: the standard model handled every corpus
+                # diff that made the premium model refuse. A standard-model
+                # call that is itself blocked, or any non-content-filter
+                # failure (auth, transient exhaustion), falls straight
+                # through to the outer handler instead of retrying again.
+                if (
+                    use_premium
+                    and isinstance(exc.code, int)
+                    and exc.code == 3
+                    and context.standard_model
+                    and context.standard_model != model_id
+                ):
+                    _log.warning(
+                        "agent %r: premium model %r blocked by provider content "
+                        "filter; retrying once on standard model %r",
+                        spec.name, model_id, context.standard_model,
+                    )
+                    fallback_from_model = model_id
+                    model_id = context.standard_model
+                    request = LLMRequest(
+                        model_id=model_id,
+                        system_prompt=system_prompt,
+                        user_message=user_message,
+                        max_tokens=max_tokens,
+                        temperature=context.temperature,
+                        system_prefix=system_prefix,
+                    )
+                    response = await llm_call(request)
+                else:
+                    raise
         usage = TokenUsage(
             input=response.input_tokens,
             output=response.output_tokens,
@@ -528,6 +569,7 @@ async def _run_single_agent(
             profile_tokens_used=profile_tokens_used,
             elapsed_ms=elapsed,
             stop_reason=response.stop_reason,
+            fallback_from_model=fallback_from_model,
         ))
     except BaseException as exc:
         # Catch BaseException (not Exception) so SystemExit from llm/client.py
