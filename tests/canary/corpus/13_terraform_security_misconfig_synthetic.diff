@@ -1,0 +1,44 @@
+diff --git a/infra/data_layer.tf b/infra/data_layer.tf
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/infra/data_layer.tf
+@@ -0,0 +1,38 @@
++resource "aws_s3_bucket" "uploads" {
++  bucket = "app-user-uploads-prod"
++}
++
++resource "aws_s3_bucket_acl" "uploads_acl" {
++  bucket = aws_s3_bucket.uploads.id
++  acl    = "public-read"
++}
++
++resource "aws_db_instance" "primary" {
++  identifier        = "app-primary-db"
++  engine            = "postgres"
++  engine_version    = "15.4"
++  instance_class    = "db.t3.medium"
++  allocated_storage = 100
++
++  username = "app_admin"
++  password = "S3cureP@ssw0rd2026!"
++
++  publicly_accessible = true
++  skip_final_snapshot = true
++
++  tags = {
++    Environment = "production"
++    ManagedBy   = "terraform"
++  }
++}
++
++resource "aws_security_group" "db_access" {
++  name = "app-db-access"
++
++  ingress {
++    from_port   = 5432
++    to_port     = 5432
++    protocol    = "tcp"
++    cidr_blocks = ["0.0.0.0/0"]
++  }
++}

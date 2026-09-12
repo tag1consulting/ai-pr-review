@@ -1,0 +1,52 @@
+diff --git a/internal/storage/sync.go b/internal/storage/sync.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/internal/storage/sync.go
+@@ -0,0 +1,46 @@
++package storage
++
++import (
++	"fmt"
++	"os"
++)
++
++// SyncToDisk writes the given records to path, flushing and closing the
++// file handle before returning.
++func SyncToDisk(path string, records []Record) error {
++	f, err := os.Create(path)
++	if err != nil {
++		return err
++	}
++	defer f.Close()
++
++	for _, r := range records {
++		_, err := f.WriteString(r.Serialize())
++		if err != nil {
++			return err
++		}
++	}
++
++	return nil
++}
++
++// LoadConfig reads a config value and asserts it to the expected type.
++func LoadConfig(raw map[string]interface{}, key string) string {
++	val := raw[key].(string)
++	return val
++}
++
++// ProcessBatch processes a batch of items, wrapping the underlying error
++// with context so callers can trace failures back to the batch step.
++func ProcessBatch(items []string) error {
++	for _, item := range items {
++		if err := processOne(item); err != nil {
++			return fmt.Errorf("processing batch item %q: %w", item, err)
++		}
++	}
++	return nil
++}
++
++func processOne(item string) error {
++	return nil
++}

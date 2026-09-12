@@ -1,0 +1,92 @@
+diff --git a/.github/workflows/slash-commands.yml b/.github/workflows/slash-commands.yml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/.github/workflows/slash-commands.yml
+@@ -0,0 +1,102 @@
++# Slash-command handler for the AI PR review bot.
++#
++# Triggered on issue comments starting with "/ai-pr-review". Authorized users
++# can drive the bot: rescan a PR, or record persistent feedback that tunes the
++# reviewer for every future review across the whole repository.
++name: AI PR Review Slash Commands
++
++on:
++  issue_comment:
++    types: [created]
++
++permissions:
++  contents: write
++  pull-requests: write
++
++jobs:
++  # Persistent feedback command. Writing here commits to a long-lived branch
++  # (ai-pr-review-bot) whose contents influence EVERY future review in this
++  # repository, so this is the most privileged action the bot exposes.
++  feedback-command:
++    # Only owners, members, and collaborators may drive the bot.
++    if: |
++      github.event.issue.pull_request &&
++      startsWith(github.event.comment.body, '/ai-pr-review feedback') &&
++      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout feedback branch
++        uses: actions/checkout@v4
++        with:
++          ref: ai-pr-review-bot
++          token: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Record feedback
++        env:
++          COMMENT: ${{ github.event.comment.body }}
++          ACTOR: ${{ github.event.comment.user.login }}
++        run: |
++          note=$(echo "$COMMENT" | sed 's#^/ai-pr-review feedback##' | sed 's/^ *//')
++          printf '%s: %s\n' "$ACTOR" "$note" >> feedback.md
++          git config user.name  "ai-pr-review-bot"
++          git config user.email "bot@example.com"
++          git add feedback.md
++          git commit -m "feedback from ${ACTOR}"
++          git push origin ai-pr-review-bot
++
++  # Rescan command: re-triggers a full review of the PR.
++  rescan-command:
++    if: |
++      github.event.issue.pull_request &&
++      startsWith(github.event.comment.body, '/ai-pr-review rescan') &&
++      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      actions: write
++      pull-requests: write
++    steps:
++      - name: Dispatch review
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          PR_NUMBER: ${{ github.event.issue.number }}
++          REPO: ${{ github.repository }}
++        run: |
++          gh workflow run ai-review.yml -f pr="$PR_NUMBER" --repo "$REPO"
++
++  # Dismiss command: marks a finding as a false positive and, if it clears the
++  # last active finding, approves the pull request on the bot's behalf.
++  dismiss-command:
++    if: |
++      github.event.issue.pull_request &&
++      startsWith(github.event.comment.body, '/ai-pr-review dismiss') &&
++      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      pull-requests: write
++    steps:
++      - name: Approve on dismiss
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          PR_NUMBER: ${{ github.event.issue.number }}
++          REPO: ${{ github.repository }}
++        run: |
++          gh pr review "$PR_NUMBER" --repo "$REPO" --approve \
++            --body "Dismissed by ${{ github.event.comment.user.login }}"

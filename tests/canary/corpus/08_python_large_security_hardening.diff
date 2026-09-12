@@ -1,0 +1,702 @@
+diff --git a/.github/workflows/ai-review.yml b/.github/workflows/ai-review.yml
+index e8ebf52..ebb0135 100644
+--- a/.github/workflows/ai-review.yml
++++ b/.github/workflows/ai-review.yml
+@@ -82,8 +82,16 @@ jobs:
+           persist-credentials: false
+           allow-unsafe-pr-checkout: true
+ 
++      # A fork PR can commit its own sarif-results/ directory. Without the
++      # rm -rf, a pre-committed file at one of the three fixed names below
++      # (ruff.sarif/hadolint.sarif/semgrep.sarif) would survive untouched if
++      # the corresponding real analyzer step fails to produce output (masked
++      # by each step's continue-on-error: true) and gets treated as a
++      # confidence-90 corroborating SARIF finding (#739).
+       - name: Create results dir
+-        run: mkdir -p sarif-results
++        run: |
++          rm -rf sarif-results
++          mkdir -p sarif-results
+ 
+       # --- Ruff (Python) ---
+       - uses: actions/setup-python@v7
+@@ -226,6 +234,14 @@ jobs:
+           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+           echo "base_ref=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
+ 
++      # Fork PR content checked out above may include its own sarif-results/
++      # directory; clear it before downloading the real artifact so a
++      # download failure or cache miss (continue-on-error below) can never
++      # leave a fork-committed file sitting at one of the fixed SARIF names
++      # the container-action ingests as confidence-90 findings (#739).
++      - name: Clear results dir before download
++        run: rm -rf sarif-results
++
+       # Download the SARIF artifacts produced by the sarif-prep job.
+       # continue-on-error so a prep failure or cache miss doesn't block the review.
+       - name: Download SARIF artifacts
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 8a4abdf..af1848c 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ - The review body's inline-ownership marker was appended after the byte-truncation step with no size reserve of its own, letting a rendered GitHub review body exceed the provider's 65,536-byte limit by the marker's length. The truncation reserve now accounts for the inline-ownership, id-map, and verdicts markers together.
+ - `_record_verdict` (the `/ai-pr-review dismiss`/`false-positive`/`wont-fix`/`fixed` verdict-recording path) now seeds its verdicts map from every prior bot review, not just the canonical review's own body — a marker-less review becoming canonical (e.g. the PR-wide auto-approve path's human-facing message) could previously erase every earlier verdict the next time one was recorded.
+ - Canonical-review reuse's thread-ownership check compared GitHub's GraphQL-reported author login (`"github-actions"`) against a REST-style constant (`"github-actions[bot]"`), rejecting every real thread and making the entire reuse feature a no-op in production while also defeating its own dismiss-safety gate. `resolve_stale` and `_dismiss_stale_reviews` had the same pre-existing bug, independent of and predating canonical-review reuse. Fixed everywhere by normalizing the REST-style constant before comparison (`ai_pr_review.vcs._stale.graphql_bot_login()`), which restores the author check as a real defense-in-depth signal instead of dropping it (issue #717).
++- Fixing #717 made `resolve_stale` recognize real threads again, which would have immediately undone canonical-review reuse's own thread keep-alive: it would re-resolve a thread `post_findings` had just PATCHed (`update`/`escalate`) or reopened (`recurred`) in the same run. `post_findings` now records the thread ids it touched each run (`GitHubProvider._kept_alive_thread_ids`) and `resolve_stale` skips them (issue #718).
++
++### Security
++
++- **Fork PR checkout (#738) reopened a code-execution path in three native analyzers.** `ai-review.yml`'s `pull_request_target` workflow now checks out untrusted fork-PR content inside a container holding `ANTHROPIC_API_KEY` and a `GITHUB_TOKEN` with `pull-requests:write`/`checks:write`. `phpstan`, `checkov`, and `tflint` all auto-discovered and executed config/plugin content from that workspace (`phpstan.neon`'s `bootstrapFiles`/`includes`, `.checkov.yaml`'s `external-checks-dir`, `.tflint.hcl`'s `plugin_dir` plus the `./.tflint.d/plugins` fallback) — the same class of bug fixed for `eslint` in #738. All three now run against a freshly created, empty, trusted config file passed via an explicit CLI flag (which always wins over each tool's own auto-discovery), and `tflint` additionally pins `TFLINT_PLUGIN_DIR` to a fresh empty directory. This is an unconditional behavior change, not limited to fork PRs: a project's own `phpstan.neon`/`phpstan.neon.dist` is no longer honored (`PHPSTAN_LEVEL` always applies now); `phpstan`'s Drupal-aware autoloading now only ever uses the image-baked `/opt/composer` install, never a workspace `vendor/` tree. The `sarif-prep` workflow job also now clears `sarif-results/` before running its analyzers, and the `review` job clears it again before downloading the real artifact, closing a related path where a fork-committed SARIF file could survive as a confidence-90 corroborating finding if the genuine tool failed to produce output (issue #739).
+ - `resolve_stale` had no way to know which threads `post_findings` had just deliberately kept alive (PATCHed for an `update`/`escalate` classification, or reopened for a `recurred` one) in the same run — fixing the bot-login issue above would have made it immediately re-resolve those threads, undoing canonical-review reuse's entire point. `post_findings` now records the threads it touched and `resolve_stale` skips them (issue #718).
+ - The superseded canonical review could be dismissed before confirming the replacement review actually posted, and an incomplete/failed thread fetch was treated as "nothing unresolved" — both could leave a PR silently unblocked on a mid-run failure. The dismissal now runs only after a confirmed, non-degraded post, gated on a complete thread fetch.
+ - Two findings that both fuzzy-matched the same open thread in one run could double-`PATCH` the same comment (silently dropping one) or double-post an escalation reply; only the highest-severity match per thread is now kept.
+diff --git a/README.md b/README.md
+index c3517fe..08d9c75 100644
+--- a/README.md
++++ b/README.md
+@@ -438,7 +438,7 @@ The container action ships all analyzer binaries pre-installed. For the direct-a
+ | **checkov** | `.tf`, `.tfvars`, `.yaml`, `.yml`, `Dockerfile*`, `.json` | `CKV2_*` and `CKV_SECRET_*`→High; all other checks→Medium | 80 | `checkov` |
+ | **phpcs** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | `ERROR`→High, `WARNING`→Medium; Drupal+DrupalPractice standard when available, else PSR12 | 90 | `phpcs` |
+ | **eslint** | `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | severity 2→High, severity 1→Medium; uses consumer's config — no-op if no `eslint.config.*` or `.eslintrc.*` found | 90 | `eslint` |
+-| **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; runs at level `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist` | 85 | `phpstan` |
++| **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; always runs at level `PHPSTAN_LEVEL` (default 3) — a project's own `phpstan.neon`/`phpstan.neon.dist` is never auto-discovered, since the analyzed workspace may be untrusted fork-PR content | 85 | `phpstan` |
+ | **kube-linter** | `.yaml`, `.yml`, `.json` with `apiVersion:` + `kind:` headers | All findings→Medium (reliability-focused: missing probes, resource limits, etc.) | 85 | `kube-linter` |
+ | **tflint** | `.tf`, `.tfvars` | `error`→High, `warning`→Medium, `notice`→Low; runs per Terraform module directory | 90 | `tflint` |
+ 
+diff --git a/ai_pr_review/analyzers/native/checkov.py b/ai_pr_review/analyzers/native/checkov.py
+index 9296d27..6e469c9 100644
+--- a/ai_pr_review/analyzers/native/checkov.py
++++ b/ai_pr_review/analyzers/native/checkov.py
+@@ -7,11 +7,14 @@ object or array), and converts failed_checks to Finding instances.
+ 
+ from __future__ import annotations
+ 
++import contextlib
+ import json
+ import logging
++import os
+ import re
+ import shutil
+ import subprocess
++import tempfile
+ from pathlib import Path
+ 
+ from ai_pr_review.findings.models import Finding
+@@ -97,20 +100,42 @@ def _run_checkov(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
+     for f in target_files:
+         file_args += ["--file", f]
+ 
++    # Never let checkov auto-discover .checkov.yaml/.checkov.yml from the
++    # analyzed workspace: the workspace may be untrusted fork-PR content
++    # checked out under pull_request_target (#739), and that config can set
++    # `external-checks-dir` to import arbitrary Python check modules from the
++    # repo. An explicit --config-file always takes priority over checkov's
++    # own auto-discovery, so pointing it at a fresh, empty file guarantees no
++    # workspace config is ever honored, regardless of trust context.
+     try:
+-        result = subprocess.run(
+-            ["checkov", *file_args, "--output", "json", "--quiet", "--compact"],
+-            capture_output=True,
+-            text=True,
+-            timeout=_TIMEOUT_SECS,
+-        )
+-    except subprocess.TimeoutExpired as exc:
+-        logger.warning("[ai-pr-review] WARNING: checkov timed out after %ss; skipping.", exc.timeout)
+-        return []
++        with tempfile.NamedTemporaryFile(
++            mode="w", suffix=".yaml", prefix="checkov-trusted-", delete=False
++        ) as trusted_config:
++            trusted_config.write("# Deliberately empty; see #739.\n")
++            trusted_config_path = trusted_config.name
+     except OSError as exc:
+-        logger.warning("[ai-pr-review] WARNING: checkov failed to start: %s", exc)
++        logger.warning("[ai-pr-review] WARNING: could not create trusted checkov config: %s; skipping.", exc)
+         return []
+ 
++    try:
++        try:
++            result = subprocess.run(
++                ["checkov", *file_args, "--config-file", trusted_config_path,
++                 "--output", "json", "--quiet", "--compact"],
++                capture_output=True,
++                text=True,
++                timeout=_TIMEOUT_SECS,
++            )
++        except subprocess.TimeoutExpired as exc:
++            logger.warning("[ai-pr-review] WARNING: checkov timed out after %ss; skipping.", exc.timeout)
++            return []
++        except OSError as exc:
++            logger.warning("[ai-pr-review] WARNING: checkov failed to start: %s", exc)
++            return []
++    finally:
++        with contextlib.suppress(OSError):
++            os.unlink(trusted_config_path)
++
+     if result.returncode >= 2:
+         logger.warning(
+             "[ai-pr-review] WARNING: checkov exited %d; possible installation error. stderr: %s",
+diff --git a/ai_pr_review/analyzers/native/phpstan.py b/ai_pr_review/analyzers/native/phpstan.py
+index 1c4562b..b340a8c 100644
+--- a/ai_pr_review/analyzers/native/phpstan.py
++++ b/ai_pr_review/analyzers/native/phpstan.py
+@@ -6,12 +6,14 @@ invokes phpstan, and converts its JSON output to Finding instances.
+ 
+ from __future__ import annotations
+ 
++import contextlib
+ import json
+ import logging
+ import os
+ import re
+ import shutil
+ import subprocess
++import tempfile
+ from pathlib import Path
+ from typing import Literal
+ 
+@@ -28,6 +30,13 @@ _REMEDIATION = "Fix the type error reported by PHPStan. See https://phpstan.org/
+ _VALID_LEVEL_RE = re.compile(r"^[0-9]$")
+ _DEFAULT_LEVEL = "3"
+ 
++# Absolute, image-baked composer install (see Dockerfile) — never a path
++# relative to the analyzed workspace. Used only to give Drupal-aware analysis
++# when the shipped container has phpstan-drupal installed; absent entirely in
++# non-container (direct-action) deployments, where this simply evaluates False.
++_BAKED_COMPOSER_AUTOLOAD = Path("/opt/composer/vendor/autoload.php")
++_BAKED_PHPSTAN_DRUPAL = Path("/opt/composer/vendor/mglaman/phpstan-drupal")
++
+ 
+ def _severity_for_level(level: str) -> Literal["High", "Medium", "Low"]:
+     """Map PHPSTAN_LEVEL (0-9) to a finding severity.
+@@ -65,16 +74,31 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
+         )
+         level = _DEFAULT_LEVEL
+ 
+-    args = ["phpstan", "analyse", "--error-format=json", "--no-progress", "--memory-limit=512M"]
++    # Never let phpstan auto-discover phpstan.neon/phpstan.neon.dist from the
++    # analyzed workspace: the workspace may be untrusted fork-PR content
++    # checked out under pull_request_target (#739), and a config file's
++    # `bootstrapFiles`/`includes` entries are arbitrary PHP executed by this
++    # subprocess. `--configuration` always takes priority over PHPStan's own
++    # auto-discovery, so pointing it at an empty, freshly-created file
++    # guarantees no workspace config is ever honored, regardless of trust
++    # context. This intentionally drops the previous "consumer phpstan.neon
++    # drives everything" behavior; PHPSTAN_LEVEL now always applies.
++    try:
++        with tempfile.NamedTemporaryFile(
++            mode="w", suffix=".neon", prefix="phpstan-trusted-", delete=False
++        ) as trusted_config:
++            trusted_config.write("# Deliberately empty; see #739.\n")
++            trusted_config_path = trusted_config.name
++    except OSError as exc:
++        logger.warning("[ai-pr-review] WARNING: could not create trusted phpstan config: %s; skipping.", exc)
++        return []
+ 
+-    has_config = Path("phpstan.neon").is_file() or Path("phpstan.neon.dist").is_file()
+-    if has_config:
+-        # Consumer config drives everything
+-        pass
+-    else:
+-        args.append(f"--level={level}")
+-        if Path("vendor/mglaman/phpstan-drupal").is_dir() and Path("vendor/autoload.php").is_file():
+-            args.append("--autoload-file=vendor/autoload.php")
++    args = [
++        "phpstan", "analyse", "--error-format=json", "--no-progress", "--memory-limit=512M",
++        f"--configuration={trusted_config_path}", f"--level={level}",
++    ]
++    if _BAKED_PHPSTAN_DRUPAL.is_dir() and _BAKED_COMPOSER_AUTOLOAD.is_file():
++        args.append(f"--autoload-file={_BAKED_COMPOSER_AUTOLOAD}")
+ 
+     # `--` stops option parsing so an attacker-controlled changed-file path
+     # beginning with a dash (e.g. `--autoload-file=evil.php`) is treated as a
+@@ -83,18 +107,22 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
+     args += target_files
+ 
+     try:
+-        result = subprocess.run(
+-            args,
+-            capture_output=True,
+-            text=True,
+-            timeout=_TIMEOUT_SECS,
+-        )
+-    except subprocess.TimeoutExpired as exc:
+-        logger.warning("[ai-pr-review] WARNING: phpstan timed out after %ss; skipping.", exc.timeout)
+-        return []
+-    except OSError as exc:
+-        logger.warning("[ai-pr-review] WARNING: phpstan failed to start: %s", exc)
+-        return []
++        try:
++            result = subprocess.run(
++                args,
++                capture_output=True,
++                text=True,
++                timeout=_TIMEOUT_SECS,
++            )
++        except subprocess.TimeoutExpired as exc:
++            logger.warning("[ai-pr-review] WARNING: phpstan timed out after %ss; skipping.", exc.timeout)
++            return []
++        except OSError as exc:
++            logger.warning("[ai-pr-review] WARNING: phpstan failed to start: %s", exc)
++            return []
++    finally:
++        with contextlib.suppress(OSError):
++            os.unlink(trusted_config_path)
+ 
+     if result.returncode >= 2:
+         logger.warning(
+diff --git a/ai_pr_review/analyzers/native/tflint.py b/ai_pr_review/analyzers/native/tflint.py
+index b5311a1..ba00050 100644
+--- a/ai_pr_review/analyzers/native/tflint.py
++++ b/ai_pr_review/analyzers/native/tflint.py
+@@ -7,10 +7,13 @@ findings to Finding instances.
+ 
+ from __future__ import annotations
+ 
++import contextlib
+ import json
+ import logging
++import os
+ import shutil
+ import subprocess
++import tempfile
+ from pathlib import Path
+ 
+ from ai_pr_review.findings.models import Finding
+@@ -43,93 +46,125 @@ def _run_tflint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
+             seen_dirs.add(d)
+             dirs.append(d)
+ 
+-    all_findings: list[Finding] = []
+-    for d in dirs:
+-        try:
+-            result = subprocess.run(
+-                ["tflint", f"--chdir={d}", "--format=json"],
+-                capture_output=True,
+-                text=True,
+-                timeout=_TIMEOUT_SECS,
+-            )
+-        except subprocess.TimeoutExpired as exc:
+-            logger.warning("[ai-pr-review] WARNING: tflint timed out after %ss in %r; skipping.", exc.timeout, d)
+-            continue
+-        except OSError as exc:
+-            logger.warning("[ai-pr-review] WARNING: tflint failed to start in %r: %s", d, exc)
+-            continue
++    # Never let tflint auto-discover .tflint.hcl/.tflint.json or resolve
++    # plugins from ./.tflint.d/plugins in the analyzed workspace: the
++    # workspace may be untrusted fork-PR content checked out under
++    # pull_request_target (#739), and both a config's `plugin_dir` directive
++    # and the default ./.tflint.d/plugins lookup let a fork point tflint at
++    # a plugin binary it committed, which tflint executes as a subprocess.
++    # --config always takes priority over auto-discovery of .tflint.hcl, and
++    # TFLINT_PLUGIN_DIR is consulted before the ./.tflint.d/plugins fallback
++    # (but after a config-set plugin_dir, hence the trusted config below
++    # deliberately sets none) -- together they guarantee no workspace
++    # config or plugin is ever honored, regardless of trust context.
++    try:
++        with tempfile.NamedTemporaryFile(
++            mode="w", suffix=".hcl", prefix="tflint-trusted-", delete=False
++        ) as trusted_config:
++            trusted_config.write("# Deliberately empty; see #739.\n")
++            trusted_config_path = trusted_config.name
++    except OSError as exc:
++        logger.warning("[ai-pr-review] WARNING: could not create trusted tflint config: %s; skipping.", exc)
++        return []
+ 
+-        if result.returncode >= 2:
+-            logger.warning(
+-                "[ai-pr-review] WARNING: tflint exited %d in %r; stderr: %s",
+-                result.returncode, d, result.stderr[:200],
+-            )
+-            continue
++    env = dict(os.environ)
++    try:
++        with tempfile.TemporaryDirectory(prefix="tflint-plugins-") as empty_plugin_dir:
++            env["TFLINT_PLUGIN_DIR"] = empty_plugin_dir
+ 
+-        if not result.stdout.strip():
+-            continue
+-
+-        try:
+-            data = json.loads(result.stdout)
+-        except json.JSONDecodeError as exc:
+-            logger.warning("[ai-pr-review] WARNING: tflint produced non-JSON output in %r: %s", d, exc)
+-            continue
+-
+-        if not isinstance(data, dict):
+-            logger.warning("[ai-pr-review] WARNING: tflint produced unexpected output structure in %r; skipping.", d)
+-            continue
+-
+-        issues = data.get("issues") or []
+-        if not isinstance(issues, list):
+-            logger.warning("[ai-pr-review] WARNING: tflint 'issues' is not a list in %r; skipping.", d)
+-            continue
+-
+-        for err in data.get("errors") or []:
+-            if isinstance(err, dict):
+-                logger.warning(
+-                    "[ai-pr-review] WARNING: tflint reported error in %r: %s",
+-                    d, err.get("message", repr(err))[:200],
+-                )
+-
+-        for item in issues:
+-            if not isinstance(item, dict):
+-                continue
+-            rule = item.get("rule") or {}
+-            rule_name = rule.get("name") or ""
+-            rule_severity = rule.get("severity") or ""
+-            rule_link = rule.get("link") or ""
+-            message = item.get("message") or ""
+-            range_info = item.get("range") or {}
+-            filename = range_info.get("filename") or ""
+-            start = range_info.get("start") or {}
+-            line = start.get("line") or 1
+-
+-            if rule_severity == "error":
+-                severity = "High"
+-            elif rule_severity == "warning":
+-                severity = "Medium"
+-            else:
+-                severity = "Low"
+-
+-            remediation = f"See {rule_link}" if rule_link else _DEFAULT_REMEDIATION
+-
+-            try:
+-                all_findings.append(
+-                    Finding(
+-                        severity=severity,  # type: ignore[arg-type]
+-                        confidence=_CONFIDENCE,
+-                        source=_SOURCE,
+-                        file=str(Path(d) / filename) if filename else filename,
+-                        line=line,
+-                        finding=f"{rule_name}: {message}",
+-                        remediation=remediation,
+-                        category="lint",
++            all_findings: list[Finding] = []
++            for d in dirs:
++                try:
++                    result = subprocess.run(
++                        ["tflint", f"--chdir={d}", f"--config={trusted_config_path}", "--format=json"],
++                        capture_output=True,
++                        text=True,
++                        timeout=_TIMEOUT_SECS,
++                        env=env,
+                     )
+-                )
+-            except (ValueError, TypeError) as exc:
+-                logger.warning(
+-                    "[ai-pr-review] WARNING: tflint dropped malformed finding: %s; item=%r",
+-                    exc, repr(item)[:200],
+-                )
++                except subprocess.TimeoutExpired as exc:
++                    logger.warning("[ai-pr-review] WARNING: tflint timed out after %ss in %r; skipping.", exc.timeout, d)
++                    continue
++                except OSError as exc:
++                    logger.warning("[ai-pr-review] WARNING: tflint failed to start in %r: %s", d, exc)
++                    continue
++
++                if result.returncode >= 2:
++                    logger.warning(
++                        "[ai-pr-review] WARNING: tflint exited %d in %r; stderr: %s",
++                        result.returncode, d, result.stderr[:200],
++                    )
++                    continue
++
++                if not result.stdout.strip():
++                    continue
++
++                try:
++                    data = json.loads(result.stdout)
++                except json.JSONDecodeError as exc:
++                    logger.warning("[ai-pr-review] WARNING: tflint produced non-JSON output in %r: %s", d, exc)
++                    continue
++
++                if not isinstance(data, dict):
++                    logger.warning(
++                        "[ai-pr-review] WARNING: tflint produced unexpected output structure in %r; skipping.", d
++                    )
++                    continue
++
++                issues = data.get("issues") or []
++                if not isinstance(issues, list):
++                    logger.warning("[ai-pr-review] WARNING: tflint 'issues' is not a list in %r; skipping.", d)
++                    continue
++
++                for err in data.get("errors") or []:
++                    if isinstance(err, dict):
++                        logger.warning(
++                            "[ai-pr-review] WARNING: tflint reported error in %r: %s",
++                            d, err.get("message", repr(err))[:200],
++                        )
++
++                for item in issues:
++                    if not isinstance(item, dict):
++                        continue
++                    rule = item.get("rule") or {}
++                    rule_name = rule.get("name") or ""
++                    rule_severity = rule.get("severity") or ""
++                    rule_link = rule.get("link") or ""
++                    message = item.get("message") or ""
++                    range_info = item.get("range") or {}
++                    filename = range_info.get("filename") or ""
++                    start = range_info.get("start") or {}
++                    line = start.get("line") or 1
++
++                    if rule_severity == "error":
++                        severity = "High"
++                    elif rule_severity == "warning":
++                        severity = "Medium"
++                    else:
++                        severity = "Low"
++
++                    remediation = f"See {rule_link}" if rule_link else _DEFAULT_REMEDIATION
++
++                    try:
++                        all_findings.append(
++                            Finding(
++                                severity=severity,  # type: ignore[arg-type]
++                                confidence=_CONFIDENCE,
++                                source=_SOURCE,
++                                file=str(Path(d) / filename) if filename else filename,
++                                line=line,
++                                finding=f"{rule_name}: {message}",
++                                remediation=remediation,
++                                category="lint",
++                            )
++                        )
++                    except (ValueError, TypeError) as exc:
++                        logger.warning(
++                            "[ai-pr-review] WARNING: tflint dropped malformed finding: %s; item=%r",
++                            exc, repr(item)[:200],
++                        )
++    finally:
++        with contextlib.suppress(OSError):
++            os.unlink(trusted_config_path)
+ 
+     return all_findings
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 132fff4..97d6683 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -120,7 +120,7 @@ your workflow `env:` block or pass them via `docker run -e`.
+ | `LLM_PROMPT_CACHING` | `auto` | Enable Anthropic/Bedrock prompt caching. `auto` enables for anthropic and bedrock-proxy; `true` force-enables; `false` force-disables. |
+ | `AI_CACHE_PRIMING` | `false` | Serialize cache-writing calls before parallel fan-out. Default off (opportunistic hits suffice). Enable in rate-limited or serialized-proxy environments. |
+ | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. |
+-| `PHPSTAN_LEVEL` | `3` | PHPStan analysis depth level (0-9); ignored if the project has `phpstan.neon` or `phpstan.neon.dist` |
++| `PHPSTAN_LEVEL` | `3` | PHPStan analysis depth level (0-9). Always applies — the analyzer runs against a trusted, empty `--configuration` file and never auto-discovers a `phpstan.neon`/`phpstan.neon.dist` from the analyzed repo, since that content may be untrusted fork-PR code checked out under `pull_request_target` (#739) |
+ 
+ ### Advanced tuning (env-var only)
+ 
+diff --git a/docs/static-analyzers.md b/docs/static-analyzers.md
+index 3f9691c..cc27671 100644
+--- a/docs/static-analyzers.md
++++ b/docs/static-analyzers.md
+@@ -46,7 +46,7 @@ In addition to severity, every analyzer maps its findings onto the same 11-value
+ | **checkov** | `.tf`, `.tfvars`, `.yaml`, `.yml`, `Dockerfile*`, `.json` | `CKV2_*` and `CKV_SECRET_*`→High; all other checks→Medium | 80 | `checkov` |
+ | **phpcs** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | `ERROR`→High, `WARNING`→Medium; Drupal+DrupalPractice standard when available, else PSR12 | 90 | `phpcs` |
+ | **eslint** | `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | severity 2→High, severity 1→Medium; uses consumer's config — no-op if no `eslint.config.*` or `.eslintrc.*` found | 90 | `eslint` |
+-| **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; runs at level `PHPSTAN_LEVEL` (default 3) unless consumer has `phpstan.neon`/`phpstan.neon.dist` | 85 | `phpstan` |
++| **phpstan** | `.php`, `.module`, `.inc`, `.theme`, `.install`, `.profile` | All findings→High; always runs at level `PHPSTAN_LEVEL` (default 3) — a project's own `phpstan.neon`/`phpstan.neon.dist` is never auto-discovered, since the analyzed workspace may be untrusted fork-PR content | 85 | `phpstan` |
+ | **kube-linter** | `.yaml`, `.yml`, `.json` with `apiVersion:` + `kind:` headers | All findings→Medium (reliability-focused: missing probes, resource limits, etc.) | 85 | `kube-linter` |
+ | **tflint** | `.tf`, `.tfvars` | `error`→High, `warning`→Medium, `notice`→Low; runs per Terraform module directory | 90 | `tflint` |
+ | **docs-api-check** | Python + `@param`-family languages (JS/TS, Java, Kotlin, C#, Ruby, C++, Scala) | A documented parameter not in the signature, or vice versa, always→Medium | 90 (Python, via ruff) / 80 (tree-sitter engine) | `docs-api-check` |
+diff --git a/tests/python/test_analyzer_checkov.py b/tests/python/test_analyzer_checkov.py
+index 98a2c9c..2c3baee 100644
+--- a/tests/python/test_analyzer_checkov.py
++++ b/tests/python/test_analyzer_checkov.py
+@@ -125,6 +125,46 @@ class TestRunCheckovGuards:
+         assert "checkov not found" in caplog.text
+ 
+ 
++class TestRunCheckovTrustedConfig:
++    def test_workspace_checkov_yaml_never_auto_discovered(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """A fork-committed .checkov.yaml (which could set external-checks-dir
++        to import arbitrary Python check modules) must never be passed to
++        checkov -- an explicit --config-file pointing at a trusted, empty
++        file always wins over auto-discovery (#739)."""
++        monkeypatch.chdir(tmp_path)
++        (tmp_path / ".checkov.yaml").write_text("external-checks-dir:\n  - ./evil-checks\n")
++        tf = tmp_path / "main.tf"
++        tf.write_text("resource \"x\" \"y\" {}\n")
++        cf = _make_cf([str(tf)], terraform=[str(tf)])
++        with (
++            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
++            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
++        ):
++            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
++            _run_checkov(cf, Path("/dev/null"))
++        call_args = mock_run.call_args[0][0]
++        assert "--config-file" in call_args
++        configured_path = call_args[call_args.index("--config-file") + 1]
++        assert configured_path != str(tmp_path / ".checkov.yaml")
++        assert not configured_path.startswith(str(tmp_path))
++
++    def test_trusted_config_file_cleaned_up(self, tmp_path: Path) -> None:
++        tf = tmp_path / "main.tf"
++        tf.write_text("resource \"x\" \"y\" {}\n")
++        cf = _make_cf([str(tf)], terraform=[str(tf)])
++        with (
++            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
++            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
++        ):
++            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
++            _run_checkov(cf, Path("/dev/null"))
++        call_args = mock_run.call_args[0][0]
++        configured_path = call_args[call_args.index("--config-file") + 1]
++        assert not Path(configured_path).exists()
++
++
+ class TestRunCheckovFindings:
+     def _run_with_fixture(self, fixture_name: str, tmp_path: Path) -> list:
+         fixture = _load_fixture(fixture_name)
+diff --git a/tests/python/test_analyzer_phpstan.py b/tests/python/test_analyzer_phpstan.py
+index f403170..d668d3f 100644
+--- a/tests/python/test_analyzer_phpstan.py
++++ b/tests/python/test_analyzer_phpstan.py
+@@ -232,9 +232,14 @@ class TestRunPhpstanFindings:
+             findings = _run_phpstan(cf, Path("/dev/null"))
+         assert findings == []
+ 
+-    def test_config_present_skips_level_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    def test_workspace_phpstan_neon_never_auto_discovered(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """A fork-committed phpstan.neon must not suppress --level or be
++        passed to phpstan; the analyzer always drives its own trusted,
++        empty --configuration file instead (#739)."""
+         monkeypatch.chdir(tmp_path)
+-        (tmp_path / "phpstan.neon").write_text("parameters:\n  level: 5\n")
++        (tmp_path / "phpstan.neon").write_text("parameters:\n  level: 5\n  bootstrapFiles: [evil.php]\n")
+         f = tmp_path / "MyService.php"
+         f.write_text("<?php\n")
+         cf = _make_cf([str(f)])
+@@ -245,9 +250,17 @@ class TestRunPhpstanFindings:
+             mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
+             _run_phpstan(cf, Path("/dev/null"))
+         call_args = mock_run.call_args[0][0]
+-        assert not any(a.startswith("--level=") for a in call_args)
++        assert "--level=3" in call_args
++        config_args = [a for a in call_args if a.startswith("--configuration=")]
++        assert len(config_args) == 1
++        configured_path = config_args[0].removeprefix("--configuration=")
++        assert configured_path != str(tmp_path / "phpstan.neon")
++        assert not configured_path.startswith(str(tmp_path))
+ 
+-    def test_drupal_autoload_added_when_available(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    def test_workspace_vendor_autoload_not_used(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++        """A fork-committed vendor/autoload.php must never be passed to
++        --autoload-file -- only the image-baked, absolute composer path
++        counts (#739)."""
+         monkeypatch.chdir(tmp_path)
+         vendor_drupal = tmp_path / "vendor" / "mglaman" / "phpstan-drupal"
+         vendor_drupal.mkdir(parents=True)
+@@ -262,7 +275,49 @@ class TestRunPhpstanFindings:
+             mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
+             _run_phpstan(cf, Path("/dev/null"))
+         call_args = mock_run.call_args[0][0]
+-        assert "--autoload-file=vendor/autoload.php" in call_args
++        assert not any(a.startswith("--autoload-file=") for a in call_args)
++
++    def test_baked_drupal_autoload_used_when_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++        """The image-baked composer path (absolute, never fork-controlled)
++        is honored when present."""
++        baked_vendor = tmp_path / "opt-composer" / "vendor"
++        (baked_vendor / "mglaman" / "phpstan-drupal").mkdir(parents=True)
++        (baked_vendor / "autoload.php").write_text("<?php\n")
++        monkeypatch.setattr(
++            "ai_pr_review.analyzers.native.phpstan._BAKED_PHPSTAN_DRUPAL",
++            baked_vendor / "mglaman" / "phpstan-drupal",
++        )
++        monkeypatch.setattr(
++            "ai_pr_review.analyzers.native.phpstan._BAKED_COMPOSER_AUTOLOAD",
++            baked_vendor / "autoload.php",
++        )
++        f = tmp_path / "MyService.php"
++        f.write_text("<?php\n")
++        cf = _make_cf([str(f)])
++        with (
++            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
++            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
++        ):
++            mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
++            _run_phpstan(cf, Path("/dev/null"))
++        call_args = mock_run.call_args[0][0]
++        assert f"--autoload-file={baked_vendor / 'autoload.php'}" in call_args
++
++    def test_trusted_config_file_cleaned_up(self, tmp_path: Path) -> None:
++        f = tmp_path / "MyService.php"
++        f.write_text("<?php\n")
++        cf = _make_cf([str(f)])
++        with (
++            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
++            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
++        ):
++            mock_run.return_value = MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
++            _run_phpstan(cf, Path("/dev/null"))
++        call_args = mock_run.call_args[0][0]
++        configured_path = next(a for a in call_args if a.startswith("--configuration=")).removeprefix(
++            "--configuration="
++        )
++        assert not Path(configured_path).exists()
+ 
+     def test_remediation_references_phpstan(self, tmp_path: Path) -> None:
+         findings = self._run_with_fixture("phpstan-error.json", tmp_path)
+diff --git a/tests/python/test_analyzer_tflint.py b/tests/python/test_analyzer_tflint.py
+index b879b2d..af1dc4d 100644
+--- a/tests/python/test_analyzer_tflint.py
++++ b/tests/python/test_analyzer_tflint.py
+@@ -48,6 +48,52 @@ class TestRunTflintGuards:
+         assert "tflint not found" in caplog.text
+ 
+ 
++class TestRunTflintTrustedConfig:
++    def test_workspace_tflint_hcl_never_auto_discovered(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """A fork-committed .tflint.hcl (which could set plugin_dir to a
++        fork-committed plugin binary) must never be passed to tflint -- an
++        explicit --config pointing at a trusted, empty file always wins over
++        auto-discovery, and TFLINT_PLUGIN_DIR is pinned to a fresh empty
++        directory as defense in depth (#739)."""
++        monkeypatch.chdir(tmp_path)
++        (tmp_path / ".tflint.hcl").write_text('plugin "evil" {\n  enabled = true\n}\n')
++        tf = tmp_path / "main.tf"
++        tf.write_text('resource "x" "y" {}\n')
++        cf = _make_cf([str(tf)])
++        with (
++            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
++            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
++        ):
++            mock_run.return_value = MagicMock(returncode=0, stdout='{"issues":[],"errors":[]}', stderr="")
++            _run_tflint(cf, Path("/dev/null"))
++        call_args, call_kwargs = mock_run.call_args
++        args = call_args[0]
++        config_args = [a for a in args if a.startswith("--config=")]
++        assert len(config_args) == 1
++        configured_path = config_args[0].removeprefix("--config=")
++        assert configured_path != str(tmp_path / ".tflint.hcl")
++        assert not configured_path.startswith(str(tmp_path))
++        plugin_dir = call_kwargs["env"]["TFLINT_PLUGIN_DIR"]
++        assert not plugin_dir.startswith(str(tmp_path))
++
++    def test_trusted_config_file_cleaned_up(self, tmp_path: Path) -> None:
++        tf = tmp_path / "main.tf"
++        tf.write_text('resource "x" "y" {}\n')
++        cf = _make_cf([str(tf)])
++        with (
++            patch("ai_pr_review.analyzers.native.tflint.shutil.which", return_value="/usr/bin/tflint"),
++            patch("ai_pr_review.analyzers.native.tflint.subprocess.run") as mock_run,
++        ):
++            mock_run.return_value = MagicMock(returncode=0, stdout='{"issues":[],"errors":[]}', stderr="")
++            _run_tflint(cf, Path("/dev/null"))
++        args, kwargs = mock_run.call_args
++        configured_path = next(a for a in args[0] if a.startswith("--config=")).removeprefix("--config=")
++        assert not Path(configured_path).exists()
++        assert not Path(kwargs["env"]["TFLINT_PLUGIN_DIR"]).exists()
++
++
+ class TestRunTflintFindings:
+     def _run_with_fixture(self, fixture_name: str, tmp_path: Path) -> list:
+         fixture = _load_fixture(fixture_name)
