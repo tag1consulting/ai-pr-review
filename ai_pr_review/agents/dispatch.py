@@ -546,7 +546,39 @@ async def _run_single_agent(
                         temperature=context.temperature,
                         system_prefix=system_prefix,
                     )
-                    response = await llm_call(request)
+                    try:
+                        response = await llm_call(request)
+                    except BaseException as fallback_exc:
+                        # The retry itself failed. Build the FailedAgent here,
+                        # with the fallback context included in `reason`,
+                        # instead of letting a bare exception propagate to the
+                        # outer handler where a post-mortem reader couldn't
+                        # tell this apart from a first-attempt failure (#810
+                        # review finding F1). KeyboardInterrupt still aborts.
+                        if isinstance(fallback_exc, KeyboardInterrupt):
+                            raise
+                        _log.warning(
+                            "agent %r: standard-model fallback (after premium "
+                            "model %r was content-filtered) also failed: %s",
+                            spec.name, fallback_from_model, fallback_exc,
+                        )
+                        fb_exit_code = 1
+                        if isinstance(fallback_exc, SystemExit) and isinstance(
+                            fallback_exc.code, int
+                        ):
+                            fb_exit_code = fallback_exc.code
+                        elapsed = int((time.monotonic() - start) * 1000)
+                        results.append(FailedAgent(
+                            name=spec.name,
+                            reason=(
+                                f"content-filter fallback from "
+                                f"{fallback_from_model!r} to {model_id!r} "
+                                f"also failed: {_format_exception_chain(fallback_exc)}"
+                            ),
+                            exit_code=fb_exit_code,
+                            elapsed_ms=elapsed,
+                        ))
+                        return
                 else:
                     raise
         usage = TokenUsage(

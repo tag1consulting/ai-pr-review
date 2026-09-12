@@ -1,51 +1,14 @@
-diff --git a/src/audit/events.ts b/src/audit/events.ts
+diff --git a/src/webhooks/parse.ts b/src/webhooks/parse.ts
 new file mode 100644
 index 0000000..1111111
 --- /dev/null
-+++ b/src/audit/events.ts
-@@ -0,0 +1,45 @@
-+interface AuditEvent {
-+  userId: string;
-+  action: string;
-+  timestamp: number;
-+}
-+
-+/**
-+ * Records an audit event to the durable log, then notifies subscribers.
-+ */
-+export async function recordAuditEvent(event: AuditEvent): Promise<void> {
-+  await writeToAuditLog(event);
-+
-+  // Fire-and-forget notification -- subscribers are best-effort, so we
-+  // don't want a slow notifier to block the audit write path.
-+  notifySubscribers(event);
-+}
-+
-+async function writeToAuditLog(event: AuditEvent): Promise<void> {
-+  const response = await fetch("/api/audit", {
-+    method: "POST",
-+    body: JSON.stringify(event),
-+  });
-+  if (!response.ok) {
-+    throw new Error(`audit write failed: ${response.status}`);
-+  }
-+}
-+
-+async function notifySubscribers(event: AuditEvent): Promise<void> {
-+  const subscribers = await getActiveSubscribers();
-+  for (const sub of subscribers) {
-+    await sub.deliver(event);
-+  }
-+}
-+
-+async function getActiveSubscribers(): Promise<{ deliver: (e: AuditEvent) => Promise<void> }[]> {
-+  return [];
-+}
-+
-+/**
-+ * Parses a webhook payload of unknown shape and extracts the user id.
-+ */
++++ b/src/webhooks/parse.ts
+@@ -0,0 +1,9 @@
 +export function extractUserId(payload: unknown): string {
 +  const data = payload as any;
 +  return data.user.id;
++}
++
++export function isEmptyCount(count: number | string): boolean {
++  return count == 0;
 +}

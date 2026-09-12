@@ -692,7 +692,9 @@ async def test_run_tier_no_fallback_when_standard_model_also_refused(
     tmp_path: Path,
 ) -> None:
     """A retry happens at most once. If the standard model is also blocked,
-    the agent is recorded as failed rather than looping indefinitely."""
+    the agent is recorded as failed rather than looping indefinitely, and the
+    failure reason names both models so a post-mortem reader can tell this
+    apart from a first-attempt failure (#810 review finding F1)."""
     base = _make_context(tmp_path)
     ctx = DispatchContext(
         script_dir=base.script_dir,
@@ -717,6 +719,9 @@ async def test_run_tier_no_fallback_when_standard_model_also_refused(
     assert len(failures) == 1
     assert failures[0].exit_code == 3
     assert call_count == 2  # premium attempt + one standard-model retry, no more
+    assert "claude-premium" in failures[0].reason
+    assert "claude-standard" in failures[0].reason
+    assert "fallback" in failures[0].reason
 
 
 @pytest.mark.anyio
