@@ -28,6 +28,16 @@ from ai_pr_review.vcs._inline import (
     split_body_findings,
 )
 from ai_pr_review.vcs._stale import graphql_bot_login, is_owned_by_us
+from ai_pr_review.vcs._thread import (
+    count_unresolved_owned_threads,
+)
+from ai_pr_review.vcs._thread import (
+    first_comment_author_login as _first_comment_author_login,
+)
+from ai_pr_review.vcs._thread import (
+    first_comment_body as _first_comment_body,
+)
+from ai_pr_review.vcs._upsert import advance_sha_marker, upsert_comment
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     ID_MAP_MARKER_PREFIX,
@@ -38,7 +48,6 @@ from ai_pr_review.vcs.marker import (
     build_summary_marker,
     extract_summary_sha,
     has_skip_marker,
-    replace_summary_sha,
 )
 from ai_pr_review.vcs.protocol import (
     DiffContext,
@@ -515,35 +524,18 @@ class GitHubProvider:
             "[ai-pr-review](https://github.com/tag1consulting/ai-pr-review)*"
         )
 
-        existing = self._list_summary_comments()
-        if existing:
-            keep = existing[0]
-            keep_id = int(keep["id"])
-            resp = self.client.request(
-                "PATCH", self._issue_comment_url(keep_id), json_body={"body": body}
-            )
-            if resp.status_code >= 400:
-                err = f"update summary: HTTP {resp.status_code}: {resp.text[:200]}"
-                self._errors.append(err)
-                return SummaryResult(
-                    comment_id=keep_id, created=False, updated=False, error=err
-                )
-            # Delete any duplicate summary comments (cosmetic, non-fatal)
-            for dup in existing[1:]:
-                dup_id = int(dup["id"])
-                self.client.request("DELETE", self._issue_comment_url(dup_id))
-            return SummaryResult(comment_id=keep_id, created=False, updated=True)
-
-        resp = self.client.request(
-            "POST", self._issue_comments_url(), json_body={"body": body}
+        return upsert_comment(
+            list_existing=self._list_summary_comments,
+            item_id=lambda item: int(item["id"]),
+            payload={"body": body},
+            update_verb="PATCH",
+            item_url=self._issue_comment_url,
+            create_url=self._issue_comments_url,
+            request=self.client.request,
+            errors=self._errors,
+            update_label="update summary",
+            create_label="create summary",
         )
-        if resp.status_code >= 400:
-            err = f"create summary: HTTP {resp.status_code}: {resp.text[:200]}"
-            self._errors.append(err)
-            return SummaryResult(comment_id=None, created=False, updated=False, error=err)
-        data = resp.json() or {}
-        new_id = int(data.get("id", 0)) or None
-        return SummaryResult(comment_id=new_id, created=True, updated=False)
 
     # ------------------------------------------------------------------
     # _list_skip_comments — find existing skip comments by SKIP_MARKER
@@ -576,65 +568,43 @@ class GitHubProvider:
         body = append_skip_marker(
             f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
         )
-        existing = self._list_skip_comments()
-        if existing:
-            keep = existing[0]
-            keep_id = int(keep["id"])
-            resp = self.client.request(
-                "PATCH", self._issue_comment_url(keep_id), json_body={"body": body}
-            )
-            if resp.status_code >= 400:
-                err = f"update skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
-                self._errors.append(err)
-                return SummaryResult(
-                    comment_id=keep_id, created=False, updated=False, error=err
-                )
-            for dup in existing[1:]:
-                dup_id = int(dup["id"])
-                self.client.request("DELETE", self._issue_comment_url(dup_id))
-            return SummaryResult(comment_id=keep_id, created=False, updated=True)
-
-        resp = self.client.request(
-            "POST", self._issue_comments_url(), json_body={"body": body}
+        return upsert_comment(
+            list_existing=self._list_skip_comments,
+            item_id=lambda item: int(item["id"]),
+            payload={"body": body},
+            update_verb="PATCH",
+            item_url=self._issue_comment_url,
+            create_url=self._issue_comments_url,
+            request=self.client.request,
+            errors=self._errors,
+            update_label="update skip comment",
+            create_label="skip comment",
         )
-        if resp.status_code >= 400:
-            err = f"skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
-            self._errors.append(err)
-            return SummaryResult(comment_id=None, created=False, updated=False, error=err)
-        data = resp.json() or {}
-        new_id = int(data.get("id", 0)) or None
-        return SummaryResult(comment_id=new_id, created=True, updated=False)
 
     # ------------------------------------------------------------------
     # advance_sha_watermark — patches the existing summary comment's marker
     # ------------------------------------------------------------------
     def advance_sha_watermark(self, new_sha: str) -> bool:
         """Rewrite the sha= field in the existing summary marker. Returns True if
-        a summary comment was found and patched successfully."""
-        existing = self._list_summary_comments()
-        if not existing:
-            return False
-        # Pick the OLDEST marker-bearing comment (existing[0]) so this is
-        # consistent with post_summary, which keeps existing[0] and deletes
-        # the rest. GitLab and Bitbucket use existing[0] in both code paths;
-        # this aligns GitHub with that convention.
-        keep = existing[0]
-        keep_id = int(keep["id"])
-        old_body = keep.get("body") or ""
-        new_body = replace_summary_sha(
-            old_body, new_sha, context_hint=f"issue_comment#{keep_id}"
+        a summary comment was found and patched successfully.
+
+        Picks the OLDEST marker-bearing comment (`existing[0]`) so this is
+        consistent with post_summary, which keeps existing[0] and deletes
+        the rest. GitLab and Bitbucket use existing[0] in both code paths;
+        this aligns GitHub with that convention.
+        """
+        return advance_sha_marker(
+            list_existing=self._list_summary_comments,
+            item_id=lambda item: int(item["id"]),
+            extract_body=lambda item: item.get("body") or "",
+            make_payload=lambda body: {"body": body},
+            update_verb="PATCH",
+            item_url=self._issue_comment_url,
+            request=self.client.request,
+            errors=self._errors,
+            new_sha=new_sha,
+            context_hint_prefix="issue_comment",
         )
-        if new_body == old_body:
-            return False
-        resp = self.client.request(
-            "PATCH", self._issue_comment_url(keep_id), json_body={"body": new_body}
-        )
-        if resp.status_code >= 400:
-            self._errors.append(
-                f"advance_sha: HTTP {resp.status_code}: {resp.text[:200]}"
-            )
-            return False
-        return True
 
     # ------------------------------------------------------------------
     # post_findings — pull-request review with inline comments + fallbacks
@@ -1723,14 +1693,25 @@ class GitHubProvider:
         """Does `review_id` still have at least one unresolved thread we own?
 
         Mirrors the exact rule `_dismiss_stale_reviews` already applies
-        (`unresolved_by_review.get(rid, 0) > 0`): a `CHANGES_REQUESTED`
-        review must never be dismissed while it still has open findings, or
-        the slash-command PR-wide auto-approve check
+        (`unresolved_by_review.get(rid, 0) > 0`, now `_thread.count_unresolved_owned_threads`):
+        a `CHANGES_REQUESTED` review must never be dismissed while it still
+        has open findings, or the slash-command PR-wide auto-approve check
         (`ai_pr_review.slash.dismiss._approve_if_pr_fully_resolved`) — which
         only counts unresolved threads on reviews whose *current* state is
         `CHANGES_REQUESTED` — would no longer see them and could approve a
         PR with a High finding still open on the review this method just
         allowed to be dismissed.
+
+        Deliberately NOT unified with `count_unresolved_owned_threads` (#822):
+        that helper counts over raw GraphQL thread dicts and re-applies the
+        marker/ownership check itself, while this one counts over already-
+        parsed `PriorThread` objects that `parse_prior_thread` has already
+        filtered to owned-and-marker-passing threads (see its `is_owned_by_us`
+        call). Routing this through the dict-based helper would mean either
+        re-serializing `PriorThread` back into GraphQL-node shape (pointless)
+        or dropping the ownership check that helper performs (silently
+        correct here only because it's already been done, which is exactly
+        the kind of implicit precondition a shared helper shouldn't rely on).
         """
         return any(
             t.review_id == review_id and not t.is_resolved for t in all_threads
@@ -2336,22 +2317,12 @@ class GitHubProvider:
         reviews = self.list_bot_reviews()
 
         # Map review id -> unresolved thread count, only counting threads
-        # where the comment body carries OUR inline marker.
-        unresolved_by_review: dict[int, int] = {}
-        for t in threads:
-            if t.get("isResolved"):
-                continue
-            body = _first_comment_body(t)
-            author = _first_comment_author_login(t) or None
-            # See resolve_stale's matching comment (#717).
-            if not is_owned_by_us(
-                body, author, graphql_bot_login(self.config.bot_login), kind="inline"
-            ):
-                continue
-            rid = _first_comment_review_id(t)
-            if rid is None:
-                continue
-            unresolved_by_review[rid] = unresolved_by_review.get(rid, 0) + 1
+        # where the comment body carries OUR inline marker. See
+        # resolve_stale's matching comment (#717) for why bot_login is
+        # normalized via graphql_bot_login() here.
+        unresolved_by_review = count_unresolved_owned_threads(
+            threads, bot_login=graphql_bot_login(self.config.bot_login)
+        )
 
         dismissed = 0
         for review in reviews:
@@ -2661,27 +2632,3 @@ def _build_inline_comment_payload(
     return payload
 
 
-def _first_comment_body(thread: dict[str, Any]) -> str:
-    nodes = ((thread.get("comments") or {}).get("nodes")) or []
-    if not nodes:
-        return ""
-    return (nodes[0].get("body") or "")
-
-
-def _first_comment_author_login(thread: dict[str, Any]) -> str:
-    nodes = ((thread.get("comments") or {}).get("nodes")) or []
-    if not nodes:
-        return ""
-    author = nodes[0].get("author") or {}
-    return author.get("login") or ""
-
-
-def _first_comment_review_id(thread: dict[str, Any]) -> int | None:
-    nodes = ((thread.get("comments") or {}).get("nodes")) or []
-    if not nodes:
-        return None
-    pr_review = nodes[0].get("pullRequestReview") or {}
-    rid = pr_review.get("databaseId")
-    if isinstance(rid, int):
-        return rid
-    return None

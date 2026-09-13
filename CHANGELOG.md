@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Unified duplicated VCS-provider CRUD/thread-counting logic (issue #822, Epic 9 Phase C)**. `github.py`/`gitlab.py`/`bitbucket.py`'s `post_summary`/`post_skip_comment`/`advance_sha_watermark` each independently re-implemented the same find-or-create-then-update / patch-in-place control flow; extracted into shared `ai_pr_review/vcs/_upsert.py` helpers. `github.py`'s module-level `_first_comment_body`/`_first_comment_author_login`/`_first_comment_review_id` duplicated `slash/dismiss.py`'s equivalents; both now share `ai_pr_review/vcs/_thread.py`, which also factors out the "unresolved threads per owning review" counting loop duplicated across `github.py`'s `_dismiss_stale_reviews` and `dismiss.py`'s `_dismiss_if_all_resolved`/`_approve_if_pr_fully_resolved`. Pure refactor, zero behavior change — see PR body for what was verified and what was intentionally left alone (the `bot_login=None` vs. normalized `graphql_bot_login(...)` difference between `dismiss.py` and `github.py`'s call sites is a deliberate, test-locked design choice, not something this PR "fixes").
+
 ### Removed
 
 - **The `docs-missing-check` static analyzer (issue #815)**. It flagged a newly-added public function/method with no doc comment at all, at Low severity (never blocking a merge on its own). Removed as part of Epic 9's review-quality simplification: three separate execution paths (a dedicated ruff rule-set, a `golangci-lint --enable-only=godoclint` invocation for Go, and a second tree-sitter presence check) for a signal that never blocks a review is more maintenance surface than the check earns. `docs-api-check`, `docs-ref-check`, and `docs-drift-check` are unchanged. **No breaking changes**: `docs-missing-check` is still accepted in the `analyzers`/`exclude-analyzers` allowlist/denylist inputs (and a `policy.yml` route's equivalent fields) as a deprecated no-op, with a runtime warning; it never dispatches. Formal removal (the name rejected outright) is planned for v3.0.0.

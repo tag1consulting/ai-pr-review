@@ -817,16 +817,22 @@ def test_dismiss_inline_reply_other_bots_thread_ignored() -> None:
 def test_dismiss_inline_reply_graphql_style_author_still_owned() -> None:
     """Pins the deliberate `bot_login=None` choice in `_stale.is_owned_by_us`
     calls throughout this module: ownership is gated by the inline marker
-    ALONE, never by comparing the GraphQL author login against the REST-style
-    `github-actions[bot]` constant. Per `reference_bot_login_graphql_vs_rest`
-    (unverified this session — flagged for live confirmation in story 13-2),
-    GitHub's GraphQL API may report the bot's login without the "[bot]"
-    suffix (`github-actions`), which would never equal the REST-style
-    constant. This test locks in marker-only gating today; if a future change
-    "fixes" the `None` to `self.config.bot_login`, this test fails and forces
-    that decision to be re-examined rather than silently reintroducing a
-    no-op author check (the exact class of bug that broke PR #378's
-    inline-by-F-ID dismiss step)."""
+    ALONE, never by comparing the GraphQL author login against a bot-login
+    constant. GitHub's GraphQL API reports the bot's login without the
+    "[bot]" suffix (`github-actions`, not `github-actions[bot]`) — confirmed
+    live and fixed elsewhere via `graphql_bot_login()` (issue #717; see that
+    function's docstring in `ai_pr_review/vcs/_stale.py`), not a hypothesis.
+    This module's own call sites deliberately do NOT adopt that normalized
+    comparison even though it's available and cheap: unlike `resolve_stale`/
+    `_dismiss_stale_reviews`/`parse_prior_thread`, they don't need the extra
+    defense-in-depth signal to be safe (a spoofed thread carries the
+    attacker's own `pullRequestReview.databaseId`, so at most it could
+    trigger dismissal of the attacker's own review). This test locks in
+    marker-only gating today; if a future change "fixes" the `None` to
+    `self.config.bot_login` (or `graphql_bot_login(self.config.bot_login)`),
+    this test fails and forces that decision to be re-examined rather than
+    silently reintroducing a no-op author check (the exact class of bug that
+    broke PR #378's inline-by-F-ID dismiss step)."""
     id_map = {"x|y.py|1|aaaaaaaaaaaa": 4}
     body = f"finding\n**[F4]**\n{INLINE_MARKER}\n" + build_id_map_marker(id_map)
     # "github-actions" (no "[bot]" suffix) — the GraphQL-reported form per the
