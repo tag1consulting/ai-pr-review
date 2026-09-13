@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from ai_pr_review.feedback.models import FeedbackEntry
-from ai_pr_review.slash.handlers import build_entry, handle_command, parse_error_reply
+from ai_pr_review.slash.handlers import (
+    build_entry,
+    handle_command,
+    list_matching_commands,
+    parse_command_gate_lines,
+    parse_error_reply,
+    run_slash_command,
+)
 from ai_pr_review.slash.parser import ParseError, SlashCommand
 
 
@@ -255,3 +262,76 @@ def test_fixed_command_never_writes_to_feedback_store() -> None:
     handle_command(cmd, entry, store)
 
     assert store.appended == []
+
+
+# ---------------------------------------------------------------------------
+# run_slash_command / list_matching_commands / parse_command_gate_lines
+# (issue #825 -- moved out of ai_pr_review/cli.py's `slash`, `list-commands`,
+# and `parse-command` subcommand bodies)
+# ---------------------------------------------------------------------------
+
+
+def test_run_slash_command_flags_context_missing() -> None:
+    store = _RecordingStore()
+    cmd = SlashCommand(name="wont-fix", reason="intentional", raw_body="/ai-pr-review wont-fix intentional")
+    run_slash_command(cmd, store, source="", file="", rule_id="")
+    assert len(store.appended) == 1
+    assert store.appended[0].extras.get("context_missing") is True
+
+
+def test_run_slash_command_no_context_missing_with_source() -> None:
+    store = _RecordingStore()
+    cmd = SlashCommand(name="wont-fix", reason="intentional", raw_body="/ai-pr-review wont-fix intentional")
+    run_slash_command(cmd, store, source="code-reviewer", file="app.py", rule_id="")
+    assert "context_missing" not in store.appended[0].extras
+
+
+def test_run_slash_command_returns_handle_command_reply() -> None:
+    store = _RecordingStore()
+    cmd = SlashCommand(name="feedback", reason="nice catch", raw_body="/ai-pr-review feedback nice catch")
+    reply = run_slash_command(cmd, store, source="code-reviewer", file="app.py")
+    assert "feedback" in reply.lower()
+
+
+def test_list_matching_commands_filters_by_family() -> None:
+    body = "/ai-pr-review dismiss F1\n/ai-pr-review wont-fix F2 not a bug\n/ai-pr-review rescan"
+    entries = list_matching_commands(body, "false-positive,wont-fix")
+    assert entries == [
+        {"command": "dismiss", "finding_id": 1, "line": "/ai-pr-review dismiss F1"},
+        {"command": "wont-fix", "finding_id": 2, "line": "/ai-pr-review wont-fix F2 not a bug"},
+    ]
+
+
+def test_list_matching_commands_empty_body() -> None:
+    assert list_matching_commands("", "false-positive") == []
+
+
+def test_parse_command_gate_lines_unrecognized() -> None:
+    assert parse_command_gate_lines("/ai-pr-review frobnicate") == [
+        "command=frobnicate",
+        "valid=false",
+        "unrecognized=true",
+    ]
+
+
+def test_parse_command_gate_lines_bash_only_command() -> None:
+    assert parse_command_gate_lines("/ai-pr-review rescan") == ["command=rescan", "valid=true"]
+
+
+def test_parse_command_gate_lines_feedback_is_invalid() -> None:
+    assert parse_command_gate_lines("/ai-pr-review feedback nice work") == [
+        "command=feedback",
+        "valid=false",
+    ]
+
+
+def test_parse_command_gate_lines_known_command_with_finding_id() -> None:
+    assert parse_command_gate_lines("/ai-pr-review dismiss F3 reason text") == [
+        "command=dismiss",
+        "valid=true",
+        "finding_id=3",
+    ]
+
+
+def test_parse_command_gate_lines_bare_body() -> None:
+    assert parse_command_gate_lines("") == ["valid=false", "unrecognized=true"]

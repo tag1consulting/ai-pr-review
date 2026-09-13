@@ -54,8 +54,6 @@ from ai_pr_review.vcs import ProviderConfigError
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
     from ai_pr_review.review.runtime import ReviewRuntime
-    from ai_pr_review.slash.dismiss import DismissResult
-    from ai_pr_review.slash.parser import SlashCommand
     from ai_pr_review.vcs import GitHubProvider
     from ai_pr_review.vcs.protocol import VcsProvider
 
@@ -584,7 +582,7 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
     silently (issue #772). The technical stderr message is unchanged and
     still intended for the job log, not the PR comment.
     """
-    from ai_pr_review.slash.handlers import build_entry, handle_command, parse_error_reply
+    from ai_pr_review.slash.handlers import parse_error_reply, run_slash_command
     from ai_pr_review.slash.parser import ParseError, parse_command
 
     if not body:
@@ -616,35 +614,14 @@ def slash(body: str, source: str, file_path: str, rule_id: str, context_missing_
 
     store = make_store(config)
 
-    # Detect missing context: both source and file are empty for a feedback
-    # command.  The entry is still persisted (captures reviewer intent) but
-    # flagged in extras so the learning-loop ranker can identify low-fidelity
-    # records and operators can audit them.  A loud warning is emitted so the
-    # issue surfaces in workflow logs.
-    context_missing = (
-        result.is_feedback_command
-        and not source
-        and not file_path
-        and result.finding_id is None
-    )
-    if context_missing:
-        logger.warning(
-            "slash: persisting feedback entry with no finding context "
-            "(source and file are both empty); command=%r reason=%r%s",
-            result.canonical_name,
-            result.reason,
-            f" context_missing_reason={context_missing_reason!r}" if context_missing_reason else "",
-        )
-
-    entry = build_entry(
+    reply = run_slash_command(
         result,
+        store,
         source=source,
         file=file_path,
         rule_id=rule_id,
-        context_missing=context_missing,
         context_missing_reason=context_missing_reason,
     )
-    reply = handle_command(result, entry, store)
     if reply:
         click.echo(reply)
 
@@ -681,17 +658,9 @@ def list_commands(comment_body: str, families: str) -> None:
     (issue #733: a single comment can carry several independent commands).
     Never exits non-zero; an empty or absent body prints `[]`.
     """
-    from ai_pr_review.slash.parser import SlashCommand, parse_commands
+    from ai_pr_review.slash.handlers import list_matching_commands
 
-    wanted = {f.strip() for f in families.split(",") if f.strip()}
-    entries = []
-    for parsed in parse_commands(comment_body) if comment_body else []:
-        if not isinstance(parsed, SlashCommand):
-            continue
-        if parsed.canonical_name not in wanted:
-            continue
-        entries.append({"command": parsed.name, "finding_id": parsed.finding_id, "line": parsed.raw_body})
-    click.echo(json.dumps(entries))
+    click.echo(json.dumps(list_matching_commands(comment_body, families)))
 
 
 @cli.command("parse-command")
@@ -752,171 +721,29 @@ def parse_command_gate(comment_body: str) -> None:
     vocabulary -- it can never route a comment to a command that didn't
     already exist.
     """
-    from ai_pr_review.slash.parser import BASH_ONLY_COMMANDS, ParseError, parse_command
+    from ai_pr_review.slash.handlers import parse_command_gate_lines
 
-    try:
-        result = parse_command(comment_body)
-    except Exception:
-        # Defense-in-depth, not a reachability guarantee either way. The
-        # concretely known trigger: parser.py's F<n> regex (_FID_RE) has no
-        # digit-count cap, unlike the length-capped regex ([0-9]{1,6}) the
-        # three bash steps this replaces used for the same extraction. An
-        # absurdly long numeral in the F-ID position (thousands of digits)
-        # exceeds Python's int-string conversion limit and raises ValueError
-        # from int() deep inside parse_command(). The bash steps never
-        # crashed on such input -- the capped regex just failed to match and
-        # the digits fell through as ordinary reason text. Replicating that
-        # exact fallback would mean reaching inside parse_command() a second
-        # time; reject the whole line instead.
-        #
-        # Caught broadly rather than `except ValueError` (review finding F1,
-        # PR #829): this step's contract is "never crashes" regardless of
-        # what parser.py does internally -- narrowing to the one exception
-        # type known today would leave the same crash-on-malformed-input
-        # risk open for any future change inside parse_command() that raises
-        # something else (e.g. a future stricter validation). Logged so a
-        # genuinely unexpected failure here is still visible in the job log
-        # rather than silently swallowed.
-        logger.warning("parse-command: unexpected error parsing comment body", exc_info=True)
-        click.echo("valid=false")
-        click.echo("unrecognized=true")
-        return
-
-    if result is None:
-        # Bare "/ai-pr-review" with nothing after, or a body that doesn't
-        # start with the prefix at all. Every job's own `if:` gate already
-        # requires the prefix before this step runs, so this is a defensive
-        # fallback, not the expected path.
-        click.echo("valid=false")
-        click.echo("unrecognized=true")
-        return
-
-    if isinstance(result, ParseError):
-        token = result.unknown_token
-        if token in BASH_ONLY_COMMANDS:
-            click.echo(f"command={token}")
-            click.echo("valid=true")
-            return
-        if token:
-            click.echo(f"command={token}")
-        click.echo("valid=false")
-        click.echo("unrecognized=true")
-        return
-
-    # Recognized by ai_pr_review.slash.parser.KNOWN_COMMANDS.
-    click.echo(f"command={result.name}")
-    if result.name == "feedback":
-        click.echo("valid=false")
-        return
-    click.echo("valid=true")
-    click.echo(f"finding_id={result.finding_id if result.finding_id is not None else ''}")
+    for line in parse_command_gate_lines(comment_body):
+        click.echo(line)
 
 
 def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     """Build a `GitHubProvider` from env, or exit(1) with a `<label>: ...` message.
 
     Shared by the `dismiss` and `dismiss-inline` subcommands: both are
-    GitHub-only (F-IDs and inline id-maps only exist on that provider), and
-    both need `VCS_PROVIDER` checked *before* calling `provider_from_env()` —
-    that dispatcher eagerly reads provider-specific env vars and raises its
-    own errors first, so an `isinstance` check after the call would fire too
-    late under a non-GitHub `VCS_PROVIDER`.
+    GitHub-only (F-IDs and inline id-maps only exist on that provider). The
+    actual construction logic lives in
+    `ai_pr_review.slash.dismiss.resolve_github_provider` (#825); this wrapper
+    only decides what to do on failure (exit 1), matching the CLI-level
+    concern this module owns.
     """
-    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
+    from ai_pr_review.slash.dismiss import GitHubProviderError, resolve_github_provider
 
-    vcs = (os.environ.get("VCS_PROVIDER") or "github").strip().lower()
-    if vcs != "github":
-        click.echo(f"{command_label}: ai-pr-review {command_label} is GitHub-only (VCS_PROVIDER={vcs!r})", err=True)
+    result = resolve_github_provider(command_label)
+    if isinstance(result, GitHubProviderError):
+        click.echo(result.message, err=True)
         sys.exit(1)
-
-    try:
-        provider = provider_from_env()
-    except ProviderConfigError as exc:
-        click.echo(f"{command_label}: {exc}", err=True)
-        sys.exit(1)
-
-    if not isinstance(provider, GitHubProvider):
-        # Unreachable given the vcs-name gate above; narrows the type for mypy
-        # and guards against provider_from_env's dispatch logic changing.
-        click.echo(f"{command_label}: expected a GitHub provider", err=True)
-        sys.exit(1)
-
-    return provider
-
-
-def _persist_verdict(
-    result: DismissResult,
-    *,
-    actor: str,
-    command_name: str,
-    finding_id: int | None,
-    comment_body: str,
-    parsed_command: SlashCommand | None,
-    enable_feedback_loop: bool,
-    feedback_write_allowed: bool,
-) -> str:
-    """Persist a feedback-store entry for a dismiss/false-positive/wont-fix
-    verdict and return the reply text to echo.
-
-    Shared by `dismiss` (top-level, BODY and INLINE F-ids) and `dismiss-inline`
-    (issue #769 -- previously the only writer for any inline verdict was the
-    now-removed `feedback-command` workflow job's `slash` invocation; this
-    makes the dismiss commands the sole owner of both the reply and the store
-    write for the whole verdict family, on both event paths).
-
-    `result.feedback_eligible` gates whether there's anything to persist at
-    all (False for `fixed` and for UNKNOWN/not-found -- see DismissResult's
-    docstring). Two independent knobs then gate the write itself:
-    `enable_feedback_loop` (AI_FEEDBACK_LOOP -- the feature is on at all) and
-    `feedback_write_allowed` (SLASH_FEEDBACK_WRITE_ALLOWED -- the actor is
-    trusted per docs/learning-loop.md's OWNER/MEMBER bar, mirroring the
-    existing SLASH_APPROVE_ALLOWED precedent). Three distinct replies so none
-    of them lies about what happened.
-    """
-    if not result.feedback_eligible:
-        return result.reply
-
-    if not enable_feedback_loop:
-        return f"{result.reply} (feedback loop disabled — not persisted to learning store)"
-
-    if not feedback_write_allowed:
-        return (
-            f"{result.reply} (not persisted to learning store — recording feedback "
-            "requires OWNER or MEMBER association)"
-        )
-
-    from ai_pr_review.feedback.store import make_store
-    from ai_pr_review.slash.handlers import build_entry
-    from ai_pr_review.slash.parser import SlashCommand
-
-    command_for_entry = parsed_command or SlashCommand(
-        name=command_name, reason="", raw_body=comment_body, finding_id=finding_id
-    )
-
-    class _DismissConfig:
-        vcs_provider = "github"
-
-    entry = build_entry(
-        command_for_entry,
-        source=result.feedback_source,
-        file=result.feedback_file,
-        rule_id=result.feedback_rule_id,
-    )
-    stored = make_store(_DismissConfig()).append(entry)
-    if stored:
-        return result.reply
-
-    logger.warning(
-        "dismiss: feedback store failed to persist entry for F%s (command=%r)",
-        finding_id,
-        command_name,
-    )
-    finding_ref = f"F{finding_id}" if finding_id is not None else "this finding"
-    return (
-        f"@{actor} marked **{finding_ref}** as `{command_name}`, but the feedback store "
-        "could not persist it (network error or unsupported VCS). "
-        "Please retry later or check the workflow logs for details."
-    )
+    return result
 
 
 @cli.command()
@@ -1038,6 +865,8 @@ def dismiss(
         bodies_newest_first,
         dismiss_by_finding_id,
         list_active_body_ids,
+        no_finding_id_reply,
+        persist_verdict,
     )
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
@@ -1060,14 +889,7 @@ def dismiss(
 
     if finding_id is None:
         active_ids = list_active_body_ids(bodies_newest_first(provider.list_bot_reviews()))
-        if active_ids:
-            ids_text = ", ".join(f"F{n}" for n in active_ids)
-            click.echo(
-                f"@{actor} please specify a finding ID, e.g. `/ai-pr-review {command_name} F{active_ids[0]}`. "
-                f"Active findings: {ids_text}."
-            )
-        else:
-            click.echo(f"@{actor} there are no active body-level findings to {command_name}.")
+        click.echo(no_finding_id_reply(actor, command_name, active_ids))
         click.echo("::notice::reaction=done", err=True)
         return
 
@@ -1095,7 +917,7 @@ def dismiss(
     )
 
     click.echo(
-        _persist_verdict(
+        persist_verdict(
             result,
             actor=actor,
             command_name=command_name,
@@ -1230,7 +1052,7 @@ def dismiss_inline(
       0 — handled (including "could not find thread" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
-    from ai_pr_review.slash.dismiss import dismiss_inline_reply
+    from ai_pr_review.slash.dismiss import dismiss_inline_reply, persist_verdict
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
     os.environ["PR_NUMBER"] = str(pr_number)
@@ -1274,7 +1096,7 @@ def dismiss_inline(
     # which falls back to "this finding" only for a legacy inline comment
     # posted before F-ids covered inline findings.
     click.echo(
-        _persist_verdict(
+        persist_verdict(
             result,
             actor=actor,
             command_name=command_name,
@@ -1290,47 +1112,18 @@ def dismiss_inline(
 def _emit_dismiss_failure_annotation(
     command_label: str, errors: tuple[str, ...], *, thread_resolved: bool = False
 ) -> None:
-    """Emit a GitHub Actions ``::error::`` annotation when a dismiss/wont-fix/
-    false-positive command hit a VCS API error (#611).
+    """Echo the GitHub Actions ``::error::`` annotation for a dismiss/wont-fix/
+    false-positive command that hit a VCS API error (#611), if any.
 
-    The calling workflow step always exits 0 on this path (see the ``dismiss``/
-    ``dismiss-inline`` docstrings: "not found" and "API error" both count as
-    "handled", not "command failure") so the reply can still post via
-    ``actions-token`` even when the error came from a different, failing
-    token (``github-token``, the PAT). That means the job's own conclusion
-    stays green regardless -- this annotation is the only signal that the
-    underlying dismiss did not actually happen, surfaced on the PR's Checks
-    tab rather than only in the run log. Matches the pattern
-    ``emit_post_failure_annotation`` (#588/#618) uses for the sibling
-    review-posting path. Deliberately omits the raw error strings (already
-    logged as ``::warning::`` by the caller) to avoid duplicating any
-    credential fragment into the more widely-visible annotation.
-
-    ``thread_resolved`` distinguishes two distinct failure shapes: the finding
-    itself may still be genuinely unresolved (thread resolution failed), or the
-    thread may have resolved fine while a secondary step -- dismissing the
-    stale review, or the PR-wide auto-approve -- errored afterward. Asserting
-    "NOT dismissed/resolved" in the second case would contradict the CLI's own
-    reply text (which correctly says the thread was resolved) and mislead
-    anyone reading the Checks tab into re-running a command that already
-    succeeded.
+    Delegates the decision of whether/what to say to
+    `ai_pr_review.slash.dismiss.dismiss_failure_annotation` (#825); this
+    wrapper only performs the actual stderr echo, the one CLI-specific bit.
     """
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        return
-    if not errors:
-        return
-    outcome = (
-        "the thread was resolved, but a follow-up step (review dismissal or "
-        "PR approval) failed."
-        if thread_resolved
-        else "the finding was likely NOT dismissed/resolved."
-    )
-    click.echo(
-        f"::error::ai-pr-review {command_label}: the command could not complete "
-        f"due to {len(errors)} API error(s); see the ::warning:: lines above "
-        f"for detail. {outcome}",
-        err=True,
-    )
+    from ai_pr_review.slash.dismiss import dismiss_failure_annotation
+
+    line = dismiss_failure_annotation(command_label, errors, thread_resolved=thread_resolved)
+    if line is not None:
+        click.echo(line, err=True)
 
 
 def _build_github_provider_or_none(command_label: str) -> GitHubProvider | None:
@@ -1341,26 +1134,17 @@ def _build_github_provider_or_none(command_label: str) -> GitHubProvider | None:
     (or will separately) be persisted regardless of whether context
     extraction or thread resolution succeeds, so provider construction
     failure must degrade gracefully (log + return) rather than exit(1) and
-    fail the whole job.
+    fail the whole job. Shares `resolve_github_provider` (#825) with
+    `_build_github_provider_or_exit`; only the failure mode (return `None`
+    here, `sys.exit(1)` there) differs.
     """
-    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
+    from ai_pr_review.slash.dismiss import GitHubProviderError, resolve_github_provider
 
-    vcs = (os.environ.get("VCS_PROVIDER") or "github").strip().lower()
-    if vcs != "github":
-        click.echo(f"{command_label}: ai-pr-review {command_label} is GitHub-only (VCS_PROVIDER={vcs!r})", err=True)
+    result = resolve_github_provider(command_label)
+    if isinstance(result, GitHubProviderError):
+        click.echo(result.message, err=True)
         return None
-
-    try:
-        provider = provider_from_env()
-    except ProviderConfigError as exc:
-        click.echo(f"{command_label}: {exc}", err=True)
-        return None
-
-    if not isinstance(provider, GitHubProvider):
-        click.echo(f"{command_label}: expected a GitHub provider", err=True)
-        return None
-
-    return provider
+    return result
 
 
 @cli.command("feedback-context")
@@ -1409,32 +1193,17 @@ def feedback_context(
     all diagnostics go to stderr. Never exits non-zero — context extraction
     is always best-effort, mirroring the two bash steps it replaces.
     """
-    import re
-
-    from ai_pr_review.slash.dismiss import (
-        FeedbackContext,
-        bodies_newest_first,
-        context_from_body_finding_id,
-        context_from_parent_comment,
-    )
+    from ai_pr_review.slash.dismiss import resolve_feedback_context
 
     os.environ["PR_NUMBER"] = str(pr_number)
 
-    context = FeedbackContext()
     provider = _build_github_provider_or_none("feedback-context")
-    if provider is not None:
-        if is_review_comment:
-            context = context_from_parent_comment(provider, parent_comment_id)
-        else:
-            first_line = comment_body.splitlines()[0] if comment_body else ""
-            tokens = first_line.split()
-            fid_token = tokens[2] if len(tokens) > 2 else ""
-            # Accept the bracketed form ("[F1]") shown in review bodies, same
-            # as ai_pr_review.slash.parser._FID_RE (issue #735).
-            match = re.fullmatch(r"\[?[Ff](\d{1,6})\]?", fid_token)
-            if match:
-                bodies = bodies_newest_first(provider.list_bot_reviews())
-                context = context_from_body_finding_id(bodies, int(match.group(1)))
+    context = resolve_feedback_context(
+        provider,
+        is_review_comment=is_review_comment,
+        parent_comment_id=parent_comment_id,
+        comment_body=comment_body,
+    )
 
     def _single_line(value: str) -> str:
         # This step's stdout is appended verbatim to $GITHUB_OUTPUT
