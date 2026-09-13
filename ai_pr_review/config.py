@@ -73,8 +73,6 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_FEEDBACK_MAX_TOKENS",
         "AI_FEEDBACK_RETENTION_COUNT",
         "AI_FEEDBACK_RETENTION_AGE_DAYS",
-        # --- Language profile routing ---
-        "AI_PROFILE_MAX_TOKENS",
         # --- Judge pass ---
         "AI_JUDGE_PASS",
         # --- Fail-on-findings ---
@@ -119,6 +117,23 @@ _DEPRECATED_AI_VAR_ALIASES: dict[str, str] = {
     "AI_PR_REVIEW_ENGINE": "",
 }
 
+# Variables whose underlying feature was removed, but which stay accepted as a
+# documented no-op with a deprecation warning naming the removal release,
+# per Epic 9's "no breaking changes" acceptance criterion (#806). Distinct
+# from _DEPRECATED_AI_VAR_ALIASES (which points at a still-live canonical
+# replacement, or -- for the single "" case grandfathered before this dict
+# existed -- a feature already fully removed in a past release): each entry
+# here names the reason plus the upcoming release the var will actually be
+# rejected in.
+_DEPRECATED_NOOP_AI_VARS: dict[str, str] = {
+    # Per-agent language-profile routing removed (#814): every eligible agent
+    # now receives the whole detected-language profile(s) instead of a
+    # per-agent routed subset, so there is no longer a per-agent profile
+    # token budget to cap.
+    "AI_PROFILE_MAX_TOKENS": "language-profile routing removed in #814",
+}
+_NOOP_REMOVAL_RELEASE = "v3.0.0"
+
 
 def _check_unknown_ai_vars() -> None:
     """Warn (not raise) for any AI_* env var not in the documented set.
@@ -132,6 +147,14 @@ def _check_unknown_ai_vars() -> None:
         if not key.startswith("AI_"):
             continue
         if key in _KNOWN_AI_VARS:
+            continue
+        if key in _DEPRECATED_NOOP_AI_VARS:
+            reason = _DEPRECATED_NOOP_AI_VARS[key]
+            print(
+                f"WARNING: {key!r} is deprecated and ignored ({reason}); "
+                f"will be rejected starting in {_NOOP_REMOVAL_RELEASE}.",
+                file=sys.stderr,
+            )
             continue
         if key in _DEPRECATED_AI_VAR_ALIASES:
             canonical = _DEPRECATED_AI_VAR_ALIASES[key]
@@ -265,9 +288,6 @@ class ReviewConfig(BaseModel):
     # "drop" -- remove out-of-diff analyzer findings entirely.
     # "off"  -- pass through unchanged (full-file linting behaviour).
     analyzer_diff_scope: str = "cap"
-
-    # --- Language profile routing ---
-    profile_max_tokens: int = 4096
 
     # --- Judge pass ---
     # On by default per explicit decision (session 2026-06-22). Adds one cheap-model
@@ -580,7 +600,6 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
-            profile_max_tokens=_int("AI_PROFILE_MAX_TOKENS", 4096),
             enable_judge_pass=_bool("AI_JUDGE_PASS", True),
             fail_on_findings=_bool("AI_FAIL_ON_FINDINGS"),
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",

@@ -26,7 +26,7 @@ happen again.
 import re
 from pathlib import Path
 
-from ai_pr_review.config import _KNOWN_AI_VARS
+from ai_pr_review.config import _DEPRECATED_NOOP_AI_VARS, _KNOWN_AI_VARS
 
 _ACTION_YML_PATH = Path(__file__).resolve().parent.parent.parent / "container-action" / "action.yml"
 
@@ -169,14 +169,16 @@ def test_deliberately_excluded_vars_are_still_known_and_still_absent() -> None:
 
 
 def test_no_unexpected_ai_var_forwarded() -> None:
-    """Every forwarded AI_*-prefixed var must be a real, known var -- catches
-    a typo'd '-e AI_FOO' that would otherwise silently do nothing forever."""
+    """Every forwarded AI_*-prefixed var must be a real, known (or documented
+    deprecated no-op, #814) var -- catches a typo'd '-e AI_FOO' that would
+    otherwise silently do nothing forever."""
     forwarded_ai_vars = {v for v in _forwarded_vars() if v.startswith("AI_")}
-    unknown = forwarded_ai_vars - _KNOWN_AI_VARS
+    unknown = forwarded_ai_vars - _KNOWN_AI_VARS - set(_DEPRECATED_NOOP_AI_VARS)
     assert not unknown, (
         f"These AI_* vars are forwarded in container-action/action.yml but "
-        f"not registered in ai_pr_review.config._KNOWN_AI_VARS -- likely a "
-        f"typo, or a new var that needs registering there: {sorted(unknown)}"
+        f"not registered in ai_pr_review.config._KNOWN_AI_VARS or "
+        f"_DEPRECATED_NOOP_AI_VARS -- likely a typo, or a new var that needs "
+        f"registering there: {sorted(unknown)}"
     )
 
 

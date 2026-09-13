@@ -132,9 +132,9 @@ def _prepare(
             (ar.context_tokens_used for ar in successes if isinstance(ar, AgentResult)),
             default=0,
         )
-        # Profile routing gives each agent a different section subset; take
-        # the max as a representative figure (the largest profile slice sent
-        # to any agent).
+        # #814: every eligible agent receives the same whole language-profile
+        # text, so this is the same value across agents (like context_tokens
+        # above); take the max rather than summing to avoid double-counting.
         profile_tokens = max(
             (ar.profile_tokens_used for ar in successes if isinstance(ar, AgentResult)),
             default=0,

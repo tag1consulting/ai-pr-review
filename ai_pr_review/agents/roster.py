@@ -14,7 +14,7 @@ conditional_trigger values (consumed by dispatch/gates layers):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, get_args
 
 ConditionalTrigger = Literal[
@@ -40,7 +40,6 @@ class AgentSpec:
     full_mode_only: bool
     context_enrichment_eligible: bool
     separately_dispatched: bool = False
-    profile_focus: frozenset[str] = field(default_factory=frozenset)
     has_findings_trailer: bool = False
     """Whether dispatch.effective_prompt() appends the shared governance +
     knowledge-cutoff + findings-trailer fragments to this agent's prompt.
@@ -89,7 +88,6 @@ AGENTS: list[AgentSpec] = [
         full_mode_only=False,
         context_enrichment_eligible=True,
         separately_dispatched=True,
-        profile_focus=frozenset(),  # summarizer does not review code; receives no profile sections
         has_findings_trailer=False,
         suggestion_eligible=False,
     ),
@@ -101,7 +99,6 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=False,
         context_enrichment_eligible=True,
-        profile_focus=frozenset({"security", "bugs", "edge", "idioms", "general"}),
         has_findings_trailer=True,
         suggestion_eligible=True,
     ),
@@ -113,7 +110,6 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=False,
         context_enrichment_eligible=True,
-        profile_focus=frozenset({"bugs", "edge"}),
         has_findings_trailer=True,
         suggestion_eligible=True,
     ),
@@ -126,7 +122,6 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
-        profile_focus=frozenset({"security", "bugs", "edge", "idioms", "general"}),
         has_findings_trailer=True,
         suggestion_eligible=False,
     ),
@@ -138,7 +133,6 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
-        profile_focus=frozenset({"security"}),
         has_findings_trailer=True,
         suggestion_eligible=True,
     ),
@@ -151,7 +145,7 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=False,
-        # context_enrichment_eligible=False means routing code never runs for this agent.
+        # context_enrichment_eligible=False means language-profile injection never runs for this agent.
         has_findings_trailer=True,
         suggestion_eligible=True,
     ),
@@ -163,7 +157,6 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
-        profile_focus=frozenset({"edge", "bugs"}),
         has_findings_trailer=True,
         suggestion_eligible=True,
     ),
@@ -175,7 +168,6 @@ AGENTS: list[AgentSpec] = [
         max_output_tokens=32768,
         full_mode_only=True,
         context_enrichment_eligible=True,
-        profile_focus=frozenset({"security", "bugs", "edge", "idioms", "general"}),
         has_findings_trailer=True,
         suggestion_eligible=False,
     ),
@@ -194,7 +186,7 @@ AGENTS: list[AgentSpec] = [
         full_mode_only=True,
         context_enrichment_eligible=False,
         separately_dispatched=True,
-        # context_enrichment_eligible=False means routing code never runs for this agent.
+        # context_enrichment_eligible=False means language-profile injection never runs for this agent.
         has_findings_trailer=False,
         suggestion_eligible=False,
     ),

@@ -224,11 +224,13 @@ These variables enable optional capabilities that are off by default.
 | `AI_CANONICAL_REUSE` | `true` | GitHub only. Controls whether reruns reuse the bot's existing "canonical" review (see [Features: Quiet reruns](features#quiet-reruns-github)) instead of always posting a fresh one. Set to `false` to restore the pre-canonical-reuse behavior of always POSTing a new review — an escape hatch if you hit a bug in the reuse path before a fix ships. Read once at provider construction from the raw env var (not a `Config` field), since it's GitHub-specific rather than provider-neutral. |
 | `AI_GITLAB_CROSS_RUN_DEDUP` | `true` | GitLab only. Controls whether reruns fuzzy-match a finding against this bot's still-open prior discussions (same file, within 3 lines, compatible category) and skip reposting an unchanged one, instead of creating a brand-new discussion every run (see [Features: Quiet reruns](features#quiet-reruns-github)). Narrower than `AI_CANONICAL_REUSE`: GitLab has no dismiss/false-positive/wont-fix/fixed verdict system, so only "still open" and "more/less severe" are tracked — a human-dismissed finding is not suppressed on GitLab. Set to `false` to restore the pre-dedup behavior of always posting a fresh discussion for every eligible finding. A separate flag from `AI_CANONICAL_REUSE` (GitLab has no canonical review to couple it to) so either feature can be rolled back independently. Read once at provider construction from the raw env var, same pattern as `AI_CANONICAL_REUSE`. |
 
-#### Per-agent language-profile routing
+#### Language profiles (deprecated per-agent routing knob)
+
+Every `context_enrichment_eligible` agent receives the whole text of every detected language's profile (#814) — there is no longer a per-agent routed subset or a per-agent token budget.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_PROFILE_MAX_TOKENS` | `4096` | Maximum token budget for per-agent language-profile context. Each eligible agent receives only the profile sections relevant to its review focus (`security`, `bugs`, `edge`, `idioms`, `general`), packed under this budget. Reduce to lower token spend on multi-language PRs; increase if profile context is being truncated in telemetry. |
+| `AI_PROFILE_MAX_TOKENS` | `4096` | Deprecated, ignored (#814): per-agent language-profile routing was removed. Accepted as a no-op with a deprecation warning in the job log; will be rejected starting in v3.0.0. |
 
 > **Incremental reviews and gates:** The gates evaluate the *incremental* diff (SHA watermark → HEAD), not the full PR diff. On a PR where an initial commit adds security-relevant code and a later commit only updates docs, the follow-up run will skip `security-reviewer`. Use `AI_DISABLE_GATE_SECURITY=true` (or apply the `ai-review-rescan` PR label with `FORCE_FULL_DIFF`) on security-sensitive PRs to ensure all Tier-2 agents run on every update.
 

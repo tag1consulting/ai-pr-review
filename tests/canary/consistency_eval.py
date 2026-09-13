@@ -79,6 +79,18 @@ decided for Epic 9. `shared-context` (#813) has no PR title/description per
 corpus fixture -- see that arm's entry in _ARM_TOGGLES for what it actually
 measures.
 
+#814 (retiring per-agent language-profile routing) is deliberately NOT a
+toggle in _ARM_TOGGLES: unlike judge/context-enrichment/shared-context, the
+old behavior (ProfileRouter routing each agent to only its
+profile_focus-relevant sections) was deleted outright rather than kept
+behind a flag, so there is no routed-subset code path left in this file's
+own worktree to toggle against. It was instead measured the way #798's
+prompt change was: run this harness's `baseline` arm unmodified in two
+worktrees -- one checked out at the commit before #814's change (routed
+subset), one after (whole profile) -- same corpus/runs/models in both, and
+diff the reports. See #814's PR description for the actual before/after
+numbers.
+
 Not a pytest suite: this makes real, billed API calls (diffs x arms x runs x
 agents x models) and is intentionally excluded from the default
 `pytest tests/python` run. Invoke directly:
@@ -108,13 +120,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from ai_pr_review.agents.dispatch import DispatchContext, run_tier  # noqa: E402
+from ai_pr_review.agents.dispatch import (  # noqa: E402
+    DispatchContext,
+    _unique_language_labels,
+    run_tier,
+)
 from ai_pr_review.agents.gates import evaluate_gates, filter_agents  # noqa: E402
 from ai_pr_review.agents.roster import AGENTS  # noqa: E402
 from ai_pr_review.findings.extract import extract_findings  # noqa: E402
 from ai_pr_review.findings.merge import merge_findings  # noqa: E402
 from ai_pr_review.findings.models import Finding  # noqa: E402
 from ai_pr_review.findings.suppress import apply_suppressions, load_rules  # noqa: E402
+from ai_pr_review.language_profiles import load_language_profiles  # noqa: E402
 from ai_pr_review.llm._config import resolve_temperature  # noqa: E402
 from ai_pr_review.llm.base import LLMRequest, LLMResponse  # noqa: E402
 from ai_pr_review.llm.client import call_llm  # noqa: E402
@@ -401,10 +418,23 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         return RunOutcome(ok=False, detail=f"no agents matched {agent_names!r}")
 
     toggles = _ARM_TOGGLES[arm]
+    diff_text = diff_path.read_text()
+    changed_file_paths = _changed_files_from_diff(diff_text)
+
+    # #814: language_profile_text mirrors real runtime behavior unconditionally
+    # (not arm-gated -- there is no routed-subset code path left to toggle
+    # against in this worktree; see this module's docstring for how #814 was
+    # actually measured, via a two-worktree comparison rather than an arm).
+    # Reuses the same whole-profile loading mechanism build_review_runtime()
+    # uses, keyed off languages detected in the fixture's own changed files.
+    _lang_labels = _unique_language_labels(changed_file_paths)
+    language_profile_text = (
+        load_language_profiles(_lang_labels, script_dir) if _lang_labels else ""
+    )
+
     shared_context_block = ""
     if toggles["shared_context"]:
-        diff_text = diff_path.read_text()
-        changed_files = build_changed_files(_changed_files_from_diff(diff_text))
+        changed_files = build_changed_files(changed_file_paths)
         manifest_text = build_manifest_text(
             changed_files, base_ref="main", diff_label=diff_path.name, diff_stat="",
         )
@@ -424,6 +454,7 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         enable_context_enrichment=toggles["context_enrichment"],
         repo_root=script_dir,
         shared_context_block=shared_context_block,
+        language_profile_text=language_profile_text,
     )
 
     try:
