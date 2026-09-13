@@ -13,6 +13,7 @@ from ai_pr_review.config import (
     _DEPRECATED_NOOP_ENV_VARS,
     _KNOWN_AI_VARS,
     ReviewConfig,
+    resolve_agent_max_tokens,
 )
 
 
@@ -511,6 +512,123 @@ def test_max_tokens_per_agent_env_clamp_low(
     assert cfg.max_tokens_per_agent == 256
     captured = capsys.readouterr()
     assert "WARNING" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# #191: per-agent AI_MAX_TOKENS_<AGENT> override
+# ---------------------------------------------------------------------------
+
+def test_resolve_agent_max_tokens_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No override set -- the caller-supplied default is returned unchanged."""
+    monkeypatch.delenv("AI_MAX_TOKENS_CODE_REVIEWER", raising=False)
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 32768
+
+
+def test_resolve_agent_max_tokens_override_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A per-agent override takes precedence over the supplied default."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "6000")
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 6000
+
+
+def test_resolve_agent_max_tokens_hyphenated_agent_name_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent names with hyphens map to underscored, uppercased env var names,
+    and an override for one agent must not leak into another's resolution."""
+    monkeypatch.setenv("AI_MAX_TOKENS_SILENT_FAILURE_HUNTER", "5000")
+    monkeypatch.delenv("AI_MAX_TOKENS_CODE_REVIEWER", raising=False)
+    assert resolve_agent_max_tokens("silent-failure-hunter", 32768) == 5000
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 32768
+
+
+def test_resolve_agent_max_tokens_invalid_value_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-integer override warns and falls back to the supplied default,
+    matching the tolerant _int()/clamp pattern used elsewhere in this module
+    (rather than raising) -- a malformed per-agent override should degrade
+    gracefully, not abort the review."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "not-a-number")
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 32768
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "AI_MAX_TOKENS_CODE_REVIEWER" in captured.err
+
+
+def test_resolve_agent_max_tokens_clamp_too_low(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Values below 256 are clamped to 256 with a warning (same range as
+    AI_MAX_TOKENS_PER_AGENT's clamp)."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "100")
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 256
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "256" in captured.err
+
+
+def test_resolve_agent_max_tokens_clamp_too_high(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Values above 65536 are clamped to 65536 with a warning."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "99999")
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 65536
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "65536" in captured.err
+
+
+def test_resolve_agent_max_tokens_blank_value_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty/whitespace-only value is treated the same as unset."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "   ")
+    assert resolve_agent_max_tokens("code-reviewer", 32768) == 32768
+
+
+def test_resolve_agent_max_tokens_nonexistent_agent_name_is_pure_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resolve_agent_max_tokens() itself does not validate that *agent_name* is
+    a real roster agent -- it is a pure env-var lookup; callers only ever pass
+    a real AgentSpec.name, so a nonexistent name here just resolves to an env
+    var nothing in dispatch reads from. Typo detection for a mistyped agent
+    name in the *env var itself* is covered separately below via
+    _check_unknown_ai_vars()."""
+    monkeypatch.setenv("AI_MAX_TOKENS_NOT_A_REAL_AGENT", "1234")
+    assert resolve_agent_max_tokens("not-a-real-agent", 32768) == 1234
+
+
+def test_per_agent_max_tokens_var_not_flagged_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AI_MAX_TOKENS_<AGENT> for a real roster agent must not trigger the
+    'Unknown AI_* variable' warning."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "6000")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "Unknown AI_* variable 'AI_MAX_TOKENS_CODE_REVIEWER'" not in captured.err
+
+
+def test_per_agent_max_tokens_typo_still_flagged_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A per-agent-shaped var for a name that isn't a real roster agent still
+    hits the existing typo-detection path. Decision (#191 asked for a call
+    here): a nonexistent-agent override is not a hard error -- it silently has
+    no effect on dispatch (see test above) -- but it is NOT silently accepted
+    either; the pre-existing unknown-AI_*-var warning already fires for it
+    since it isn't in the per-agent set derived from the real roster, which is
+    enough to surface a typo without adding a second, redundant warning path."""
+    monkeypatch.setenv("AI_MAX_TOKENS_NOT_A_REAL_AGENT", "6000")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "Unknown AI_* variable 'AI_MAX_TOKENS_NOT_A_REAL_AGENT'" in captured.err
 
 
 # ---------------------------------------------------------------------------

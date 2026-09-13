@@ -213,6 +213,85 @@ def _validate_analyzer_names_list(values: tuple[str, ...]) -> tuple[str, ...]:
     )
 
 
+def _agent_max_tokens_env_var(agent_name: str) -> str:
+    """Return the per-agent max-tokens override env var name for *agent_name*.
+
+    e.g. "code-reviewer" -> AI_MAX_TOKENS_CODE_REVIEWER (#191). Shared by
+    resolve_agent_max_tokens() and _check_unknown_ai_vars() so the accepted-
+    var set and the resolution lookup can never drift apart from each other
+    or from agents.roster.AGENT_NAMES.
+    """
+    return f"AI_MAX_TOKENS_{agent_name.upper().replace('-', '_')}"
+
+
+def _per_agent_max_tokens_vars() -> frozenset[str]:
+    """Return the set of valid AI_MAX_TOKENS_<AGENT> var names for the current roster.
+
+    Lazy import (mirrors _validate_analyzer_names_list/_validate_agent_names
+    above) so importing config.py doesn't eagerly pull in the agent roster.
+    """
+    from ai_pr_review.agents.roster import AGENT_NAMES  # noqa: PLC0415
+
+    return frozenset(_agent_max_tokens_env_var(name) for name in AGENT_NAMES)
+
+
+def resolve_agent_max_tokens(agent_name: str, default: int) -> int:
+    """Resolve the effective max_output_tokens for one agent (#191).
+
+    Reads ``AI_MAX_TOKENS_<AGENT_NAME_UPPER_SNAKE>`` from the environment as a
+    higher-precedence override on top of *default* -- *default* is normally
+    whatever the caller already resolved from the roster default or the
+    global ``AI_MAX_TOKENS_PER_AGENT`` override. When the env var is unset or
+    blank, *default* is returned unchanged: this function only ever adds a
+    per-agent override on top, it never lowers or otherwise second-guesses
+    the caller-supplied fallback.
+
+    Invalid values (non-integer, or outside [256, 65536]) print a WARNING to
+    stderr and fall back to *default* rather than raising -- matching the
+    tolerant clamp-and-warn pattern ``_clamp_max_tokens_per_agent`` and
+    ``_int()`` already use elsewhere in this module for numeric env vars, so
+    a malformed per-agent override degrades gracefully instead of aborting
+    the whole review.
+
+    A mistyped agent name in the env var itself (e.g.
+    ``AI_MAX_TOKENS_CODE_REVEIWER``) is never looked up here -- callers only
+    ever pass a real ``AgentSpec.name`` -- so it has no effect on dispatch.
+    It is still caught separately: ``_check_unknown_ai_vars()`` only
+    recognizes ``AI_MAX_TOKENS_<NAME>`` for names currently in
+    ``agents.roster.AGENT_NAMES``, so a typo still surfaces the existing
+    "Unknown AI_* variable... Did you mean...?" warning at startup.
+    """
+    env_name = _agent_max_tokens_env_var(agent_name)
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"WARNING: {env_name}={raw!r} is not a valid integer; using {default}. "
+            "Review will proceed with this default.",
+            file=sys.stderr,
+        )
+        return default
+    _MIN, _MAX = 256, 65536
+    if value < _MIN:
+        print(
+            f"WARNING: {env_name}={value} is below minimum {_MIN}; clamping to {_MIN}. "
+            "Review will proceed with this value.",
+            file=sys.stderr,
+        )
+        return _MIN
+    if value > _MAX:
+        print(
+            f"WARNING: {env_name}={value} exceeds maximum {_MAX}; clamping to {_MAX}. "
+            "Review will proceed with this value.",
+            file=sys.stderr,
+        )
+        return _MAX
+    return value
+
+
 def _check_unknown_ai_vars() -> None:
     """Warn (not raise) for any AI_* env var not in the documented set.
 
@@ -221,10 +300,11 @@ def _check_unknown_ai_vars() -> None:
     was introduced after the image was built.  The warning still catches typos
     without hard-breaking forward-compatibility.
     """
+    per_agent_vars = _per_agent_max_tokens_vars()
     for key in os.environ:
         if not key.startswith("AI_"):
             continue
-        if key in _KNOWN_AI_VARS:
+        if key in _KNOWN_AI_VARS or key in per_agent_vars:
             continue
         if key in _DEPRECATED_NOOP_AI_VARS:
             reason = _DEPRECATED_NOOP_AI_VARS[key]
@@ -249,7 +329,7 @@ def _check_unknown_ai_vars() -> None:
                 )
             continue
         # Find closest documented match for a helpful hint.
-        matches = difflib.get_close_matches(key, _KNOWN_AI_VARS, n=1, cutoff=0.6)
+        matches = difflib.get_close_matches(key, _KNOWN_AI_VARS | per_agent_vars, n=1, cutoff=0.6)
         suggestion = f" Did you mean {matches[0]!r}?" if matches else ""
         print(
             f"WARNING: Unknown AI_* variable {key!r} will be ignored.{suggestion}",

@@ -454,6 +454,15 @@ runs:
         #     the same throwaway-filesystem problem as
         #     AI_PR_REVIEW_RECORD_DIR/COMPUTE_OUTPUT above and won't actually
         #     persist anything on this path.
+        #   AI_MAX_TOKENS_<AGENT> (#191): one override per current
+        #     agents.roster.AGENT_NAMES entry (config.py's
+        #     resolve_agent_max_tokens() derives the exact env var name from
+        #     that same roster). No corresponding input, same as
+        #     AI_MAX_TOKENS_PER_AGENT's siblings above this group -- forwarded
+        #     unconditionally like AI_CANONICAL_REUSE rather than with a
+        #     ${VAR:+-e VAR} guard, since an unset override is a no-op either
+        #     way. Adding a tenth agent to the roster means adding its var
+        #     here too; nothing enforces that this list stays exhaustive.
         docker run --rm \
           -e AI_PROVIDER \
           -e AI_REVIEW_MODE \
@@ -507,6 +516,15 @@ runs:
           ${AI_CONFIDENCE_THRESHOLD:+-e AI_CONFIDENCE_THRESHOLD} \
           -e AI_CANONICAL_REUSE \
           -e AI_GITLAB_CROSS_RUN_DEDUP \
+          -e AI_MAX_TOKENS_PR_SUMMARIZER \
+          -e AI_MAX_TOKENS_CODE_REVIEWER \
+          -e AI_MAX_TOKENS_SILENT_FAILURE_HUNTER \
+          -e AI_MAX_TOKENS_ARCHITECTURE_REVIEWER \
+          -e AI_MAX_TOKENS_SECURITY_REVIEWER \
+          -e AI_MAX_TOKENS_BLIND_HUNTER \
+          -e AI_MAX_TOKENS_EDGE_CASE_HUNTER \
+          -e AI_MAX_TOKENS_ADVERSARIAL_GENERAL \
+          -e AI_MAX_TOKENS_ISSUE_LINKER \
           -e AI_LOG_LEVEL \
           -e AI_LOG_FORMAT \
           -e AI_TELEMETRY_ENABLED \

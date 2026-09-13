@@ -349,7 +349,7 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_PARALLEL` | `true` | Tiered parallel agent execution |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score for findings |
 | `AI_MAX_INLINE` | `25` | Maximum inline review comments per run |
-| `AI_MAX_TOKENS_PER_AGENT` | `32768` | Max output tokens per LLM agent call; clamped to [256, 65536] |
+| `AI_MAX_TOKENS_PER_AGENT` | `32768` | Max output tokens per LLM agent call; clamped to [256, 65536]. `AI_MAX_TOKENS_<AGENT>` (e.g. `AI_MAX_TOKENS_CODE_REVIEWER`) overrides this per named agent, applied in `dispatch.py`'s `_run_single_agent` and `preflight.py`'s `run_summarizer`/`run_issue_linker` via `config.resolve_agent_max_tokens()` (#191). See [Configuration: Per-agent max-tokens overrides](configuration#per-agent-max-tokens-overrides-env-var-only) for the full variable list. |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons (GitHub and GitLab; ignored on Bitbucket) |
 | `LLM_PROMPT_CACHING` | `auto` | Anthropic/Bedrock prompt caching. Valid: `auto`, `true`, `false` |
 | `AI_CACHE_PRIMING` | `false` | Deprecated, ignored (#824 audit of #807): the cache-priming serialization mechanism was deleted as dead code. No-op with a deprecation warning; rejected starting in v3.0.0. |

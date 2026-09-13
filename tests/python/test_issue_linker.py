@@ -170,6 +170,24 @@ class TestRunIssueLinkerUserMessage:
         assert "## Open Issues" in user_msg
         assert "#42 A real issue" in user_msg
 
+    def test_default_max_tokens_unchanged_at_4096(
+        self, prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#191: with no AI_MAX_TOKENS_ISSUE_LINKER override set, the
+        pre-existing hardcoded 4096 default must be unchanged."""
+        monkeypatch.delenv("AI_MAX_TOKENS_ISSUE_LINKER", raising=False)
+        _result, captured = self._run(prompt_dir)
+        assert captured[0].max_tokens == 4096
+
+    def test_per_agent_max_tokens_override_applied(
+        self, prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#191: AI_MAX_TOKENS_ISSUE_LINKER overrides the hardcoded 4096
+        default for this preflight-dispatched agent."""
+        monkeypatch.setenv("AI_MAX_TOKENS_ISSUE_LINKER", "2048")
+        _result, captured = self._run(prompt_dir)
+        assert captured[0].max_tokens == 2048
+
     def test_open_issues_unavailable_does_not_abort(self, prompt_dir: Path) -> None:
         """When the fetch returns (unavailable) the LLM call still proceeds."""
         _result, captured = self._run(prompt_dir, open_issues_text="(unavailable)")

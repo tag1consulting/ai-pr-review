@@ -26,7 +26,11 @@ happen again.
 import re
 from pathlib import Path
 
-from ai_pr_review.config import _DEPRECATED_NOOP_AI_VARS, _KNOWN_AI_VARS
+from ai_pr_review.config import (
+    _DEPRECATED_NOOP_AI_VARS,
+    _KNOWN_AI_VARS,
+    _per_agent_max_tokens_vars,
+)
 
 _ACTION_YML_PATH = Path(__file__).resolve().parent.parent.parent / "container-action" / "action.yml"
 
@@ -171,14 +175,26 @@ def test_deliberately_excluded_vars_are_still_known_and_still_absent() -> None:
 def test_no_unexpected_ai_var_forwarded() -> None:
     """Every forwarded AI_*-prefixed var must be a real, known (or documented
     deprecated no-op, #814) var -- catches a typo'd '-e AI_FOO' that would
-    otherwise silently do nothing forever."""
+    otherwise silently do nothing forever.
+
+    AI_MAX_TOKENS_<AGENT> per-agent overrides (#191) aren't static members of
+    _KNOWN_AI_VARS -- they're derived from the live agent roster via
+    _per_agent_max_tokens_vars(), the same source of truth
+    config._check_unknown_ai_vars() itself consults -- so that computed set is
+    included here too.
+    """
     forwarded_ai_vars = {v for v in _forwarded_vars() if v.startswith("AI_")}
-    unknown = forwarded_ai_vars - _KNOWN_AI_VARS - set(_DEPRECATED_NOOP_AI_VARS)
+    unknown = (
+        forwarded_ai_vars
+        - _KNOWN_AI_VARS
+        - set(_DEPRECATED_NOOP_AI_VARS)
+        - _per_agent_max_tokens_vars()
+    )
     assert not unknown, (
         f"These AI_* vars are forwarded in container-action/action.yml but "
-        f"not registered in ai_pr_review.config._KNOWN_AI_VARS or "
-        f"_DEPRECATED_NOOP_AI_VARS -- likely a typo, or a new var that needs "
-        f"registering there: {sorted(unknown)}"
+        f"not registered in ai_pr_review.config._KNOWN_AI_VARS, "
+        f"_DEPRECATED_NOOP_AI_VARS, or _per_agent_max_tokens_vars() -- likely "
+        f"a typo, or a new var that needs registering there: {sorted(unknown)}"
     )
 
 

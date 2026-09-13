@@ -12,6 +12,7 @@ from pathlib import Path
 import anyio
 
 from ai_pr_review.agents.roster import AgentSpec, get_agent
+from ai_pr_review.config import resolve_agent_max_tokens
 from ai_pr_review.languages import detect_language
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
@@ -533,10 +534,28 @@ async def _run_single_agent(
         cache_blocks = tuple(prefix_parts)
 
         # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
-        max_tokens = (
+        base_max_tokens = (
             context.max_tokens_per_agent
             if context.max_tokens_per_agent > 0
             else spec.max_output_tokens
+        )
+        # #191: a per-agent AI_MAX_TOKENS_<AGENT> override takes precedence
+        # over both AI_MAX_TOKENS_PER_AGENT and the roster default resolved
+        # above; falls back to base_max_tokens unchanged when unset.
+        max_tokens = resolve_agent_max_tokens(spec.name, base_max_tokens)
+        # Log which precedence tier actually produced the effective value --
+        # not just the number -- so a per-agent override that silently didn't
+        # take effect (e.g. a typo'd env var name) is diagnosable from logs
+        # alone, without cross-referencing config.py's precedence rules.
+        if max_tokens != base_max_tokens:
+            max_tokens_source = "per-agent override"
+        elif context.max_tokens_per_agent > 0:
+            max_tokens_source = "AI_MAX_TOKENS_PER_AGENT"
+        else:
+            max_tokens_source = "roster default"
+        _log.info(
+            "agent %r: effective max_output_tokens=%d (source=%s)",
+            spec.name, max_tokens, max_tokens_source,
         )
         request = LLMRequest(
             model_id=model_id,
