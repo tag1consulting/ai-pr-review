@@ -77,6 +77,21 @@ def test_ignore_merge_commits_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.ignore_merge_commits is False
 
 
+def test_judge_pass_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_JUDGE_PASS defaults to False (issue #806, flipped 2026-09-13:
+    harness measurement found no benefit on finding- or verdict-stability)."""
+    monkeypatch.delenv("AI_JUDGE_PASS", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.enable_judge_pass is False
+
+
+def test_judge_pass_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting AI_JUDGE_PASS=true re-enables the judge pass."""
+    monkeypatch.setenv("AI_JUDGE_PASS", "true")
+    cfg = ReviewConfig.from_env()
+    assert cfg.enable_judge_pass is True
+
+
 def test_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_REVIEW_MODE", "full")
     monkeypatch.setenv("AI_CONFIDENCE_THRESHOLD", "50")

@@ -184,11 +184,12 @@ Consuming repos can add **local suppressions** at `.github/ai-pr-review/suppress
 
 ## LLM judge pass
 
-After the findings pipeline (extract → merge → suppress → diff-scope) produces its final candidate list, `ai_pr_review/findings/judge.py:judge_findings()` — Phase 2.75, gated by `AI_JUDGE_PASS` (default `true`) — sends one compact LLM call on the standard model asking a cheap model to return a `keep` or `downrank` verdict per finding.
+After the findings pipeline (extract → merge → suppress → diff-scope) produces its final candidate list, `ai_pr_review/findings/judge.py:judge_findings()` — Phase 2.75, gated by `AI_JUDGE_PASS` (default `false`, see below) — sends one compact LLM call on the standard model asking a cheap model to return a `keep` or `downrank` verdict per finding.
 
 - `downrank` is the only non-`keep` verdict; there is no `drop`. The judge never removes a finding outright — a false positive that stays visible is preferred over a silently dropped true positive. `downrank` lowers confidence by `JUDGE_DOWNRANK_AMOUNT` (15) and routes the finding to the review body (`demoted_to_body=True`) instead of an inline comment; severity is left unchanged, since downranking affects placement, not assessed risk.
 - Findings with `Finding.corroborated=True` (independently confirmed by both an LLM agent and a static analyzer, see `findings/provenance.py`) are always kept regardless of the judge's verdict — one cheap-model call cannot override an independent, cross-source agreement.
 - Always fail-soft: any LLM error, parse error, timeout, or empty input returns the findings unchanged (still `keep`) with a logged WARNING. `JudgeResult` also carries the pass's own token usage (`input_tokens`/`output_tokens`/`cache_creation_tokens`/`cache_read_tokens`), surfaced in the token usage table (see below) alongside the finding-producing agents.
+- Default flipped to `false` (issue #806, 2026-09-13): a two-arm harness comparison (14-diff corpus, `claude-sonnet-5`/`claude-opus-5`, 5 runs each) found the judge pass moves neither of the harness's tracked metrics — verdict-stability was identical between judge-on/off (both models), and finding-stability deltas were sampling noise rather than a judge effect, since the judge never touches severity (what verdict classification uses) or finding text (what the stability clustering uses). A qualitative sample of actual downranked findings were genuine Medium-severity issues, not junk, showing no demonstrated filtering value against the one added LLM call's real cost. See the issue's comment thread for the full measurement.
 
 ## Token usage and cost estimation
 
@@ -353,7 +354,7 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons (GitHub and GitLab; ignored on Bitbucket) |
 | `LLM_PROMPT_CACHING` | `auto` | Anthropic/Bedrock prompt caching. Valid: `auto`, `true`, `false` |
 | `AI_CACHE_PRIMING` | `false` | Deprecated, ignored (#824 audit of #807): the cache-priming serialization mechanism was deleted as dead code. No-op with a deprecation warning; rejected starting in v3.0.0. |
-| `AI_JUDGE_PASS` | `true` | Run the cheap-model judge pass (Phase 2.75) after findings are extracted. Set to `false` to disable. |
+| `AI_JUDGE_PASS` | `false` | Run the cheap-model judge pass (Phase 2.75) after findings are extracted. Set to `true` to enable (see "LLM judge pass" above for why the default was flipped 2026-09-13). |
 | `AI_FAIL_ON_FINDINGS` | `false` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. CI-gate use case. |
 | `AI_ANALYZER_CONCURRENCY` | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `AI_PARALLEL=false`. |
 | `AI_ANALYZER_DIFF_SCOPE` | `cap` | How out-of-diff native-analyzer findings are handled. Valid: `cap`, `drop`, `off`. |

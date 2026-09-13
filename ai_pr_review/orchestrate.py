@@ -105,8 +105,12 @@ class OrchestrationConfig:
     # Mirrors ReviewConfig.analyzer_diff_scope ("cap" / "drop" / "off").
     analyzer_diff_scope: str = "cap"
     # Judge pass: one cheap-model LLM call after Phase 2.5 to down-rank weak
-    # single-source findings. On by default (Story 7-3, #360 remainder).
-    enable_judge_pass: bool = True
+    # single-source findings. Off by default (issue #806, 2026-09-13 harness
+    # measurement found no benefit on finding- or verdict-stability); the
+    # production caller (review/runtime.py) always passes this explicitly
+    # from ReviewConfig.enable_judge_pass, so this bare-dataclass default
+    # only matters for direct construction (tests, `run_review(config=None)`).
+    enable_judge_pass: bool = False
     judge_model: str = ""
     judge_prompt_path: Path | None = None
 

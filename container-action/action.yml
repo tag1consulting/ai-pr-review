@@ -202,12 +202,14 @@ inputs:
 
   judge-pass:
     description: >
-      When true (default), run a cheap-model judge pass after findings are
-      extracted. The judge scores each candidate finding and down-ranks weak
+      When true, run a cheap-model judge pass after findings are extracted.
+      The judge scores each candidate finding and down-ranks weak
       single-source results. Corroborated findings are always kept. Adds one
-      LLM call per review. Set to 'false' to disable.
+      LLM call per review. Off by default (#806, 2026-09-13): a harness
+      measurement found no benefit on finding- or verdict-stability. Set to
+      'true' to enable.
     required: false
-    default: 'true'
+    default: 'false'
 
   profile-max-tokens:
     description: >

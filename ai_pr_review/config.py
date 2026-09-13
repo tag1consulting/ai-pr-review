@@ -365,9 +365,18 @@ class ReviewConfig(BaseModel):
     analyzer_diff_scope: str = "cap"
 
     # --- Judge pass ---
-    # On by default per explicit decision (session 2026-06-22). Adds one cheap-model
-    # LLM call per review. Set AI_JUDGE_PASS=false to disable.
-    enable_judge_pass: bool = True
+    # Off by default per Epic 9 harness measurement (issue #806, 2026-09-13):
+    # a 14-diff / 5-run / 2-model comparison found no measurable benefit on
+    # either of the harness's tracked metrics (verdict-stability was
+    # bit-for-bit identical between judge-on/off; finding-stability deltas
+    # were sampling noise, not a judge effect -- the judge never touches
+    # severity or finding text, which are what those two metrics track), a
+    # real added cost (one extra serialized LLM call per review), and a
+    # qualitative sample of actual downranked findings that were genuine
+    # Medium-severity issues, not junk -- i.e. no demonstrated filtering
+    # value. See the issue's comment thread for the full write-up. Set
+    # AI_JUDGE_PASS=true to re-enable.
+    enable_judge_pass: bool = False
 
     # --- Fail-on-findings ---
     # When true, exit code 2 is returned if the review outcome is REQUEST_CHANGES
@@ -669,7 +678,7 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
-            enable_judge_pass=_bool("AI_JUDGE_PASS", True),
+            enable_judge_pass=_bool("AI_JUDGE_PASS", False),
             fail_on_findings=_bool("AI_FAIL_ON_FINDINGS"),
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),

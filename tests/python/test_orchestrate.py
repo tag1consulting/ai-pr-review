@@ -378,6 +378,9 @@ def test_orchestration_config_defaults() -> None:
     assert cfg.enable_suggestions is True
     assert cfg.semaphore_size == 4
     assert cfg.suppression_rules == ()
+    # Off by default since issue #806 (2026-09-13): harness measurement found
+    # no benefit on finding- or verdict-stability.
+    assert cfg.enable_judge_pass is False
 
 
 def test_failed_summary_logs_error(tmp_path: Path, caplog: Any) -> None:

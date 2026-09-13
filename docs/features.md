@@ -114,7 +114,7 @@ The `judge-pass` row appears as a regular agent row (included in the Total) when
 
 | Row | Description | When shown |
 |-----|-------------|------------|
-| `judge-pass` | Tokens consumed by the judge-pass LLM call; included in Total | When `AI_JUDGE_PASS=true` (default) and the judge ran on a non-empty finding set |
+| `judge-pass` | Tokens consumed by the judge-pass LLM call; included in Total | When `AI_JUDGE_PASS=true` (off by default since 2026-09-13, see issue #806) and the judge ran on a non-empty finding set |
 
 Two supplementary rows may appear after the **Total** row. They are informational only and do not affect cost totals:
 
