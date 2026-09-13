@@ -1,8 +1,12 @@
 .claude/
 claude/
 .serena/
-memory-bank/.obsidian/
-memory-bank/bmad/soak-log.md
+# BMAD planning artifacts (issue #805): untracked, not deleted -- these stay
+# on disk locally but no longer live in the product repo's git history going
+# forward. Supersedes the two narrower entries this replaced
+# (memory-bank/.obsidian/, memory-bank/bmad/soak-log.md).
+memory-bank/
+_bmad/
 _site/
 .jekyll-cache/
 .jekyll-metadata
