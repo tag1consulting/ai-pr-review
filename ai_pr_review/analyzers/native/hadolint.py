@@ -6,12 +6,21 @@ and converts its JSON output to Finding instances.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
-import subprocess
-from pathlib import Path
 
+# subprocess is never called directly in this module (run_cli_json_analyzer
+# owns the actual subprocess.run call) but stays imported: existing tests
+# patch it as "ai_pr_review.analyzers.native.hadolint.subprocess.run", which
+# resolves the attribute on *this* module first. Since `subprocess` is a
+# singleton module object, the patch still lands on the real subprocess.run
+# that _cli_runner.py calls -- removing the import would only break the
+# test's attribute lookup, not the patch's effect.
+import subprocess  # noqa: F401
+from pathlib import Path
+from typing import Any
+
+from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -36,72 +45,41 @@ def _run_hadolint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]
         logger.warning("[ai-pr-review] WARNING: hadolint not found; skipping.")
         return []
 
-    try:
-        result = subprocess.run(
-            ["hadolint", "--format", "json", "--no-fail", "--", *dockerfile_files],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: hadolint timed out after %ss; skipping.", exc.timeout)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: hadolint failed to start: %s", exc)
-        return []
+    return run_cli_json_analyzer(
+        tool="hadolint",
+        command=["hadolint", "--format", "json", "--no-fail", "--", *dockerfile_files],
+        timeout_secs=_TIMEOUT_SECS,
+        extract_items=_hadolint_items,
+        build_finding=_hadolint_finding,
+    )
 
-    # Exit code 0 = no findings; 1 = findings present (or --no-fail not supported).
-    # Any other exit code is a real error.
-    if result.returncode not in (0, 1):
-        logger.warning(
-            "[ai-pr-review] WARNING: hadolint exited %d; skipping. stderr: %s",
-            result.returncode, result.stderr[:200],
-        )
-        return []
 
-    if not result.stdout.strip():
-        return []
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("[ai-pr-review] WARNING: hadolint produced non-JSON output: %s", exc)
-        return []
-
+def _hadolint_items(data: Any) -> list[dict[str, Any]] | None:
     if not isinstance(data, list):
-        logger.warning("[ai-pr-review] WARNING: hadolint produced unexpected output structure (not a list); skipping.")
-        return []
+        logger.warning(
+            "[ai-pr-review] WARNING: hadolint produced unexpected output structure (not a list); skipping."
+        )
+        return None
+    return [item for item in data if isinstance(item, dict)]
 
-    findings: list[Finding] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        level = item.get("level", "")
-        if level == "error":
-            severity = "High"
-        elif level == "warning":
-            severity = "Medium"
-        else:
-            severity = "Low"
 
-        code = item.get("code") or ""
-        try:
-            findings.append(
-                Finding(
-                    severity=severity,  # type: ignore[arg-type]
-                    confidence=_CONFIDENCE,
-                    source=_SOURCE,
-                    file=item.get("file") or "",
-                    line=item.get("line") or None,
-                    finding=f"{code}: {item.get('message', '')}",
-                    remediation=f"See https://github.com/hadolint/hadolint/wiki/{code}",
-                    category="lint",
-                )
-            )
-        except (ValueError, TypeError) as exc:
-            logger.warning(
-                "[ai-pr-review] WARNING: hadolint dropped malformed finding: %s; item=%r",
-                exc, repr(item)[:200],
-            )
+def _hadolint_finding(item: dict[str, Any]) -> Finding:
+    level = item.get("level", "")
+    if level == "error":
+        severity = "High"
+    elif level == "warning":
+        severity = "Medium"
+    else:
+        severity = "Low"
 
-    return findings
+    code = item.get("code") or ""
+    return Finding(
+        severity=severity,  # type: ignore[arg-type]
+        confidence=_CONFIDENCE,
+        source=_SOURCE,
+        file=item.get("file") or "",
+        line=item.get("line") or None,
+        finding=f"{code}: {item.get('message', '')}",
+        remediation=f"See https://github.com/hadolint/hadolint/wiki/{code}",
+        category="lint",
+    )

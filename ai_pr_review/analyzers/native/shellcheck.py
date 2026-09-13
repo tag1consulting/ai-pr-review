@@ -6,12 +6,21 @@ subprocess and converts its json1 output to Finding instances.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
-import subprocess
-from pathlib import Path
 
+# subprocess is never called directly in this module (run_cli_json_analyzer
+# owns the actual subprocess.run call) but stays imported: existing tests
+# patch it as "ai_pr_review.analyzers.native.shellcheck.subprocess.run",
+# which resolves the attribute on *this* module first. Since `subprocess` is
+# a singleton module object, the patch still lands on the real subprocess.run
+# that _cli_runner.py calls -- removing the import would only break the
+# test's attribute lookup, not the patch's effect.
+import subprocess  # noqa: F401
+from pathlib import Path
+from typing import Any
+
+from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -39,63 +48,43 @@ def _run_shellcheck(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
 
 
 def _scan_file(file_path: str) -> list[Finding]:
-    try:
-        result = subprocess.run(
-            ["shellcheck", "-f", "json1", "-S", "warning", "--", file_path],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: shellcheck timed out after %ss for %r; skipping.", exc.timeout, file_path)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: shellcheck failed for %r: %s", file_path, exc)
-        return []
+    return run_cli_json_analyzer(
+        tool="shellcheck",
+        command=["shellcheck", "-f", "json1", "-S", "warning", "--", file_path],
+        timeout_secs=_TIMEOUT_SECS,
+        extract_items=lambda data: _shellcheck_items(data, file_path),
+        build_finding=lambda item: _shellcheck_finding(item, file_path),
+    )
 
-    if result.returncode not in (0, 1):
+
+def _shellcheck_items(data: Any, file_path: str) -> list[dict[str, Any]] | None:
+    if not isinstance(data, dict):
         logger.warning(
-            "[ai-pr-review] WARNING: shellcheck exited %d for %r; skipping. stderr: %s",
-            result.returncode, file_path, result.stderr[:200],
+            "[ai-pr-review] WARNING: shellcheck produced unexpected output structure for %r; skipping.",
+            file_path,
         )
-        return []
+        return None
+    comments = data.get("comments") or []
+    return [c for c in comments if isinstance(c, dict)]
 
-    if not result.stdout.strip():
-        return []
 
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("[ai-pr-review] WARNING: shellcheck produced non-JSON output for %r: %s", file_path, exc)
-        return []
-
-    findings: list[Finding] = []
-    for item in data.get("comments") or []:
-        if not isinstance(item, dict):
-            continue
-        level = item.get("level", "")
-        if level == "error":
-            severity = "High"
-        elif level == "warning":
-            severity = "Medium"
-        else:
-            severity = "Low"
-        code = item.get("code", 0)
-        message = item.get("message", "")
-        try:
-            findings.append(
-                Finding(
-                    severity=severity,  # type: ignore[arg-type]
-                    confidence=_CONFIDENCE,
-                    source=_SOURCE,
-                    file=file_path,
-                    line=item.get("line") or None,
-                    finding=f"SC{code}: {message}",
-                    remediation=f"See https://www.shellcheck.net/wiki/SC{code}",
-                    category="lint",
-                )
-            )
-        except (ValueError, TypeError) as exc:
-            logger.warning("[ai-pr-review] WARNING: shellcheck dropped malformed finding from %r: %s; item=%r", file_path, exc, repr(item)[:200])
-
-    return findings
+def _shellcheck_finding(item: dict[str, Any], file_path: str) -> Finding:
+    level = item.get("level", "")
+    if level == "error":
+        severity = "High"
+    elif level == "warning":
+        severity = "Medium"
+    else:
+        severity = "Low"
+    code = item.get("code", 0)
+    message = item.get("message", "")
+    return Finding(
+        severity=severity,  # type: ignore[arg-type]
+        confidence=_CONFIDENCE,
+        source=_SOURCE,
+        file=file_path,
+        line=item.get("line") or None,
+        finding=f"SC{code}: {message}",
+        remediation=f"See https://www.shellcheck.net/wiki/SC{code}",
+        category="lint",
+    )
