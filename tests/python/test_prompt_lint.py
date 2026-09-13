@@ -60,6 +60,20 @@ _FINDING_AGENT_PROMPTS = (
 # phrase should never reappear in any of them.
 _POSITIVE_NONE_INSTRUCTION = re.compile(r"output exactly", re.IGNORECASE)
 
+# #798: code-reviewer.md's "Severity Classification" section keyed each
+# level directly to a confidence range ("**High** (confidence 80-90)"),
+# while _governance.md (appended to the same composed prompt) says severity
+# reflects harm and review/outcome.py turns any High into REQUEST_CHANGES --
+# a confidently-identified but harmless finding could reach High and block
+# a merge purely because it was confident. CONTEXT.md now defines Severity
+# and Confidence as independent axes (Severity: the blocking contract,
+# harm-based; Confidence: an existence floor only, findings/merge.py's
+# threshold). This catches the pattern reappearing in any finding-agent
+# prompt, not just the one it originally shipped in.
+_SEVERITY_FROM_CONFIDENCE = re.compile(
+    r"\*\*(Critical|High|Medium|Low)\*\*\s*\(confidence", re.IGNORECASE
+)
+
 
 def _all_prompt_files() -> list[Path]:
     files = sorted(PROMPTS_DIR.glob("*.md"))
@@ -87,4 +101,16 @@ def test_no_bare_none_instruction(filename: str) -> None:
         f"{match.group(0)!r}), but findings/extract.py has no handling for "
         "anything but a fenced json-findings block — an agent that obeys "
         "this has its entire review silently discarded (#372, F5)"
+    )
+
+
+@pytest.mark.parametrize("filename", _FINDING_AGENT_PROMPTS)
+def test_no_severity_derived_from_confidence(filename: str) -> None:
+    content = (PROMPTS_DIR / filename).read_text()
+    match = _SEVERITY_FROM_CONFIDENCE.search(content)
+    assert match is None, (
+        f"{filename} keys a severity level directly to a confidence range "
+        f"(matched {match.group(0)!r}), contradicting _governance.md's "
+        "harm-based severity definition and letting a confidently-identified "
+        "but harmless finding reach a level that blocks the merge (#798)"
     )

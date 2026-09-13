@@ -96,10 +96,16 @@ Rate each issue from 0-100:
 
 ## Severity Classification
 
-- **Critical** (confidence 91-100): Will cause bugs in production, security vulnerabilities, data loss
-- **High** (confidence 80-90): Likely to cause issues under realistic conditions, significant code quality problems
-- **Medium** (confidence 75-79): Valid issues with limited impact, defense-in-depth improvements
-- **Low** (confidence 75+): Minor issues worth noting but with negligible impact
+Severity is a judgment about harm and is independent of confidence: rate how certain you
+are a finding is real using Issue Confidence Scoring above, then separately rate how bad
+it would be if left in, using only the criteria below. A confidently-identified but
+low-impact issue is still Low or Medium; do not let high confidence pull severity up.
+
+- **Critical**: Will cause a bug, security vulnerability, or data loss in production
+- **High**: Likely to cause incorrect behavior or a significant maintainability problem
+  under realistic conditions
+- **Medium**: Valid issue with limited impact, or a defense-in-depth improvement
+- **Low**: Minor issue worth noting but with negligible impact
 
 ## Empty State
 
