@@ -84,6 +84,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Token usage display (#758) ---
         "AI_TOKEN_USAGE_DISPLAY",
         "AI_TOKEN_USAGE_WARN_USD",
+        # --- Pre-flight cost ceiling (#24) ---
+        "AI_MAX_COST_USD",
+        "AI_FAIL_ON_COST_CEILING",
         # --- Structured logging ---
         "AI_LOG_FORMAT",
         "AI_LOG_LEVEL",
@@ -389,6 +392,21 @@ class ReviewConfig(BaseModel):
     # token_usage_display payload is shown. 0 disables the warning entirely.
     token_usage_warn_usd: float = 1.00
 
+    # --- Pre-flight cost ceiling (#24) ---
+    # Estimated USD ceiling on a single review run's LLM spend, checked
+    # before any agent dispatches (see review/cost_ceiling.py). 0 (default)
+    # disables the ceiling -- the estimate is still computed and logged via
+    # the COST_ESTIMATE line, just never enforced.
+    max_cost_usd: float = 0.0
+    # When the ceiling is exceeded, the run always aborts before any LLM call
+    # (a skip comment is posted, same mechanism as the max-diff-lines skip)
+    # -- but by default this is NOT treated as a CI failure (exit 0), mirroring
+    # fail_on_findings' "off by default" design: one unusually large PR
+    # shouldn't break a required status check on its own. Set true to exit
+    # code 2 instead, the same code fail_on_findings uses for its own
+    # opt-in "treat this as blocking" gate.
+    fail_on_cost_ceiling: bool = False
+
     # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
     feedback_branch: str = "ai-pr-review-bot"
@@ -546,6 +564,18 @@ class ReviewConfig(BaseModel):
             return 0.0
         return v
 
+    @field_validator("max_cost_usd")
+    @classmethod
+    def _clamp_max_cost_usd(cls, v: float) -> float:
+        if v < 0:
+            print(
+                f"WARNING: AI_MAX_COST_USD={v} is negative; clamping to 0 "
+                "(ceiling disabled). Review will proceed with this value.",
+                file=sys.stderr,
+            )
+            return 0.0
+        return v
+
     @field_validator("log_format")
     @classmethod
     def _validate_log_format(cls, v: str) -> str:
@@ -673,6 +703,8 @@ class ReviewConfig(BaseModel):
             fail_on_findings=_bool("AI_FAIL_ON_FINDINGS"),
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
+            max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
+            fail_on_cost_ceiling=_bool("AI_FAIL_ON_COST_CEILING"),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
             feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),

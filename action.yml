@@ -366,6 +366,30 @@ inputs:
     required: false
     default: '1.00'
 
+  max-cost-usd:
+    description: >
+      Maximum estimated cost (USD) for a single review run's LLM spend. Before
+      any agent dispatches, the run's cost is estimated from the diff size,
+      the agent roster, and per-model pricing; if the estimate exceeds this
+      ceiling, the run aborts before any LLM call is made. The estimate is
+      always logged as a COST_ESTIMATE line regardless of whether a ceiling is
+      set. This is an approximation, not a precise invoice preview -- real
+      input tokenization and actual output length are not known in advance.
+      Set to '0' (default) to disable the ceiling.
+    required: false
+    default: '0'
+
+  fail-on-cost-ceiling:
+    description: >
+      When true, exit with code 2 if max-cost-usd is set and the pre-flight
+      cost estimate exceeds it. When false (default), an exceeded ceiling
+      still aborts the run before any LLM call and posts a skip comment
+      explaining why, but exits 0 -- so one unusually large PR doesn't break
+      a required status check by itself. Has no effect when max-cost-usd is
+      unset/'0'.
+    required: false
+    default: 'false'
+
 runs:
   using: composite
   steps:
@@ -468,5 +492,7 @@ runs:
         AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}
         AI_TOKEN_USAGE_DISPLAY: ${{ inputs.token-usage-display }}
         AI_TOKEN_USAGE_WARN_USD: ${{ inputs.token-usage-warn-usd }}
+        AI_MAX_COST_USD: ${{ inputs.max-cost-usd }}
+        AI_FAIL_ON_COST_CEILING: ${{ inputs.fail-on-cost-ceiling }}
         AI_PR_REVIEW_SCRIPT_DIR: ${{ github.action_path }}
       run: python3 -m ai_pr_review review

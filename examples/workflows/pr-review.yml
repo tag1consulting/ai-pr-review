@@ -38,6 +38,8 @@
 #   AI_REVIEW_FAIL_ON_FINDINGS   — exit code 2 on REQUEST_CHANGES/COMMENT, for CI gates (default: true)
 #   AI_REVIEW_TOKEN_USAGE_DISPLAY — token-usage content in the review comment: compact/full/off (default: compact)
 #   AI_REVIEW_TOKEN_USAGE_WARN_USD — high-usage warning threshold in USD, 0 disables (default: 1.00)
+#   AI_REVIEW_MAX_COST_USD       — pre-flight cost ceiling in USD; run aborts before dispatch if the estimate exceeds it, 0 disables (default: 0)
+#   AI_REVIEW_FAIL_ON_COST_CEILING — exit code 2 (instead of 0) when the cost ceiling is exceeded (default: false)
 #   AI_REVIEW_MODE_DEFAULT       — mode for automatic review AND /ai-pr-review rescan when set (default: '' — defer to policy.yml, else quick)
 #   AI_REVIEW_FEEDBACK_LOOP      — enable learning loop (default: false; GitHub-only)
 #   AI_REVIEW_CONTEXT_ENRICHMENT — tree-sitter symbol-context injection (default: true)
@@ -199,6 +201,16 @@ jobs:
           # a high-usage warning line is added to the comment (default: 1.00). Set to
           # 0 to disable.
           token-usage-warn-usd: ${{ vars.AI_REVIEW_TOKEN_USAGE_WARN_USD || '1.00' }}
+          # AI_REVIEW_MAX_COST_USD: maximum estimated cost (USD) for a single
+          # review run (default: 0, disabled). Before any agent dispatches,
+          # the run's cost is estimated from the diff size, agent roster, and
+          # model pricing; if the estimate exceeds this, the run aborts
+          # before any LLM call. See docs/configuration.md#cost-ceiling.
+          max-cost-usd: ${{ vars.AI_REVIEW_MAX_COST_USD || '0' }}
+          # AI_REVIEW_FAIL_ON_COST_CEILING: exit code 2 instead of 0 when the
+          # cost ceiling above is exceeded (default: false — informational
+          # only). No effect when max-cost-usd is unset/0.
+          fail-on-cost-ceiling: ${{ vars.AI_REVIEW_FAIL_ON_COST_CEILING || 'false' }}
           # --- Capabilities (Python engine only — the default since v1.0.0) ---
           # AI_REVIEW_CONTEXT_ENRICHMENT: tree-sitter + ripgrep symbol-context injection
           # (default: true — matches the container image's own default, since it ships
