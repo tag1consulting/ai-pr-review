@@ -36,9 +36,12 @@ The entrypoint is `ai_pr_review.cli:review`. The Click command parses flags, set
    - Builds the VCS provider via `provider_from_env`.
    - Fetches the last-reviewed SHA and computes the diff (`ai_pr_review/review/compute.py`).
    - Returns `SkipPlan` if compute reports no changes.
-   - Detects changed file languages and loads language profiles once via `load_language_profiles()`. The concatenated markdown is stored in `DispatchContext.language_profile_text` so each agent dispatch reads from memory rather than disk.
-   - Loads the feedback store, runs native analyzers, loads SARIF findings (via `config.sarif_paths`), loads suppression rules, evaluates gates, and builds the `DispatchContext` and `OrchestrationConfig`. All pre-computed findings are merged into `OrchestrationConfig.extra_findings`.
-2. Runs `pr-summarizer` on first (non-incremental) reviews.
+   - Loads the feedback store (`AI_FEEDBACK_LOOP=1`) into a feedback addendum.
+   - Fetches the PR/MR title and description via `provider.get_pr_description()` (fail-soft: a missing or malformed result just omits this) and folds it with the file manifest into the shared `<pr-context>` block (`ai_pr_review/review/pr_context.py:build_shared_context_block`, #813).
+   - Resolves `.github/ai-pr-review/policy.yml` if present (`ai_pr_review/policy.py`) and merges any matched route's agent/analyzer allow-deny lists and review-mode default with the explicit config (explicit input always wins). See [docs/policy.md](policy.md) for the policy-file format; this also determines `policy_gate_required`/`policy_gate_satisfied` for the CLI's merge-gate check-run.
+   - Detects changed file languages and loads the whole text of every detected language's profile once via `load_language_profiles()`. The concatenated markdown is stored in `DispatchContext.language_profile_text` so each agent dispatch reads from memory rather than disk (#814: every eligible agent gets the whole profile, not a per-agent routed subset — see [Shared run-context assembly](#shared-run-context-assembly) below).
+   - Runs native analyzers, loads SARIF findings (via `config.sarif_paths`), loads suppression rules, evaluates gates, and builds the `DispatchContext` and `OrchestrationConfig`. All pre-computed findings are merged into `OrchestrationConfig.extra_findings`.
+2. Runs `pr-summarizer` on first (non-incremental) reviews, then `issue-linker` on first reviews in `full` mode when the VCS provider is GitHub (both fail-soft; see `ai_pr_review/review/preflight.py`).
 3. If `AI_DRY_RUN=1`, short-circuits after assembly without posting.
 4. Otherwise calls `orchestrate.run_review()`, which dispatches agent tiers, merges LLM + pre-computed findings via `extra_findings`, suppresses, classifies the outcome, and posts via the provider.
 
@@ -82,15 +85,17 @@ Both are closed without touching the fuzzy-match tolerance itself:
 
 GitHub-only; GitLab and Bitbucket still post fresh content every run (tracked in issue #710).
 
-## Context message variants
+**Shared CRUD/thread helpers (#822).** `ai_pr_review/vcs/_upsert.py` (`upsert_comment`/`advance_sha_marker`) and `ai_pr_review/vcs/_thread.py` (`first_comment*` GraphQL accessors, `count_unresolved_owned_threads`) factor out the find-or-create-then-update control flow and the GraphQL review-thread reads that all three providers' summary-comment CRUD and `github.py`'s/`slash/dismiss.py`'s thread-counting logic previously duplicated. Provider-specific bits (marker/body/footer text, HTTP verb, payload shape) stay in each provider module — only the byte-identical control flow moved.
 
-Three context variants are assembled and passed selectively to agents:
+## Shared run-context assembly
 
-- **full context** — manifest + PR description (title + body) + commit log + CLAUDE.md excerpt (first 2000 chars) + language profiles + diff
-- **code context** — manifest + PR description (title + body) + language profiles + diff (no commit log or project context)
-- **blind** — raw diff only (intentional zero context for `blind-hunter`)
+Every finding-producing agent except `blind-hunter` (deliberately excluded — it is meant to reason about the diff with zero project context, see `AgentSpec.context_enrichment_eligible=False`) receives up to three run-shared prompt fragments, assembled once per run in `build_review_runtime()` and threaded through `DispatchContext`:
 
-The PR description is fetched from the VCS provider API early in the run. It includes the PR/MR title and body (truncated to 4000 chars). HTML comment lines from PR templates are stripped. The section is omitted entirely when the title and body are both empty (e.g., standalone reviews or PRs with no description). This gives agents visibility into the author's stated intent, reducing false positives on intentional changes.
+- **`shared_context_block`** (#813) — the PR/MR title and description (via `provider.get_pr_description()`, truncated to 4000 chars with HTML-comment template boilerplate stripped) plus the changed-files manifest, wrapped in a `<pr-context>` block by `ai_pr_review/review/pr_context.py:build_shared_context_block()`. Empty when the title, body, and manifest are all empty.
+- **`language_profile_text`** (#814) — the whole concatenated markdown of every language profile detected in the diff's changed files, loaded once via `load_language_profiles()`. Retired: the older per-agent *routed subset* selection (`ProfileRouter`/`language_profile_sections.py`) that used to make this block differ per agent; every eligible agent now gets the same, whole text.
+- **`feedback_addendum`** — recent learnings from the feedback-loop store (`AI_FEEDBACK_LOOP=1`), the least stable of the three since it changes as the store accumulates new entries between reruns.
+
+`ai_pr_review/agents/dispatch.py`'s `_run_single_agent` joins whichever of these are non-empty (most-stable-first: context block, then language profiles, then feedback) into `LLMRequest.system_prefix` (for providers without multi-breakpoint caching) and, separately, into `LLMRequest.cache_blocks` — an ordered tuple of up to 3 independently-cache-tagged fragments consumed by the Anthropic/Bedrock client (see [Prompt caching](#prompt-caching) below). There is no "context variant"/cache-cohort concept in the current code: every eligible agent receives the same fragments in the same order, and per-agent differentiation comes only from each agent's own system prompt (base prompt + governance + knowledge-cutoff + findings-trailer + optional suggestion-addendum, see [Code suggestions](#code-suggestions)).
 
 ## Parallel agent execution
 
@@ -104,11 +109,15 @@ Disable via `parallel: false` action input or `AI_PARALLEL=false` env var (defau
 
 | Tier | Agents | When |
 |------|--------|------|
-| Tier 1 | `pr-summarizer` (first run only), `code-reviewer`, `silent-failure-hunter` (conditional, standard model in quick / premium in full) | Always |
+| Tier 1 | `pr-summarizer` (first run only, dispatched separately — see below), `code-reviewer`, `silent-failure-hunter` (conditional: `has_error_patterns` gate) | Always |
 | Tier 1 (static analyzers, concurrent with Tier 1) | All native analyzers (`ai_pr_review/analyzers/`) | Always (graceful no-op if binary absent) |
 | Tier 2 | `architecture-reviewer`, `security-reviewer`, `blind-hunter`, `edge-case-hunter`, `adversarial-general` | `review-mode: full` only |
 
 Tier 1 and Tier 2 are separated by a barrier so Tier 2 never starts until all Tier 1 agents complete.
+
+**Model selection.** `ai_pr_review/agents/dispatch.py`'s `_run_single_agent` uses the premium model only when `spec.tier == 2 AND mode == "full" AND premium_model is set`; every Tier 1 agent (including `silent-failure-hunter`) always runs on the standard model, in both `quick` and `full` mode. A Tier 2 agent's premium call that is blocked by the provider's content filter (`stop_reason=refusal`, exit code 3) retries once on the standard model for that one call (`fallback_from_model`, #810) rather than dropping the agent's coverage entirely.
+
+`pr-summarizer` and `issue-linker` are marked `separately_dispatched=True` in the roster and never go through `run_tier` — they compose their own prompt and user message (manifest, commit log, diff for `pr-summarizer`; the open-issues list for `issue-linker`) and are called directly from `cli.py` before the tiered fan-out (see [Runtime flow](#runtime-flow)).
 
 ## Multi-provider support (GitHub / Bitbucket Cloud / GitLab)
 
@@ -173,6 +182,14 @@ If verification confirms the version exists, the suppression stands. If the API 
 
 Consuming repos can add **local suppressions** at `.github/ai-pr-review/suppressions.json`, merged with global rules at runtime.
 
+## LLM judge pass
+
+After the findings pipeline (extract → merge → suppress → diff-scope) produces its final candidate list, `ai_pr_review/findings/judge.py:judge_findings()` — Phase 2.75, gated by `AI_JUDGE_PASS` (default `true`) — sends one compact LLM call on the standard model asking a cheap model to return a `keep` or `downrank` verdict per finding.
+
+- `downrank` is the only non-`keep` verdict; there is no `drop`. The judge never removes a finding outright — a false positive that stays visible is preferred over a silently dropped true positive. `downrank` lowers confidence by `JUDGE_DOWNRANK_AMOUNT` (15) and routes the finding to the review body (`demoted_to_body=True`) instead of an inline comment; severity is left unchanged, since downranking affects placement, not assessed risk.
+- Findings with `Finding.corroborated=True` (independently confirmed by both an LLM agent and a static analyzer, see `findings/provenance.py`) are always kept regardless of the judge's verdict — one cheap-model call cannot override an independent, cross-source agreement.
+- Always fail-soft: any LLM error, parse error, timeout, or empty input returns the findings unchanged (still `keep`) with a logged WARNING. `JudgeResult` also carries the pass's own token usage (`input_tokens`/`output_tokens`/`cache_creation_tokens`/`cache_read_tokens`), surfaced in the token usage table (see below) alongside the finding-producing agents.
+
 ## Token usage and cost estimation
 
 Token counts are accumulated per agent across all LLM calls. For Google Gemini, `cache_read` reports `cachedContentTokenCount` when present; thinking tokens (`thoughtsTokenCount`) are added to the output count since they are billed at the output rate.
@@ -191,31 +208,40 @@ When `AI_PROVIDER` is `anthropic` or `bedrock-proxy`, the LLM client uses Anthro
 - `true` — force-enable markers.
 - `false` — force-disable; falls back to the legacy request layout.
 
-#### Shared-cache layout (issue #142)
+#### Cache layout (`ai_pr_review/llm/anthropic.py:_build_body`, current as of #816)
 
-Anthropic's cache key is CUMULATIVE — a hash of the full prefix up to each `cache_control` marker. Our 5-8 agents per review split into **two cache cohorts** by context variant:
-- **code context** cohort — code-reviewer, silent-failure-hunter, security-reviewer, edge-case-hunter, adversarial-general
-- **full context** cohort — pr-summarizer, architecture-reviewer
+Anthropic allows up to 4 `cache_control` breakpoints per request; the diff/user message always claims one of them, leaving at most 3 for `system` content. `_build_body` picks one of four layouts depending on what the caller (`agents/dispatch.py`) populated on the `LLMRequest`:
 
-To unlock cross-agent caching, the request is restructured when caching is enabled so the shared context becomes the FIRST system content block with a cache_control marker, and the per-agent prompt becomes the SECOND system block without a marker:
+1. **N-block layout — caching enabled, `cache_blocks` non-empty (preferred).** Each non-empty entry in `LLMRequest.cache_blocks` (see [Shared run-context assembly](#shared-run-context-assembly): the PR-context block, then language profiles, then the feedback addendum, most-stable-first) gets its own `system` block with its own `cache_control` breakpoint, followed by a final unmarked block holding the per-agent `system_prompt`. The diff (`user_message`) gets the 4th breakpoint:
+   ```
+   system: [
+     {type:"text", text:<cache_blocks[0]>, cache_control:{type:"ephemeral"}},
+     {type:"text", text:<cache_blocks[1]>, cache_control:{type:"ephemeral"}},
+     {type:"text", text:<cache_blocks[2]>, cache_control:{type:"ephemeral"}},
+     {type:"text", text:<system_prompt>}
+   ]
+   messages: [{role:"user", content:[{type:"text", text:<user_message>, cache_control:{type:"ephemeral"}}]}]
+   ```
+   Because Anthropic's cache-hit check is prefix-cumulative (breakpoint N covers everything from the start of `system` through breakpoint N), ordering the most byte-stable fragment first means its own cache entry survives churn in a less-stable fragment later in the list, instead of one change invalidating everything after it the way a single joined block would. A run with only 1 or 2 populated fragments gets 1 or 2 breakpoints, not 3 padded ones; a hypothetical 4th fragment would be folded into the last block rather than exceeding the 4-breakpoint total.
+2. **Two-breakpoint legacy layout — caching enabled, `cache_blocks` empty but `system_prefix` non-empty.** The whole run-shared system tail caches as ONE block ahead of `system_prompt`; preserved for any caller that populates `system_prefix` without `cache_blocks`.
+3. **Single-breakpoint legacy layout — caching enabled, both empty.** Preserved for backward compatibility: `system: [{user_message, cache_control}, {system_prompt}]`, with `messages` reduced to a plain sentinel user turn.
+4. **Caching disabled.** `system_prefix` (if any) and `system_prompt` are concatenated into a single plain string; no cache_control markers anywhere.
 
-```
-system: [
-  { text: "<shared code context>",  cache_control: ephemeral },
-  { text: "<per-agent system prompt>" }
-]
-messages: [{ role: "user", content: "Please perform your review now." }]
-```
+`build_body_for_bedrock` in the same module reuses `_build_body` for Bedrock's Anthropic-shaped request (model in the URL rather than the body), so Bedrock gets the identical layout logic.
 
-**Live-benchmarked impact** (Sonnet 4.6, 5 agents, ~25 KB shared context):
+Every agent that is `context_enrichment_eligible` (all finding agents except `blind-hunter`) receives the same `cache_blocks` tuple in the same run, so their shared fragments are cached once across the whole tiered fan-out rather than per-agent — there is no separate "cache cohort" concept; see [Shared run-context assembly](#shared-run-context-assembly).
 
-| Run | input | cache_write | cache_read | est. cost | vs no cache |
+#### Historical: live-benchmarked impact (issue #142, pre-#816 two-cohort layout)
+
+**This table describes a layout that no longer exists.** It measured the original two-cache-cohort design (issue #142, before #816 replaced it with the N-block `cache_blocks` layout above) and is kept only as a historical data point for why caching was adopted at all — do not read it as a current-layout measurement, and do not extrapolate its percentages to the current 3-breakpoint design without re-benchmarking.
+
+| Run (Sonnet 4.6, 5 agents, ~25 KB shared context) | input | cache_write | cache_read | est. cost | vs no cache |
 |---|---:|---:|---:|---:|---:|
 | A (caching off) | 56,652 | 0 | 0 | $0.189 | baseline |
 | B (cold cache, first run) | 13,722 | 8,593 | 34,372 | $0.103 | **-46%** |
 | C (hot cache, re-run within 5 min) | 13,722 | 0 | 42,965 | $0.073 | **-61%** |
 
-Weighted across typical PR traffic (70% cold / 25% hot): **~47% cheaper on average**.
+No equivalent measurement has been taken against the current N-block layout as of this writing.
 
 #### Cache priming (issues #144, #153) — removed, `AI_CACHE_PRIMING` is now a deprecated no-op
 
@@ -234,7 +260,7 @@ The implementation (`cache_priming_effective()` and `DispatchContext.cache_primi
 
 #### Semantic change
 
-The shared-cache layout moves the diff/context from the user message into system[0]. Empirically Claude treats late-system content equivalently to user-turn content (verified by `claude/bench-quality.sh`). The layout is used only when prompt caching is active; `LLM_PROMPT_CACHING=false` preserves the legacy shape.
+Every caching-enabled layout above moves shared context out of the final user turn and into `system` content blocks ahead of the per-agent `system_prompt` — a structural change from the disabled layout's plain `system_prompt` + `user_message` shape. No benchmark script or automated quality check verifies this is model-neutral in this repository today (an earlier reference to a `claude/bench-quality.sh` script did not resolve to any file in this checkout); treat the equivalence as an operating assumption carried from the original #142 change, not as something currently re-verified in CI. The layout is used only when prompt caching is active; `LLM_PROMPT_CACHING=false` preserves the legacy disabled shape.
 
 #### Cache-minimum threshold
 
@@ -246,9 +272,9 @@ OpenAI provides automatic prefix caching (50% discount on cached input tokens) f
 
 #### Shared-cache layout for OpenAI (issue #164)
 
-The OpenAI request is restructured for first-party OpenAI (`AI_PROVIDER=openai`) to maximize the shared prefix across agents in the same cohort. The shared context (code context or full context) is placed first in the system message, followed by a separator and the per-agent prompt. The user message becomes a minimal sentinel (`"Please perform your review now."`). This mirrors the Anthropic shared-cache layout (issue #142) but uses string concatenation instead of a content-block array (OpenAI doesn't support system arrays). `blind-hunter` uses the blind context and stays on its own prefix.
+The OpenAI request is restructured for first-party OpenAI (`AI_PROVIDER=openai`) to maximize the shared prefix OpenAI's automatic prefix caching can detect across agents in the same run. `ai_pr_review/llm/openai.py:_build_body` puts the diff (`user_message`) first in the `system` message — this is the text most agents in a run share byte-for-byte — followed by an `===AGENT_INSTRUCTIONS===` separator and the per-agent tail (`system_prefix` + `system_prompt`, concatenated since OpenAI has no multi-breakpoint system-array support). The user message becomes a minimal sentinel (`"Please perform your review now."`). This mirrors the intent of the Anthropic shared-cache layout (issue #142) via string concatenation rather than a content-block array. Gated on `LLM_PROMPT_CACHING` (`auto`/unset enables it; `false`/`0` disables it) — independent of `resolve_temperature`/other per-request knobs, since OpenAI's caching itself is automatic and needs no explicit marker.
 
-`openai-compatible` endpoints keep the legacy layout (system = agent prompt, user = shared context) because third-party providers may have different caching behavior or no prefix caching at all.
+`openai-compatible` endpoints keep the legacy layout (`system` = agent prompt, `user` = diff) and use `max_tokens` instead of `max_completion_tokens`, since third-party endpoints may have different caching behavior or none at all.
 
 ### Google Gemini
 
@@ -271,14 +297,14 @@ When an agent call fails, the dispatch layer:
 1. Logs a WARNING with the failure type and last error message
 2. Records the agent name as failed and continues to the next agent
 
-After all agents complete:
+After all agents complete, `ai_pr_review/review/outcome.py:classify_review_outcome()` classifies the run:
 - If **all** finding agents failed, the review aborts with exit 1
 - Otherwise, failed agents are tracked and reported in the summary comment
-- An empty-findings review is downgraded from APPROVE to COMMENT
+- Any failed agent forces `may_approve=False` and `incomplete=True`. When that overrides an otherwise-APPROVE-eligible outcome — zero findings with a failure (`risk="Unknown"`), or a non-empty finding set whose highest severity is only Medium or Low — the event downgrades from `APPROVE` to `COMMENT`. A Critical/High finding always yields `REQUEST_CHANGES` regardless of failures, since that was never going to approve anyway.
 
 ## Standalone review mode
 
-`review-target: standalone` (`REVIEW_TARGET=standalone`) is accepted by the engine, but the only behavior it currently changes is disabling merge-commit filtering in diff computation (`ai_pr_review/diff/compute.py`). Posting findings as a GitHub/GitLab issue was part of the bash engine removed in v2.0.0 and has not been reimplemented in the Python engine — no code path in `ai_pr_review/` currently creates an issue. Tracked as a known gap; see the repository issue tracker before relying on `standalone` for anything beyond `pr` mode's default behavior.
+`review-target: standalone` (`REVIEW_TARGET=standalone`) is accepted by the engine, but the only behavior it currently changes is disabling merge-commit filtering in diff computation (`ai_pr_review/diff/compute.py`). Posting findings as a GitHub/GitLab issue was part of the bash engine removed in v2.0.0 and has not been reimplemented in the Python engine — no code path in `ai_pr_review/` currently creates an issue. Tracked as a known gap; see the repository issue tracker before relying on `standalone` for anything beyond `pr` mode's default behavior. (This section was re-verified for #805/#824: `ReviewConfig.standalone_depth`, an int field once parsed alongside this mode and reserved for a deeper standalone-review scan that was never built, was removed as dead code in #824 — see the `STANDALONE_DEPTH` row in [Environment variable reference](#environment-variable-reference). The behavior described above, and this section itself, is otherwise unaffected and still accurate.)
 
 ## Multi-arch container image
 
@@ -297,15 +323,18 @@ Tests live in `tests/python/` and use pytest. Key test files:
 |---|---|
 | `test_runtime.py` | Assembly boundary: `build_review_runtime()`, `SkipPlan`, SARIF routing, provider factory seam |
 | `test_orchestrate.py` | `run_review()` happy path, skip path, summary/findings failure, token table |
-| `test_cli.py` | `run_compute()`, `compute` command, `slash` command, `parse_changed_files_payload()`, `AI_PR_REVIEW_SCRIPT_DIR` resolution |
-| `test_config.py` | `ReviewConfig.from_env()`, `resolve_models()`, unknown-var detection, deprecation warnings |
+| `test_cli.py` | `run_compute()`, `compute` command, `parse_changed_files_payload()`, `AI_PR_REVIEW_SCRIPT_DIR` resolution |
+| `test_cli_parse_command.py` | `parse-command` subcommand (#821): the unified Python job-router replacing three bash `case` statements |
+| `test_cli_slash.py`, `test_cli_dismiss.py`, `test_cli_dismiss_inline.py`, `test_cli_feedback_context.py` | `slash` subcommand and its dismiss/dismiss-inline/feedback-context CLI paths |
+| `test_cli_policy_gate.py` | `_post_policy_gate_check_run` — the `ai-pr-review/policy-gate` merge-gate check-run (see [docs/policy.md](policy.md)) |
+| `test_config.py` | `ReviewConfig.from_env()`, `resolve_models()`, unknown-var detection, deprecation warnings (`_DEPRECATED_NOOP_AI_VARS`, `_DEPRECATED_NOOP_ENV_VARS`, `_DEPRECATED_ANALYZER_NAMES`) |
 | `test_manifest.py` | `build_changed_files()`, `build_manifest_text()`, `parse_changed_files_payload()` (including None-entry guard) |
 | `test_language_profiles.py` | `load_language_profiles()` happy path, OSError fail-soft, missing profile key |
 | `test_suppress.py`, `test_findings.py` | Suppression pipeline and findings merge |
 | `test_sarif.py`, `test_bridge.py` | SARIF parsing and static analyzer bridge |
 | `test_telemetry.py`, `test_logging.py` | Telemetry sink dispatch and structured log formatting |
 | `test_feedback_*.py` | Learning loop: inject, store, retention, models |
-| `vcs/test_github.py`, `vcs/test_gitlab.py` | GitHub and GitLab provider unit tests |
+| `vcs/test_github_*.py`, `vcs/test_gitlab_*.py` | GitHub and GitLab provider unit tests, split by concern (canonical-review flow, findings, stale-thread handling, summary CRUD, paginated reviews, check-runs, etc.) rather than one file per provider |
 
 Run with `pytest tests/python/ -q`.
 
@@ -328,9 +357,10 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_FAIL_ON_FINDINGS` | `false` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. CI-gate use case. |
 | `AI_ANALYZER_CONCURRENCY` | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `AI_PARALLEL=false`. |
 | `AI_ANALYZER_DIFF_SCOPE` | `cap` | How out-of-diff native-analyzer findings are handled. Valid: `cap`, `drop`, `off`. |
-| `AI_ANALYZERS` / `AI_EXCLUDE_ANALYZERS` | `''` | Allowlist / denylist of static analyzer names. See [Static analyzers](static-analyzers.md). |
+| `AI_ANALYZERS` / `AI_EXCLUDE_ANALYZERS` | `''` | Allowlist / denylist of static analyzer names. See [Static analyzers](static-analyzers.md). `docs-missing-check` is accepted in either list as a documented no-op (#815: removed from `ANALYZER_NAMES`, superseded by `docs-api-check`/`docs-ref-check`/`docs-drift-check`; never dispatches regardless of membership). |
 | `AI_AGENTS` / `AI_EXCLUDE_AGENTS` | `''` | Allowlist / denylist of review agent names. See [Agents](agents.md). |
 | `AI_PROFILE_MAX_TOKENS` | `4096` | Deprecated, ignored (#814): per-agent language-profile routing was removed; every eligible agent now receives the whole detected-language profile(s). Accepted as a no-op with a deprecation warning; will be rejected starting in v3.0.0. |
+| `STANDALONE_DEPTH` | — (not `AI_`-prefixed) | Deprecated, ignored (#824): reserved for a standalone review mode that was documented but never implemented (#623); its last reader, `ReviewConfig.standalone_depth`, was removed in #824. Warns via a separate `_DEPRECATED_NOOP_ENV_VARS` registry (not `AI_`-prefixed, so it can't go through the `AI_*` unknown-var scan); rejected starting in v3.0.0. |
 | `AI_CONTEXT_ENRICHMENT` | `true` (config default) | Inject tree-sitter `<symbol-context>` blocks into agent prompts. |
 | `AI_CONTEXT_MAX_TOKENS` | `8192` | Token budget for the injected `<symbol-context>` block per agent call. |
 | `AI_CONTEXT_LOOKUP_LINES` | `8` | Lines of surrounding context captured per symbol lookup. |
