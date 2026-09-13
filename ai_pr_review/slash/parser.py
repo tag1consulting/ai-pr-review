@@ -56,6 +56,25 @@ KNOWN_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
+# Command vocabulary recognized only by the GitHub Actions workflow's
+# job-routing layer (slash-commands.yml's `handle-command` job, via the
+# `ai-pr-review parse-command` CLI subcommand -- issue #821), never by
+# `parse_command`/`parse_commands` below. These four never produce a
+# `SlashCommand`: they don't write a `FeedbackEntry`, carry a reason, or take
+# an `F<n>` argument -- they're plain triggers (force a rescan, switch review
+# mode, add a label, print help) handled entirely in bash/YAML, not by the
+# Python engine's slash-command pipeline. Kept here (rather than duplicated
+# across the workflow file and its own test) so there is exactly one place
+# that enumerates "every command name `/ai-pr-review` recognizes at all".
+BASH_ONLY_COMMANDS: frozenset[str] = frozenset(
+    {
+        "rescan",
+        "review-full",
+        "skip",
+        "help",
+    }
+)
+
 # Matches a bare commit SHA (short or full, lowercase or upper). Same shape
 # as vcs.marker's _SHA_PATTERN, duplicated here rather than imported to keep
 # the parser free of a dependency on the vcs package.

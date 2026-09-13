@@ -173,6 +173,14 @@ inputs:
     required: false
     default: 'python'
 
+  fail-on-findings:
+    description: >
+      When true, exit with code 2 if the review outcome is REQUEST_CHANGES or COMMENT
+      (incomplete/unknown risk). Use this to block CI gates (e.g. Renovate auto-merge)
+      until the bot approves. Exit code 1 still signals a posting/config error.
+    required: false
+    default: 'false'
+
   ignore-merge-commits:
     description: >
       When true, strip merge commits that pulled in upstream base-branch changes
@@ -297,6 +305,17 @@ inputs:
       it when the composite action is used directly.
     required: false
     default: 'false'
+
+  context-max-queries:
+    description: >
+      Maximum number of ripgrep symbol-lookup queries across all agents in a
+      run. The cap is global (shared across Tier 1 and Tier 2 agents via a
+      module-level cache), so a multi-agent run consumes queries faster than
+      a single-agent one. Increase if you see
+      "context enrichment: max_queries=N reached; remaining symbols skipped"
+      in the logs. Default: 200.
+    required: false
+    default: '200'
 
   feedback-loop:
     description: >
@@ -432,6 +451,7 @@ runs:
         AI_MAX_TOKENS_PER_AGENT: ${{ inputs.max-tokens-per-agent }}
         AI_ANALYZER_CONCURRENCY: ${{ inputs.analyzer-concurrency }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
+        AI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
@@ -442,6 +462,7 @@ runs:
         AI_EXCLUDE_AGENTS: ${{ inputs.exclude-agents }}
         AI_ANALYZER_DIFF_SCOPE: ${{ inputs.analyzer-diff-scope }}
         AI_CONTEXT_ENRICHMENT: ${{ inputs.context-enrichment }}
+        AI_CONTEXT_MAX_QUERIES: ${{ inputs.context-max-queries }}
         AI_FEEDBACK_LOOP: ${{ inputs.feedback-loop }}
         AI_JUDGE_PASS: ${{ inputs.judge-pass }}
         AI_PROFILE_MAX_TOKENS: ${{ inputs.profile-max-tokens }}

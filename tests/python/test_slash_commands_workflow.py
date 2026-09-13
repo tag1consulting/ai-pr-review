@@ -28,16 +28,18 @@ from typing import Any
 
 import yaml
 
-from ai_pr_review.slash.parser import KNOWN_COMMANDS
+from ai_pr_review.slash.parser import BASH_ONLY_COMMANDS
 
 _WORKFLOW_PATH = (
     Path(__file__).resolve().parents[2] / ".github" / "workflows" / "slash-commands.yml"
 )
 
-# Commands handle-command's bash pre-parse recognizes that ai_pr_review.slash.
-# parser never sees at all -- rescan/review-full/skip/help are a bash-only
-# vocabulary this job fully owns, not part of KNOWN_COMMANDS.
-_BASH_ONLY_COMMANDS = {"rescan", "review-full", "skip", "help"}
+# Commands handle-command's job-routing parse recognizes that ai_pr_review.
+# slash.parser's KNOWN_COMMANDS never sees at all -- rescan/review-full/skip/
+# help are a bash-only vocabulary this job fully owns. Issue #821: imported
+# from parser.py (single source of truth) rather than duplicated here, same
+# as KNOWN_COMMANDS above.
+_BASH_ONLY_COMMANDS = BASH_ONLY_COMMANDS
 
 # `dismiss`/canonical `false-positive` are the same family everywhere in this
 # repo (ai_pr_review/slash/parser.py's SlashCommand.canonical_name); normalize
@@ -160,50 +162,50 @@ def test_no_overlap_between_dismiss_finding_and_feedback_command_review_thread()
     )
 
 
-def _handle_command_recognized_commands(jobs: dict[str, Any]) -> set[str]:
-    """Every literal command token appearing in a non-wildcard `case` arm of
-    handle-command's "Parse command" step, across ALL arms (including a
-    no-op arm like `feedback)` that exists purely so the catch-all below
-    doesn't misfire on it)."""
-    step = _step(jobs["handle-command"], "Parse command")
-    arms = re.findall(r"^\s*([a-zA-Z][\w-]*(?:\|[a-zA-Z][\w-]*)*)\)\s*$", step["run"], re.MULTILINE)
-    assert arms, "could not find any case arms in handle-command's Parse command step"
-    recognized: set[str] = set()
-    for arm in arms:
-        recognized |= set(arm.split("|"))
-    return recognized
+def _parse_command_run_text(jobs: dict[str, Any], job_name: str, step_name: str) -> str:
+    return _step(jobs[job_name], step_name)["run"]
 
 
-def test_handle_command_recognizes_every_known_command() -> None:
-    """Issue #772: handle-command's bash `case` pre-parse must have SOME arm
-    (a real one, or a documented no-op like `feedback)`) for every command
-    name in ai_pr_review.slash.parser.KNOWN_COMMANDS. Anything without a
-    matching arm falls into the `*)` catch-all, which (as of #772) reacts
-    with a confused emoji and posts an "I didn't recognize this command"
-    reply -- correct for a genuinely malformed command, but wrong for a
-    command this job simply doesn't act on itself (e.g. `feedback`, owned
-    entirely by the feedback-command job). If a future command is added to
-    KNOWN_COMMANDS without a matching update here, this test catches the gap
-    before a legitimate command starts getting a bogus "unrecognized"
-    reply -- the exact dual-maintenance risk this fix's `feedback)` no-op
-    arm exists to close.
+def test_all_three_parse_command_steps_call_the_shared_entry_point() -> None:
+    """Issue #821: handle-command, dismiss-finding, and feedback-command's
+    "Parse command" steps no longer each run their own bash `case`/`awk`
+    re-implementation -- they all invoke the same `ai-pr-review
+    parse-command` CLI subcommand (backed by `ai_pr_review.slash.parser`'s
+    `KNOWN_COMMANDS`/`parse_command`, see test_cli_parse_command.py for its
+    own coverage). This guards against a future edit reintroducing a
+    bespoke bash re-parse in any of the three jobs -- the exact drift this
+    issue closes.
+
+    handle-command's step wraps the call in `docker run` (it runs on a bare
+    runner, not inside the ai-pr-review image, unlike the other two jobs --
+    see that step's own comment for why); the other two invoke the
+    console-script directly since their job already runs inside that image.
+    Assert on the shared `parse-command` subcommand name so both invocation
+    styles (the `ai-pr-review` console script directly, or `python3 -m
+    ai_pr_review` inside `docker run`) are covered by one check.
     """
     jobs = _workflow_jobs()
-    recognized = _handle_command_recognized_commands(jobs)
-    bash_only_recognized = recognized & _BASH_ONLY_COMMANDS
-    python_facing_recognized = recognized - _BASH_ONLY_COMMANDS
+    handle_run = _parse_command_run_text(jobs, "handle-command", "Parse command")
+    dismiss_run = _parse_command_run_text(jobs, "dismiss-finding", "Parse command")
+    feedback_run = _parse_command_run_text(
+        jobs, "feedback-command", "Parse command (review-thread path only)"
+    )
 
-    assert bash_only_recognized == _BASH_ONLY_COMMANDS, (
-        "handle-command no longer recognizes its bash-only vocabulary "
-        f"(rescan/review-full/skip/help): missing {_BASH_ONLY_COMMANDS - bash_only_recognized}"
-    )
-    missing = KNOWN_COMMANDS - python_facing_recognized
-    assert missing == set(), (
-        f"KNOWN_COMMANDS has {missing} with no matching case arm in handle-command's "
-        "Parse command step -- these will incorrectly fall into the `*)` catch-all "
-        "and get a bogus 'unrecognized command' reply even though they're valid "
-        "commands handled by another job"
-    )
+    for job_name, run_text in (
+        ("handle-command", handle_run),
+        ("dismiss-finding", dismiss_run),
+        ("feedback-command", feedback_run),
+    ):
+        assert re.search(r"ai[_-]pr[_-]review\b.*\bparse-command\b", run_text), (
+            f"{job_name}'s Parse command step no longer calls the shared "
+            "`parse-command` entry point (issue #821) -- found:\n"
+            f"{run_text}"
+        )
+        assert "case " not in run_text and "esac" not in run_text, (
+            f"{job_name}'s Parse command step still contains a bash `case` "
+            "statement -- issue #821 replaced all three with the shared "
+            "Python entry point"
+        )
 
 
 def test_verdict_family_is_the_expected_four_commands() -> None:
