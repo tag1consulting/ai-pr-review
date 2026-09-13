@@ -44,6 +44,9 @@ def build_entry(
     rule_id: str = "",
     context_missing: bool = False,
     context_missing_reason: str = "",
+    judge_verdict: str | None = None,
+    corroborated: bool = False,
+    confidence: int | None = None,
 ) -> FeedbackEntry:
     """Build a ``FeedbackEntry`` from a parsed ``SlashCommand``.
 
@@ -67,6 +70,20 @@ def build_entry(
     context_missing_reason:
         Human-readable explanation of why context is absent, forwarded from
         the GHA ``context_missing_reason`` output.
+    judge_verdict, corroborated, confidence:
+        Judge-pass state for this finding at the moment it was posted,
+        recovered by the caller from the inline comment's own metadata
+        marker (``ai_pr_review.vcs.marker.extract_inline_meta``) since this
+        process has no access to the original in-memory ``Finding``. Always
+        written into ``extras`` (as ``"judge_verdict"``/``"corroborated"``/
+        ``"confidence"``) regardless of whether real data was found, so
+        every persisted entry has a consistent, analyzable shape:
+        ``judge_verdict`` is ``None`` and ``confidence`` is ``None`` when the
+        finding predates this feature, was never judged (e.g.
+        ``AI_JUDGE_PASS=false``), or has no per-finding metadata mechanism at
+        all (a body-level finding — see ``DismissResult``'s docstring in
+        ``slash/dismiss.py``); ``corroborated`` defaults to ``False`` in
+        those same cases.
     """
     extras: dict[str, Any] = {}
     if command.finding_id is not None:
@@ -75,6 +92,9 @@ def build_entry(
         extras["context_missing"] = True
         if context_missing_reason:
             extras["context_missing_reason"] = context_missing_reason
+    extras["judge_verdict"] = judge_verdict
+    extras["corroborated"] = corroborated
+    extras["confidence"] = confidence
     return FeedbackEntry(
         ts=datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         command=command.canonical_name,

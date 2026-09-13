@@ -30,17 +30,15 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from ai_pr_review.agents.dispatch import LLMCall
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.findings.models import JudgeVerdict as JudgeVerdict  # re-exported
 from ai_pr_review.llm.base import LLMRequest
 
 logger = logging.getLogger(__name__)
 
 JUDGE_DOWNRANK_AMOUNT: int = 15
-
-JudgeVerdict = Literal["keep", "downrank"]
 
 
 @dataclass(frozen=True)
@@ -85,11 +83,18 @@ def _apply_verdicts(
     """Apply judge verdicts deterministically. Returns (modified list, downrank count).
 
     Rules:
-    - ``corroborated is True`` → always ``keep``, log DEBUG.
+    - ``corroborated is True`` → the *placement* verdict is always ``keep``
+      regardless of what the judge said (log DEBUG), but ``Finding.
+      judge_verdict`` still records the judge's raw per-finding verdict
+      (issue tracking this: see PR description). Recording the raw verdict
+      here — rather than collapsing it to the overridden "keep" — is what
+      lets a later analysis distinguish "corroboration saved a finding the
+      judge wanted to downrank" from "the judge agreed with keeping it" by
+      cross-referencing ``judge_verdict`` against ``corroborated``.
     - ``downrank`` → lower confidence by JUDGE_DOWNRANK_AMOUNT (floor 0),
-      set demoted_to_body=True so the finding routes to the review body.
-      Severity is intentionally untouched.
-    - ``keep`` → unchanged.
+      set demoted_to_body=True so the finding routes to the review body, and
+      set judge_verdict="downrank". Severity is intentionally untouched.
+    - ``keep`` → unchanged apart from judge_verdict="keep".
     - Missing verdict id defaults to ``keep``.
 
     Note: the judge pass runs on ``kept`` *after* ``apply_diff_scope`` (see
@@ -121,25 +126,34 @@ def _apply_verdicts(
     downrank_count = 0
 
     for idx, finding in enumerate(kept):
+        # Computed for every finding, corroborated or not: this is the raw
+        # verdict the judge assigned, independent of whether corroboration
+        # goes on to override its placement effect below.
+        verdict_raw = id_to_verdict.get(idx, "keep")
+        verdict: JudgeVerdict = "downrank" if verdict_raw == "downrank" else "keep"
+
         if finding.corroborated:
             logger.debug(
                 "judge: corroborated finding %d kept regardless of verdict (file=%s line=%s)",
                 idx, finding.file, finding.line,
             )
-            result.append(finding)
+            result.append(finding.model_copy(update={"judge_verdict": verdict}))
             continue
 
-        verdict = id_to_verdict.get(idx, "keep")
         if verdict == "downrank":
             new_confidence = max(0, finding.confidence - JUDGE_DOWNRANK_AMOUNT)
-            # model_copy skips validator re-runs; safe here — only confidence
-            # and demoted_to_body are updated and neither has cross-field
-            # validation. severity is deliberately untouched: downrank means
-            # "less prominent placement," not "lower risk."
-            result.append(finding.model_copy(update={"confidence": new_confidence, "demoted_to_body": True}))
+            # model_copy skips validator re-runs; safe here — only confidence,
+            # demoted_to_body, and judge_verdict are updated and none has
+            # cross-field validation. severity is deliberately untouched:
+            # downrank means "less prominent placement," not "lower risk."
+            result.append(finding.model_copy(update={
+                "confidence": new_confidence,
+                "demoted_to_body": True,
+                "judge_verdict": verdict,
+            }))
             downrank_count += 1
         else:
-            result.append(finding)
+            result.append(finding.model_copy(update={"judge_verdict": verdict}))
 
     return result, downrank_count
 

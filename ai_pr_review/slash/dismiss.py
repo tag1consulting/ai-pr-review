@@ -141,6 +141,19 @@ class DismissResult:
     # (ab)used as BODY-vs-INLINE classification signals elsewhere; this field
     # exists so that distinction never has to double as "should we write".
     feedback_eligible: bool = False
+    # Judge-pass state for the feedback-store entry's `extras` (judge-verdict
+    # instrumentation): read back from the inline comment's own metadata
+    # marker (`vcs.marker.extract_inline_meta`) for an INLINE finding, since
+    # this CLI process has no access to the original in-memory `Finding`.
+    # Always at their defaults (None/False/None) for a BODY-level finding —
+    # the id-map marker backing body findings carries only a bare
+    # fingerprint-to-F-id map, no per-finding metadata, so there is no
+    # mechanism to recover this state for that path today. Also default when
+    # the finding predates this feature (old-format marker) or never went
+    # through the judge pass at all.
+    feedback_judge_verdict: str | None = None
+    feedback_corroborated: bool = False
+    feedback_confidence: int | None = None
     # True whenever this call resolved/dismissed/recorded/approved something
     # real -- drives the done/confused reaction. Explicit rather than derived
     # from the fields above (issue #769): a successful BODY `fixed` sets none
@@ -936,6 +949,9 @@ def dismiss_by_finding_id(
         inline_source,
         inline_rule_id,
         inline_finding_id,
+        inline_judge_verdict,
+        inline_corroborated,
+        inline_confidence,
     ) = _inline_feedback_context(
         _first_comment_body(target_thread), resolved=resolved, command=command
     )
@@ -971,6 +987,9 @@ def dismiss_by_finding_id(
         feedback_rule_id=inline_rule_id,
         feedback_finding_id=inline_finding_id,
         feedback_eligible=inline_feedback_eligible,
+        feedback_judge_verdict=inline_judge_verdict,
+        feedback_corroborated=inline_corroborated,
+        feedback_confidence=inline_confidence,
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
@@ -1010,9 +1029,10 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
 
 def _inline_feedback_context(
     body: str, *, resolved: bool, command: str
-) -> tuple[bool, str, str, int | None]:
-    """Compute ``(feedback_eligible, source, rule_id, finding_id)`` for an
-    INLINE finding's feedback-store entry.
+) -> tuple[bool, str, str, int | None, str | None, bool, int | None]:
+    """Compute ``(feedback_eligible, source, rule_id, finding_id,
+    judge_verdict, corroborated, confidence)`` for an INLINE finding's
+    feedback-store entry.
 
     Shared by `dismiss_by_finding_id`'s INLINE branch (top-level comment
     naming an inline F<n>) and `dismiss_inline_reply` (reply on the inline
@@ -1031,13 +1051,32 @@ def _inline_feedback_context(
     here, two DIFFERENT findings dismissed within the feedback store's dedup
     window would collide on the same key and the second would be silently
     dropped -- see `feedback/store.py`'s `_dedup_key`).
+
+    `judge_verdict`/`corroborated`/`confidence` (judge-verdict instrumentation):
+    read from the comment's own metadata marker via
+    `ai_pr_review.vcs.marker.extract_inline_meta`, the same marker
+    `classified`/`finding_id` above are recovered from -- no extra API call.
+    All three fall back to `None`/`False`/`None` when the marker is absent,
+    predates this feature, or the finding never went through the judge pass.
     """
     if not (resolved and command != "fixed"):
-        return False, "", "", None
+        return False, "", "", None, None, False, None
     classified = parse_inline_comment_header(body)
     finding_id_match = _ID_RE.search(body)
     finding_id = int(finding_id_match.group(1)) if finding_id_match is not None else None
-    return True, classified.source, classified.rule_id, finding_id
+    meta = extract_inline_meta(body)
+    judge_verdict = meta.judge_verdict if meta is not None else None
+    corroborated = meta.corroborated if meta is not None else False
+    confidence = meta.confidence if meta is not None else None
+    return (
+        True,
+        classified.source,
+        classified.rule_id,
+        finding_id,
+        judge_verdict,
+        corroborated,
+        confidence,
+    )
 
 
 _BOT_LOGIN: Final[str] = "github-actions[bot]"
@@ -1321,6 +1360,9 @@ def dismiss_inline_reply(
         inline_source,
         inline_rule_id,
         inline_finding_id,
+        inline_judge_verdict,
+        inline_corroborated,
+        inline_confidence,
     ) = _inline_feedback_context(body, resolved=resolved, command=command)
 
     sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
@@ -1351,6 +1393,9 @@ def dismiss_inline_reply(
         feedback_rule_id=inline_rule_id,
         feedback_finding_id=inline_finding_id,
         feedback_eligible=inline_feedback_eligible,
+        feedback_judge_verdict=inline_judge_verdict,
+        feedback_corroborated=inline_corroborated,
+        feedback_confidence=inline_confidence,
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
@@ -1496,6 +1541,9 @@ def persist_verdict(
         source=result.feedback_source,
         file=result.feedback_file,
         rule_id=result.feedback_rule_id,
+        judge_verdict=result.feedback_judge_verdict,
+        corroborated=result.feedback_corroborated,
+        confidence=result.feedback_confidence,
     )
     stored = make_store(_DismissConfig()).append(entry)
     if stored:

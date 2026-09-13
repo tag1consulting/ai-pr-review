@@ -2574,6 +2574,9 @@ def _build_inline_comment_body(
         category=f.category,
         severity=f.severity,
         prior_fingerprints=prior_fingerprints,
+        judge_verdict=f.judge_verdict,
+        corroborated=f.corroborated,
+        confidence=f.confidence,
     )
     return f"{body}\n{meta_marker}"
 

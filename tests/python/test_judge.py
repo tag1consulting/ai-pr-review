@@ -67,9 +67,15 @@ def test_judge_downrank_amount_is_15() -> None:
 # ---------------------------------------------------------------------------
 
 def test_apply_verdicts_keep_unchanged() -> None:
+    # No longer identity-preserving (judge-verdict instrumentation): a "keep"
+    # verdict now stamps Finding.judge_verdict="keep" via model_copy, so
+    # result[0] is a distinct object from f even though every other field is
+    # unchanged.
     f = _finding(confidence=80)
     result, count = _apply_verdicts([f], [{"id": 0, "verdict": "keep", "reason": "clear"}])
-    assert result[0] is f
+    assert result[0] is not f
+    assert result[0].model_copy(update={"judge_verdict": None}) == f
+    assert result[0].judge_verdict == "keep"
     assert count == 0
 
 
@@ -122,17 +128,25 @@ def test_apply_verdicts_downrank_on_already_out_of_diff_finding_is_safe() -> Non
 def test_apply_verdicts_corroborated_exempt_from_downrank() -> None:
     f = _finding(confidence=80, corroborated=True)
     result, count = _apply_verdicts([f], [{"id": 0, "verdict": "downrank", "reason": "vague"}])
-    assert result[0] is f
+    # Placement is exempt (confidence/demoted_to_body untouched), but the
+    # judge's raw verdict is still recorded on judge_verdict -- corroboration
+    # overrides the *effect* of a downrank, not the fact that the judge said
+    # so. This is what lets later analysis distinguish "corroboration saved
+    # a finding the judge wanted to downrank" from "the judge agreed to keep
+    # it" (see Finding.judge_verdict's docstring).
+    assert result[0] is not f
     assert result[0].confidence == 80
     assert result[0].demoted_to_body is False
     assert result[0].out_of_diff is False
+    assert result[0].judge_verdict == "downrank"
     assert count == 0
 
 
 def test_apply_verdicts_missing_id_defaults_to_keep() -> None:
     f = _finding(confidence=80)
     result, count = _apply_verdicts([f], [])  # no verdict for id=0
-    assert result[0] is f
+    assert result[0] is not f
+    assert result[0].judge_verdict == "keep"
     assert count == 0
 
 

@@ -121,6 +121,31 @@ def test_build_entry_context_missing_false_no_flag() -> None:
     assert "context_missing" not in entry.extras
 
 
+def test_build_entry_populates_judge_data_in_extras() -> None:
+    """Judge-verdict instrumentation: judge_verdict/corroborated/confidence
+    are always written into extras, so every persisted entry has a
+    consistent, analyzable shape regardless of whether the caller had real
+    judge data to pass."""
+    cmd = _cmd("false-positive", "not real")
+    entry = build_entry(
+        cmd, source="code-reviewer", file="src/foo.py",
+        judge_verdict="downrank", corroborated=True, confidence=63,
+    )
+    assert entry.extras.get("judge_verdict") == "downrank"
+    assert entry.extras.get("corroborated") is True
+    assert entry.extras.get("confidence") == 63
+
+
+def test_build_entry_judge_data_defaults_when_absent() -> None:
+    """No judge data supplied (the common case today) still writes
+    absent-safe defaults into extras rather than omitting the keys."""
+    cmd = _cmd("false-positive", "not real")
+    entry = build_entry(cmd, source="code-reviewer", file="src/foo.py")
+    assert entry.extras.get("judge_verdict") is None
+    assert entry.extras.get("corroborated") is False
+    assert entry.extras.get("confidence") is None
+
+
 def test_build_entry_finding_id_and_context_missing_coexist() -> None:
     """finding_id and context_missing can appear together in extras."""
     cmd = SlashCommand(

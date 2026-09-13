@@ -557,6 +557,71 @@ def test_build_inline_meta_marker_round_trips() -> None:
     )
 
 
+def test_build_inline_meta_marker_round_trips_judge_data() -> None:
+    """Judge-verdict instrumentation: judge_verdict/corroborated/confidence
+    round-trip through the marker when supplied."""
+    marker = build_inline_meta_marker(
+        fingerprint="code-reviewer|app.py|10|abc123def456",
+        category="secret",
+        severity="High",
+        judge_verdict="downrank",
+        corroborated=True,
+        confidence=63,
+    )
+    meta = extract_inline_meta(marker)
+    assert meta == InlineMeta(
+        fp="code-reviewer|app.py|10|abc123def456",
+        cat="secret",
+        sev="High",
+        judge_verdict="downrank",
+        corroborated=True,
+        confidence=63,
+    )
+
+
+def test_build_inline_meta_marker_omits_judge_data_when_absent() -> None:
+    """A marker built with no judge data at all (judge pass never ran, or a
+    caller predating this feature) has byte-for-byte the same shape as
+    before this feature existed -- no `jv`/`corr`/`conf` keys at all."""
+    marker = build_inline_meta_marker(
+        fingerprint="code-reviewer|app.py|10|abc123def456", category="secret", severity="High"
+    )
+    assert '"jv"' not in marker
+    assert '"corr"' not in marker
+    assert '"conf"' not in marker
+    meta = extract_inline_meta(marker)
+    assert meta is not None
+    assert meta.judge_verdict is None
+    assert meta.corroborated is False
+    assert meta.confidence is None
+
+
+def test_extract_inline_meta_unknown_judge_verdict_drops_to_none() -> None:
+    """A future judge_verdict value this version doesn't recognize degrades
+    to None rather than being trusted verbatim."""
+    import base64
+    import json
+
+    payload = json.dumps({"fp": "src|f.py|1|abc", "jv": "not-a-real-verdict"})
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    meta = extract_inline_meta(f"<!-- ai-pr-review-finding:{encoded} -->")
+    assert meta is not None
+    assert meta.judge_verdict is None
+
+
+def test_extract_inline_meta_out_of_range_confidence_drops_to_none() -> None:
+    """A confidence value outside 0-100 (corrupt or forged payload) degrades
+    to None rather than being trusted verbatim."""
+    import base64
+    import json
+
+    payload = json.dumps({"fp": "src|f.py|1|abc", "conf": 999})
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    meta = extract_inline_meta(f"<!-- ai-pr-review-finding:{encoded} -->")
+    assert meta is not None
+    assert meta.confidence is None
+
+
 def test_extract_inline_meta_no_marker_returns_none() -> None:
     assert extract_inline_meta("just a plain comment body") == extract_inline_meta("")
     assert extract_inline_meta("just a plain comment body") is None

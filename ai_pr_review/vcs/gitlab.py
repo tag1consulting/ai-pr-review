@@ -796,6 +796,8 @@ class GitLabProvider:
         # matching logic that consumes them ships.
         body += "\n" + build_inline_meta_marker(
             fingerprint=fingerprint(f), category=f.category, severity=f.severity,
+            judge_verdict=f.judge_verdict, corroborated=f.corroborated,
+            confidence=f.confidence,
         )
         return body
 
