@@ -694,6 +694,124 @@ def list_commands(comment_body: str, families: str) -> None:
     click.echo(json.dumps(entries))
 
 
+@cli.command("parse-command")
+@click.option(
+    "--comment-body",
+    envvar="SLASH_COMMENT_BODY",
+    default="",
+    help="Raw comment body; only the first line is inspected (defaults to "
+    "SLASH_COMMENT_BODY env var).",
+)
+def parse_command_gate(comment_body: str) -> None:
+    """Job-routing parse for slash-commands.yml (issue #821).
+
+    Replaces three previously-independent bash `case`/`awk` "Parse command"
+    steps (`handle-command`, `dismiss-finding`, `feedback-command`) with one
+    shared entry point built on `ai_pr_review.slash.parser`'s
+    `KNOWN_COMMANDS`/`parse_command` -- the same grammar the `slash`,
+    `list-commands`, `dismiss`, and `dismiss-inline` subcommands already use.
+    This is a job-routing classification, not the full slash-command grammar:
+    it also recognizes `ai_pr_review.slash.parser.BASH_ONLY_COMMANDS`
+    (rescan/review-full/skip/help), a vocabulary the Python engine's
+    feedback/dismiss pipeline never sees at all.
+
+    Prints `key=value` lines to stdout only (safe for `>> $GITHUB_OUTPUT`);
+    never exits non-zero for a malformed comment -- an unparseable or
+    unrecognized first line is a normal outcome here (`unrecognized=true`),
+    not a CLI failure.
+
+    Keys emitted:
+      command      -- the command token (lowercased, matching
+                       SlashCommand.name's normalization), whenever the first
+                       line has one at all -- whether or not it's recognized.
+                       Every consumer of this key compares it against
+                       specific literal command names, so an unrecognized or
+                       job-irrelevant value here is inert.
+      valid         -- 'true' for a command this step's caller can act on
+                       directly (BASH_ONLY_COMMANDS, or any KNOWN_COMMANDS
+                       entry other than 'feedback'); 'false' for 'feedback'
+                       (a real command, but owned entirely by the
+                       feedback-command job -- see KNOWN_COMMANDS's
+                       docstring) and for anything unrecognized.
+      unrecognized  -- 'true' only when the token is neither
+                       BASH_ONLY_COMMANDS nor a KNOWN_COMMANDS entry.
+      finding_id    -- the numeric F<n> (or "[F<n>]") token immediately
+                       following the command, for every KNOWN_COMMANDS entry
+                       except 'feedback'; empty when absent. Bracket-form and
+                       case handling match `parse_command`'s own `_FID_RE`.
+
+    One normalization is deliberate relative to the three bash steps this
+    replaces: `parse_command` lowercases the command token (`SlashCommand.
+    name`), so e.g. "/ai-pr-review Dismiss" is now recognized the same as
+    "/ai-pr-review dismiss". The old bash `case` statements were
+    case-sensitive, so a mixed-case command previously either silently
+    misrouted (handle-command's `*)` catch-all) or was forwarded verbatim to
+    a downstream `click.Choice` (`ai-pr-review dismiss`/`dismiss-inline`'s
+    `--command`, case-sensitive) that would then reject it outright. This
+    normalization only ever widens acceptance of the existing, fixed command
+    vocabulary -- it can never route a comment to a command that didn't
+    already exist.
+    """
+    from ai_pr_review.slash.parser import BASH_ONLY_COMMANDS, ParseError, parse_command
+
+    try:
+        result = parse_command(comment_body)
+    except Exception:
+        # Defense-in-depth, not a reachability guarantee either way. The
+        # concretely known trigger: parser.py's F<n> regex (_FID_RE) has no
+        # digit-count cap, unlike the length-capped regex ([0-9]{1,6}) the
+        # three bash steps this replaces used for the same extraction. An
+        # absurdly long numeral in the F-ID position (thousands of digits)
+        # exceeds Python's int-string conversion limit and raises ValueError
+        # from int() deep inside parse_command(). The bash steps never
+        # crashed on such input -- the capped regex just failed to match and
+        # the digits fell through as ordinary reason text. Replicating that
+        # exact fallback would mean reaching inside parse_command() a second
+        # time; reject the whole line instead.
+        #
+        # Caught broadly rather than `except ValueError` (review finding F1,
+        # PR #829): this step's contract is "never crashes" regardless of
+        # what parser.py does internally -- narrowing to the one exception
+        # type known today would leave the same crash-on-malformed-input
+        # risk open for any future change inside parse_command() that raises
+        # something else (e.g. a future stricter validation). Logged so a
+        # genuinely unexpected failure here is still visible in the job log
+        # rather than silently swallowed.
+        logger.warning("parse-command: unexpected error parsing comment body", exc_info=True)
+        click.echo("valid=false")
+        click.echo("unrecognized=true")
+        return
+
+    if result is None:
+        # Bare "/ai-pr-review" with nothing after, or a body that doesn't
+        # start with the prefix at all. Every job's own `if:` gate already
+        # requires the prefix before this step runs, so this is a defensive
+        # fallback, not the expected path.
+        click.echo("valid=false")
+        click.echo("unrecognized=true")
+        return
+
+    if isinstance(result, ParseError):
+        token = result.unknown_token
+        if token in BASH_ONLY_COMMANDS:
+            click.echo(f"command={token}")
+            click.echo("valid=true")
+            return
+        if token:
+            click.echo(f"command={token}")
+        click.echo("valid=false")
+        click.echo("unrecognized=true")
+        return
+
+    # Recognized by ai_pr_review.slash.parser.KNOWN_COMMANDS.
+    click.echo(f"command={result.name}")
+    if result.name == "feedback":
+        click.echo("valid=false")
+        return
+    click.echo("valid=true")
+    click.echo(f"finding_id={result.finding_id if result.finding_id is not None else ''}")
+
+
 def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     """Build a `GitHubProvider` from env, or exit(1) with a `<label>: ...` message.
 

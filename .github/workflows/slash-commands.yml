@@ -276,61 +276,36 @@ jobs:
     steps:
       - name: Parse command
         id: cmd
+        # This job runs on a bare ubuntu-latest runner (no job-level
+        # `container:` — see the "Run review (rescan)"/"Run review
+        # (review-full)" steps below, which invoke
+        # tag1consulting/ai-pr-review/container-action@main, a composite
+        # action that shells out to `docker run` itself; that action's docker
+        # invocation needs a real Docker daemon reachable from wherever it
+        # runs, and giving this job its own `container:` would execute those
+        # steps *inside* that container instead of on the runner host, where
+        # the ai-pr-review image (a plain analyzer/Python image, no Docker
+        # CLI baked in) cannot shell out to Docker at all -- verified against
+        # this repo's Dockerfile, which has no Docker-in-Docker setup).
+        # `docker run` here talks to the *host's* Docker daemon directly (the
+        # same way that composite action does), so it works without any of
+        # that -- it isn't nested inside a job container.
+        #
+        # Issue #821: this replaces a bash `case` statement with the same
+        # `ai-pr-review parse-command` entry point dismiss-finding and
+        # feedback-command call directly below (they already run inside the
+        # image as their job container, so no `docker run` wrapper is
+        # needed there). The image's ENTRYPOINT is `python3 -m ai_pr_review
+        # review`, so it's overridden here to invoke the CLI's `parse-command`
+        # subcommand instead of a review.
         env:
-          COMMENT: ${{ inputs.comment-body }}
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
         run: |
-          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
-          case "$command" in
-            rescan|review-full|skip|help)
-              echo "command=$command" >> "$GITHUB_OUTPUT"
-              echo "valid=true"       >> "$GITHUB_OUTPUT"
-              ;;
-            dismiss|false-positive|wont-fix|fixed|explain|revise)
-              # These commands accept an optional F<n> body-finding ID from a
-              # top-level PR comment. Handled by dismiss-body-finding job.
-              # "fixed" additionally accepts an optional commit SHA after the
-              # F-ID -- that's parsed in Python (ai_pr_review/slash/parser.py)
-              # from the full comment body already forwarded below, not here.
-              echo "command=$command" >> "$GITHUB_OUTPUT"
-              echo "valid=true"       >> "$GITHUB_OUTPUT"
-              # Extract optional finding ID (e.g. "F3", "f3", or the bracketed
-              # "[F3]" shown in review bodies — issue #735) from second token.
-              # Validate strictly: must be F followed by 1-6 digits only (caps at F999999),
-              # with optional surrounding square brackets.
-              second_token=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $3}')
-              if echo "$second_token" | grep -qiE '^\[?F[0-9]{1,6}\]?$'; then
-                finding_num=$(echo "$second_token" | grep -oE '[0-9]{1,6}')
-                echo "finding_id=${finding_num}" >> "$GITHUB_OUTPUT"
-              else
-                echo "finding_id=" >> "$GITHUB_OUTPUT"
-              fi
-              ;;
-            feedback)
-              # Recognized command (ai_pr_review/slash/parser.py's
-              # KNOWN_COMMANDS), but owned entirely by the feedback-command
-              # job (OWNER/MEMBER-gated persistent side effects, issue #769)
-              # -- this job has nothing to do for it. Not an error: must NOT
-              # fall into the `*)` unrecognized-command branch below, or
-              # every legitimate `/ai-pr-review feedback ...` comment would
-              # get a bogus "unrecognized command" reply on top of its
-              # correct handling elsewhere (issue #772).
-              #
-              # IMPORTANT for future maintainers: if a new command is ever
-              # added to KNOWN_COMMANDS that isn't already recognized by one
-              # of the case arms above, it must be added here too (or its
-              # own arm) -- otherwise it silently falls into `*)` and this
-              # job will incorrectly tell the user it's "unrecognized" even
-              # though another job handles it correctly. This coupling is
-              # enforced by test_slash_commands_workflow.py's
-              # test_handle_command_recognizes_every_known_command, which
-              # fails loudly if the two ever drift apart.
-              echo "valid=false" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "valid=false"      >> "$GITHUB_OUTPUT"
-              echo "unrecognized=true" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
+          docker run --rm \
+            -e SLASH_COMMENT_BODY \
+            --entrypoint python3 \
+            "ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}" \
+            -m ai_pr_review parse-command >> "$GITHUB_OUTPUT"
 
       - name: React — seen
         if: steps.cmd.outputs.valid == 'true'
@@ -960,11 +935,14 @@ jobs:
     steps:
       - name: Parse command
         id: cmd
+        # Issue #821: this job already runs inside the ai-pr-review image as
+        # its job-level container (above), so the CLI's console-script entry
+        # point is directly on PATH -- no `docker run` wrapper needed, unlike
+        # handle-command's equivalent step (bare ubuntu-latest, no job
+        # container).
         env:
-          COMMENT: ${{ inputs.comment-body }}
-        run: |
-          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
-          echo "command=$command" >> "$GITHUB_OUTPUT"
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+        run: ai-pr-review parse-command >> "$GITHUB_OUTPUT"
 
       - name: React — seen
         env:
@@ -1215,12 +1193,15 @@ jobs:
         # exclusion is enforced by "List feedback commands"' `--families`
         # filter below, which never selects the dismiss family in the first
         # place. Mirrors dismiss-finding's identical single-line parse.
+        #
+        # Issue #821: this job already runs inside the ai-pr-review image as
+        # its job-level container (see the `container:` key on this job
+        # above), so the CLI's console-script entry point is directly on
+        # PATH here too -- same as dismiss-finding's identical step.
         id: cmd
         env:
-          COMMENT: ${{ inputs.comment-body }}
-        run: |
-          command=$(echo "$COMMENT" | head -1 | tr -d '\r' | awk '{print $2}')
-          echo "command=$command" >> "$GITHUB_OUTPUT"
+          SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
+        run: ai-pr-review parse-command >> "$GITHUB_OUTPUT"
 
       - name: React — seen
         env:
