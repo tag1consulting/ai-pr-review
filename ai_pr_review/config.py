@@ -31,7 +31,6 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_MAX_INLINE",
         "AI_MAX_TOKENS_PER_AGENT",
         "AI_ENABLE_SUGGESTIONS",
-        "AI_CACHE_PRIMING",
         "AI_CONFIDENCE_THRESHOLD",
         "AI_DISABLE_GATE_ARCHITECTURE",
         "AI_DISABLE_GATE_SECURITY",
@@ -39,6 +38,11 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_DRY_RUN",
         "AI_IGNORE_MERGE_COMMITS",
         "AI_PR_REVIEW_RECORD_DIR",
+        # Read directly by cli.py's `compute` subcommand (a `--output` click
+        # option with this envvar as its Click default), not by Config --
+        # ReviewConfig.compute_output was an unread duplicate field, removed
+        # in #824. Kept in this set so Config.from_env's unknown-AI_*-var
+        # check doesn't warn about it.
         "AI_PR_REVIEW_COMPUTE_OUTPUT",
         "AI_PR_REVIEW_SCRIPT_DIR",
         # Read directly by review/runtime.py, not by Config -- registered here
@@ -131,6 +135,13 @@ _DEPRECATED_NOOP_AI_VARS: dict[str, str] = {
     # per-agent routed subset, so there is no longer a per-agent profile
     # token budget to cap.
     "AI_PROFILE_MAX_TOKENS": "language-profile routing removed in #814",
+    # cache_priming_effective() and DispatchContext.cache_priming_env were
+    # deleted as dead code (zero production callers) in #807. That commit's
+    # message claimed AI_CACHE_PRIMING would "stay accepted in config.py as a
+    # documented no-op", but it was never actually added to this registry --
+    # it stayed silently accepted via _KNOWN_AI_VARS with no warning at all
+    # until this entry (#824 audit of #806's deprecation-exit criterion).
+    "AI_CACHE_PRIMING": "cache-priming serialization removed as dead code in #807",
 }
 _NOOP_REMOVAL_RELEASE = "v3.0.0"
 
@@ -153,6 +164,30 @@ _DEPRECATED_ANALYZER_NAMES: dict[str, str] = {
     # dispatches regardless of allow/deny-list membership.
     "docs-missing-check": "removed in #815, docs-api-check/docs-ref-check/docs-drift-check remain",
 }
+
+# Env vars whose underlying feature was removed, same shape and intent as
+# _DEPRECATED_NOOP_AI_VARS above, but kept in a separate registry because
+# _check_unknown_ai_vars only scans keys starting with "AI_" -- none of
+# these names ever did, so they need their own unconditional presence check
+# (_check_deprecated_noop_env_vars) rather than that scan.
+_DEPRECATED_NOOP_ENV_VARS: dict[str, str] = {
+    # ReviewConfig.standalone_depth (default 50) was parsed from this var into
+    # an int field nothing outside config.py ever read -- reserved for a
+    # standalone review mode that was documented but never implemented (see
+    # #623). The field itself was removed in #824.
+    "STANDALONE_DEPTH": "reserved for standalone review mode, never implemented (#623)",
+}
+
+
+def _check_deprecated_noop_env_vars() -> None:
+    """Warn (not raise) for any set-but-inert non-'AI_'-prefixed env var."""
+    for key, reason in _DEPRECATED_NOOP_ENV_VARS.items():
+        if key in os.environ:
+            print(
+                f"WARNING: {key!r} is deprecated and ignored ({reason}); "
+                f"will be rejected starting in {_NOOP_REMOVAL_RELEASE}.",
+                file=sys.stderr,
+            )
 
 
 def _validate_analyzer_names_list(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -277,7 +312,6 @@ class ReviewConfig(BaseModel):
     vcs_provider: str = "github"
     review_target: str = "pr"
     force_full_diff: bool = False
-    standalone_depth: int = 50
 
     # --- Agent tuning ---
     parallel: bool = True
@@ -291,11 +325,9 @@ class ReviewConfig(BaseModel):
     max_inline: int = 25
     max_tokens_per_agent: int = 32768
     enable_suggestions: bool = True
-    cache_priming: bool = False
     llm_prompt_caching: str = "auto"
     confidence_threshold: int = 75
     max_diff_lines: int = 5000
-    llm_retry_count: int = 2
 
     # --- Agent gates ---
     disable_gate_architecture: bool = False
@@ -394,12 +426,8 @@ class ReviewConfig(BaseModel):
     ci_merge_request_diff_base_sha: str = ""
     ci_job_token: str = ""
 
-    # --- PHP ---
-    phpstan_level: int = 3
-
     # --- Recording ---
     record_dir: str = ""
-    compute_output: str = ""
 
     # --- Structured logging ---
     log_format: str = "human"
@@ -545,6 +573,7 @@ class ReviewConfig(BaseModel):
     def from_env(cls) -> ReviewConfig:
         """Load config from environment variables. Raises ConfigError on unknown AI_* vars."""
         _check_unknown_ai_vars()
+        _check_deprecated_noop_env_vars()
 
         review_target = os.environ.get("REVIEW_TARGET", "pr").strip().lower()
         _check_deprecated_review_target(review_target)
@@ -592,17 +621,14 @@ class ReviewConfig(BaseModel):
             vcs_provider=os.environ.get("VCS_PROVIDER", "github").strip(),
             review_target=review_target,
             force_full_diff=_bool("FORCE_FULL_DIFF"),
-            standalone_depth=_int("STANDALONE_DEPTH", 50),
             parallel=_bool("AI_PARALLEL", True),
             analyzer_concurrency=max(1, _int("AI_ANALYZER_CONCURRENCY", 4)),
             max_inline=_int("AI_MAX_INLINE", 25),
             max_tokens_per_agent=_int("AI_MAX_TOKENS_PER_AGENT", 32768),
             enable_suggestions=_bool("AI_ENABLE_SUGGESTIONS", True),
-            cache_priming=_bool("AI_CACHE_PRIMING", False),
             llm_prompt_caching=os.environ.get("LLM_PROMPT_CACHING", "auto"),
             confidence_threshold=_int("AI_CONFIDENCE_THRESHOLD", 75),
             max_diff_lines=_int("MAX_DIFF_LINES", 5000),
-            llm_retry_count=_int("LLM_RETRY_COUNT", 2),
             disable_gate_architecture=_bool("AI_DISABLE_GATE_ARCHITECTURE"),
             disable_gate_security=_bool("AI_DISABLE_GATE_SECURITY"),
             disable_gate_edge_case=_bool("AI_DISABLE_GATE_EDGE_CASE"),
@@ -676,9 +702,7 @@ class ReviewConfig(BaseModel):
                 "CI_MERGE_REQUEST_DIFF_BASE_SHA", ""
             ),
             ci_job_token=os.environ.get("CI_JOB_TOKEN", "").strip(),
-            phpstan_level=_int("PHPSTAN_LEVEL", 3),
             record_dir=os.environ.get("AI_PR_REVIEW_RECORD_DIR", ""),
-            compute_output=os.environ.get("AI_PR_REVIEW_COMPUTE_OUTPUT", ""),
             log_format=os.environ.get("AI_LOG_FORMAT", "human"),
             log_level=os.environ.get("AI_LOG_LEVEL", "WARNING"),
             telemetry_enabled=_bool("AI_TELEMETRY_ENABLED", False),

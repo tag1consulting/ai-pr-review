@@ -10,6 +10,7 @@ import ai_pr_review.config as _config_module
 from ai_pr_review.config import (
     _DEPRECATED_AI_VAR_ALIASES,
     _DEPRECATED_NOOP_AI_VARS,
+    _DEPRECATED_NOOP_ENV_VARS,
     _KNOWN_AI_VARS,
     ReviewConfig,
 )
@@ -263,6 +264,20 @@ def test_profile_max_tokens_env_var_deprecated_noop(
     assert "v3.0.0" in stderr
 
 
+def test_deprecated_noop_env_vars_never_ai_prefixed() -> None:
+    """_DEPRECATED_NOOP_ENV_VARS exists only because _check_unknown_ai_vars
+    scans exclusively "AI_"-prefixed keys. A key here that DOES start with
+    "AI_" would fire both that scan's generic unknown-var warning AND this
+    registry's warning for the same var -- it belongs in
+    _DEPRECATED_NOOP_AI_VARS instead.
+    """
+    ai_prefixed = {k for k in _DEPRECATED_NOOP_ENV_VARS if k.startswith("AI_")}
+    assert not ai_prefixed, (
+        f"Keys in _DEPRECATED_NOOP_ENV_VARS must not start with 'AI_' "
+        f"(use _DEPRECATED_NOOP_AI_VARS instead): {ai_prefixed}"
+    )
+
+
 def test_invalid_review_mode() -> None:
     with pytest.raises(ValueError):
         ReviewConfig.model_validate({"review_mode": "invalid"})
@@ -356,18 +371,44 @@ def test_float_env_var_parse_failure_warns(
     assert "proceed with" in captured.err
 
 
-def test_cache_priming_default_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AI_CACHE_PRIMING unset → cache_priming defaults to False."""
-    monkeypatch.delenv("AI_CACHE_PRIMING", raising=False)
-    cfg = ReviewConfig.from_env()
-    assert cfg.cache_priming is False
-
-
-def test_cache_priming_env_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AI_CACHE_PRIMING=true → cache_priming is True."""
+def test_cache_priming_env_var_deprecated_noop(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AI_CACHE_PRIMING (#807: cache_priming_effective() deleted as dead code;
+    #824 retrofitted the deprecation warning that commit's message promised
+    but never actually wired in) is accepted without ConfigError, warns, and
+    names the removal release.
+    """
     monkeypatch.setenv("AI_CACHE_PRIMING", "true")
-    cfg = ReviewConfig.from_env()
-    assert cfg.cache_priming is True
+    ReviewConfig.from_env()  # must not raise
+    stderr = capsys.readouterr().err
+    assert "AI_CACHE_PRIMING" in stderr
+    assert "deprecated" in stderr
+    assert "v3.0.0" in stderr
+
+
+def test_standalone_depth_env_var_deprecated_noop(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """STANDALONE_DEPTH (#824: unread ReviewConfig field removed) is accepted
+    without ConfigError, warns, and names the removal release, even though
+    it never had an "AI_" prefix to go through _check_unknown_ai_vars.
+    """
+    monkeypatch.setenv("STANDALONE_DEPTH", "100")
+    ReviewConfig.from_env()  # must not raise
+    stderr = capsys.readouterr().err
+    assert "STANDALONE_DEPTH" in stderr
+    assert "deprecated" in stderr
+    assert "v3.0.0" in stderr
+
+
+def test_standalone_depth_unset_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("STANDALONE_DEPTH", raising=False)
+    ReviewConfig.from_env()
+    stderr = capsys.readouterr().err
+    assert "STANDALONE_DEPTH" not in stderr
 
 
 def test_anthropic_premium_default_is_opus_5(monkeypatch: pytest.MonkeyPatch) -> None:

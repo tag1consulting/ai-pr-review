@@ -120,7 +120,7 @@ your workflow `env:` block or pass them via `docker run -e`.
 |----------|---------|-------------|
 | `AI_TEMPERATURE` | `0.3` | Sampling temperature for LLM calls (clamped to [0, 2]) |
 | `LLM_PROMPT_CACHING` | `auto` | Enable Anthropic/Bedrock prompt caching. `auto` enables for anthropic and bedrock-proxy; `true` force-enables; `false` force-disables. |
-| `AI_CACHE_PRIMING` | `false` | Serialize cache-writing calls before parallel fan-out. Default off (opportunistic hits suffice). Enable in rate-limited or serialized-proxy environments. |
+| `AI_CACHE_PRIMING` | `false` | Deprecated, ignored (#824 audit of #807): the cache-priming serialization mechanism (`cache_priming_effective()`) was deleted as dead code with zero production callers. Accepted as a no-op with a deprecation warning; will be rejected starting in v3.0.0. |
 | `VCS_PROVIDER` | `github` | Selects the post-review script. Valid: `github`, `bitbucket`, `gitlab`. |
 | `PHPSTAN_LEVEL` | `3` | PHPStan analysis depth level (0-9). Always applies — the analyzer runs against a trusted, empty `--configuration` file and never auto-discovers a `phpstan.neon`/`phpstan.neon.dist` from the analyzed repo, since that content may be untrusted fork-PR code checked out under `pull_request_target` (#739) |
 
@@ -133,8 +133,8 @@ to change them.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FORCE_FULL_DIFF` | `false` | Bypass the SHA watermark and review the full PR diff. Prefer the `ai-review-rescan` PR label instead — it sets this automatically. |
-| `STANDALONE_DEPTH` | `50` | Reserved for standalone review mode, which is not currently implemented (see [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). Not currently read outside config loading. |
-| `LLM_RETRY_COUNT` | `2` | Retry attempts for transient LLM API failures (429, 5xx, timeouts). Set to `0` to disable. |
+| `STANDALONE_DEPTH` | n/a | Deprecated, ignored (#824): reserved for a standalone review mode that was documented but never implemented (see [issue #623](https://github.com/tag1consulting/ai-pr-review/issues/623)). The last remaining trace, an unread `ReviewConfig` field, was removed in #824. Accepted as a no-op with a deprecation warning; will be rejected starting in v3.0.0. |
+| `LLM_RETRY_COUNT` | `3` | Retry attempts for transient LLM API failures (429, 5xx, timeouts), clamped to 0-10. Set to `0` to disable. |
 | `AI_CONFIDENCE_THRESHOLD` | `75` | Minimum confidence score (0–100) for findings. Findings below this are dropped before suppressions. |
 | `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Disables the docs-only heuristic gate; `architecture-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
