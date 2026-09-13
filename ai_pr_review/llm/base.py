@@ -22,7 +22,31 @@ class LLMRequest:
     # leads the system field with its own cache_control marker so it caches
     # once per run and is read by every subsequent agent dispatch in that run.
     # Providers without multi-breakpoint caching prepend it to system_prompt.
+    #
+    # This is always the full "\n\n"-joined string of every run-shared
+    # fragment, regardless of whether cache_blocks (below) is also populated
+    # -- every provider except Anthropic/Bedrock reads only this field, and
+    # Anthropic/Bedrock fall back to it too when cache_blocks is empty.
     system_prefix: str = ""
+    # Same run-shared fragments as system_prefix, kept separate instead of
+    # joined, ordered most-stable-first (#816). When non-empty and caching is
+    # enabled, ai_pr_review.llm.anthropic/bedrock give each entry its OWN
+    # cache_control breakpoint (up to 3, leaving Anthropic's 4th breakpoint
+    # for the diff in `messages`) instead of one joined block sharing a
+    # single cache lifetime -- so a change to a volatile fragment (e.g. the
+    # feedback-loop addendum, which updates between reruns as the store
+    # accumulates entries) does not invalidate the cache for a more-stable
+    # fragment ahead of it (e.g. the PR-context block, stable for the PR's
+    # whole lifetime). Anthropic's cache-hit check is prefix-cumulative: a
+    # breakpoint's cache entry covers all `system` content from the start
+    # through that breakpoint, so ordering matters -- most-stable content
+    # must come first for the split to actually improve hit rate.
+    #
+    # Every provider OTHER than Anthropic/Bedrock ignores this field
+    # entirely and continues to read only system_prefix, unaffected by its
+    # introduction. dispatch.py is the only current populator; it builds
+    # both fields from the same underlying parts list.
+    cache_blocks: tuple[str, ...] = ()
 
 
 @dataclass

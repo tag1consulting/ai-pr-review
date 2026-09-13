@@ -2,8 +2,35 @@
 
 Caching layouts (Anthropic supports up to 4 cache breakpoints per request):
 
-  Caching enabled, system_prefix non-empty (preferred — caches the run-shared
-  system tail across every agent in the run, plus the diff):
+  Caching enabled, cache_blocks non-empty (#816, preferred — splits the
+  run-shared system tail into up to 3 independently-cached blocks, ordered
+  most-stable-first (shared PR context, then language profiles, then the
+  feedback-loop addendum), each with its own cache_control breakpoint, plus
+  the diff's existing message-level breakpoint as the 4th:
+    system: [
+      {type:"text", text:<cache_blocks[0]>, cache_control:{type:"ephemeral"}},
+      {type:"text", text:<cache_blocks[1]>, cache_control:{type:"ephemeral"}},
+      {type:"text", text:<cache_blocks[2]>, cache_control:{type:"ephemeral"}},
+      {type:"text", text:<system_prompt>}
+    ]
+    messages: [
+      {role:"user", content:[
+        {type:"text", text:<user_message>, cache_control:{type:"ephemeral"}}
+      ]}
+    ]
+    Only non-empty cache_blocks entries get their own block+breakpoint (a
+    run with just 1 or 2 populated fragments still gets 1 or 2 breakpoints,
+    not 3 padded ones). Anthropic's cache-hit check is prefix-cumulative —
+    breakpoint N's cache entry covers all `system` content from the start
+    through breakpoint N — so putting the most byte-stable fragment first
+    means its own cache lifetime survives churn in a less-stable fragment
+    later in the list, instead of one change invalidating everything after
+    it the way a single joined block would.
+
+  Caching enabled, cache_blocks empty but system_prefix non-empty (legacy
+  two-breakpoint layout — caches the whole run-shared system tail as ONE
+  block, preserved for any caller that populates system_prefix without
+  cache_blocks):
     system: [
       {type:"text", text:<system_prefix>, cache_control:{type:"ephemeral"}},
       {type:"text", text:<system_prompt>}
@@ -14,8 +41,8 @@ Caching layouts (Anthropic supports up to 4 cache breakpoints per request):
       ]}
     ]
 
-  Caching enabled, system_prefix empty (legacy single-breakpoint layout
-  preserved for backward compatibility):
+  Caching enabled, both cache_blocks and system_prefix empty (legacy
+  single-breakpoint layout preserved for backward compatibility):
     system: [
       {type:"text", text:<user_message>, cache_control:{type:"ephemeral"}},
       {type:"text", text:<system_prompt>}
@@ -41,6 +68,11 @@ from .base import LLMRequest, LLMResponse
 _API_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 
+# Anthropic allows at most 4 cache_control breakpoints per request. The diff
+# (in `messages`) always claims one, so at most 3 remain for `system` blocks
+# built from LLMRequest.cache_blocks (#816).
+_MAX_SYSTEM_CACHE_BLOCKS = 3
+
 
 def _build_body(
     req: LLMRequest,
@@ -53,7 +85,39 @@ def _build_body(
     body: dict[str, Any] = {**extra}
     if include_model:
         body["model"] = req.model_id
-    if caching and req.system_prefix:
+    if caching and req.cache_blocks:
+        # N-block layout (#816): each run-shared fragment in cache_blocks
+        # gets its own cache breakpoint, in the caller-supplied (most-stable-
+        # first) order, so a change to a less-stable fragment does not
+        # invalidate the breakpoints for more-stable fragments ahead of it.
+        blocks = [b for b in req.cache_blocks if b]
+        if len(blocks) > _MAX_SYSTEM_CACHE_BLOCKS:
+            # Not expected in practice — dispatch.py currently supplies at
+            # most 3 entries — but if a future caller adds a 4th, fold the
+            # overflow into the last cached block rather than silently
+            # exceeding Anthropic's 4-breakpoint total (3 here + 1 for the
+            # diff) or dropping a fragment's content.
+            overflow = blocks[_MAX_SYSTEM_CACHE_BLOCKS - 1 :]
+            blocks = [*blocks[: _MAX_SYSTEM_CACHE_BLOCKS - 1], "\n\n".join(overflow)]
+        system_blocks: list[dict[str, Any]] = [
+            {"type": "text", "text": block, "cache_control": {"type": "ephemeral"}}
+            for block in blocks
+        ]
+        system_blocks.append({"type": "text", "text": req.system_prompt})
+        body["system"] = system_blocks
+        body["messages"] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": req.user_message,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+    elif caching and req.system_prefix:
         # Two-breakpoint layout: shared run-scoped prefix caches across every
         # agent in the run; user_message (the diff) caches separately.
         body["system"] = [

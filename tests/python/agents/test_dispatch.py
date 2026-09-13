@@ -399,6 +399,92 @@ async def test_run_tier_shared_context_block_excluded_for_ineligible_agent(
 
 
 @pytest.mark.anyio
+async def test_run_tier_populates_cache_blocks_most_stable_first(tmp_path: Path) -> None:
+    """#816: run_tier must populate LLMRequest.cache_blocks with the same
+    run-shared fragments as system_prefix, kept separate and ordered
+    most-stable-first: shared_context_block, then language_profile_text,
+    then feedback_addendum (the least stable -- it updates between reruns).
+    """
+    ctx = _make_context(tmp_path)
+    ctx.shared_context_block = "<pr-context>Add widget</pr-context>"
+    ctx.language_profile_text = "## Python-Specific Review Context\nUse type hints."
+    ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.cache_blocks == (
+        "<pr-context>Add widget</pr-context>",
+        "## Python-Specific Review Context\nUse type hints.",
+        "<repo-feedback>recent learnings</repo-feedback>",
+    )
+    # system_prefix carries the same content joined, for non-Anthropic providers.
+    assert req.system_prefix == "\n\n".join(req.cache_blocks)
+
+
+@pytest.mark.anyio
+async def test_run_tier_cache_blocks_excludes_ineligible_fragments(tmp_path: Path) -> None:
+    """blind-hunter (context_enrichment_eligible=False) must see only
+    feedback_addendum in cache_blocks -- shared_context_block and
+    language_profile_text stay excluded, same gate as system_prefix.
+    """
+    ctx = _make_context(tmp_path)
+    ctx.shared_context_block = "<pr-context>Add widget</pr-context>"
+    ctx.language_profile_text = "## Python-Specific Review Context\nUse type hints."
+    ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    ineligible = get_agent("blind-hunter")
+    await run_tier(
+        agents=[ineligible],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.cache_blocks == ("<repo-feedback>recent learnings</repo-feedback>",)
+
+
+@pytest.mark.anyio
+async def test_run_tier_empty_cache_blocks_when_no_addenda(tmp_path: Path) -> None:
+    """No run-shared fragments set -> cache_blocks is the empty tuple, same
+    as system_prefix being empty, so anthropic.py falls back to the legacy
+    single-breakpoint layout.
+    """
+    ctx = _make_context(tmp_path)
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert captured[0].cache_blocks == ()
+
+
+@pytest.mark.anyio
 async def test_run_tier_runs_context_enrichment_once_per_tier(tmp_path: Path) -> None:
     """#499: with multiple eligible agents in a tier, the expensive
     diff-parse + symbol-lookup must run exactly once for the whole tier
