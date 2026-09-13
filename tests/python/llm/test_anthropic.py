@@ -195,6 +195,130 @@ def test_body_caching_without_system_prefix_preserves_legacy_layout():
     ]
 
 
+def test_body_caching_with_cache_blocks_uses_one_breakpoint_per_block():
+    """#816: when cache_blocks is populated, each entry gets its own system
+    block + cache_control breakpoint, in the caller-supplied order, followed
+    by the uncached per-agent system_prompt. The diff keeps its own separate
+    breakpoint under `messages`, so 3 populated cache_blocks + the diff use
+    all 4 of Anthropic's breakpoints.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff content.",
+        system_prefix="<pr-context>...</pr-context>\n\nPython profile\n\n<repo-feedback>...</repo-feedback>",
+        cache_blocks=("<pr-context>...</pr-context>", "Python profile", "<repo-feedback>...</repo-feedback>"),
+    )
+    body = _build_body(req, caching=True, extra={})
+
+    assert isinstance(body["system"], list)
+    assert len(body["system"]) == 4
+    assert body["system"][0]["text"] == "<pr-context>...</pr-context>"
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][1]["text"] == "Python profile"
+    assert body["system"][1]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][2]["text"] == "<repo-feedback>...</repo-feedback>"
+    assert body["system"][2]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][3]["text"] == "Per-agent prompt."
+    assert "cache_control" not in body["system"][3]
+
+    # diff still lives in messages with its own (4th) cache breakpoint.
+    content = body["messages"][0]["content"]
+    assert content[0]["text"] == "The diff content."
+    assert content[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_body_caching_with_cache_blocks_skips_empty_entries():
+    """A run with only 1 of 3 possible fragments populated (e.g. only
+    feedback_addendum, for an agent ineligible for shared context / language
+    profiles) must produce exactly 1 cached block, not 3 padded ones.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff.",
+        cache_blocks=("", "", "<repo-feedback>...</repo-feedback>"),
+    )
+    body = _build_body(req, caching=True, extra={})
+
+    assert len(body["system"]) == 2
+    assert body["system"][0]["text"] == "<repo-feedback>...</repo-feedback>"
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][1]["text"] == "Per-agent prompt."
+
+
+def test_body_caching_with_cache_blocks_overflow_folds_into_last_block():
+    """More than 3 non-empty cache_blocks entries (not expected from
+    dispatch.py today, but a defensive guard) must not exceed 3 system
+    breakpoints -- the overflow folds into the final cached block instead of
+    silently dropping content or exceeding Anthropic's 4-breakpoint total.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff.",
+        cache_blocks=("one", "two", "three", "four"),
+    )
+    body = _build_body(req, caching=True, extra={})
+
+    assert len(body["system"]) == 4  # 3 cached blocks + uncached system_prompt
+    assert body["system"][0]["text"] == "one"
+    assert body["system"][1]["text"] == "two"
+    assert body["system"][2]["text"] == "three\n\nfour"
+    for i in range(3):
+        assert body["system"][i]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][3]["text"] == "Per-agent prompt."
+    assert "cache_control" not in body["system"][3]
+
+
+def test_body_caching_cache_blocks_takes_priority_over_system_prefix():
+    """When both cache_blocks and system_prefix are set (as dispatch.py
+    always does), the N-block layout wins -- system_prefix is not also
+    consulted, since it would duplicate content already in cache_blocks.
+    """
+    from ai_pr_review.llm.anthropic import _build_body
+
+    req = make_request(
+        system_prompt="Per-agent prompt.",
+        user_message="The diff.",
+        system_prefix="joined-fallback-text",
+        cache_blocks=("block-a", "block-b"),
+    )
+    body = _build_body(req, caching=True, extra={})
+
+    assert len(body["system"]) == 3
+    assert body["system"][0]["text"] == "block-a"
+    assert body["system"][1]["text"] == "block-b"
+    assert body["system"][2]["text"] == "Per-agent prompt."
+    # The joined fallback string never appears in the body.
+    texts = [b["text"] for b in body["system"]]
+    assert "joined-fallback-text" not in texts
+
+
+def test_body_bedrock_cache_blocks_layout():
+    """build_body_for_bedrock must produce the same N-block layout as direct
+    Anthropic — Bedrock reuses _build_body verbatim.
+    """
+    req = make_request(
+        model_id="us.anthropic.claude-sonnet-5",
+        system_prompt="Per-agent prompt.",
+        user_message="The diff.",
+        cache_blocks=("block-a", "block-b"),
+    )
+    body = build_body_for_bedrock(req, caching=True)
+
+    assert "model" not in body
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert len(body["system"]) == 3
+    assert body["system"][0]["text"] == "block-a"
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][1]["text"] == "block-b"
+    assert body["system"][2]["text"] == "Per-agent prompt."
+
+
 def test_body_no_caching_with_system_prefix_concatenates():
     """When caching is disabled, system_prefix is concatenated ahead of the
     per-agent prompt so the model still sees identical content; the two

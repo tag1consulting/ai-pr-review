@@ -482,13 +482,14 @@ async def _run_single_agent(
             diff_text, spec, context, enrichment=enrichment,
         )
 
-        # Run-shared system tail: shared PR context, feedback addendum, and
-        # language profiles. These are byte-identical across every agent in a
-        # run, so they go into LLMRequest.system_prefix where Anthropic/Bedrock
-        # can mark them with a shared cache breakpoint and read them once
-        # across the whole run instead of paying for them per-agent.
+        # Run-shared system tail: shared PR context, language profiles, and
+        # feedback addendum. These are byte-identical across every agent in a
+        # run, so they go into LLMRequest.system_prefix / cache_blocks where
+        # Anthropic/Bedrock can mark them with cache breakpoints and read them
+        # once across the whole run instead of paying for them per-agent.
         # Providers without multi-breakpoint caching concatenate them ahead of
-        # system_prompt, preserving identical model-visible content.
+        # system_prompt (via system_prefix), preserving identical model-visible
+        # content.
         #
         # The shared PR-context block (#813: PR title/description + file
         # manifest) and language profiles are both gated on
@@ -505,17 +506,31 @@ async def _run_single_agent(
         # previously made this block differ per agent and defeat cross-agent
         # prompt-cache reuse. See #814's PR description for the measured
         # token-cost/stability tradeoff of this simplification.
+        #
+        # Ordering (#816): parts are listed most-stable-first --
+        # shared_context_block (stable for the PR's whole lifetime, unless
+        # its description is edited), then language_profile_text (stable
+        # unless the set of changed-file languages changes between reruns),
+        # then feedback_addendum (the LEAST stable -- it genuinely updates
+        # between reruns as the feedback store accumulates new entries, see
+        # ai_pr_review/feedback/{store,inject}.py). The same ordered list
+        # feeds both system_prefix (joined, for providers without
+        # multi-breakpoint caching) and cache_blocks (kept separate, one
+        # cache_control breakpoint per entry on Anthropic/Bedrock) so a
+        # change to the volatile feedback addendum does not invalidate the
+        # cache for the two more-stable fragments ahead of it.
         prefix_parts: list[str] = []
         profile_tokens_used = 0
         if spec.context_enrichment_eligible and context.shared_context_block:
             prefix_parts.append(context.shared_context_block)
-        if context.feedback_addendum:
-            prefix_parts.append(context.feedback_addendum)
         if spec.context_enrichment_eligible and context.language_profile_text:
             from ai_pr_review.context.budget import estimate_tokens
             prefix_parts.append(context.language_profile_text)
             profile_tokens_used = estimate_tokens(context.language_profile_text)
+        if context.feedback_addendum:
+            prefix_parts.append(context.feedback_addendum)
         system_prefix = "\n\n".join(prefix_parts)
+        cache_blocks = tuple(prefix_parts)
 
         # #316: honour AI_MAX_TOKENS_PER_AGENT when set; fall back to roster default
         max_tokens = (
@@ -530,6 +545,7 @@ async def _run_single_agent(
             max_tokens=max_tokens,
             temperature=context.temperature,
             system_prefix=system_prefix,
+            cache_blocks=cache_blocks,
         )
         fallback_from_model: str | None = None
         async with limiter:
@@ -564,6 +580,7 @@ async def _run_single_agent(
                         max_tokens=max_tokens,
                         temperature=context.temperature,
                         system_prefix=system_prefix,
+                        cache_blocks=cache_blocks,
                     )
                     try:
                         response = await llm_call(request)
