@@ -95,6 +95,7 @@ class _FakeProvider:
     """Minimal VcsProvider fake that satisfies the @runtime_checkable protocol."""
 
     last_sha: str | None = None
+    pr_description: tuple[str, str] | None = None
     post_summary_calls: list[Any] = field(default_factory=list)
     post_findings_calls: list[Any] = field(default_factory=list)
 
@@ -103,6 +104,9 @@ class _FakeProvider:
 
     def get_summary_body(self) -> str | None:
         return None
+
+    def get_pr_description(self) -> tuple[str, str] | None:
+        return self.pr_description
 
     def post_summary(self, summary_body: str, head_sha: str) -> SummaryResult:
         self.post_summary_calls.append((summary_body, head_sha))
@@ -134,8 +138,11 @@ class _FakeProvider:
         return SummaryResult(comment_id=None, created=False, updated=False)
 
 
-def _make_fake_provider(last_sha: str | None = None) -> _FakeProvider:
-    provider = _FakeProvider(last_sha=last_sha)
+def _make_fake_provider(
+    last_sha: str | None = None,
+    pr_description: tuple[str, str] | None = None,
+) -> _FakeProvider:
+    provider = _FakeProvider(last_sha=last_sha, pr_description=pr_description)
     return provider
 
 
@@ -307,6 +314,77 @@ class TestBuildReviewRuntimeFullPath:
         assert isinstance(runtime, ReviewRuntime)
         assert runtime.config.model_standard == "claude-sonnet-4-6"
         assert runtime.config.model_premium == "claude-opus-4-7"
+
+    @pytest.mark.anyio
+    async def test_shared_context_block_built_from_pr_description(
+        self, tmp_path: Path
+    ) -> None:
+        """#813: when the provider returns a PR title/body, build_review_runtime
+        folds it (with the manifest) into dispatch_context.shared_context_block.
+        """
+        config = _make_config()
+        provider = _make_fake_provider(
+            pr_description=("Add widget", "This closes #1.")
+        )
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(runtime, ReviewRuntime)
+        block = runtime.dispatch_context.shared_context_block
+        assert "Add widget" in block
+        assert "This closes #1." in block
+
+    @pytest.mark.anyio
+    async def test_shared_context_block_empty_when_no_pr_description(
+        self, tmp_path: Path
+    ) -> None:
+        """When get_pr_description() returns None (fetch failure, or a
+        provider that doesn't support it), the block degrades to "" rather
+        than aborting the run.
+        """
+        config = _make_config()
+        provider = _make_fake_provider(pr_description=None)
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(runtime, ReviewRuntime)
+        assert runtime.dispatch_context.shared_context_block == ""
+
+    @pytest.mark.anyio
+    async def test_shared_context_block_empty_when_pr_description_malformed(
+        self, tmp_path: Path
+    ) -> None:
+        """A provider that violates the get_pr_description() contract (e.g.
+        an unconfigured Mock(spec=VcsProvider), whose unstubbed method
+        returns another Mock rather than None or a (str, str) tuple) must
+        degrade to no context block, not raise out of build_review_runtime.
+        """
+        config = _make_config()
+        provider = _make_fake_provider()
+        provider.pr_description = ("only one element",)  # type: ignore[assignment]
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(runtime, ReviewRuntime)
+        assert runtime.dispatch_context.shared_context_block == ""
 
     @pytest.mark.anyio
     async def test_provider_factory_called_exactly_once(self, tmp_path: Path) -> None:

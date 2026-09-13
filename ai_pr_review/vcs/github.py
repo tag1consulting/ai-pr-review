@@ -2163,6 +2163,31 @@ class GitHubProvider:
         sha = head.get("sha") if isinstance(head, dict) else None
         return sha if isinstance(sha, str) else None
 
+    def get_pr_description(self) -> tuple[str, str] | None:
+        """GET the PR's title and body. Returns `None` on any HTTP error
+        (appended to `self._errors`) or a response missing a usable title.
+
+        See VcsProvider.get_pr_description for the fail-soft contract this
+        implements (#813).
+        """
+        resp = self.client.request("GET", self._pull_request_url())
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"get_pr_description: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return None
+        data = resp.json()
+        if not isinstance(data, dict):
+            self._errors.append(
+                f"get_pr_description: unexpected response shape {type(data).__name__}"
+            )
+            return None
+        title = data.get("title")
+        if not isinstance(title, str):
+            return None
+        body = data.get("body")
+        return title, (body if isinstance(body, str) else "")
+
     def submit_approval(self, message: str) -> tuple[bool, int, str]:
         """POST a standalone APPROVE review. Returns (ok, status, body_snippet).
 

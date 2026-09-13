@@ -156,6 +156,9 @@ class GitLabProvider:
     def _project_segment(self) -> str:
         return _project_path_segment(self.config.project_id_or_path)
 
+    def _mr_url(self) -> str:
+        return f"/projects/{self._project_segment()}/merge_requests/{self.config.mr_iid}"
+
     def _notes_url(self) -> str:
         return f"/projects/{self._project_segment()}/merge_requests/{self.config.mr_iid}/notes"
 
@@ -326,6 +329,37 @@ class GitLabProvider:
         if not notes:
             return None
         return notes[0].get("body") or None
+
+    def get_pr_description(self) -> tuple[str, str] | None:
+        """GET the MR's title and description. Returns `None` on any HTTP
+        error (appended to `self._errors`) or a response missing a usable
+        title. GitLab calls the body field "description", not "body"
+        (#813) -- returned here as the same `(title, body)` shape every
+        other provider uses.
+        """
+        resp = self.client.request("GET", self._mr_url())
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"get_pr_description: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return None
+        try:
+            data = resp.json()
+        except ValueError:
+            self._errors.append(
+                f"get_pr_description: non-JSON body (status={resp.status_code})"
+            )
+            return None
+        if not isinstance(data, dict):
+            self._errors.append(
+                f"get_pr_description: unexpected response shape {type(data).__name__}"
+            )
+            return None
+        title = data.get("title")
+        if not isinstance(title, str):
+            return None
+        description = data.get("description")
+        return title, (description if isinstance(description, str) else "")
 
     # ------------------------------------------------------------------
     # post_summary — upsert single combined note keyed by marker

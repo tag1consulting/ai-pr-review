@@ -276,6 +276,7 @@ class TestScriptDir:
 
         provider = MagicMock(spec=VcsProvider)
         provider.get_last_reviewed_sha.return_value = None
+        provider.get_pr_description.return_value = None
         return provider
 
     def _fake_run_review_factory(self, captured: list) -> AsyncMock:  # type: ignore[type-arg]
@@ -377,6 +378,7 @@ class TestSummarizerCollapseWalkthroughGate:
 
         provider = MagicMock(spec=VcsProvider)
         provider.get_last_reviewed_sha.return_value = None
+        provider.get_pr_description.return_value = None
         return provider
 
     def _fake_run_review_factory(self) -> AsyncMock:
@@ -938,6 +940,7 @@ class TestWriteStepSummary:
 
         provider = MagicMock(spec=VcsProvider)
         provider.get_last_reviewed_sha.return_value = None
+        provider.get_pr_description.return_value = None
 
         async def _fake_run_review(**kwargs: object) -> object:
             result = MagicMock()
@@ -1004,6 +1007,7 @@ class TestWriteStepSummary:
 
         provider = MagicMock(spec=VcsProvider)
         provider.get_last_reviewed_sha.return_value = None
+        provider.get_pr_description.return_value = None
 
         async def _fake_run_review(**kwargs: object) -> object:
             result = MagicMock()
@@ -1352,6 +1356,7 @@ class TestTokenUsageDisplayModeSelection:
 
         provider = MagicMock(spec=VcsProvider)
         provider.get_last_reviewed_sha.return_value = None
+        provider.get_pr_description.return_value = None
 
         agent_result = AgentResult(
             name="code-reviewer",

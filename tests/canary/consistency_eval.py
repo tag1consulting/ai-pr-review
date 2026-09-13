@@ -70,11 +70,14 @@ available without needing the full corpus.
 
 Arms (issue #800, judge/context-enrichment "decide on data"): set
 AI_EVAL_ARMS to a comma-separated list of `baseline`, `judge`,
-`context-enrichment` (default: `baseline` only, to keep an unconfigured
-invocation cheap). Each active arm re-runs the full N-repeat protocol with
-that arm's toggle turned on relative to the baseline (judge off, context
-enrichment off); arms are additive one-at-a-time, not combinatorial, to keep
-cost bounded, per the sequencing decided for Epic 9.
+`context-enrichment`, `shared-context` (default: `baseline` only, to keep an
+unconfigured invocation cheap). Each active arm re-runs the full N-repeat
+protocol with that arm's toggle turned on relative to the baseline (judge
+off, context enrichment off, shared-context block off); arms are additive
+one-at-a-time, not combinatorial, to keep cost bounded, per the sequencing
+decided for Epic 9. `shared-context` (#813) has no PR title/description per
+corpus fixture -- see that arm's entry in _ARM_TOGGLES for what it actually
+measures.
 
 Not a pytest suite: this makes real, billed API calls (diffs x arms x runs x
 agents x models) and is intentionally excluded from the default
@@ -115,9 +118,10 @@ from ai_pr_review.findings.suppress import apply_suppressions, load_rules  # noq
 from ai_pr_review.llm._config import resolve_temperature  # noqa: E402
 from ai_pr_review.llm.base import LLMRequest, LLMResponse  # noqa: E402
 from ai_pr_review.llm.client import call_llm  # noqa: E402
-from ai_pr_review.manifest import build_changed_files  # noqa: E402
+from ai_pr_review.manifest import build_changed_files, build_manifest_text  # noqa: E402
 from ai_pr_review.pricing import TokenEntry, compute_totals, format_cost, load_pricing  # noqa: E402
 from ai_pr_review.review.outcome import classify_review_outcome  # noqa: E402
+from ai_pr_review.review.pr_context import build_shared_context_block  # noqa: E402
 
 _PRICING_DATA = load_pricing(str(REPO_ROOT / "config" / "model-pricing.json"))
 
@@ -156,9 +160,16 @@ API_KEY_ENV = "ANTHROPIC_API_KEY"
 # baseline, one at a time (not combinatorial) to keep cost bounded. See the
 # module docstring for the "decide on data" rationale.
 _ARM_TOGGLES: dict[str, dict[str, bool]] = {
-    "baseline": {"judge": False, "context_enrichment": False},
-    "judge": {"judge": True, "context_enrichment": False},
-    "context-enrichment": {"judge": False, "context_enrichment": True},
+    "baseline": {"judge": False, "context_enrichment": False, "shared_context": False},
+    "judge": {"judge": True, "context_enrichment": False, "shared_context": False},
+    "context-enrichment": {"judge": False, "context_enrichment": True, "shared_context": False},
+    # #813: the shared PR-context block (file manifest + PR title/description)
+    # every finding agent except blind-hunter now receives. This harness has
+    # no PR title/description per corpus fixture (each is a bare .diff file,
+    # not a full PR record) -- title/body are always "" here, so this arm
+    # measures the manifest-only half of #813's change, not the full effect
+    # of adding real PR intent. See tests/canary/corpus/README.md.
+    "shared-context": {"judge": False, "context_enrichment": False, "shared_context": True},
 }
 DEFAULT_ARMS = ("baseline",)
 
@@ -390,6 +401,18 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         return RunOutcome(ok=False, detail=f"no agents matched {agent_names!r}")
 
     toggles = _ARM_TOGGLES[arm]
+    shared_context_block = ""
+    if toggles["shared_context"]:
+        diff_text = diff_path.read_text()
+        changed_files = build_changed_files(_changed_files_from_diff(diff_text))
+        manifest_text = build_manifest_text(
+            changed_files, base_ref="main", diff_label=diff_path.name, diff_stat="",
+        )
+        # No PR title/description per corpus fixture (see _ARM_TOGGLES's
+        # "shared-context" comment) -- title/body are always "" here.
+        shared_context_block = build_shared_context_block(
+            manifest_text=manifest_text, pr_title="", pr_body="",
+        )
     context = DispatchContext(
         script_dir=script_dir,
         mode="full",
@@ -400,6 +423,7 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         max_tokens_per_agent=32768,
         enable_context_enrichment=toggles["context_enrichment"],
         repo_root=script_dir,
+        shared_context_block=shared_context_block,
     )
 
     try:

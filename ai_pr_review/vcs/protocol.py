@@ -137,6 +137,21 @@ class VcsProvider(Protocol):
         """Return the current body of the summary comment, or None if not yet posted."""
         ...
 
+    def get_pr_description(self) -> tuple[str, str] | None:
+        """Return `(title, body)` for the PR/MR itself, or None on any failure.
+
+        Fetched once per run (`review/runtime.py`) and folded into the
+        shared context block every finding agent except blind-hunter
+        receives (#813/#177) -- a stated intent ("this is a deliberate
+        behavior change, not a regression") in the description can change
+        whether an observation is a real bug. Implementations must be
+        fail-soft: any HTTP/parse error appends to the provider's own error
+        log (where one exists) and returns None, exactly like
+        `get_summary_body`, rather than raising -- a missing description is
+        a degraded run, not a failed one.
+        """
+        ...
+
     def post_summary(self, summary_body: str, head_sha: str) -> SummaryResult:
         """Upsert the one-per-PR summary comment, keyed by SUMMARY_MARKER_PREFIX."""
         ...
