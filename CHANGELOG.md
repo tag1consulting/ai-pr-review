@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The `docs-missing-check` static analyzer (issue #815)**. It flagged a newly-added public function/method with no doc comment at all, at Low severity (never blocking a merge on its own). Removed as part of Epic 9's review-quality simplification: three separate execution paths (a dedicated ruff rule-set, a `golangci-lint --enable-only=godoclint` invocation for Go, and a second tree-sitter presence check) for a signal that never blocks a review is more maintenance surface than the check earns. `docs-api-check`, `docs-ref-check`, and `docs-drift-check` are unchanged. **No breaking changes**: `docs-missing-check` is still accepted in the `analyzers`/`exclude-analyzers` allowlist/denylist inputs (and a `policy.yml` route's equivalent fields) as a deprecated no-op, with a runtime warning; it never dispatches. Formal removal (the name rejected outright) is planned for v3.0.0.
+
 ## [2.11.0] - 2026-09-11
 
 ### Fixed

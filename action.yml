@@ -220,11 +220,12 @@ inputs:
       only the listed analyzers run and exclude-analyzers is ignored. Valid names:
       shellcheck, trufflehog, semgrep, ruff, golangci-lint, hadolint, checkov,
       phpcs, phpstan, eslint, kube-linter, tflint, cve-check, docs-api-check,
-      docs-missing-check, docs-ref-check, docs-drift-check. Entries are split on
-      commas; surrounding whitespace is trimmed and empty entries are dropped.
-      Empty (default): no allowlist — all eligible analyzers run (subject to
-      exclude-analyzers). Unknown names are rejected with an error. Requires the
-      Python engine.
+      docs-ref-check, docs-drift-check. docs-missing-check is also accepted as
+      a deprecated no-op (see issue #815, removed for real in v3.0.0). Entries
+      are split on commas; surrounding whitespace is trimmed and empty entries
+      are dropped. Empty (default): no allowlist — all eligible analyzers run
+      (subject to exclude-analyzers). Unknown names are rejected with an error.
+      Requires the Python engine.
     required: false
     default: ''
 
@@ -234,10 +235,12 @@ inputs:
       analyzers except those listed will run. Ignored when analyzers (allowlist) is
       set. Valid names: shellcheck, trufflehog, semgrep, ruff, golangci-lint,
       hadolint, checkov, phpcs, phpstan, eslint, kube-linter, tflint, cve-check,
-      docs-api-check, docs-missing-check, docs-ref-check, docs-drift-check.
-      Entries are split on commas; surrounding whitespace is trimmed and empty
-      entries are dropped. Empty (default): no denylist — all eligible analyzers
-      run. Unknown names are rejected with an error. Requires the Python engine.
+      docs-api-check, docs-ref-check, docs-drift-check. docs-missing-check is
+      also accepted as a deprecated no-op (see issue #815, removed for real in
+      v3.0.0). Entries are split on commas; surrounding whitespace is trimmed
+      and empty entries are dropped. Empty (default): no denylist — all
+      eligible analyzers run. Unknown names are rejected with an error.
+      Requires the Python engine.
     required: false
     default: ''
 

@@ -558,6 +558,43 @@ def test_unknown_analyzer_in_denylist_raises(
     assert "tflent" in str(exc_info.value)
 
 
+def test_deprecated_analyzer_name_in_allowlist_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#815: docs-missing-check in AI_ANALYZERS is accepted (deprecated,
+    inert) with a warning, not a hard ConfigError, so an existing consumer's
+    allowlist referencing it doesn't break on upgrade."""
+    monkeypatch.setenv("AI_ANALYZERS", "docs-missing-check,semgrep")
+    cfg = ReviewConfig.from_env()  # must not raise
+    assert cfg.analyzers == ("docs-missing-check", "semgrep")
+    captured = capsys.readouterr()
+    assert "docs-missing-check" in captured.err
+    assert "deprecated" in captured.err
+
+
+def test_deprecated_analyzer_name_in_denylist_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#815: docs-missing-check in AI_EXCLUDE_ANALYZERS is also accepted."""
+    monkeypatch.setenv("AI_EXCLUDE_ANALYZERS", "docs-missing-check")
+    cfg = ReviewConfig.from_env()  # must not raise
+    assert cfg.exclude_analyzers == ("docs-missing-check",)
+    captured = capsys.readouterr()
+    assert "docs-missing-check" in captured.err
+    assert "deprecated" in captured.err
+
+
+def test_non_deprecated_analyzer_names_do_not_warn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real, still-supported analyzer name never triggers the deprecated-
+    analyzer-name warning path."""
+    monkeypatch.setenv("AI_ANALYZERS", "docs-api-check,docs-ref-check,docs-drift-check")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "deprecated" not in captured.err
+
+
 def test_unknown_agent_name_raises_with_suggestion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

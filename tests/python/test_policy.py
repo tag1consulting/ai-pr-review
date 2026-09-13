@@ -113,6 +113,19 @@ def test_parse_rejects_unknown_analyzer_name() -> None:
         _parse_policy_file(raw)
 
 
+def test_parse_accepts_deprecated_analyzer_name(capsys: pytest.CaptureFixture[str]) -> None:
+    """#815: docs-missing-check in a policy.yml route's analyzers list is
+    accepted (deprecated, inert) with a warning, not rejected -- the same
+    tolerant validation ReviewConfig's AI_ANALYZERS/AI_EXCLUDE_ANALYZERS
+    fields apply, shared via config._validate_analyzer_names_list."""
+    raw = {"policies": {"x": {"analyzers": ["docs-missing-check", "semgrep"]}}, "routes": []}
+    pf = _parse_policy_file(raw)
+    assert pf.policies["x"].analyzers == ("docs-missing-check", "semgrep")
+    captured = capsys.readouterr()
+    assert "docs-missing-check" in captured.err
+    assert "deprecated" in captured.err
+
+
 def test_parse_accepts_extends_chain_to_named_policy() -> None:
     raw = {
         "policies": {

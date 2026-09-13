@@ -36,7 +36,6 @@ _ANALYZER_PREFIXES: tuple[str, ...] = (
     "checkov",
     "docs-api-check",
     "docs-drift-check",
-    "docs-missing-check",
     "docs-ref-check",
     "eslint",
     "golangci-lint",
