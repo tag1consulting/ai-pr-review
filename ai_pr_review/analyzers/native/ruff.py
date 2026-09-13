@@ -6,13 +6,22 @@ converts its JSON output to Finding instances.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
-import subprocess
-from pathlib import Path
 
+# subprocess is never called directly in this module (run_cli_json_analyzer
+# owns the actual subprocess.run call) but stays imported: existing tests
+# patch it as "ai_pr_review.analyzers.native.ruff.subprocess.run", which
+# resolves the attribute on *this* module first. Since `subprocess` is a
+# singleton module object, the patch still lands on the real subprocess.run
+# that _cli_runner.py calls -- removing the import would only break the
+# test's attribute lookup, not the patch's effect.
+import subprocess  # noqa: F401
+from pathlib import Path
+from typing import Any
+
+from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -33,79 +42,48 @@ def _run_ruff(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         logger.warning("[ai-pr-review] WARNING: ruff not found; skipping.")
         return []
 
-    try:
-        result = subprocess.run(
-            ["ruff", "check", "--output-format=json", "--no-cache", "--exit-zero", "--", *py_files],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: ruff timed out after %ss; skipping.", exc.timeout)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: ruff failed to start: %s", exc)
-        return []
+    return run_cli_json_analyzer(
+        tool="ruff",
+        command=["ruff", "check", "--output-format=json", "--no-cache", "--exit-zero", "--", *py_files],
+        timeout_secs=_TIMEOUT_SECS,
+        extract_items=_ruff_items,
+        build_finding=_ruff_finding,
+    )
 
-    if result.returncode not in (0, 1):
-        logger.warning(
-            "[ai-pr-review] WARNING: ruff exited %d; skipping. stderr: %s",
-            result.returncode, result.stderr[:200],
-        )
-        return []
 
-    if not result.stdout.strip():
-        return []
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("[ai-pr-review] WARNING: ruff produced non-JSON output: %s", exc)
-        return []
-
+def _ruff_items(data: Any) -> list[dict[str, Any]] | None:
     if not isinstance(data, list):
         logger.warning("[ai-pr-review] WARNING: ruff produced unexpected output structure (not a list); skipping.")
-        return []
+        return None
+    return [item for item in data if isinstance(item, dict)]
 
+
+def _ruff_finding(item: dict[str, Any]) -> Finding:
     workspace_prefix = (os.environ.get("GITHUB_WORKSPACE") or os.getcwd()).rstrip("/") + "/"
 
-    findings: list[Finding] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        code = item.get("code") or ""
-        prefix = code[:1]
-        if prefix in ("F", "E"):
-            severity = "High"
-        elif prefix in ("W", "C"):
-            severity = "Medium"
-        else:
-            severity = "Low"
+    code = item.get("code") or ""
+    prefix = code[:1]
+    if prefix in ("F", "E"):
+        severity = "High"
+    elif prefix in ("W", "C"):
+        severity = "Medium"
+    else:
+        severity = "Low"
 
-        filename = item.get("filename") or ""
-        if filename.startswith(workspace_prefix):
-            filename = filename[len(workspace_prefix):]
+    filename = item.get("filename") or ""
+    if filename.startswith(workspace_prefix):
+        filename = filename[len(workspace_prefix):]
 
-        url = item.get("url")
-        remediation = f"See {url}" if url else f"See https://docs.astral.sh/ruff/rules/{code}"
+    url = item.get("url")
+    remediation = f"See {url}" if url else f"See https://docs.astral.sh/ruff/rules/{code}"
 
-        try:
-            findings.append(
-                Finding(
-                    severity=severity,  # type: ignore[arg-type]
-                    confidence=_CONFIDENCE,
-                    source=_SOURCE,
-                    file=filename,
-                    line=item.get("location", {}).get("row") or None,
-                    finding=f"{code}: {item.get('message', '')}",
-                    remediation=remediation,
-                    category="lint",
-                )
-            )
-        except (ValueError, TypeError) as exc:
-            logger.warning(
-                "[ai-pr-review] WARNING: ruff dropped malformed finding: %s; item=%r",
-                exc, repr(item)[:200],
-            )
-
-    return findings
+    return Finding(
+        severity=severity,  # type: ignore[arg-type]
+        confidence=_CONFIDENCE,
+        source=_SOURCE,
+        file=filename,
+        line=item.get("location", {}).get("row") or None,
+        finding=f"{code}: {item.get('message', '')}",
+        remediation=remediation,
+        category="lint",
+    )

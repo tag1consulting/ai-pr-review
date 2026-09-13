@@ -7,13 +7,14 @@ to Finding instances.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
+from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -103,44 +104,35 @@ def _run_eslint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     if _supports_no_warn_ignored(eslint_cmd):
         extra_flags.append("--no-warn-ignored")
 
-    try:
-        result = subprocess.run(
-            [*eslint_cmd, "--format", "json", *extra_flags, "--", *target_files],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: eslint timed out after %ss; skipping.", exc.timeout)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: eslint failed to start: %s", exc)
-        return []
+    return run_cli_json_analyzer(
+        tool="eslint",
+        command=[*eslint_cmd, "--format", "json", *extra_flags, "--", *target_files],
+        timeout_secs=_TIMEOUT_SECS,
+        # eslint's own exit codes: 0 = clean, 1 = lint issues found (not
+        # fatal), 2 = fatal error (broken config or missing plugin). The
+        # runner's default success set ({0, 1}) already treats 2 as failure;
+        # this hook only swaps in eslint's more specific message for it.
+        on_bad_returncode=_eslint_bad_returncode,
+        extract_items=_eslint_items,
+        build_finding=_eslint_finding,
+    )
 
-    if result.returncode == 2:
-        logger.warning(
-            "[ai-pr-review] WARNING: eslint exited with fatal error (exit 2); "
-            "broken config or missing plugin. stderr: %s",
-            result.stderr[:200],
-        )
-        return []
 
-    if not result.stdout.strip():
-        return []
+def _eslint_bad_returncode(result: subprocess.CompletedProcess[str]) -> None:
+    logger.warning(
+        "[ai-pr-review] WARNING: eslint exited with fatal error (exit 2); "
+        "broken config or missing plugin. stderr: %s",
+        result.stderr[:200],
+    )
 
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("[ai-pr-review] WARNING: eslint produced non-JSON output: %s", exc)
-        return []
 
+def _eslint_items(data: Any) -> list[tuple[str, dict[str, Any]]] | None:
     if not isinstance(data, list):
         logger.warning("[ai-pr-review] WARNING: eslint produced unexpected output structure; skipping.")
-        return []
+        return None
 
     cwd_prefix = str(Path.cwd()) + "/"
-    findings: list[Finding] = []
-
+    items: list[tuple[str, dict[str, Any]]] = []
     for file_entry in data:
         if not isinstance(file_entry, dict):
             continue
@@ -149,36 +141,30 @@ def _run_eslint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         messages = file_entry.get("messages") or []
         if not isinstance(messages, list):
             continue
-
         for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            rule_id = msg.get("ruleId")
-            if not rule_id:
-                continue
-            message = msg.get("message") or ""
-            severity_code = msg.get("severity") or 1
-            line = msg.get("line") or 1
-            severity = "High" if severity_code == 2 else "Medium"
-            remediation = f"See https://eslint.org/docs/rules/{rule_id}"
+            if isinstance(msg, dict):
+                items.append((rel_path, msg))
+    return items
 
-            try:
-                findings.append(
-                    Finding(
-                        severity=severity,  # type: ignore[arg-type]
-                        confidence=_CONFIDENCE,
-                        source=_SOURCE,
-                        file=rel_path,
-                        line=line,
-                        finding=f"{rule_id}: {message}",
-                        remediation=remediation,
-                        category="lint",
-                    )
-                )
-            except (ValueError, TypeError) as exc:
-                logger.warning(
-                    "[ai-pr-review] WARNING: eslint dropped malformed finding: %s; msg=%r",
-                    exc, repr(msg)[:200],
-                )
 
-    return findings
+def _eslint_finding(item: tuple[str, dict[str, Any]]) -> Finding | None:
+    rel_path, msg = item
+    rule_id = msg.get("ruleId")
+    if not rule_id:
+        return None
+    message = msg.get("message") or ""
+    severity_code = msg.get("severity") or 1
+    line = msg.get("line") or 1
+    severity = "High" if severity_code == 2 else "Medium"
+    remediation = f"See https://eslint.org/docs/rules/{rule_id}"
+
+    return Finding(
+        severity=severity,  # type: ignore[arg-type]
+        confidence=_CONFIDENCE,
+        source=_SOURCE,
+        file=rel_path,
+        line=line,
+        finding=f"{rule_id}: {message}",
+        remediation=remediation,
+        category="lint",
+    )

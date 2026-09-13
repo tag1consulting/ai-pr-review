@@ -6,13 +6,21 @@ subprocess and converts its JSON output to Finding instances.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
-import subprocess
-from pathlib import Path
-from typing import Literal
 
+# subprocess is never called directly in this module (run_cli_json_analyzer
+# owns the actual subprocess.run call) but stays imported: existing tests
+# patch it as "ai_pr_review.analyzers.native.kube_linter.subprocess.run",
+# which resolves the attribute on *this* module first. Since `subprocess` is
+# a singleton module object, the patch still lands on the real subprocess.run
+# that _cli_runner.py calls -- removing the import would only break the
+# test's attribute lookup, not the patch's effect.
+import subprocess  # noqa: F401
+from pathlib import Path
+from typing import Any, Literal
+
+from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -70,79 +78,49 @@ def _run_kube_linter(changed_files: ChangedFiles, diff_file: Path) -> list[Findi
         logger.warning("[ai-pr-review] WARNING: kube-linter not found; skipping.")
         return []
 
-    try:
-        result = subprocess.run(
-            ["kube-linter", "lint", "--format", "json", "--", *eligible],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.warning("[ai-pr-review] WARNING: kube-linter timed out after %ss; skipping.", exc.timeout)
-        return []
-    except OSError as exc:
-        logger.warning("[ai-pr-review] WARNING: kube-linter failed to start: %s", exc)
-        return []
+    return run_cli_json_analyzer(
+        tool="kube-linter",
+        command=["kube-linter", "lint", "--format", "json", "--", *eligible],
+        timeout_secs=_TIMEOUT_SECS,
+        # kube-linter exits 1 when violations are found -- the runner's
+        # default success set ({0, 1}) already covers this.
+        extract_items=_kube_linter_items,
+        build_finding=_kube_linter_finding,
+    )
 
-    # kube-linter exits 1 when violations are found.
-    if result.returncode not in (0, 1):
-        logger.warning(
-            "[ai-pr-review] WARNING: kube-linter exited %d; skipping. stderr: %s",
-            result.returncode, result.stderr[:200],
-        )
-        return []
 
-    if not result.stdout.strip():
-        return []
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("[ai-pr-review] WARNING: kube-linter produced non-JSON output: %s", exc)
-        return []
-
+def _kube_linter_items(data: Any) -> list[dict[str, Any]] | None:
     if not isinstance(data, dict):
         logger.warning("[ai-pr-review] WARNING: kube-linter produced unexpected output structure; skipping.")
-        return []
+        return None
 
     if "Reports" not in data:
         logger.warning("[ai-pr-review] WARNING: kube-linter output missing 'Reports' key; skipping.")
-        return []
+        return None
     reports = data["Reports"] or []
     if not isinstance(reports, list):
-        return []
+        return None
+    return [r for r in reports if isinstance(r, dict)]
 
-    findings: list[Finding] = []
-    for report in reports:
-        if not isinstance(report, dict):
-            continue
-        obj = report.get("Object") or {}
-        metadata = obj.get("Metadata") or {}
-        obj_type = obj.get("Type") or {}
-        check = report.get("Check") or ""
-        message = (report.get("Diagnostic") or {}).get("Message") or "policy violation"
-        kind = obj_type.get("Kind") or "resource"
-        name = obj.get("Name") or ""
 
-        severity: Literal["High", "Medium"] = "High" if check in _HIGH_SEVERITY_CHECKS else "Medium"
-        category = "authz" if check in _HIGH_SEVERITY_CHECKS else "lint"
-        try:
-            findings.append(
-                Finding(
-                    severity=severity,
-                    confidence=_CONFIDENCE,
-                    source=_SOURCE,
-                    file=metadata.get("FilePath") or "unknown",
-                    line=metadata.get("LineNumber") or None,
-                    finding=f"{check}: {message} [{kind} {name}]",
-                    remediation=report.get("Remediation") or "See https://docs.kubelinter.io/#/generated/checks",
-                    category=category,  # type: ignore[arg-type]
-                )
-            )
-        except (ValueError, TypeError) as exc:
-            logger.warning(
-                "[ai-pr-review] WARNING: kube-linter dropped malformed finding: %s; report=%r",
-                exc, repr(report)[:200],
-            )
+def _kube_linter_finding(report: dict[str, Any]) -> Finding:
+    obj = report.get("Object") or {}
+    metadata = obj.get("Metadata") or {}
+    obj_type = obj.get("Type") or {}
+    check = report.get("Check") or ""
+    message = (report.get("Diagnostic") or {}).get("Message") or "policy violation"
+    kind = obj_type.get("Kind") or "resource"
+    name = obj.get("Name") or ""
 
-    return findings
+    severity: Literal["High", "Medium"] = "High" if check in _HIGH_SEVERITY_CHECKS else "Medium"
+    category = "authz" if check in _HIGH_SEVERITY_CHECKS else "lint"
+    return Finding(
+        severity=severity,
+        confidence=_CONFIDENCE,
+        source=_SOURCE,
+        file=metadata.get("FilePath") or "unknown",
+        line=metadata.get("LineNumber") or None,
+        finding=f"{check}: {message} [{kind} {name}]",
+        remediation=report.get("Remediation") or "See https://docs.kubelinter.io/#/generated/checks",
+        category=category,  # type: ignore[arg-type]
+    )

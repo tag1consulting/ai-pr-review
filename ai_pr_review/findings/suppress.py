@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -217,6 +218,33 @@ def _rule_matches(finding: Finding, rule: SuppressionRule) -> bool:
     return True
 
 
+# verify_type -> the *name* of the module-level handler function (looked up
+# via globals() at call time, not stored as a direct callable reference).
+# This indirection is deliberate: tests patch handlers as e.g.
+# "ai_pr_review.findings.suppress._verify_github_release", which replaces
+# the module attribute. A dict built at import time with direct function
+# references would keep pointing at the pre-patch function; resolving the
+# name through globals() on every call picks up the patched version, same as
+# calling the function by its bare name would.
+#
+# #796 (F3): config/suppressions.json shipped "github-release" and
+# "go-module" while this dispatch only ever recognized "github-releases" and
+# "go", so those two rules could never fire. The config is now normalized to
+# the code's spelling; the old spellings stay mapped here to the same
+# handler so a downstream consumer who copied the old shipped config into a
+# repo-level suppressions.json override does not silently lose the rule.
+_VERIFY_HANDLERS: dict[str, str] = {
+    "github-releases": "_verify_github_release",
+    "github-release": "_verify_github_release",
+    "npm": "_verify_npm",
+    "pypi": "_verify_pypi",
+    "go": "_verify_go",
+    "go-module": "_verify_go",
+    "cargo": "_verify_cargo",
+    "docker-hub": "_verify_docker_hub",
+}
+
+
 def _verify_version(finding: Finding, verify_type: str) -> bool:
     """Confirm the version referenced in the finding exists in its registry.
 
@@ -224,34 +252,19 @@ def _verify_version(finding: Finding, verify_type: str) -> bool:
     """
     text = f"{finding.finding} {finding.remediation}"
     try:
-        # #796 (F3): config/suppressions.json shipped "github-release"
-        # and "go-module" while this dispatch only ever recognized
-        # "github-releases" and "go", so those two rules could never fire.
-        # The config is now normalized to the code's spelling; the old
-        # spellings stay accepted here for one release so a downstream
-        # consumer who copied the old shipped config into a repo-level
-        # suppressions.json override does not silently lose the rule.
-        if verify_type in ("github-releases", "github-release"):
-            return _verify_github_release(text)
-        if verify_type == "npm":
-            return _verify_npm(text)
-        if verify_type == "pypi":
-            return _verify_pypi(text)
-        if verify_type in ("go", "go-module"):
-            return _verify_go(text)
-        if verify_type == "cargo":
-            return _verify_cargo(text)
-        if verify_type == "docker-hub":
-            return _verify_docker_hub(text)
-        # Silent-failure review finding (Medium, #796 follow-up): every prior
-        # branch above returns; falling through here means verify_type named
-        # something no registered verifier handles (a typo, or a removed
-        # verifier like the old "ruby-org" — see docs/suppression.md). That
-        # used to return False with zero diagnostic, identical in outward
-        # behavior to "confirmed unconfirmed, keeping the finding" — a rule
-        # that can never suppress anything looks the same as one that fires
-        # correctly and finds nothing. Warn once so a stale or misspelled
-        # verify type in a repo-level suppressions.json override is visible.
+        handler_name = _VERIFY_HANDLERS.get(verify_type)
+        if handler_name is not None:
+            handler: Callable[[str], bool] = globals()[handler_name]
+            return handler(text)
+        # Silent-failure review finding (Medium, #796 follow-up): falling
+        # through here means verify_type named something no registered
+        # verifier handles (a typo, or a removed verifier like the old
+        # "ruby-org" — see docs/suppression.md). That used to return False
+        # with zero diagnostic, identical in outward behavior to "confirmed
+        # unconfirmed, keeping the finding" — a rule that can never suppress
+        # anything looks the same as one that fires correctly and finds
+        # nothing. Warn once so a stale or misspelled verify type in a
+        # repo-level suppressions.json override is visible.
         print(
             f"WARNING: suppression rule uses unrecognized verify type {verify_type!r}; "
             "no registered verifier handles it, so this rule can never suppress a "
