@@ -109,7 +109,7 @@ class SlashCommand:
     # For "fixed [F<n>] <sha>" — the commit SHA, lowercased. Empty string
     # when none was supplied or the command is not "fixed". Echoed in the
     # reply for audit-trail purposes only; never validated against the repo
-    # (see slash/dismiss.py) and never used to drive thread resolution.
+    # (see slash/github_orchestration.py) and never used to drive thread resolution.
     commit_sha: str = ""
 
     @property
@@ -132,7 +132,7 @@ class SlashCommand:
         with command="fixed" would reach the model with no interpretive
         rule, and could be misread as a suppression signal for a finding
         that was actually correct. "fixed" rides the dismiss/resolve path
-        only (ai_pr_review/slash/dismiss.py) and never touches the
+        only (ai_pr_review/slash/github_orchestration.py) and never touches the
         learning-loop store.
         """
         return self.canonical_name in ("false-positive", "wont-fix", "feedback")

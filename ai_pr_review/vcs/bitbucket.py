@@ -320,7 +320,7 @@ class BitbucketProvider:
         except Exception as exc:  # noqa: BLE001
             # Logged (not just appended to self._errors): orchestrate.py never
             # reads this provider's _errors list for a normal review run (only
-            # slash/dismiss.py's command handlers do), and this failure must
+            # slash/github_orchestration.py's command handlers do), and this failure must
             # not set FindingsResult.error either -- the comment itself still
             # posts fine below, just without F-ID stability for this cycle,
             # and orchestrate.py gates watermark-advance/stale-cleanup on

@@ -204,7 +204,7 @@ def test_merge_verdicts_preserves_dismissed_entry_despite_own_id_map() -> None:
     """Issue #771 / ADR 0003: a review's own id-map still listing a
     fingerprint while its verdicts marker claims "dismissed" for that same
     fingerprint is the EXPECTED shape produced by an ordinary, correct
-    dismissal -- `slash.dismiss._record_verdict` PATCHes a verdict onto the
+    dismissal -- `slash.github_orchestration._record_verdict` PATCHes a verdict onto the
     canonical review without touching its id-map, by design. merge_verdicts
     must trust and return this verdict rather than discard it (the #755
     guard this once did discard it, which is what #771 was about: every
@@ -558,7 +558,7 @@ def test_classify_open_thread_matches_across_source_types_by_design() -> None:
     the existing thread's comment in place with the new finding's rendered
     content -- same GitHub comment id, same **[F<n>]** token, completely
     different `source` in the header. `feedback-context`'s
-    `context_from_parent_comment` (slash/dismiss.py) reads that comment's
+    `context_from_parent_comment` (slash/github_orchestration.py) reads that comment's
     *current* body by exact comment id with a single synchronous REST GET,
     so a `/ai-pr-review feedback` command run before vs. after such an
     in-place update sees a different, but individually accurate, `source` --

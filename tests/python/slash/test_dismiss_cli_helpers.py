@@ -1,4 +1,4 @@
-"""Tests for the CLI-adjacent pure helpers moved into ai_pr_review.slash.dismiss
+"""Tests for the CLI-adjacent pure helpers moved into ai_pr_review.slash.github_orchestration
 by issue #825 (out of ai_pr_review/cli.py).
 
 These back cli.py's `_build_github_provider_or_exit`/`_build_github_provider_or_none`,
@@ -12,7 +12,7 @@ since the logic itself now lives in this module.
 from __future__ import annotations
 
 import ai_pr_review.vcs as vcs_module
-from ai_pr_review.slash.dismiss import (
+from ai_pr_review.slash.github_orchestration import (
     FeedbackContext,
     GitHubProviderError,
     dismiss_failure_annotation,

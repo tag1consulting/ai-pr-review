@@ -1,4 +1,4 @@
-"""HTTP-mocked tests for ai_pr_review.slash.dismiss's GitHub orchestration.
+"""HTTP-mocked tests for ai_pr_review.slash.github_orchestration's GitHub orchestration.
 
 Follows the `_make_provider(handler)` harness from `test_github_stale.py`.
 Covers the #555 bug class specifically: a GraphQL 200-with-errors body and a
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.slash.dismiss import (
+from ai_pr_review.slash.github_orchestration import (
     context_from_parent_comment,
     dismiss_by_finding_id,
     dismiss_inline_reply,

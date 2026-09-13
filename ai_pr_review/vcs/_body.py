@@ -21,7 +21,7 @@ from ai_pr_review.findings.models import Finding
 GITHUB_MAX_BODY_SIZE: Final[int] = 65_536
 
 # Substring of `truncate_body`'s trailer, exported so callers (e.g.
-# `ai_pr_review.slash.dismiss.classify_finding`) can detect a truncated body
+# `ai_pr_review.slash.github_orchestration.classify_finding`) can detect a truncated body
 # without duplicating the trailer text. A truncated body's id-map marker can
 # still list an ID whose bullet was cut off by the truncation itself, so a
 # caller reconstructing "which bucket is this ID in" from a truncated body

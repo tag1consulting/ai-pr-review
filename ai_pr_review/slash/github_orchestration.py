@@ -1365,7 +1365,7 @@ def dismiss_inline_reply(
 # vars, exit codes), then delegate. Kept in this module rather than
 # `slash/handlers.py` because they operate on the same GitHub-only surface
 # (provider construction, F-id/verdict persistence, dismiss-failure
-# reporting) as the rest of this file -- `dismiss.py` already hosts
+# reporting) as the rest of this file -- this module already hosts
 # `context_from_parent_comment`/`context_from_body_finding_id`/`resolve_only`,
 # which back the `feedback-context`/`resolve-thread` commands, not just
 # `dismiss`/`dismiss-inline` -- so this module's actual boundary is "GitHub

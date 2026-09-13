@@ -80,7 +80,7 @@ def test_strict_false_returns_partial_results_and_records_error() -> None:
     """Same two-page failure shape, but strict=False must keep page 1's
     results and append the failure to self._errors instead of discarding
     everything -- the contract every list_bot_reviews() caller (e.g.
-    ai_pr_review.slash.dismiss's classification/verdict-recording call
+    ai_pr_review.slash.github_orchestration's classification/verdict-recording call
     sites) already relies on."""
     page1 = [_review(1, "COMMENTED")]
 
@@ -166,7 +166,7 @@ def test_list_bot_reviews_keeps_pending_and_returns_full_review_dicts() -> None:
 
     assert {r["id"] for r in result} == {1, 2}
     # Full review dict, not narrowed -- callers like _dismiss_stale_reviews
-    # and ai_pr_review.slash.dismiss read "user"/"state"/"body" off of it.
+    # and ai_pr_review.slash.github_orchestration read "user"/"state"/"body" off of it.
     assert result[0]["user"]["login"] == "github-actions[bot]"
 
 

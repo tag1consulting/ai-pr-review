@@ -41,7 +41,7 @@ SKIP_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-skip)"
 # `off` (nothing but this marker). A stable, mode-independent anchor is the
 # point: GitLab's summary-note upsert, Bitbucket's incremental
 # walkthrough-boundary extraction, and both prior-body finding scanners
-# (vcs/_finding_ids.py, slash/dismiss.py) all need to find "where the usage
+# (vcs/_finding_ids.py, slash/github_orchestration.py) all need to find "where the usage
 # block starts/ends" without caring which mode produced the body they are
 # re-reading. Before this, GitLab and Bitbucket anchored on
 # TOKEN_TABLE_OPEN_MARKER (the accordion's own opening tag) below, which only
@@ -363,7 +363,7 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
 # distinguishes "resolved because a human said so" from "resolved because a
 # human said this specific thing" from "resolved as part of unrelated
 # housekeeping." Embedded in whichever review is currently canonical,
-# parallel to ID_MAP_MARKER_PREFIX; written by `ai_pr_review.slash.dismiss`
+# parallel to ID_MAP_MARKER_PREFIX; written by `ai_pr_review.slash.github_orchestration`
 # at command-handling time via `GitHubProvider.update_review_body`.
 VERDICTS_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-verdicts:"
 _VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
@@ -445,7 +445,7 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:
 # reconstructing any of the three from rendered text. None of the three is
 # otherwise recoverable: category is never rendered anywhere in a comment
 # body, and severity is only recoverable by re-parsing the `**[Sev]**` token
-# in the comment's first line (ai_pr_review.slash.dismiss.parse_inline_comment_header
+# in the comment's first line (ai_pr_review.slash.github_orchestration.parse_inline_comment_header
 # already isolates it as a throwaway group).
 #
 # Payload is base64-encoded, not raw JSON like VERDICTS_MARKER_PREFIX, because

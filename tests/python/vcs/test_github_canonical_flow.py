@@ -1293,7 +1293,7 @@ def test_dismissed_finding_stays_suppressed_after_fuzzy_update_drift() -> None:
     """#720 regression: a fuzzy "update" match PATCHes an open thread's
     comment in place, replacing its private metadata marker's fingerprint
     with the reworded finding's exact one while the visible **[F<n>]**
-    token stays put. If a human then dismisses that thread, dismiss.py
+    token stays put. If a human then dismisses that thread, github_orchestration.py
     records the verdict against whatever fingerprint was current *at dismiss
     time* -- per #720's own narrative, that can be the finding's original
     (now-superseded) fingerprint. The next run must still suppress the same
@@ -1368,10 +1368,10 @@ def test_dismissed_finding_stays_suppressed_after_fuzzy_update_drift() -> None:
     patches = [c for c in rec.calls if c[0] == "PATCH" and c[1].endswith("/pulls/comments/1")]
     assert len(patches) == 1
 
-    # Simulate dismiss.py: a human replies `/ai-pr-review dismiss` on that
+    # Simulate github_orchestration.py: a human replies `/ai-pr-review dismiss` on that
     # thread, reads the still-visible F3 token, and records a "dismissed"
     # verdict -- against the finding's original fingerprint, per #720's own
-    # narrative of what the reverse F-id lookup can return. dismiss.py also
+    # narrative of what the reverse F-id lookup can return. github_orchestration.py also
     # always resolves the underlying GraphQL thread.
     state["canonical_body"] = upsert_verdicts_marker(state["canonical_body"], {old_fp: "dismissed"})
     state["resolved"] = True

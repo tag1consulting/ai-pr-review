@@ -1,13 +1,13 @@
 """Shared GraphQL review-thread first-comment accessors — issue #822.
 
 `github.py`'s stale-cleanup/review-dismissal paths (`resolve_stale`'s marker
-check, `_dismiss_stale_reviews`) and `slash/dismiss.py`'s F-ID
+check, `_dismiss_stale_reviews`) and `slash/github_orchestration.py`'s F-ID
 classification/auto-approve paths (`_dismiss_if_all_resolved`,
 `_approve_if_pr_fully_resolved`, and friends) each independently
 re-implemented an identical accessor set for "read the first comment off a
 GitHub GraphQL `reviewThreads` node" — github.py's own module-level
 `_first_comment_body`/`_first_comment_author_login`/`_first_comment_review_id`,
-and dismiss.py's `_first_comment`/`_first_comment_body`/
+and github_orchestration.py's `_first_comment`/`_first_comment_body`/
 `_first_comment_author_login`/`_thread_review_id`/`_first_comment_id`. Both
 operate on the exact same shape (`thread["comments"]["nodes"][0]`) returned
 by `GitHubProvider.fetch_review_threads()`'s GraphQL query, so this module is
@@ -15,13 +15,13 @@ the single source of truth for it.
 
 `count_unresolved_owned_threads` factors out the "map review id -> count of
 currently-unresolved threads we own" loop that `github.py`'s
-`_dismiss_stale_reviews` and `slash/dismiss.py`'s `_approve_if_pr_fully_resolved`
+`_dismiss_stale_reviews` and `slash/github_orchestration.py`'s `_approve_if_pr_fully_resolved`
 (and, filtered to one review id, `_dismiss_if_all_resolved`) each
 independently built via a near-identical `for t in threads: ...` loop. The
 one deliberate difference between call sites — `bot_login=None` in
-dismiss.py's two call sites vs. a normalized `graphql_bot_login(...)` in
+github_orchestration.py's two call sites vs. a normalized `graphql_bot_login(...)` in
 github.py's — is preserved as a caller-supplied parameter, not flattened
-away; see `dismiss._dismiss_if_all_resolved`'s docstring for why that
+away; see `github_orchestration._dismiss_if_all_resolved`'s docstring for why that
 difference is intentional, not a bug.
 """
 

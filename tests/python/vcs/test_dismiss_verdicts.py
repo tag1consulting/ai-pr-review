@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.slash.dismiss import (
+from ai_pr_review.slash.github_orchestration import (
     FindingLocation,
     _fingerprint_for_finding_id,
     classify_finding,
@@ -305,7 +305,7 @@ def test_verdict_put_failure_does_not_leak_into_dismiss_result_errors(caplog) ->
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.github_orchestration"):
         result = dismiss_by_finding_id(prov, 3, actor="alice", command="dismiss")
 
     # The primary outcome (reply, feedback routing) is completely unaffected
@@ -372,7 +372,7 @@ def test_verdict_put_raising_httpx_error_does_not_crash_dismiss(caplog) -> None:
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.github_orchestration"):
         result = dismiss_by_finding_id(prov, 3, actor="alice", command="dismiss")
 
     assert result.errors == ()
@@ -574,7 +574,7 @@ def test_dismiss_inline_reply_verdict_lookup_list_reviews_raising_is_swallowed(c
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.github_orchestration"):
         result = dismiss_inline_reply(prov, 77, None, actor="alice", command="false-positive")
 
     assert result.thread_resolved is True
@@ -608,7 +608,7 @@ def test_dismiss_inline_reply_verdict_lookup_http_failure_is_logged_not_silently
         return httpx.Response(404)
 
     prov, _ = _make_provider(handler)
-    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.dismiss"):
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.slash.github_orchestration"):
         result = dismiss_inline_reply(prov, 77, None, actor="alice", command="false-positive")
 
     assert result.thread_resolved is True
