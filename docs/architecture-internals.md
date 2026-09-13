@@ -217,20 +217,20 @@ messages: [{ role: "user", content: "Please perform your review now." }]
 
 Weighted across typical PR traffic (70% cold / 25% hot): **~47% cheaper on average**.
 
-#### Cache priming (issues #144, #153) — opt-in tuning knob
+#### Cache priming (issues #144, #153) — removed, `AI_CACHE_PRIMING` is now a deprecated no-op
 
-`AI_CACHE_PRIMING=true` serializes 1-2 cache-writing calls before Tier 1 fan-out so remaining agents hit a guaranteed-warm cache:
+`AI_CACHE_PRIMING=true` used to serialize 1-2 cache-writing calls before Tier 1 fan-out so remaining agents would hit a guaranteed-warm cache:
 
 1. `code-reviewer` (Sonnet primer for the code context cohort) concurrently with
 2. `security-reviewer` (Opus primer, pulled forward from Tier 2 in full mode)
 
-**Default is `false`.** Investigation (#153) concluded that opportunistic cache hits from the parallel fan-out are sufficient in normal environments:
+Investigation (#153) concluded that opportunistic cache hits from the parallel fan-out are sufficient in normal environments, so the default stayed `false`:
 
 - The 7-agent fan-out has ~100-500ms natural stagger between calls (different system-prompt sizes 5-35 KB, different model TTFT, HTTP connection-pool serialization), which is enough time for the first cache write to become visible before subsequent agents reach the Anthropic API.
 - A single-sample benchmark (PR #137, ~1185 diff lines, 8 agents, Bedrock Sonnet/Opus proxy) showed **zero cost difference** vs unprimed, with priming adding **+30s wall-clock (+20%)** overhead from the serial barrier.
 - Anthropic's cache becomes visible faster than worst-case documentation suggests; agents starting within a few hundred milliseconds typically see each other's cache writes.
 
-Cache priming remains as an opt-in for environments where opportunistic hits fail — strict rate-limit policies that serialize concurrent requests, proxy implementations that queue rather than multiplex, or single-agent sequential dispatch modes. See [configuration reference](configuration.md) for `AI_CACHE_PRIMING`.
+The implementation (`cache_priming_effective()` and `DispatchContext.cache_priming_env`) was deleted as dead code in #807 (zero production callers at that point). `AI_CACHE_PRIMING` stays accepted as a documented no-op with a deprecation warning (retrofitted in #824, since #807's commit message promised this but never actually added the registry entry); formal removal is planned for v3.0.0. See [configuration reference](configuration.md) for `AI_CACHE_PRIMING`.
 
 #### Semantic change
 
@@ -323,7 +323,7 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_MAX_TOKENS_PER_AGENT` | `32768` | Max output tokens per LLM agent call; clamped to [256, 65536] |
 | `AI_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons (GitHub and GitLab; ignored on Bitbucket) |
 | `LLM_PROMPT_CACHING` | `auto` | Anthropic/Bedrock prompt caching. Valid: `auto`, `true`, `false` |
-| `AI_CACHE_PRIMING` | `false` | Opt-in cache-writing serialization before parallel fan-out |
+| `AI_CACHE_PRIMING` | `false` | Deprecated, ignored (#824 audit of #807): the cache-priming serialization mechanism was deleted as dead code. No-op with a deprecation warning; rejected starting in v3.0.0. |
 | `AI_JUDGE_PASS` | `true` | Run the cheap-model judge pass (Phase 2.75) after findings are extracted. Set to `false` to disable. |
 | `AI_FAIL_ON_FINDINGS` | `false` | Exit code 2 when the review outcome is `REQUEST_CHANGES` or `COMMENT`. CI-gate use case. |
 | `AI_ANALYZER_CONCURRENCY` | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `AI_PARALLEL=false`. |
