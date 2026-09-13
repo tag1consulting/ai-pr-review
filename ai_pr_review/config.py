@@ -134,6 +134,49 @@ _DEPRECATED_NOOP_AI_VARS: dict[str, str] = {
 }
 _NOOP_REMOVAL_RELEASE = "v3.0.0"
 
+# Analyzer names removed from ai_pr_review.analyzers.bridge.ANALYZER_NAMES
+# (so they never dispatch) but still accepted, as a documented no-op, in the
+# analyzers/exclude-analyzers allowlist/denylist inputs (and policy.yml's
+# per-route equivalent) -- the same shape as _DEPRECATED_NOOP_AI_VARS above,
+# just keyed by analyzer name instead of env-var name. A name here would
+# otherwise turn ReviewConfig.from_env()/policy.py's validation into a hard
+# ConfigError for any consumer who already references it, which Epic 9's
+# no-breaking-changes acceptance criterion (#806) forbids. Formal removal
+# (validation then rejects the name outright) is planned for v3.0.0, the
+# same release _NOOP_REMOVAL_RELEASE above targets for AI_PROFILE_MAX_TOKENS.
+_DEPRECATED_ANALYZER_NAMES: dict[str, str] = {
+    # #815: duplicated docs-api-check/docs-ref-check/docs-drift-check's
+    # documentation-quality coverage closely enough, at Low severity only
+    # (never blocks a merge), to not be worth its maintenance surface (a
+    # separate ruff rule-set, a dedicated golangci-lint/godoclint invocation
+    # for Go, and a second tree-sitter presence check). Removed, and never
+    # dispatches regardless of allow/deny-list membership.
+    "docs-missing-check": "removed in #815, docs-api-check/docs-ref-check/docs-drift-check remain",
+}
+
+
+def _validate_analyzer_names_list(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate analyzer names, tolerating deprecated-but-inert names.
+
+    Shared by ReviewConfig's analyzers/exclude_analyzers field validator and
+    policy.py's per-route analyzer selection (#815), so both surfaces treat a
+    deprecated analyzer name the same way: accepted with a warning, never a
+    hard error, and never actually dispatched (it is simply absent from
+    ANALYZER_NAMES / the analyzer registry).
+    """
+    from ai_pr_review.analyzers.bridge import ANALYZER_NAMES  # noqa: PLC0415
+
+    for name in values:
+        if name in _DEPRECATED_ANALYZER_NAMES:
+            print(
+                f"WARNING: analyzer {name!r} is deprecated and ignored: "
+                f"{_DEPRECATED_ANALYZER_NAMES[name]}.",
+                file=sys.stderr,
+            )
+    return _validate_names_tuple(
+        values, ANALYZER_NAMES | frozenset(_DEPRECATED_ANALYZER_NAMES), "analyzer"
+    )
+
 
 def _check_unknown_ai_vars() -> None:
     """Warn (not raise) for any AI_* env var not in the documented set.
@@ -400,9 +443,9 @@ class ReviewConfig(BaseModel):
     def _validate_analyzer_names(cls, v: tuple[str, ...]) -> tuple[str, ...]:
         if not v:
             return v
-        # Lazy import to avoid pulling all native analyzer modules into config at startup.
-        from ai_pr_review.analyzers.bridge import ANALYZER_NAMES  # noqa: PLC0415
-        return _validate_names_tuple(v, ANALYZER_NAMES, "analyzer")
+        # Lazy import (inside _validate_analyzer_names_list) to avoid pulling
+        # all native analyzer modules into config at startup.
+        return _validate_analyzer_names_list(v)
 
     @field_validator("agents", "exclude_agents")
     @classmethod

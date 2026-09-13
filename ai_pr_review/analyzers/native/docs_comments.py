@@ -1,23 +1,24 @@
-"""Native analyzers for doc-comment/signature mismatch and missing docs.
+"""Native analyzer for doc-comment/signature mismatch.
 
-Backs two AnalyzerSpec registrations:
+Backs one AnalyzerSpec registration:
   - docs-api-check: a documented @param-family tag names a parameter that
     does not exist in the signature, or vice versa. Medium severity —
     near-zero false-positive rate measured against this repo (see
     docs/adr/0001-tree-sitter-not-node-for-doc-mismatch.md).
-  - docs-missing-check: a newly-added public function/method has no
-    preceding doc comment at all. Low severity, diff-gated to symbols
-    genuinely added in this diff (not pre-existing undocumented code).
 
 Python uses the already-installed `ruff` binary (--isolated, so results
-never depend on the consumer's own ruff config). Go uses a dedicated
-`golangci-lint --enable-only=godoclint` invocation, independent of the
-general golangci-lint analyzer (native/golangci_lint.py), for the same
---isolated reason. Every other supported language (JS/TS/Java/Kotlin/C#/
-Ruby/C++/Scala) is covered by one shared tree-sitter traversal — see
-ADR-0001 for why this is a tree-sitter engine rather than a Node/ESLint
-layer. PHP is deliberately excluded: phpcs already covers doc-comment
-mismatch on both the Drupal and PSR12 paths (native/phpcs.py).
+never depend on the consumer's own ruff config). Every other supported
+language (JS/TS/Java/Kotlin/C#/Ruby/C++/Scala) is covered by one shared
+tree-sitter traversal — see ADR-0001 for why this is a tree-sitter engine
+rather than a Node/ESLint layer. PHP is deliberately excluded: phpcs
+already covers doc-comment mismatch on both the Drupal and PSR12 paths
+(native/phpcs.py).
+
+This module used to also back docs-missing-check (a newly-added public
+function/method with no preceding doc comment at all), removed in #815 as
+a Low-severity analyzer judged not worth its maintenance surface (a
+separate ruff rule-set, a dedicated golangci-lint/godoclint invocation for
+Go, and a second tree-sitter presence check) relative to its review value.
 """
 
 from __future__ import annotations
@@ -27,11 +28,9 @@ import logging
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from ai_pr_review.context.treesitter import _attr_or_call
-from ai_pr_review.diff.linemap import LineRef, parse_added_lines
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -40,7 +39,6 @@ logger = logging.getLogger(__name__)
 _TIMEOUT_SECS = 120
 
 _API_SOURCE = "docs-api-check"
-_MISSING_SOURCE = "docs-missing-check"
 _TS_ENGINE_CONFIDENCE = 80
 _RUFF_CONFIDENCE = 90
 
@@ -107,19 +105,6 @@ _IDENTIFIER_KINDS = frozenset({"identifier", "simple_identifier"})
 # Skipping (not guessing) matches this repo's stated preference for
 # under- rather than over-reporting on ambiguous cases.
 _UNRESOLVABLE_PARAM_KINDS = frozenset({"object_pattern", "array_pattern", "rest_pattern"})
-
-# Node kinds that mark visibility as non-public. Presence of any of these
-# words in a modifier/access-specifier node's text means "not public";
-# absence means public, which is the correct default for every listed
-# language except Java (package-private-by-default) — erring toward
-# checking a package-private Java method is the safer failure mode for a
-# Low-severity, non-blocking finding, so it is not special-cased here.
-_NON_PUBLIC_MARKERS = frozenset({"private", "protected"})
-
-# C++ and Ruby toggle visibility via a preceding sibling rather than a
-# modifier on the function itself (an access_specifier "public:"/"private:"
-# section in C++; a bare `private`/`protected` call in Ruby).
-_ACCESS_SPECIFIER_KINDS = frozenset({"access_specifier"})
 
 
 def _kind(node: object) -> str:
@@ -328,50 +313,13 @@ def _preceding_comment_text(func_node: object, src_bytes: bytes) -> str | None:
     return None
 
 
-def _is_public(func_node: object, language: str, src_bytes: bytes) -> bool:
-    """Return whether *func_node* looks like public API by language convention.
-
-    Absence of an explicit private/protected marker means public for every
-    listed language except Java (package-private by default) — treated as
-    public anyway here, since flagging an extra package-private method is
-    the safer failure mode for a Low-severity, non-blocking finding than
-    silently skipping real API surface.
-    """
-    name_node = None
-    for child in _children(func_node):
-        kind = _kind(child)
-        if kind in ("modifiers", "modifier"):
-            text = _node_text(child, src_bytes).lower()
-            if any(marker in text for marker in _NON_PUBLIC_MARKERS):
-                return False
-        if kind in _IDENTIFIER_KINDS or kind == "property_identifier":
-            name_node = child
-    if name_node is not None:
-        name = _node_text(name_node, src_bytes)
-        if name.startswith("_") or name.startswith("#"):
-            return False
-    if language == "cpp":
-        # Toggled by the nearest preceding access_specifier sibling within
-        # the same field_declaration_list, not a modifier on the node
-        # itself — verified this session.
-        parent = _attr_or_call(func_node, "parent", None)
-        if parent is not None:
-            siblings = _children(parent)
-            idx = _sibling_index(siblings, func_node)
-            if idx is not None:
-                for i in range(idx - 1, -1, -1):
-                    if _kind(siblings[i]) in _ACCESS_SPECIFIER_KINDS:
-                        return "public" in _node_text(siblings[i], src_bytes).lower()
-    return True
-
-
 def _parse_file(path: Path, grammar: str) -> tuple[object, bytes] | None:
     try:
         from tree_sitter_language_pack import get_parser
     except ImportError as exc:
         logger.warning(
             "[ai-pr-review] WARNING: tree-sitter-language-pack unavailable; "
-            "docs-api-check/docs-missing-check skipped for %s. Cause: %s",
+            "docs-api-check skipped for %s. Cause: %s",
             path, exc,
         )
         return None
@@ -482,44 +430,6 @@ def _tree_sitter_api_findings(path: str) -> list[Finding]:
     return findings
 
 
-def _tree_sitter_missing_findings(path: str, added_lines: set[LineRef]) -> list[Finding]:
-    p = Path(path)
-    grammar = _grammar_for_file(p)
-    if grammar is None:
-        return []
-    parsed = _parse_file(p, grammar)
-    if parsed is None:
-        return []
-    root, src_bytes = parsed
-
-    function_kinds = _FUNCTION_NODE_TYPES[grammar]
-    functions: list[object] = []
-    _walk_functions(root, function_kinds, functions)
-
-    findings: list[Finding] = []
-    for func in functions:
-        line = _start_line(func)
-        if LineRef(path, line) not in added_lines:
-            continue
-        if not _is_public(func, grammar, src_bytes):
-            continue
-        if _preceding_comment_text(func, src_bytes) is not None:
-            continue
-        findings.append(
-            Finding(
-                severity="Low",
-                confidence=_TS_ENGINE_CONFIDENCE,
-                source=_MISSING_SOURCE,
-                category="docs",
-                file=path,
-                line=line,
-                finding="New public function/method has no doc comment.",
-                remediation="Add a doc comment describing this function's purpose and parameters.",
-            )
-        )
-    return findings
-
-
 # ---------------------------------------------------------------------------
 # Python path: ruff --isolated (never inherits the consumer's own ruff
 # config — that is the whole reason this is a separate invocation from the
@@ -604,194 +514,6 @@ def _python_api_findings(py_files: list[str]) -> list[Finding]:
     return findings
 
 
-def _python_missing_findings(py_files: list[str], added_lines: set[LineRef]) -> list[Finding]:
-    items = _run_ruff_isolated(py_files, "D101,D102,D103")
-    if not items:
-        return []
-    findings: list[Finding] = []
-    for item in items:
-        filename, row = _ruff_filename_and_row(item)
-        if row is None or LineRef(filename, row) not in added_lines:
-            continue
-        try:
-            findings.append(
-                Finding(
-                    severity="Low",
-                    confidence=_RUFF_CONFIDENCE,
-                    source=_MISSING_SOURCE,
-                    category="docs",
-                    file=filename,
-                    line=row,
-                    finding=f"{item.get('code', '')}: {item.get('message', '')}",
-                    remediation="Add a docstring describing this symbol.",
-                )
-            )
-        except (ValueError, TypeError) as exc:
-            logger.warning(
-                "[ai-pr-review] WARNING: docs-missing-check dropped malformed ruff item: %s; item=%r",
-                exc, repr(item)[:200],
-            )
-    return findings
-
-
-# ---------------------------------------------------------------------------
-# Go path: a dedicated golangci-lint invocation scoped to godoclint only,
-# independent of the general golangci-lint analyzer (native/golangci_lint.py)
-# for the same --isolated-style reason ruff gets a second invocation here.
-# godoclint checks Go doc-comment presence and form only — Go doc comments
-# have no @param syntax, so there is no mismatch direction to check; this
-# only feeds docs-missing-check, never docs-api-check.
-# ---------------------------------------------------------------------------
-
-
-def _find_go_module_root(go_files: list[str]) -> Path | None:
-    candidate = Path(go_files[0]).resolve().parent
-    while True:
-        if (candidate / "go.mod").is_file():
-            return candidate
-        parent = candidate.parent
-        if parent == candidate:
-            return None
-        candidate = parent
-
-
-def _go_missing_findings(go_files: list[str], added_lines: set[LineRef]) -> list[Finding]:
-    target_files = [f for f in go_files if Path(f).is_file()]
-    if not target_files:
-        return []
-    if not shutil.which("golangci-lint"):
-        logger.warning("[ai-pr-review] WARNING: golangci-lint not found; skipping docs-missing-check for Go.")
-        return []
-    module_root = _find_go_module_root(target_files)
-    if module_root is None:
-        logger.warning("[ai-pr-review] WARNING: could not find go.mod; docs-missing-check skipped for Go.")
-        return []
-
-    seen: set[str] = set()
-    patterns: list[str] = []
-    for f in target_files:
-        rel = Path(f).resolve().relative_to(module_root)
-        pkg_dir = str(rel.parent)
-        if pkg_dir not in seen:
-            seen.add(pkg_dir)
-            patterns.append(f"./{pkg_dir}/...")
-
-    # godoclint's rules ship in tiers; enabling the linter only turns on the
-    # "Basic" tier (doc-comment FORM checks: start-with-name, etc), never
-    # "require-doc" (the presence check this analyzer needs) — that is
-    # "Strict" tier, opt-in only. Verified empirically this session against
-    # golangci-lint 2.13.1: --enable-only=godoclint alone produces zero
-    # findings even on a fully undocumented exported function. A config
-    # file is the only way to turn on a per-linter rule in golangci-lint
-    # v2 — there is no CLI flag for it.
-    #
-    # The config file must live INSIDE module_root, not an unrelated temp
-    # directory: verified empirically that golangci-lint computes each
-    # issue's reported Pos.Filename relative to the --config file's own
-    # directory when that directory differs from the lint target's module
-    # root, producing unusable paths like "../../home/x/repo/main.go"
-    # instead of "main.go" — which would silently break the diff-gating
-    # lookup below. The JSON *output* path has no such constraint (only
-    # verified to affect the config file's location).
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=str(module_root), suffix=".yml", prefix=".ai-pr-review-godoclint-", delete=True
-    ) as config_file:
-        config_file.write(
-            'version: "2"\n'
-            "linters:\n"
-            "  settings:\n"
-            "    godoclint:\n"
-            "      enable:\n"
-            "        - require-doc\n"
-        )
-        config_file.flush()
-
-        with tempfile.TemporaryDirectory(prefix="godoclint-") as tmpdir:
-            json_path = Path(tmpdir) / "output.json"
-            try:
-                result = subprocess.run(
-                    [
-                        "golangci-lint", "run",
-                        "--enable-only=godoclint",
-                        f"--config={config_file.name}",
-                        f"--output.json.path={json_path}",
-                        "--issues-exit-code=0",
-                        *patterns,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=_TIMEOUT_SECS,
-                    cwd=str(module_root),
-                )
-            except subprocess.TimeoutExpired as exc:
-                logger.warning("[ai-pr-review] WARNING: godoclint timed out after %ss; skipping.", exc.timeout)
-                return []
-            except OSError as exc:
-                logger.warning("[ai-pr-review] WARNING: godoclint failed to start: %s", exc)
-                return []
-
-            if result.returncode not in (0, 1):
-                logger.warning(
-                    "[ai-pr-review] WARNING: godoclint exited %d; skipping. stderr: %s",
-                    result.returncode, result.stderr[:200],
-                )
-                return []
-
-            if not json_path.exists() or not json_path.stat().st_size:
-                return []
-
-            try:
-                data = json.loads(json_path.read_text())
-            except json.JSONDecodeError as exc:
-                logger.warning("[ai-pr-review] WARNING: godoclint produced non-JSON output: %s", exc)
-                return []
-
-    if not isinstance(data, dict):
-        return []
-    issues = data.get("Issues") or []
-    if not isinstance(issues, list):
-        return []
-
-    resolved_cwd = Path(".").resolve()
-    if module_root != resolved_cwd:
-        try:
-            prefix = str(module_root.relative_to(resolved_cwd)) + "/"
-        except ValueError:
-            prefix = str(module_root) + "/"
-    else:
-        prefix = ""
-
-    findings: list[Finding] = []
-    for item in issues:
-        if not isinstance(item, dict):
-            continue
-        pos = item.get("Pos") or {}
-        filename = pos.get("Filename") or ""
-        line = pos.get("Line")
-        full_path = prefix + filename
-        if not isinstance(line, int) or LineRef(full_path, line) not in added_lines:
-            continue
-        try:
-            findings.append(
-                Finding(
-                    severity="Low",
-                    confidence=_TS_ENGINE_CONFIDENCE,
-                    source=_MISSING_SOURCE,
-                    category="docs",
-                    file=full_path,
-                    line=line,
-                    finding=f"godoclint: {item.get('Text', '')}",
-                    remediation="Add or fix the doc comment for this exported symbol.",
-                )
-            )
-        except (ValueError, TypeError) as exc:
-            logger.warning(
-                "[ai-pr-review] WARNING: docs-missing-check dropped malformed godoclint item: %s; item=%r",
-                exc, repr(item)[:200],
-            )
-    return findings
-
-
 # ---------------------------------------------------------------------------
 # Public entrypoints (AnalyzerSpec.native_fn).
 # ---------------------------------------------------------------------------
@@ -813,34 +535,5 @@ def _run_docs_api_check(changed_files: ChangedFiles, diff_file: Path) -> list[Fi
     ]
     for f in ts_files:
         findings.extend(_tree_sitter_api_findings(f))
-
-    return findings
-
-
-def _run_docs_missing_check(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
-    """Missing docs on newly-added public symbols, diff-gated to added lines."""
-    try:
-        diff_text = diff_file.read_text(errors="replace")
-    except OSError:
-        diff_text = ""
-    added_lines = parse_added_lines(diff_text)
-    if not added_lines:
-        return []
-
-    findings: list[Finding] = []
-
-    py_files = [f for f in changed_files.python if Path(f).is_file()]
-    if py_files:
-        findings.extend(_python_missing_findings(py_files, added_lines))
-
-    if changed_files.go:
-        findings.extend(_go_missing_findings(changed_files.go, added_lines))
-
-    ts_files = [
-        f for f in changed_files.source
-        if Path(f).is_file() and Path(f).suffix.lstrip(".").lower() in _TS_ENGINE_EXTENSIONS
-    ]
-    for f in ts_files:
-        findings.extend(_tree_sitter_missing_findings(f, added_lines))
 
     return findings

@@ -1,4 +1,11 @@
-"""Tests for the docs-api-check and docs-missing-check native analyzers."""
+"""Tests for the docs-api-check native analyzer.
+
+docs-missing-check (the sibling analyzer this module used to also back) was
+removed in #815; its dedicated test classes (TestTreeSitterMissingFindings,
+TestGoPath) and the two missing-check-specific TestPythonPaths tests were
+removed with it. Anything below still exercises docs-api-check's own
+behavior (shared tree-sitter helpers, ruff --isolated path).
+"""
 
 from __future__ import annotations
 
@@ -12,11 +19,8 @@ import pytest
 from ai_pr_review.analyzers.native.docs_comments import (
     _doc_param_names,
     _run_docs_api_check,
-    _run_docs_missing_check,
     _tree_sitter_api_findings,
-    _tree_sitter_missing_findings,
 )
-from ai_pr_review.diff.linemap import LineRef
 from ai_pr_review.manifest import ChangedFiles
 
 # tree-sitter-language-pack is an optional dependency (the [context] extra);
@@ -35,10 +39,6 @@ _requires_tree_sitter = pytest.mark.skipif(
 def _make_cf(**kwargs: list[str]) -> ChangedFiles:
     all_files = [f for files in kwargs.values() for f in files]
     return ChangedFiles(all_files=all_files, **kwargs)
-
-
-def _added_lines(path: str, lines: range) -> set[LineRef]:
-    return {LineRef(path, i) for i in lines}
 
 
 class TestDocParamNames:
@@ -305,62 +305,6 @@ class Sample {
         assert _tree_sitter_api_findings(str(f)) == []
 
 
-@_requires_tree_sitter
-class TestTreeSitterMissingFindings:
-    def test_new_undocumented_public_function_flagged(self, tmp_path: Path) -> None:
-        f = tmp_path / "sample.js"
-        f.write_text("function transfer(amount) {\n    return amount;\n}\n")
-        findings = _tree_sitter_missing_findings(str(f), _added_lines(str(f), range(1, 4)))
-        assert len(findings) == 1
-        assert findings[0].severity == "Low"
-        assert findings[0].confidence == 80
-        assert findings[0].source == "docs-missing-check"
-        assert findings[0].category == "docs"
-
-    def test_documented_function_not_flagged(self, tmp_path: Path) -> None:
-        f = tmp_path / "sample.js"
-        f.write_text("/** doc */\nfunction transfer(amount) {\n    return amount;\n}\n")
-        findings = _tree_sitter_missing_findings(str(f), _added_lines(str(f), range(1, 5)))
-        assert findings == []
-
-    def test_out_of_diff_function_not_flagged(self, tmp_path: Path) -> None:
-        # Diff-gating: an undocumented function whose def-line was NOT
-        # added in this diff must not be flagged, even if it is genuinely
-        # undocumented — this is what keeps the check from nagging about
-        # pre-existing code.
-        f = tmp_path / "sample.js"
-        f.write_text("function transfer(amount) {\n    return amount;\n}\n")
-        findings = _tree_sitter_missing_findings(str(f), added_lines=set())
-        assert findings == []
-
-    def test_private_convention_underscore_not_flagged(self, tmp_path: Path) -> None:
-        f = tmp_path / "sample.js"
-        f.write_text("function _helper(amount) {\n    return amount;\n}\n")
-        findings = _tree_sitter_missing_findings(str(f), _added_lines(str(f), range(1, 4)))
-        assert findings == []
-
-    def test_java_private_modifier_not_flagged(self, tmp_path: Path) -> None:
-        f = tmp_path / "Sample.java"
-        f.write_text("public class Sample {\n    private int helper(int x) {\n        return x;\n    }\n}\n")
-        findings = _tree_sitter_missing_findings(str(f), _added_lines(str(f), range(1, 6)))
-        assert findings == []
-
-    def test_java_public_method_flagged(self, tmp_path: Path) -> None:
-        f = tmp_path / "Sample.java"
-        f.write_text("public class Sample {\n    public int transfer(int x) {\n        return x;\n    }\n}\n")
-        findings = _tree_sitter_missing_findings(str(f), _added_lines(str(f), range(1, 6)))
-        assert len(findings) == 1
-
-    def test_cpp_private_section_not_flagged(self, tmp_path: Path) -> None:
-        f = tmp_path / "sample.cpp"
-        f.write_text("class Sample {\npublic:\n    int transfer(int amount) {\n        return amount;\n    }\nprivate:\n    int helper(int x) {\n        return x;\n    }\n};\n")
-        added = _added_lines(str(f), range(1, 12))
-        findings = _tree_sitter_missing_findings(str(f), added)
-        # transfer() is public+undocumented -> flagged; helper() is
-        # private+undocumented -> not flagged.
-        assert len(findings) == 1
-
-
 class TestPythonPaths:
     def test_api_check_isolated_flag_present(self, tmp_path: Path) -> None:
         f = tmp_path / "a.py"
@@ -405,38 +349,6 @@ class TestPythonPaths:
         assert findings[0].source == "docs-api-check"
         assert findings[0].line == 3
 
-    def test_missing_check_diff_gates_ruff_findings(self, tmp_path: Path) -> None:
-        f = tmp_path / "a.py"
-        f.write_text("def foo():\n    pass\n")
-        cf = _make_cf(python=[str(f)])
-        payload = json.dumps([
-            {"code": "D103", "filename": str(f), "location": {"row": 1, "column": 1}, "message": "Missing docstring"},
-            {"code": "D103", "filename": str(f), "location": {"row": 99, "column": 1}, "message": "Missing docstring"},
-        ])
-        diff_file = tmp_path / "the.diff"
-        diff_file.write_text(f"diff --git a/{f} b/{f}\n--- /dev/null\n+++ b/{f}\n@@ -0,0 +1,2 @@\n+def foo():\n+    pass\n")
-        with (
-            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/ruff"),
-            patch("ai_pr_review.analyzers.native.docs_comments.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
-            findings = _run_docs_missing_check(cf, diff_file)
-        # Only the row-1 finding is on an added line; row 99 is not.
-        assert len(findings) == 1
-        assert findings[0].line == 1
-        assert findings[0].severity == "Low"
-
-    def test_missing_check_no_added_lines_short_circuits(self, tmp_path: Path) -> None:
-        f = tmp_path / "a.py"
-        f.write_text("def foo():\n    pass\n")
-        cf = _make_cf(python=[str(f)])
-        diff_file = tmp_path / "empty.diff"
-        diff_file.write_text("")
-        with patch("ai_pr_review.analyzers.native.docs_comments.subprocess.run") as mock_run:
-            findings = _run_docs_missing_check(cf, diff_file)
-        assert findings == []
-        mock_run.assert_not_called()
-
     def test_ruff_timeout_returns_none_gracefully(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp
         f = tmp_path / "a.py"
@@ -467,125 +379,6 @@ class TestPythonPaths:
         assert findings == []
 
 
-class TestGoPath:
-    def _json_path_writer(self, content: str, returncode: int = 0):
-        def _run(args: list[str], **kwargs: object) -> MagicMock:
-            flag = next(a for a in args if a.startswith("--output.json.path="))
-            Path(flag.removeprefix("--output.json.path=")).write_text(content)
-            return MagicMock(returncode=returncode, stdout="", stderr="")
-        return _run
-
-    def test_uses_enable_only_godoclint(self, tmp_path: Path) -> None:
-        go_mod = tmp_path / "go.mod"
-        go_mod.write_text("module test\n\ngo 1.21\n")
-        go_file = tmp_path / "main.go"
-        go_file.write_text("package main\n")
-        cf = _make_cf(go=[str(go_file)])
-        diff_file = tmp_path / "the.diff"
-        diff_file.write_text(f"diff --git a/{go_file} b/{go_file}\n--- /dev/null\n+++ b/{go_file}\n@@ -0,0 +1,1 @@\n+package main\n")
-        with (
-            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch(
-                "ai_pr_review.analyzers.native.docs_comments.subprocess.run",
-                side_effect=self._json_path_writer('{"Issues": []}'),
-            ) as mock_run,
-        ):
-            _run_docs_missing_check(cf, diff_file)
-        call_args = mock_run.call_args[0][0]
-        assert "--enable-only=godoclint" in call_args
-        assert any(a.startswith("--output.json.path=") for a in call_args)
-        assert not any(a.startswith("--out-format") for a in call_args)
-
-    def test_config_enables_require_doc_and_lives_in_module_root(self, tmp_path: Path) -> None:
-        # require-doc is a "Strict"-tier godoclint rule, off even when the
-        # linter itself is enabled — verified empirically this session that
-        # --enable-only=godoclint alone produces zero findings on a fully
-        # undocumented exported function. Also verified: golangci-lint
-        # computes each issue's reported Pos.Filename relative to the
-        # --config file's own directory when it differs from the module
-        # root, so the config file must live INSIDE module_root or
-        # diff-gating's path lookup silently breaks.
-        go_mod = tmp_path / "go.mod"
-        go_mod.write_text("module test\n\ngo 1.21\n")
-        go_file = tmp_path / "main.go"
-        go_file.write_text("package main\n")
-        cf = _make_cf(go=[str(go_file)])
-        diff_file = tmp_path / "the.diff"
-        diff_file.write_text(f"diff --git a/{go_file} b/{go_file}\n--- /dev/null\n+++ b/{go_file}\n@@ -0,0 +1,1 @@\n+package main\n")
-        captured: dict[str, object] = {}
-
-        def _run(args: list[str], **kwargs: object) -> MagicMock:
-            config_flag = next(a for a in args if a.startswith("--config="))
-            config_path = Path(config_flag.removeprefix("--config="))
-            # Must read the config's location and content DURING the call —
-            # it is a delete-on-close NamedTemporaryFile, gone by the time
-            # _run_docs_missing_check returns.
-            captured["parent"] = config_path.parent
-            captured["content"] = config_path.read_text()
-            json_flag = next(a for a in args if a.startswith("--output.json.path="))
-            Path(json_flag.removeprefix("--output.json.path=")).write_text('{"Issues": []}')
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with (
-            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch("ai_pr_review.analyzers.native.docs_comments.subprocess.run", side_effect=_run),
-        ):
-            _run_docs_missing_check(cf, diff_file)
-        assert captured["parent"] == tmp_path
-        assert "require-doc" in captured["content"]
-
-    def test_parses_and_diff_gates_godoclint_issues(self, tmp_path: Path) -> None:
-        go_mod = tmp_path / "go.mod"
-        go_mod.write_text("module test\n\ngo 1.21\n")
-        go_file = tmp_path / "main.go"
-        go_file.write_text("package main\n\nfunc Transfer() {}\n")
-        cf = _make_cf(go=[str(go_file)])
-        diff_file = tmp_path / "the.diff"
-        diff_file.write_text(f"diff --git a/{go_file} b/{go_file}\n--- /dev/null\n+++ b/{go_file}\n@@ -0,0 +1,3 @@\n+package main\n+\n+func Transfer() {{}}\n")
-        payload = json.dumps({"Issues": [{
-            "FromLinter": "godoclint",
-            "Text": "exported function Transfer should have a doc comment",
-            "Pos": {"Filename": "main.go", "Line": 3, "Column": 1},
-        }]})
-        with (
-            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/golangci-lint"),
-            patch(
-                "ai_pr_review.analyzers.native.docs_comments.subprocess.run",
-                side_effect=self._json_path_writer(payload),
-            ),
-        ):
-            findings = _run_docs_missing_check(cf, diff_file)
-        assert len(findings) == 1
-        assert findings[0].severity == "Low"
-        assert findings[0].source == "docs-missing-check"
-        assert findings[0].category == "docs"
-
-    def test_no_go_mod_skips_gracefully(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        go_file = tmp_path / "main.go"
-        go_file.write_text("package main\n")
-        cf = _make_cf(go=[str(go_file)])
-        diff_file = tmp_path / "the.diff"
-        diff_file.write_text(f"diff --git a/{go_file} b/{go_file}\n--- /dev/null\n+++ b/{go_file}\n@@ -0,0 +1,1 @@\n+package main\n")
-        with (
-            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/golangci-lint"),
-            caplog.at_level("WARNING"),
-        ):
-            findings = _run_docs_missing_check(cf, diff_file)
-        assert findings == []
-        assert "go.mod" in caplog.text
-
-    def test_binary_absent_returns_empty(self, tmp_path: Path) -> None:
-        go_mod = tmp_path / "go.mod"
-        go_mod.write_text("module test\n\ngo 1.21\n")
-        go_file = tmp_path / "main.go"
-        go_file.write_text("package main\n")
-        cf = _make_cf(go=[str(go_file)])
-        diff_file = tmp_path / "the.diff"
-        diff_file.write_text(f"diff --git a/{go_file} b/{go_file}\n--- /dev/null\n+++ b/{go_file}\n@@ -0,0 +1,1 @@\n+package main\n")
-        with patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value=None):
-            assert _run_docs_missing_check(cf, diff_file) == []
-
-
 class TestBridgeIntegration:
     @pytest.mark.anyio
     async def test_docs_api_check_uses_native_fn(self) -> None:
@@ -605,7 +398,15 @@ class TestBridgeIntegration:
         assert called
 
     @pytest.mark.anyio
-    async def test_docs_missing_check_skipped_when_no_source_files(self) -> None:
+    async def test_analyzer_skipped_when_no_eligible_files(self) -> None:
+        # Generic required_file_types gating (ai_pr_review.analyzers.bridge's
+        # _is_eligible), not specific to any one analyzer -- exercised here
+        # with a fake spec rather than a real one so this test doesn't need
+        # updating whenever the real analyzer roster changes. Named
+        # "docs-missing-check" until #815 removed that real analyzer; kept
+        # as a fake name here since the behavior under test (an analyzer
+        # gated on "source" files is skipped when ChangedFiles has none) is
+        # unrelated to that removal.
         from ai_pr_review.analyzers import bridge
         from ai_pr_review.analyzers.bridge import AnalyzerSpec, run_analyzers
 
@@ -615,7 +416,7 @@ class TestBridgeIntegration:
             called.append(True)
             return []
 
-        spec = AnalyzerSpec("docs-missing-check", ["source"], fake_native)
+        spec = AnalyzerSpec("fake-source-gated-analyzer", ["source"], fake_native)
         with patch.object(bridge, "_ANALYZERS", [spec]):
             await run_analyzers(ChangedFiles(), "/dev/null")
         assert not called

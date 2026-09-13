@@ -399,11 +399,15 @@ def _opt_analyzer_names(v: object, ctx: str) -> tuple[str, ...] | None:
     names = _opt_str_list(v, ctx)
     if not names:
         return names
-    from ai_pr_review.analyzers.bridge import ANALYZER_NAMES  # noqa: PLC0415
-    from ai_pr_review.config import _validate_names_tuple  # noqa: PLC0415
+    # _validate_analyzer_names_list (not just _validate_names_tuple) so a
+    # deprecated-but-inert analyzer name (#815) referenced in a policy.yml
+    # route is accepted with a warning here too, not just in the main
+    # analyzers/exclude-analyzers env-var path -- one shared source of
+    # truth for which analyzer names are tolerated post-deprecation.
+    from ai_pr_review.config import _validate_analyzer_names_list  # noqa: PLC0415
 
     try:
-        return _validate_names_tuple(names, ANALYZER_NAMES, "analyzer")
+        return _validate_analyzer_names_list(names)
     except ValueError as exc:
         raise ValueError(f"{ctx}: {exc}") from exc
 

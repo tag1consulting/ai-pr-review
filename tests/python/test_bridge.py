@@ -340,6 +340,16 @@ def test_analyzer_names_covers_all_registry_entries() -> None:
     assert {spec.name for spec in _ANALYZERS} == ANALYZER_NAMES
 
 
+def test_docs_missing_check_removed_siblings_remain() -> None:
+    """#815: docs-missing-check never dispatches. The other three docs
+    analyzers (a genuinely distinct concern each -- signature mismatch,
+    broken Markdown links, and stale references to deleted files) are
+    unaffected by its removal."""
+    assert "docs-missing-check" not in ANALYZER_NAMES
+    for name in ("docs-api-check", "docs-ref-check", "docs-drift-check"):
+        assert name in ANALYZER_NAMES
+
+
 # ---------------------------------------------------------------------------
 # _analyzer_skip_names: allow/deny collapse logic
 # ---------------------------------------------------------------------------
