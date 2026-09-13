@@ -144,23 +144,37 @@ def test_unchanged_finding_not_reposted_and_kept_alive() -> None:
 def test_kept_alive_matched_discussion_survives_same_run_resolve_stale() -> None:
     """Finding 0, matched-thread half: post_findings fuzzy-matches D1 and
     keeps it alive; the very next resolve_stale() call on the same instance
-    must not resolve it."""
+    must not resolve it.
+
+    An unchanged finding still classifies "update" (same severity, not
+    "escalate"), so post_findings also PATCHes D1's note in place (#710
+    in-place update) -- that PUT targets .../discussions/D1/notes/<id>, a
+    distinct endpoint from resolve_stale's .../discussions/D1 (no /notes/
+    suffix), tracked separately below so the two are never conflated.
+    """
     f = _finding(line=4)
     prior = _prior_disc("D1", f, line=4)
     resolve_calls: list[str] = []
+    note_update_calls: list[str] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "GET" and "/discussions" in str(req.url):
+        url = str(req.url)
+        if req.method == "GET" and "/discussions" in url:
             return httpx.Response(200, json=[prior])
-        if req.method == "PUT" and "/discussions/" in str(req.url):
-            resolve_calls.append(str(req.url))
+        if req.method == "PUT" and "/notes/" in url:
+            note_update_calls.append(url)
+            return httpx.Response(200, json={})
+        if req.method == "PUT" and "/discussions/" in url:
+            resolve_calls.append(url)
             return httpx.Response(200, json={})
         return httpx.Response(404)
 
     prov = _make_provider(handler)
-    prov.post_findings(
+    post_result = prov.post_findings(
         [f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
     )
+    assert post_result.inline_updated == 1
+    assert len(note_update_calls) == 1
     result = prov.resolve_stale()
     assert resolve_calls == []
     assert result.threads_resolved == 0
@@ -448,3 +462,132 @@ def test_prior_discussions_fetch_auth_failure_is_failsoft() -> None:
     )
     assert result.inline_posted == 1
     assert result.ok
+
+
+def test_update_classification_patches_note_in_place() -> None:
+    """An `update` classification (unchanged severity) PATCHes the matched
+    discussion's note body in place instead of merely keeping it alive --
+    closes the #710 known limitation ("no in-place update of an existing
+    discussion's body yet")."""
+    prior_f = _finding(line=4, severity="Low", finding="old wording")
+    prior = _prior_disc("D1", prior_f, line=4, note_id=7)
+    new_f = _finding(line=4, severity="Low", finding="new wording")
+    note_updates: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/discussions" in url:
+            return httpx.Response(200, json=[prior])
+        if req.method == "PUT" and url.endswith("/discussions/D1/notes/7"):
+            note_updates.append(json.loads(req.content))
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [new_f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_updated == 1
+    assert result.replies_posted == 0
+    assert len(note_updates) == 1
+    assert "new wording" in note_updates[0]["body"]
+    assert "D1" in prov._kept_alive_discussion_ids
+
+
+def test_escalated_finding_patches_note_and_replies() -> None:
+    """An `escalate` classification (higher severity than the matched
+    discussion's last-known severity) PATCHes the note in place AND posts a
+    reply noting the escalation -- mirrors GitHub's
+    test_escalated_finding_patches_and_replies_no_new_review."""
+    prior_f = _finding(line=5, severity="Low")
+    prior = _prior_disc("D1", prior_f, line=5, note_id=3)
+    escalated_f = _finding(line=5, severity="Critical")
+    note_updates: list[dict] = []
+    replies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/discussions" in url:
+            return httpx.Response(200, json=[prior])
+        if req.method == "PUT" and url.endswith("/discussions/D1/notes/3"):
+            note_updates.append(json.loads(req.content))
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/discussions/D1/notes"):
+            replies.append(json.loads(req.content))
+            return httpx.Response(201, json={"id": 99})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [escalated_f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_updated == 1
+    assert result.replies_posted == 1
+    assert len(note_updates) == 1
+    assert "Critical" in note_updates[0]["body"]
+    assert len(replies) == 1
+    assert "Severity escalated" in replies[0]["body"]
+    assert "Low" in replies[0]["body"]
+    assert "Critical" in replies[0]["body"]
+
+
+def test_escalate_patch_failure_does_not_count_updated_or_reply() -> None:
+    """If the note PATCH itself fails, the run must not claim
+    inline_updated/replies_posted -- a reply saying "severity escalated"
+    would itself be a silent-failure risk when the note still shows the old
+    content. Mirrors GitHub's
+    test_escalate_patch_failure_does_not_count_updated_or_send_notification."""
+    prior_f = _finding(line=5, severity="Low")
+    prior = _prior_disc("D1", prior_f, line=5, note_id=3)
+    escalated_f = _finding(line=5, severity="Critical")
+    replies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/discussions" in url:
+            return httpx.Response(200, json=[prior])
+        if req.method == "PUT" and url.endswith("/discussions/D1/notes/3"):
+            return httpx.Response(500, json={"message": "unavailable"})
+        if req.method == "POST" and url.endswith("/discussions/D1/notes"):
+            replies.append(json.loads(req.content))
+            return httpx.Response(201, json={"id": 99})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [escalated_f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_updated == 0
+    assert result.replies_posted == 0
+    assert replies == []
+    assert "D1" in prov._kept_alive_discussion_ids
+    assert result.ok
+
+
+def test_fuzzy_matched_update_drops_suggestion_fence_on_line_drift() -> None:
+    """A fuzzy match (drifted line, not an exact match) must not carry a
+    suggestion fence into the PATCHed note -- the note's position can't move,
+    so an "Apply suggestion" button would target the wrong line."""
+    prior_f = _finding(line=4, severity="Low")
+    prior = _prior_disc("D1", prior_f, line=4, note_id=1)
+    drifted_f = _finding(
+        line=6, severity="Low", suggested_code="fixed_code()",
+    )
+    note_updates: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/discussions" in url:
+            return httpx.Response(200, json=[prior])
+        if req.method == "PUT" and url.endswith("/discussions/D1/notes/1"):
+            note_updates.append(json.loads(req.content))
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [drifted_f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_updated == 1
+    assert len(note_updates) == 1
+    assert "suggestion" not in note_updates[0]["body"]

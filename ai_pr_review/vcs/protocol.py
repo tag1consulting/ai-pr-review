@@ -72,9 +72,14 @@ class FindingsResult:
     event: PostEvent
     degraded_to_comment: bool = False
     error: str | None = None
-    # Canonical-review-reuse counters (GitHub only; always 0/False on
-    # GitLab/Bitbucket, which don't implement the reuse classification).
-    # inline_updated: comments PATCHed in place for an update/escalate
+    # Canonical-review-reuse / cross-run-dedup counters. GitHub populates all
+    # four (full reuse: suppress/recur/update/escalate against a verdict
+    # system). GitLab populates `inline_updated`/`replies_posted` (#710: its
+    # fuzzy-match dedup only ever reaches `update`/`escalate`, never
+    # `suppressed`/`reused_review`, since it has no verdict system or
+    # canonical-review concept). Bitbucket implements none of this yet
+    # (tracked as the remaining #710 parity gap) and always reports 0/False.
+    # inline_updated: comments/notes PATCHed in place for an update/escalate
     # classification. suppressed: findings matching a durable "dismissed"
     # verdict, never reposted. replies_posted: escalation/recurrence
     # notification replies posted on existing threads. reused_review: True
