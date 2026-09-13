@@ -9,6 +9,7 @@ import pytest
 import ai_pr_review.config as _config_module
 from ai_pr_review.config import (
     _DEPRECATED_AI_VAR_ALIASES,
+    _DEPRECATED_NOOP_AI_VARS,
     _KNOWN_AI_VARS,
     ReviewConfig,
 )
@@ -231,6 +232,37 @@ def test_deprecated_aliases_are_disjoint_from_known_vars() -> None:
     )
 
 
+def test_deprecated_noop_vars_are_disjoint_from_known_and_alias_vars() -> None:
+    """Deprecated no-op vars (#814) must NOT be in _KNOWN_AI_VARS or
+    _DEPRECATED_AI_VAR_ALIASES.
+
+    _check_unknown_ai_vars checks _DEPRECATED_NOOP_AI_VARS before
+    _DEPRECATED_AI_VAR_ALIASES, but a key in _KNOWN_AI_VARS would still
+    shadow it (that branch is checked first of all).
+    """
+    overlap = set(_DEPRECATED_NOOP_AI_VARS) & (
+        _KNOWN_AI_VARS | set(_DEPRECATED_AI_VAR_ALIASES)
+    )
+    assert not overlap, (
+        f"Keys in both _DEPRECATED_NOOP_AI_VARS and _KNOWN_AI_VARS/"
+        f"_DEPRECATED_AI_VAR_ALIASES (warning will never fire): {overlap}"
+    )
+
+
+def test_profile_max_tokens_env_var_deprecated_noop(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AI_PROFILE_MAX_TOKENS (#814: language-profile routing removed) is
+    accepted without ConfigError, warns, and names the removal release.
+    """
+    monkeypatch.setenv("AI_PROFILE_MAX_TOKENS", "8192")
+    ReviewConfig.from_env()  # must not raise
+    stderr = capsys.readouterr().err
+    assert "AI_PROFILE_MAX_TOKENS" in stderr
+    assert "deprecated" in stderr
+    assert "v3.0.0" in stderr
+
+
 def test_invalid_review_mode() -> None:
     with pytest.raises(ValueError):
         ReviewConfig.model_validate({"review_mode": "invalid"})
@@ -279,13 +311,19 @@ def test_all_ai_vars_read_in_from_env_are_known() -> None:
     source = Path(_config_module.__file__).read_text()
     # Extract all "AI_..." string literals from the source
     ai_vars_in_source = set(re.findall(r'"(AI_[A-Z_]+)"', source))
-    # Both _KNOWN_AI_VARS and _DEPRECATED_AI_VAR_ALIASES are valid homes
-    # (internal vars like AI_AGENT are allowed extras in _KNOWN_AI_VARS)
-    covered = _KNOWN_AI_VARS | set(_DEPRECATED_AI_VAR_ALIASES)
+    # _KNOWN_AI_VARS, _DEPRECATED_AI_VAR_ALIASES, and _DEPRECATED_NOOP_AI_VARS
+    # (#814) are all valid homes (internal vars like AI_AGENT are allowed
+    # extras in _KNOWN_AI_VARS)
+    covered = (
+        _KNOWN_AI_VARS
+        | set(_DEPRECATED_AI_VAR_ALIASES)
+        | set(_DEPRECATED_NOOP_AI_VARS)
+    )
     missing = ai_vars_in_source - covered
     assert not missing, (
-        f"AI_* vars referenced in config.py but missing from both "
-        f"_KNOWN_AI_VARS and _DEPRECATED_AI_VAR_ALIASES: {missing}"
+        f"AI_* vars referenced in config.py but missing from "
+        f"_KNOWN_AI_VARS, _DEPRECATED_AI_VAR_ALIASES, and "
+        f"_DEPRECATED_NOOP_AI_VARS: {missing}"
     )
 
 

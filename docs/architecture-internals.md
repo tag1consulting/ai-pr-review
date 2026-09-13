@@ -330,7 +330,7 @@ Variables consumed by the engine but not exposed as action inputs:
 | `AI_ANALYZER_DIFF_SCOPE` | `cap` | How out-of-diff native-analyzer findings are handled. Valid: `cap`, `drop`, `off`. |
 | `AI_ANALYZERS` / `AI_EXCLUDE_ANALYZERS` | `''` | Allowlist / denylist of static analyzer names. See [Static analyzers](static-analyzers.md). |
 | `AI_AGENTS` / `AI_EXCLUDE_AGENTS` | `''` | Allowlist / denylist of review agent names. See [Agents](agents.md). |
-| `AI_PROFILE_MAX_TOKENS` | `4096` | Token budget for per-agent language-profile context sections. |
+| `AI_PROFILE_MAX_TOKENS` | `4096` | Deprecated, ignored (#814): per-agent language-profile routing was removed; every eligible agent now receives the whole detected-language profile(s). Accepted as a no-op with a deprecation warning; will be rejected starting in v3.0.0. |
 | `AI_CONTEXT_ENRICHMENT` | `true` (config default) | Inject tree-sitter `<symbol-context>` blocks into agent prompts. |
 | `AI_CONTEXT_MAX_TOKENS` | `8192` | Token budget for the injected `<symbol-context>` block per agent call. |
 | `AI_CONTEXT_LOOKUP_LINES` | `8` | Lines of surrounding context captured per symbol lookup. |

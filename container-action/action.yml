@@ -211,8 +211,12 @@ inputs:
 
   profile-max-tokens:
     description: >
-      Maximum token budget for per-agent language-profile context sections.
-      Default: 4096.
+      Deprecated, ignored (#814): per-agent language-profile routing was
+      removed -- every eligible agent now receives the whole detected-language
+      profile(s) instead of a per-agent token-capped subset, so there is no
+      longer a budget to cap. Still accepted as a no-op (with a deprecation
+      warning in the job log) so existing workflows don't break; will be
+      rejected starting in v3.0.0.
     required: false
     default: '4096'
 

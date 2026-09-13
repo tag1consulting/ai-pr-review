@@ -17,7 +17,6 @@ from ai_pr_review.agents.dispatch import (
     run_tier,
 )
 from ai_pr_review.agents.roster import AGENTS, get_agent
-from ai_pr_review.language_profile_sections import ProfileRouter
 from ai_pr_review.llm.base import LLMResponse
 
 # ---------------------------------------------------------------------------
@@ -188,14 +187,6 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
     assert names == {"code-reviewer", "silent-failure-hunter"}
 
 
-def _make_profile_router(tmp_path: Path, profile_text: str) -> ProfileRouter:
-    """Build a ProfileRouter from a single in-memory profile string."""
-    profile_dir = tmp_path / "language-profiles"
-    profile_dir.mkdir(exist_ok=True)
-    (profile_dir / "python.md").write_text(profile_text)
-    return ProfileRouter(["Python"], tmp_path)
-
-
 @pytest.mark.anyio
 async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     tmp_path: Path,
@@ -208,10 +199,10 @@ async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     """
     ctx = _make_context(tmp_path)
     ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
-    ctx.profile_router = _make_profile_router(
-        tmp_path, "## Python-Specific Review Context\n\n### Common Python Bugs\nProject uses click + pydantic."
+    ctx.language_profile_text = (
+        "## Python-Specific Review Context\n\n### Common Python Bugs\n"
+        "Project uses click + pydantic."
     )
-    ctx.profile_max_tokens = 8192
 
     captured: list[Any] = []
 
@@ -251,10 +242,10 @@ async def test_run_tier_language_profile_excluded_for_ineligible_agent(
     """
     ctx = _make_context(tmp_path)
     ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
-    ctx.profile_router = _make_profile_router(
-        tmp_path, "## Python-Specific Review Context\n\n### Common Python Bugs\nProject uses click + pydantic."
+    ctx.language_profile_text = (
+        "## Python-Specific Review Context\n\n### Common Python Bugs\n"
+        "Project uses click + pydantic."
     )
-    ctx.profile_max_tokens = 8192
 
     captured: list[Any] = []
 
@@ -280,8 +271,49 @@ async def test_run_tier_language_profile_excluded_for_ineligible_agent(
 
 
 @pytest.mark.anyio
+async def test_run_tier_whole_language_profile_text_reaches_eligible_agent(
+    tmp_path: Path,
+) -> None:
+    """#814: every context_enrichment_eligible agent receives the WHOLE
+    language_profile_text verbatim -- no per-agent routed subset. Two
+    languages' full text (each with sections a routed subset would once
+    have dropped for a narrowly-focused agent) must both reach even
+    security-reviewer (formerly profile_focus={"security"} only).
+    """
+    ctx = _make_context(tmp_path)
+    ctx.language_profile_text = (
+        "## Python-Specific Review Context\n\n### Idiomatic Patterns\n"
+        "Use context managers for resource cleanup.\n\n"
+        "## Go-Specific Review Context\n\n### Common Go Bugs\n"
+        "Unchecked error returns are a frequent bug."
+    )
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    security_reviewer = get_agent("security-reviewer")
+    assert security_reviewer.context_enrichment_eligible, \
+        "test premise: security-reviewer must be context_enrichment_eligible"
+    await run_tier(
+        agents=[security_reviewer],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    # Whole text reaches the agent, including a section a routed subset
+    # keyed to this agent's old profile_focus={"security"} would have dropped.
+    assert "Use context managers for resource cleanup." in req.system_prefix
+    assert "Unchecked error returns are a frequent bug." in req.system_prefix
+
+
+@pytest.mark.anyio
 async def test_run_tier_empty_system_prefix_when_no_addenda(tmp_path: Path) -> None:
-    """When neither feedback_addendum nor profile_router is set,
+    """When neither feedback_addendum nor language_profile_text is set,
     system_prefix is empty so the legacy single-breakpoint Anthropic layout
     is preserved (regression guard for the byte-identical fallback).
     """

@@ -264,7 +264,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove out-of-diff analyzer findings entirely. `off`: pass through unchanged (full-file linting behaviour). LLM-agent findings are never affected. |
 | `feedback-loop` | No | `false` | Persist `/ai-pr-review false-positive\|wont-fix\|feedback` verdicts to a dedicated git branch and re-inject them into future reviews. GitHub-only. |
 | `judge-pass` | No | `true` | Run a cheap-model judge pass after findings are extracted to down-rank weak single-source findings. Adds one LLM call per review; its token usage appears as a `judge-pass` row in the token table. Set to `false` to disable. |
-| `profile-max-tokens` | No | `4096` | Maximum token budget for per-agent language-profile context. Reduce to lower token spend; increase if profile sections are being truncated. |
+| `profile-max-tokens` | No | `4096` | Deprecated, ignored (#814): per-agent language-profile routing was removed; every eligible agent now receives the whole detected-language profile(s) instead. Accepted as a no-op with a deprecation warning; will be rejected starting in v3.0.0. |
 
 Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).
 
@@ -475,7 +475,7 @@ When no cache activity is detected, the Cache Write and Cache Read columns are o
 When `AI_JUDGE_PASS=true` (the default) and the judge ran on a non-empty finding set, a `judge-pass` row appears as a regular agent row with its tokens included in the Total. Three supplementary informational rows may appear after Total (they do not affect cost totals):
 
 - **Context enrichment** — token count of the `<symbol-context>` block; shown when `AI_CONTEXT_ENRICHMENT=1` and the block was non-empty.
-- **Language profiles** — maximum profile tokens injected across agents; shown when per-agent profile routing (v2.1.0+) was active.
+- **Language profiles** — token count of the whole detected-language profile text injected into every eligible agent (#814); shown when at least one language profile was loaded.
 - **SARIF ingestion** — wall-clock elapsed time for SARIF parsing; shown when `AI_SARIF_PATHS` is configured.
 
 Costs are calculated using rates from `config/model-pricing.json` and do not reflect enterprise discounts, committed use agreements, or proxy markups.
