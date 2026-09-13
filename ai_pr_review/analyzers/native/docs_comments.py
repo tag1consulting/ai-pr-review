@@ -30,6 +30,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.context.treesitter import _attr_or_call
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -480,6 +481,9 @@ def _run_ruff_isolated(py_files: list[str], select: str) -> list[dict[str, objec
 def _ruff_filename_and_row(item: dict[str, object]) -> tuple[str, int | None]:
     filename_raw = item.get("filename")
     filename = filename_raw if isinstance(filename_raw, str) else ""
+    # ruff's JSON `filename` is always absolute/cwd-resolved (issue #713),
+    # unlike changed_files paths and every other analyzer's Finding.file.
+    filename = strip_workspace_prefix(filename)
     location = item.get("location")
     row_raw = location.get("row") if isinstance(location, dict) else None
     row = row_raw if isinstance(row_raw, int) else None
