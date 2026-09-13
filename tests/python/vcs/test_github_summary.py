@@ -412,3 +412,15 @@ def test_get_pr_description_missing_title_returns_none() -> None:
 
     prov, _ = _make_provider(handler)
     assert prov.get_pr_description() is None
+
+
+def test_get_pr_description_non_json_body_returns_none() -> None:
+    """A malformed/non-JSON 2xx response must degrade to None (appended to
+    self._errors), not raise -- matching gitlab.py/bitbucket.py's
+    get_pr_description (review finding F1 on PR #817)."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() is None
+    assert prov._errors

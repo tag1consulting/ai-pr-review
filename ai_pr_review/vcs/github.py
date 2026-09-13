@@ -2176,7 +2176,13 @@ class GitHubProvider:
                 f"get_pr_description: HTTP {resp.status_code}: {resp.text[:200]}"
             )
             return None
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            self._errors.append(
+                f"get_pr_description: non-JSON body (status={resp.status_code})"
+            )
+            return None
         if not isinstance(data, dict):
             self._errors.append(
                 f"get_pr_description: unexpected response shape {type(data).__name__}"
