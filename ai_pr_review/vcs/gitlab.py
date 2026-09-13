@@ -39,6 +39,7 @@ from ai_pr_review.vcs._inline import (
     partition_findings,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
+from ai_pr_review.vcs._upsert import advance_sha_marker, upsert_comment
 from ai_pr_review.vcs.http import RecordingClient, RetryExhaustedError, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     GITLAB_BODY_FINDINGS_MARKER,
@@ -51,7 +52,6 @@ from ai_pr_review.vcs.marker import (
     build_usage_block,
     extract_summary_sha,
     has_skip_marker,
-    replace_summary_sha,
 )
 from ai_pr_review.vcs.protocol import (
     DiffContext,
@@ -381,41 +381,18 @@ class GitLabProvider:
             "[ai-pr-review](https://github.com/tag1consulting/ai-pr-review)*"
         )
 
-        existing = self._list_summary_notes()
-        if existing:
-            keep = existing[0]
-            keep_id = int(keep["id"])
-            resp = self.client.request(
-                "PUT", self._note_url(keep_id), json_body={"body": body}
-            )
-            if resp.status_code >= 400:
-                err = (
-                    f"update summary: HTTP {resp.status_code}: {resp.text[:200]}"
-                )
-                self._errors.append(err)
-                return SummaryResult(
-                    comment_id=keep_id,
-                    created=False,
-                    updated=False,
-                    error=err,
-                )
-            for dup in existing[1:]:
-                dup_id = int(dup["id"])
-                self.client.request("DELETE", self._note_url(dup_id))
-            return SummaryResult(comment_id=keep_id, created=False, updated=True)
-
-        resp = self.client.request(
-            "POST", self._notes_url(), json_body={"body": body}
+        return upsert_comment(
+            list_existing=self._list_summary_notes,
+            item_id=lambda item: int(item["id"]),
+            payload={"body": body},
+            update_verb="PUT",
+            item_url=self._note_url,
+            create_url=self._notes_url,
+            request=self.client.request,
+            errors=self._errors,
+            update_label="update summary",
+            create_label="create summary",
         )
-        if resp.status_code >= 400:
-            err = f"create summary: HTTP {resp.status_code}: {resp.text[:200]}"
-            self._errors.append(err)
-            return SummaryResult(
-                comment_id=None, created=False, updated=False, error=err
-            )
-        data = resp.json() or {}
-        new_id = int(data.get("id", 0)) or None
-        return SummaryResult(comment_id=new_id, created=True, updated=False)
 
     # ------------------------------------------------------------------
     # _list_skip_notes / post_skip_comment
@@ -462,61 +439,35 @@ class GitLabProvider:
         body = append_skip_marker(
             f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
         )
-        existing = self._list_skip_notes()
-        if existing:
-            keep = existing[0]
-            keep_id = int(keep["id"])
-            resp = self.client.request(
-                "PUT", self._note_url(keep_id), json_body={"body": body}
-            )
-            if resp.status_code >= 400:
-                err = f"update skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
-                self._errors.append(err)
-                return SummaryResult(
-                    comment_id=keep_id, created=False, updated=False, error=err
-                )
-            for dup in existing[1:]:
-                dup_id = int(dup["id"])
-                self.client.request("DELETE", self._note_url(dup_id))
-            return SummaryResult(comment_id=keep_id, created=False, updated=True)
-
-        resp = self.client.request(
-            "POST", self._notes_url(), json_body={"body": body}
+        return upsert_comment(
+            list_existing=self._list_skip_notes,
+            item_id=lambda item: int(item["id"]),
+            payload={"body": body},
+            update_verb="PUT",
+            item_url=self._note_url,
+            create_url=self._notes_url,
+            request=self.client.request,
+            errors=self._errors,
+            update_label="update skip comment",
+            create_label="skip comment",
         )
-        if resp.status_code >= 400:
-            err = f"skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
-            self._errors.append(err)
-            return SummaryResult(
-                comment_id=None, created=False, updated=False, error=err
-            )
-        data = resp.json() or {}
-        new_id = int(data.get("id", 0)) or None
-        return SummaryResult(comment_id=new_id, created=True, updated=False)
 
     # ------------------------------------------------------------------
     # advance_sha_watermark — patches sha= field in existing summary marker
     # ------------------------------------------------------------------
     def advance_sha_watermark(self, new_sha: str) -> bool:
-        existing = self._list_summary_notes()
-        if not existing:
-            return False
-        keep = existing[0]
-        keep_id = int(keep["id"])
-        old_body = keep.get("body") or ""
-        new_body = replace_summary_sha(
-            old_body, new_sha, context_hint=f"gitlab_note#{keep_id}"
+        return advance_sha_marker(
+            list_existing=self._list_summary_notes,
+            item_id=lambda item: int(item["id"]),
+            extract_body=lambda item: item.get("body") or "",
+            make_payload=lambda body: {"body": body},
+            update_verb="PUT",
+            item_url=self._note_url,
+            request=self.client.request,
+            errors=self._errors,
+            new_sha=new_sha,
+            context_hint_prefix="gitlab_note",
         )
-        if new_body == old_body:
-            return False
-        resp = self.client.request(
-            "PUT", self._note_url(keep_id), json_body={"body": new_body}
-        )
-        if resp.status_code >= 400:
-            self._errors.append(
-                f"advance_sha: HTTP {resp.status_code}: {resp.text[:200]}"
-            )
-            return False
-        return True
 
     # ------------------------------------------------------------------
     # post_findings — inline MR discussions + body overflow in summary

@@ -39,6 +39,21 @@ from ai_pr_review.vcs._finding_ids import (
     safe_review_id,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
+from ai_pr_review.vcs._thread import (
+    count_unresolved_owned_threads,
+)
+from ai_pr_review.vcs._thread import (
+    first_comment_author_login as _first_comment_author_login,
+)
+from ai_pr_review.vcs._thread import (
+    first_comment_body as _first_comment_body,
+)
+from ai_pr_review.vcs._thread import (
+    first_comment_id as _first_comment_id,
+)
+from ai_pr_review.vcs._thread import (
+    first_comment_review_id as _thread_review_id,
+)
 from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, upsert_verdicts_marker
 
 if TYPE_CHECKING:
@@ -437,31 +452,6 @@ def _warn_verdict_failure(message: str) -> None:
     _log.warning("dismiss: %s", message)
 
 
-def _first_comment(thread: dict[str, Any]) -> dict[str, Any]:
-    comments = ((thread.get("comments") or {}).get("nodes")) or []
-    return comments[0] if comments else {}
-
-
-def _first_comment_body(thread: dict[str, Any]) -> str:
-    return _first_comment(thread).get("body") or ""
-
-
-def _first_comment_author_login(thread: dict[str, Any]) -> str:
-    author = _first_comment(thread).get("author") or {}
-    return author.get("login") or ""
-
-
-def _thread_review_id(thread: dict[str, Any]) -> int | None:
-    review = (_first_comment(thread).get("pullRequestReview")) or {}
-    rid = review.get("databaseId")
-    return int(rid) if isinstance(rid, int) else None
-
-
-def _first_comment_id(thread: dict[str, Any]) -> int | None:
-    cid = _first_comment(thread).get("databaseId")
-    return int(cid) if isinstance(cid, int) else None
-
-
 def _thread_by_comment_id(
     threads: Sequence[dict[str, Any]], comment_id: int
 ) -> dict[str, Any] | None:
@@ -556,33 +546,27 @@ def _dismiss_if_all_resolved(
 
     Deliberately passes `bot_login=None` to `is_owned_by_us` (author-login
     check skipped, marker is the sole gate) for GraphQL-sourced author logins
-    specifically. This differs from `resolve_stale`/`_dismiss_stale_reviews`,
-    which pass `self.config.bot_login` (the REST-style constant,
-    "github-actions[bot]") against the same GraphQL-sourced author field —
-    per `reference_bot_login_graphql_vs_rest` (unverified this session;
-    flagged for live confirmation in story 13-2), GitHub's GraphQL API may
-    report the bot's login without the "[bot]" suffix, in which case that
-    REST-style comparison would never match and the author check would be a
-    silent no-op there too. `None` here is correct under either hypothesis:
-    if the logins do differ, `bot_login` would make this dismiss path a
-    silent no-op in production; if they don't, `None` only forgoes a narrow
-    extra check against a spoofed marker, and a spoofed thread carries the
-    attacker's own `pullRequestReview.databaseId`, so at most it could
-    trigger dismissal of the attacker's own review, not ours.
+    specifically. This differs from `resolve_stale`/`_dismiss_stale_reviews`/
+    `_load_prior_state`'s `parse_prior_thread` call, which pass
+    `graphql_bot_login(self.config.bot_login)` — the REST-style
+    "github-actions[bot]" constant with the "[bot]" suffix stripped — against
+    the same GraphQL-sourced author field (issue #717, confirmed live: the
+    format difference between GraphQL's and REST's bot-login string is a
+    settled fact, not a hypothesis — see `graphql_bot_login()`'s own
+    docstring in `_stale.py`). Choosing `None` here is still correct given
+    that: unlike those three call sites, this function does not need the
+    extra defense-in-depth signal to be safe, because a spoofed thread
+    carries the attacker's own `pullRequestReview.databaseId`, so at most it
+    could trigger dismissal of the attacker's own review, not ours. This is a
+    genuine, intentional inconsistency between the two groups of call sites
+    (not a bug in either), and `test_dismiss_inline_reply_graphql_style_author_still_owned`
+    (`tests/python/vcs/test_dismiss_github.py`) pins it: it fails on purpose
+    if `None` is ever swapped for a real `bot_login` here without that
+    tradeoff being re-examined first.
     """
     errors: list[str] = []
-    unresolved = 0
-    for t in threads:
-        if t.get("isResolved"):
-            continue
-        if _thread_review_id(t) != target_review_id:
-            continue
-        body = _first_comment_body(t)
-        author = _first_comment_author_login(t) or None
-        if not is_owned_by_us(body, author, None, kind="inline"):
-            continue
-        unresolved += 1
-    if unresolved > 0:
+    counts = count_unresolved_owned_threads(threads, bot_login=None)
+    if counts.get(target_review_id, 0) > 0:
         return False, errors
 
     state = provider.get_review_state(target_review_id)
@@ -661,18 +645,7 @@ def _approve_if_pr_fully_resolved(
 
     # Count unresolved, marker-owned threads per owning review, PR-wide (not
     # filtered to a single target_review_id, unlike _dismiss_if_all_resolved).
-    unresolved_by_review: dict[int, int] = {}
-    for t in threads:
-        if t.get("isResolved"):
-            continue
-        body = _first_comment_body(t)
-        author = _first_comment_author_login(t) or None
-        if not is_owned_by_us(body, author, None, kind="inline"):
-            continue
-        rid = _thread_review_id(t)
-        if rid is None:
-            continue
-        unresolved_by_review[rid] = unresolved_by_review.get(rid, 0) + 1
+    unresolved_by_review = count_unresolved_owned_threads(threads, bot_login=None)
 
     reviews = provider.list_bot_reviews()
     cr_review_ids = [

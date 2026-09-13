@@ -37,6 +37,7 @@ from ai_pr_review.vcs._body import (
 )
 from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
 from ai_pr_review.vcs._stale import is_owned_by_us
+from ai_pr_review.vcs._upsert import advance_sha_marker, upsert_comment
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     INLINE_MARKER_HIDDEN,
@@ -53,7 +54,6 @@ from ai_pr_review.vcs.marker import (
     extract_id_map,
     extract_summary_sha,
     has_skip_marker,
-    replace_summary_sha,
 )
 from ai_pr_review.vcs.protocol import (
     DiffContext,
@@ -857,34 +857,19 @@ def _post_summary_impl(
     marker = build_summary_marker(head_sha, hidden=True)
     truncated = truncate_body(summary_body, limit=_MAX_BITBUCKET_BODY_SIZE)
     body = f"{marker}\n{truncated}\n\n{_FOOTER}"
-    payload = {"content": {"raw": body}}
 
-    existing = provider._list_summary_comments()
-    if existing:
-        keep = existing[0]
-        keep_id = int(keep["id"])
-        resp = provider.client.request(
-            "PUT", provider._comment_url(keep_id), json_body=payload
-        )
-        if resp.status_code >= 400:
-            err = f"update summary: HTTP {resp.status_code}: {resp.text[:200]}"
-            provider._errors.append(err)
-            return SummaryResult(
-                comment_id=keep_id, created=False, updated=False, error=err
-            )
-        for dup in existing[1:]:
-            dup_id = int(dup["id"])
-            provider.client.request("DELETE", provider._comment_url(dup_id))
-        return SummaryResult(comment_id=keep_id, created=False, updated=True)
-
-    resp = provider.client.request("POST", provider._comments_url(), json_body=payload)
-    if resp.status_code >= 400:
-        err = f"create summary: HTTP {resp.status_code}: {resp.text[:200]}"
-        provider._errors.append(err)
-        return SummaryResult(comment_id=None, created=False, updated=False, error=err)
-    data = resp.json() or {}
-    new_id = int(data.get("id", 0)) or None
-    return SummaryResult(comment_id=new_id, created=True, updated=False)
+    return upsert_comment(
+        list_existing=provider._list_summary_comments,
+        item_id=lambda item: int(item["id"]),
+        payload={"content": {"raw": body}},
+        update_verb="PUT",
+        item_url=provider._comment_url,
+        create_url=provider._comments_url,
+        request=provider.client.request,
+        errors=provider._errors,
+        update_label="update summary",
+        create_label="create summary",
+    )
 
 
 def _list_skip_comments_bb(provider: BitbucketProvider) -> list[dict[str, Any]]:
@@ -918,56 +903,30 @@ def _post_skip_impl(provider: BitbucketProvider, reason: str) -> SummaryResult:
         inline_marker=INLINE_MARKER_HIDDEN,
         skip_marker=SKIP_MARKER_HIDDEN,
     )
-    existing = _list_skip_comments_bb(provider)
-    if existing:
-        keep = existing[0]
-        keep_id = int(keep["id"])
-        resp = provider.client.request(
-            "PUT", provider._comment_url(keep_id), json_body={"content": {"raw": raw}}
-        )
-        if resp.status_code >= 400:
-            err = f"update skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
-            provider._errors.append(err)
-            return SummaryResult(
-                comment_id=keep_id, created=False, updated=False, error=err
-            )
-        for dup in existing[1:]:
-            dup_id = int(dup["id"])
-            provider.client.request("DELETE", provider._comment_url(dup_id))
-        return SummaryResult(comment_id=keep_id, created=False, updated=True)
-
-    resp = provider.client.request(
-        "POST", provider._comments_url(), json_body={"content": {"raw": raw}}
+    return upsert_comment(
+        list_existing=lambda: _list_skip_comments_bb(provider),
+        item_id=lambda item: int(item["id"]),
+        payload={"content": {"raw": raw}},
+        update_verb="PUT",
+        item_url=provider._comment_url,
+        create_url=provider._comments_url,
+        request=provider.client.request,
+        errors=provider._errors,
+        update_label="update skip comment",
+        create_label="skip comment",
     )
-    if resp.status_code >= 400:
-        err = f"skip comment: HTTP {resp.status_code}: {resp.text[:200]}"
-        provider._errors.append(err)
-        return SummaryResult(comment_id=None, created=False, updated=False, error=err)
-    data = resp.json() or {}
-    new_id = int(data.get("id", 0)) or None
-    return SummaryResult(comment_id=new_id, created=True, updated=False)
 
 
 def _advance_sha_impl(provider: BitbucketProvider, new_sha: str) -> bool:
-    existing = provider._list_summary_comments()
-    if not existing:
-        return False
-    keep = existing[0]
-    keep_id = int(keep["id"])
-    old_body = _comment_body(keep)
-    new_body = replace_summary_sha(
-        old_body, new_sha, context_hint=f"bitbucket_comment#{keep_id}"
+    return advance_sha_marker(
+        list_existing=provider._list_summary_comments,
+        item_id=lambda item: int(item["id"]),
+        extract_body=_comment_body,
+        make_payload=lambda body: {"content": {"raw": body}},
+        update_verb="PUT",
+        item_url=provider._comment_url,
+        request=provider.client.request,
+        errors=provider._errors,
+        new_sha=new_sha,
+        context_hint_prefix="bitbucket_comment",
     )
-    if new_body == old_body:
-        return False
-    resp = provider.client.request(
-        "PUT",
-        provider._comment_url(keep_id),
-        json_body={"content": {"raw": new_body}},
-    )
-    if resp.status_code >= 400:
-        provider._errors.append(
-            f"advance_sha: HTTP {resp.status_code}: {resp.text[:200]}"
-        )
-        return False
-    return True
