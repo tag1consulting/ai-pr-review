@@ -1693,14 +1693,25 @@ class GitHubProvider:
         """Does `review_id` still have at least one unresolved thread we own?
 
         Mirrors the exact rule `_dismiss_stale_reviews` already applies
-        (`unresolved_by_review.get(rid, 0) > 0`): a `CHANGES_REQUESTED`
-        review must never be dismissed while it still has open findings, or
-        the slash-command PR-wide auto-approve check
+        (`unresolved_by_review.get(rid, 0) > 0`, now `_thread.count_unresolved_owned_threads`):
+        a `CHANGES_REQUESTED` review must never be dismissed while it still
+        has open findings, or the slash-command PR-wide auto-approve check
         (`ai_pr_review.slash.dismiss._approve_if_pr_fully_resolved`) — which
         only counts unresolved threads on reviews whose *current* state is
         `CHANGES_REQUESTED` — would no longer see them and could approve a
         PR with a High finding still open on the review this method just
         allowed to be dismissed.
+
+        Deliberately NOT unified with `count_unresolved_owned_threads` (#822):
+        that helper counts over raw GraphQL thread dicts and re-applies the
+        marker/ownership check itself, while this one counts over already-
+        parsed `PriorThread` objects that `parse_prior_thread` has already
+        filtered to owned-and-marker-passing threads (see its `is_owned_by_us`
+        call). Routing this through the dict-based helper would mean either
+        re-serializing `PriorThread` back into GraphQL-node shape (pointless)
+        or dropping the ownership check that helper performs (silently
+        correct here only because it's already been done, which is exactly
+        the kind of implicit precondition a shared helper shouldn't rely on).
         """
         return any(
             t.review_id == review_id and not t.is_resolved for t in all_threads
