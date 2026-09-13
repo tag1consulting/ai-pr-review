@@ -19,6 +19,7 @@ from __future__ import annotations
 import enum
 import logging
 import os as _os
+import re
 import sys as _sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -57,6 +58,7 @@ from ai_pr_review.vcs._thread import (
 from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, upsert_verdicts_marker
 
 if TYPE_CHECKING:
+    from ai_pr_review.slash.parser import SlashCommand
     from ai_pr_review.vcs.github import GitHubProvider
 
 _log = logging.getLogger(__name__)
@@ -1352,3 +1354,254 @@ def dismiss_inline_reply(
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
+
+
+# ---------------------------------------------------------------------------
+# CLI-adjacent helpers (issue #825)
+#
+# Moved out of ai_pr_review/cli.py so the `dismiss`, `dismiss-inline`,
+# `feedback-context`, and `resolve-thread` Click commands are left as thin
+# option-parsing wrappers: parse/validate CLI-level concerns (options, env
+# vars, exit codes), then delegate. Kept in this module rather than
+# `slash/handlers.py` because they operate on the same GitHub-only surface
+# (provider construction, F-id/verdict persistence, dismiss-failure
+# reporting) as the rest of this file -- `dismiss.py` already hosts
+# `context_from_parent_comment`/`context_from_body_finding_id`/`resolve_only`,
+# which back the `feedback-context`/`resolve-thread` commands, not just
+# `dismiss`/`dismiss-inline` -- so this module's actual boundary is "GitHub
+# slash-command orchestration", not literally "the dismiss verb".
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GitHubProviderError:
+    """Non-fatal GitHub-provider construction failure.
+
+    Carries the exact ``"<command_label>: ..."`` message text that both of
+    `resolve_github_provider`'s callers in `ai_pr_review.cli`
+    (`_build_github_provider_or_exit`, `_build_github_provider_or_none`) echo
+    to stderr before diverging on how to fail: `sys.exit(1)` for the
+    GitHub-only `dismiss`/`dismiss-inline` commands, versus `return None` for
+    the best-effort `feedback-context`/`resolve-thread` commands. The message
+    text is identical either way -- only the failure mode differs -- so this
+    dataclass carries the one shared piece of state and the CLI layer alone
+    decides what to do about it.
+    """
+
+    message: str
+
+
+def resolve_github_provider(command_label: str) -> GitHubProvider | GitHubProviderError:
+    """Build a `GitHubProvider` from env, or return a `GitHubProviderError`
+    describing why.
+
+    `command_label` names the calling CLI subcommand (e.g. "dismiss",
+    "feedback-context") for the error message prefix.
+
+    `VCS_PROVIDER` is checked *before* calling `provider_from_env()` — that
+    dispatcher eagerly reads provider-specific env vars and raises its own
+    errors first, so an `isinstance` check after the call would fire too
+    late under a non-GitHub `VCS_PROVIDER`.
+    """
+    from ai_pr_review.vcs import GitHubProvider, ProviderConfigError, provider_from_env
+
+    vcs = (_os.environ.get("VCS_PROVIDER") or "github").strip().lower()
+    if vcs != "github":
+        return GitHubProviderError(
+            f"{command_label}: ai-pr-review {command_label} is GitHub-only (VCS_PROVIDER={vcs!r})"
+        )
+
+    try:
+        provider = provider_from_env()
+    except ProviderConfigError as exc:
+        return GitHubProviderError(f"{command_label}: {exc}")
+
+    if not isinstance(provider, GitHubProvider):
+        # Unreachable given the vcs-name gate above; narrows the type for
+        # mypy and guards against provider_from_env's dispatch logic changing.
+        return GitHubProviderError(f"{command_label}: expected a GitHub provider")
+
+    return provider
+
+
+def no_finding_id_reply(actor: str, command_name: str, active_ids: Sequence[int]) -> str:
+    """Reply for `/ai-pr-review dismiss|false-positive|wont-fix|fixed` posted
+    with no `F<n>` given, backing `ai_pr_review.cli`'s `dismiss` command.
+
+    `active_ids` must already be sorted (see `list_active_body_ids`).
+    """
+    if active_ids:
+        ids_text = ", ".join(f"F{n}" for n in active_ids)
+        return (
+            f"@{actor} please specify a finding ID, e.g. `/ai-pr-review {command_name} F{active_ids[0]}`. "
+            f"Active findings: {ids_text}."
+        )
+    return f"@{actor} there are no active body-level findings to {command_name}."
+
+
+def persist_verdict(
+    result: DismissResult,
+    *,
+    actor: str,
+    command_name: str,
+    finding_id: int | None,
+    comment_body: str,
+    parsed_command: SlashCommand | None,
+    enable_feedback_loop: bool,
+    feedback_write_allowed: bool,
+) -> str:
+    """Persist a feedback-store entry for a dismiss/false-positive/wont-fix
+    verdict and return the reply text to echo.
+
+    Shared by `dismiss` (top-level, BODY and INLINE F-ids) and `dismiss-inline`
+    (issue #769 -- previously the only writer for any inline verdict was the
+    now-removed `feedback-command` workflow job's `slash` invocation; this
+    makes the dismiss commands the sole owner of both the reply and the store
+    write for the whole verdict family, on both event paths).
+
+    `result.feedback_eligible` gates whether there's anything to persist at
+    all (False for `fixed` and for UNKNOWN/not-found -- see DismissResult's
+    docstring). Two independent knobs then gate the write itself:
+    `enable_feedback_loop` (AI_FEEDBACK_LOOP -- the feature is on at all) and
+    `feedback_write_allowed` (SLASH_FEEDBACK_WRITE_ALLOWED -- the actor is
+    trusted per docs/learning-loop.md's OWNER/MEMBER bar, mirroring the
+    existing SLASH_APPROVE_ALLOWED precedent). Three distinct replies so none
+    of them lies about what happened.
+    """
+    if not result.feedback_eligible:
+        return result.reply
+
+    if not enable_feedback_loop:
+        return f"{result.reply} (feedback loop disabled — not persisted to learning store)"
+
+    if not feedback_write_allowed:
+        return (
+            f"{result.reply} (not persisted to learning store — recording feedback "
+            "requires OWNER or MEMBER association)"
+        )
+
+    from ai_pr_review.feedback.store import make_store
+    from ai_pr_review.slash.handlers import build_entry
+    from ai_pr_review.slash.parser import SlashCommand as _SlashCommand
+
+    command_for_entry = parsed_command or _SlashCommand(
+        name=command_name, reason="", raw_body=comment_body, finding_id=finding_id
+    )
+
+    class _DismissConfig:
+        vcs_provider = "github"
+
+    entry = build_entry(
+        command_for_entry,
+        source=result.feedback_source,
+        file=result.feedback_file,
+        rule_id=result.feedback_rule_id,
+    )
+    stored = make_store(_DismissConfig()).append(entry)
+    if stored:
+        return result.reply
+
+    _log.warning(
+        "dismiss: feedback store failed to persist entry for F%s (command=%r)",
+        finding_id,
+        command_name,
+    )
+    finding_ref = f"F{finding_id}" if finding_id is not None else "this finding"
+    return (
+        f"@{actor} marked **{finding_ref}** as `{command_name}`, but the feedback store "
+        "could not persist it (network error or unsupported VCS). "
+        "Please retry later or check the workflow logs for details."
+    )
+
+
+def dismiss_failure_annotation(
+    command_label: str, errors: tuple[str, ...], *, thread_resolved: bool = False
+) -> str | None:
+    """Build the GitHub Actions ``::error::`` annotation line for a dismiss/
+    wont-fix/false-positive command that hit a VCS API error (#611), or
+    `None` when nothing should be emitted.
+
+    Backs `ai_pr_review.cli`'s `_emit_dismiss_failure_annotation`, which
+    echoes the returned line to stderr (the one remaining CLI-specific bit);
+    this function decides only whether/what to say.
+
+    The calling workflow step always exits 0 on this path (see the ``dismiss``/
+    ``dismiss-inline`` docstrings: "not found" and "API error" both count as
+    "handled", not "command failure") so the reply can still post via
+    ``actions-token`` even when the error came from a different, failing
+    token (``github-token``, the PAT). That means the job's own conclusion
+    stays green regardless -- this annotation is the only signal that the
+    underlying dismiss did not actually happen, surfaced on the PR's Checks
+    tab rather than only in the run log. Matches the pattern
+    ``emit_post_failure_annotation`` (#588/#618) uses for the sibling
+    review-posting path. Deliberately omits the raw error strings (already
+    logged as ``::warning::`` by the caller) to avoid duplicating any
+    credential fragment into the more widely-visible annotation.
+
+    ``thread_resolved`` distinguishes two distinct failure shapes: the finding
+    itself may still be genuinely unresolved (thread resolution failed), or the
+    thread may have resolved fine while a secondary step -- dismissing the
+    stale review, or the PR-wide auto-approve -- errored afterward. Asserting
+    "NOT dismissed/resolved" in the second case would contradict the CLI's own
+    reply text (which correctly says the thread was resolved) and mislead
+    anyone reading the Checks tab into re-running a command that already
+    succeeded.
+
+    Only emitted when running in GitHub Actions (``GITHUB_ACTIONS=true``) and
+    when *errors* is non-empty.
+    """
+    if _os.environ.get("GITHUB_ACTIONS") != "true":
+        return None
+    if not errors:
+        return None
+    outcome = (
+        "the thread was resolved, but a follow-up step (review dismissal or "
+        "PR approval) failed."
+        if thread_resolved
+        else "the finding was likely NOT dismissed/resolved."
+    )
+    return (
+        f"::error::ai-pr-review {command_label}: the command could not complete "
+        f"due to {len(errors)} API error(s); see the ::warning:: lines above "
+        f"for detail. {outcome}"
+    )
+
+
+def resolve_feedback_context(
+    provider: GitHubProvider | None,
+    *,
+    is_review_comment: bool,
+    parent_comment_id: int,
+    comment_body: str,
+) -> FeedbackContext:
+    """Look up source/file/rule_id context for a `feedback-command`
+    FeedbackEntry, backing `ai_pr_review.cli`'s `feedback-context` command.
+
+    Two paths, matching the two bash steps this replaces: `is_review_comment`
+    looks up context from the parent inline comment being replied to;
+    otherwise an F<n> token (accepting the bracketed `[F<n>]` form -- issue
+    #735) is extracted from the third whitespace-separated token of the
+    comment body's first line (`/ai-pr-review <command> F<n> ...`) and
+    resolved against prior review bodies.
+
+    Returns a default (empty) `FeedbackContext` whenever `provider` is
+    `None` (provider construction already failed and was reported by the
+    caller) or no `F<n>` token is found in the non-review-comment path --
+    both silent "not found" cases, matching the two bash steps' own
+    `not_found)` branch, which emits nothing at all.
+    """
+    if provider is None:
+        return FeedbackContext()
+    if is_review_comment:
+        return context_from_parent_comment(provider, parent_comment_id)
+
+    first_line = comment_body.splitlines()[0] if comment_body else ""
+    tokens = first_line.split()
+    fid_token = tokens[2] if len(tokens) > 2 else ""
+    # Accept the bracketed form ("[F1]") shown in review bodies, same as
+    # ai_pr_review.slash.parser._FID_RE (issue #735).
+    match = re.fullmatch(r"\[?[Ff](\d{1,6})\]?", fid_token)
+    if not match:
+        return FeedbackContext()
+    bodies = bodies_newest_first(provider.list_bot_reviews())
+    return context_from_body_finding_id(bodies, int(match.group(1)))
