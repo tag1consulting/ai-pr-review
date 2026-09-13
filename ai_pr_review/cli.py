@@ -756,18 +756,28 @@ def parse_command_gate(comment_body: str) -> None:
 
     try:
         result = parse_command(comment_body)
-    except ValueError:
-        # Defense-in-depth, not a reachability guarantee either way: parser.py's
-        # F<n> regex (_FID_RE) has no digit-count cap, unlike the length-capped
-        # regex ([0-9]{1,6}) the three bash steps this replaces used for the
-        # same extraction. An absurdly long numeral in the F-ID position
-        # (thousands of digits) can exceed Python's int-string conversion
-        # limit and raise ValueError from int() deep inside parse_command().
-        # The bash steps never crashed on such input -- the capped regex just
-        # failed to match and the digits fell through as ordinary reason
-        # text. Replicating that exact fallback would mean reaching inside
-        # parse_command() a second time; reject the whole line instead, which
-        # preserves "this step never crashes" without reimplementing anything.
+    except Exception:
+        # Defense-in-depth, not a reachability guarantee either way. The
+        # concretely known trigger: parser.py's F<n> regex (_FID_RE) has no
+        # digit-count cap, unlike the length-capped regex ([0-9]{1,6}) the
+        # three bash steps this replaces used for the same extraction. An
+        # absurdly long numeral in the F-ID position (thousands of digits)
+        # exceeds Python's int-string conversion limit and raises ValueError
+        # from int() deep inside parse_command(). The bash steps never
+        # crashed on such input -- the capped regex just failed to match and
+        # the digits fell through as ordinary reason text. Replicating that
+        # exact fallback would mean reaching inside parse_command() a second
+        # time; reject the whole line instead.
+        #
+        # Caught broadly rather than `except ValueError` (review finding F1,
+        # PR #829): this step's contract is "never crashes" regardless of
+        # what parser.py does internally -- narrowing to the one exception
+        # type known today would leave the same crash-on-malformed-input
+        # risk open for any future change inside parse_command() that raises
+        # something else (e.g. a future stricter validation). Logged so a
+        # genuinely unexpected failure here is still visible in the job log
+        # rather than silently swallowed.
+        logger.warning("parse-command: unexpected error parsing comment body", exc_info=True)
         click.echo("valid=false")
         click.echo("unrecognized=true")
         return

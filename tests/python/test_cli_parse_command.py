@@ -104,3 +104,28 @@ def test_absurdly_long_finding_id_digit_string_does_not_crash() -> None:
     out = _run(f"/ai-pr-review dismiss F{'9' * 5000} reason")
     assert out["valid"] == "false"
     assert out["unrecognized"] == "true"
+
+
+def test_unexpected_exception_from_parse_command_does_not_crash(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Review finding F1 (PR #829): the guard around parse_command() must not
+    # be narrowed to just ValueError -- any exception parse_command() could
+    # ever raise must still leave this step's "never crashes" contract
+    # intact, not just the one concretely-known trigger (an oversized F<n>
+    # digit string).
+    import ai_pr_review.slash.parser as parser_module
+
+    def _boom(_body: str) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(parser_module, "parse_command", _boom)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["parse-command", "--comment-body", "/ai-pr-review dismiss F1"])
+    assert result.exit_code == 0, result.output
+    out: dict[str, str] = {}
+    for line in result.output.splitlines():
+        if not line:
+            continue
+        key, _, value = line.partition("=")
+        out[key] = value
+    assert out["valid"] == "false"
+    assert out["unrecognized"] == "true"
