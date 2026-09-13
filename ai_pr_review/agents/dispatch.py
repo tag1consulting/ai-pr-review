@@ -158,6 +158,12 @@ class DispatchContext:
     changed_files: list[str] = field(default_factory=list)
     # --- Feedback loop ---
     feedback_addendum: str = ""
+    # Run-shared PR title/description + file manifest block (#813), built once
+    # via review.pr_context.build_shared_context_block and threaded to every
+    # finding agent except blind-hunter (gated the same way as language
+    # profiles, on AgentSpec.context_enrichment_eligible). "" when the
+    # provider's get_pr_description() failed or returned nothing usable.
+    shared_context_block: str = ""
     # #316: user-configurable per-agent output cap (0 = use roster default)
     max_tokens_per_agent: int = 0
     # #356: user-configurable temperature for agent LLM calls
@@ -474,19 +480,21 @@ async def _run_single_agent(
             diff_text, spec, context, enrichment=enrichment,
         )
 
-        # Run-shared system tail: feedback addendum + language profiles. These
-        # are byte-identical across every agent in a run, so they go into
-        # LLMRequest.system_prefix where Anthropic/Bedrock can mark them with
-        # a shared cache breakpoint and read them once across the whole run
-        # instead of paying for them per-agent.  Providers without
-        # multi-breakpoint caching concatenate them ahead of system_prompt,
-        # preserving identical model-visible content.
+        # Run-shared system tail: shared PR context, feedback addendum, and
+        # language profiles. These are byte-identical across every agent in a
+        # run, so they go into LLMRequest.system_prefix where Anthropic/Bedrock
+        # can mark them with a shared cache breakpoint and read them once
+        # across the whole run instead of paying for them per-agent.
+        # Providers without multi-breakpoint caching concatenate them ahead of
+        # system_prompt, preserving identical model-visible content.
         #
-        # Language profiles are gated on context_enrichment_eligible: agents
-        # like blind-hunter explicitly ask the model to reason about the diff
-        # with no project context, so injecting language profiles would defeat
-        # their purpose and waste tokens on content the model is told to ignore.
-        # Feedback addenda are run-shared learning signals and reach all agents.
+        # The shared PR-context block (#813: PR title/description + file
+        # manifest) and language profiles are both gated on
+        # context_enrichment_eligible: agents like blind-hunter explicitly ask
+        # the model to reason about the diff with no project context or
+        # stated intent, so injecting either would defeat their purpose and
+        # waste tokens on content the model is told to ignore. Feedback
+        # addenda are run-shared learning signals and reach all agents.
         #
         # Profile routing (Story 7-2): each agent receives only the profile
         # sections relevant to its profile_focus, packed under profile_max_tokens.
@@ -494,6 +502,8 @@ async def _run_single_agent(
         # reuse for the profile block — but delivers smaller, more relevant context.
         prefix_parts: list[str] = []
         profile_tokens_used = 0
+        if spec.context_enrichment_eligible and context.shared_context_block:
+            prefix_parts.append(context.shared_context_block)
         if context.feedback_addendum:
             prefix_parts.append(context.feedback_addendum)
         if spec.context_enrichment_eligible and context.profile_router is not None:

@@ -133,6 +133,10 @@ class BitbucketProvider:
     def _comment_url(self, comment_id: int) -> str:
         return f"{self._comments_url()}/{comment_id}"
 
+    def _pull_request_url(self) -> str:
+        c = self.config
+        return f"/repositories/{c.workspace}/{c.repo_slug}/pullrequests/{c.pr_id}"
+
     # ------------------------------------------------------------------
     # Pagination — Bitbucket returns a `next` URL in the body
     # ------------------------------------------------------------------
@@ -186,6 +190,37 @@ class BitbucketProvider:
         if not comments:
             return None
         return ((comments[0].get("content") or {}).get("raw")) or None
+
+    def get_pr_description(self) -> tuple[str, str] | None:
+        """GET the PR's title and description. Returns `None` on any HTTP
+        error (appended to `self._errors`) or a response missing a usable
+        title. Unlike comment bodies, Bitbucket's pullrequest resource
+        carries `description` as a plain markdown string, not a
+        `{raw, markup, html}` object (#813).
+        """
+        resp = self.client.request("GET", self._pull_request_url())
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"get_pr_description: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return None
+        try:
+            data = resp.json()
+        except ValueError:
+            self._errors.append(
+                f"get_pr_description: non-JSON body (status={resp.status_code})"
+            )
+            return None
+        if not isinstance(data, dict):
+            self._errors.append(
+                f"get_pr_description: unexpected response shape {type(data).__name__}"
+            )
+            return None
+        title = data.get("title")
+        if not isinstance(title, str):
+            return None
+        description = data.get("description")
+        return title, (description if isinstance(description, str) else "")
 
     # ------------------------------------------------------------------
     # post_summary / post_skip_comment / advance_sha_watermark

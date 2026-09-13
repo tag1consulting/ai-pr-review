@@ -25,6 +25,7 @@ from ai_pr_review.language_profile_sections import ProfileRouter
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
+from ai_pr_review.review.pr_context import build_shared_context_block
 from ai_pr_review.vcs import provider_from_env
 from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
 
@@ -248,6 +249,44 @@ async def build_review_runtime(
                 "feedback loop: could not load feedback store: %s", exc, exc_info=True
             )
 
+    # 5b. Fetch the PR/MR title+description once per run (#813, closes the
+    # remaining gap in #177) and fold it with the file manifest into the one
+    # shared context block every finding agent except blind-hunter receives.
+    # get_pr_description() is itself fail-soft (returns None, never raises)
+    # per VcsProvider's contract; the broad except and the shape check below
+    # are a defensive backstop for a provider fake/test double or future
+    # implementation that doesn't honor it (an unconfigured Mock(spec=
+    # VcsProvider), say, whose unstubbed get_pr_description() returns another
+    # Mock -- which unpacks as an empty sequence, not a 2-tuple) -- a broken
+    # or malformed fetch here must degrade to no context block, never abort
+    # the review.
+    shared_context_block = ""
+    try:
+        pr_description = provider.get_pr_description()
+    except Exception as exc:
+        logger.warning(
+            "could not fetch PR description; shared context block will omit "
+            "it: %s", exc, exc_info=True,
+        )
+        pr_description = None
+    if (
+        isinstance(pr_description, tuple)
+        and len(pr_description) == 2
+        and isinstance(pr_description[0], str)
+        and isinstance(pr_description[1], str)
+    ):
+        pr_title, pr_body = pr_description
+        shared_context_block = build_shared_context_block(
+            manifest_text=manifest_text, pr_title=pr_title, pr_body=pr_body,
+        )
+    elif pr_description is not None:
+        logger.warning(
+            "provider.get_pr_description() returned %r, expected a "
+            "(title, body) str tuple or None; shared context block will "
+            "omit the PR description",
+            pr_description,
+        )
+
     # 6. Resolve script_dir / diff_path from env conventions.
     # AI_PR_REVIEW_SCRIPT_DIR is exported by review.sh so the Python engine
     # can locate prompts/language-profiles when installed as a pip package.
@@ -392,6 +431,7 @@ async def build_review_runtime(
         repo_root=Path("."),
         changed_files=_changed_list,
         feedback_addendum=feedback_addendum,
+        shared_context_block=shared_context_block,
         max_tokens_per_agent=config.max_tokens_per_agent,
         temperature=config.temperature,
         profile_router=_profile_router,

@@ -373,3 +373,54 @@ def test_advance_sha_watermark_rejects_invalid_sha() -> None:
     assert prov.advance_sha_watermark("not-a-real-sha") is False
     # only the GET happened; no PATCH attempted
     assert all(c[0] != "PATCH" for c in rec.calls)
+
+
+# ---------------------------------------------------------------------------
+# get_pr_description (#813)
+# ---------------------------------------------------------------------------
+
+
+def test_get_pr_description_returns_title_and_body() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/repos/o/r/pulls/7"
+        return httpx.Response(200, json={"title": "Add widget", "body": "Fixes #1"})
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() == ("Add widget", "Fixes #1")
+
+
+def test_get_pr_description_null_body_becomes_empty_string() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"title": "Add widget", "body": None})
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() == ("Add widget", "")
+
+
+def test_get_pr_description_http_error_returns_none() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() is None
+    assert prov._errors
+
+
+def test_get_pr_description_missing_title_returns_none() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"body": "no title field"})
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() is None
+
+
+def test_get_pr_description_non_json_body_returns_none() -> None:
+    """A malformed/non-JSON 2xx response must degrade to None (appended to
+    self._errors), not raise -- matching gitlab.py/bitbucket.py's
+    get_pr_description (review finding F1 on PR #817)."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() is None
+    assert prov._errors

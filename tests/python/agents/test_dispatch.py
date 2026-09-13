@@ -302,6 +302,71 @@ async def test_run_tier_empty_system_prefix_when_no_addenda(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_run_tier_shared_context_block_reaches_eligible_agent(
+    tmp_path: Path,
+) -> None:
+    """#813: the shared PR-context block (title/description/manifest) must
+    reach every context_enrichment_eligible agent's system_prefix, same as
+    feedback_addendum and language profiles.
+    """
+    ctx = _make_context(tmp_path)
+    ctx.shared_context_block = "<pr-context>\n## PR Title\n\nAdd widget\n</pr-context>"
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    assert get_agent("code-reviewer").context_enrichment_eligible, \
+        "test premise: code-reviewer must be context_enrichment_eligible"
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    assert "Add widget" in req.system_prefix
+    assert "Add widget" not in req.system_prompt
+
+
+@pytest.mark.anyio
+async def test_run_tier_shared_context_block_excluded_for_ineligible_agent(
+    tmp_path: Path,
+) -> None:
+    """blind-hunter (context_enrichment_eligible=False) must NOT receive the
+    shared PR-context block: it's deliberately diff-only, and a stated PR
+    intent is exactly the kind of project familiarity it's designed without.
+    """
+    ctx = _make_context(tmp_path)
+    ctx.shared_context_block = "<pr-context>\n## PR Title\n\nAdd widget\n</pr-context>"
+    ctx.feedback_addendum = "<repo-feedback>recent learnings</repo-feedback>"
+
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    ineligible = get_agent("blind-hunter")
+    assert not ineligible.context_enrichment_eligible, \
+        "test premise: blind-hunter must not be context_enrichment_eligible"
+    await run_tier(
+        agents=[ineligible],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert len(captured) == 1
+    req = captured[0]
+    assert "Add widget" not in req.system_prefix
+    # Feedback addendum still reaches blind-hunter (run-shared learning signal).
+    assert "recent learnings" in req.system_prefix
+
+
+@pytest.mark.anyio
 async def test_run_tier_runs_context_enrichment_once_per_tier(tmp_path: Path) -> None:
     """#499: with multiple eligible agents in a tier, the expensive
     diff-parse + symbol-lookup must run exactly once for the whole tier

@@ -337,3 +337,44 @@ def test_advance_sha_watermark_updates_existing() -> None:
 def test_advance_sha_watermark_no_existing() -> None:
     prov, _ = _make_provider(lambda _r: httpx.Response(200, json=[]))
     assert prov.advance_sha_watermark(_VALID_SHA) is False
+
+
+# ---------------------------------------------------------------------------
+# get_pr_description (#813)
+# ---------------------------------------------------------------------------
+
+
+def test_get_pr_description_returns_title_and_description() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v4/projects/42/merge_requests/7"
+        return httpx.Response(
+            200, json={"title": "Add widget", "description": "Fixes #1"}
+        )
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() == ("Add widget", "Fixes #1")
+
+
+def test_get_pr_description_null_description_becomes_empty_string() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"title": "Add widget", "description": None})
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() == ("Add widget", "")
+
+
+def test_get_pr_description_http_error_returns_none() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() is None
+    assert prov._errors
+
+
+def test_get_pr_description_missing_title_returns_none() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"description": "no title field"})
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_pr_description() is None
