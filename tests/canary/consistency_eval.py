@@ -410,6 +410,21 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
     through the real merge/suppress/(judge)/outcome pipeline (issue #800:
     a verdict-level readout, not just raw per-agent finding clusters)."""
 
+    if _ARM_TOGGLES[arm]["context_enrichment"]:
+        # Issue #806 measurement bug: ai_pr_review.context.symbols._cache is a
+        # module-level singleton keyed by (repo_root, symbol), capped at
+        # context_max_queries (200) total ripgrep lookups. Production hits
+        # this cap once per review (one process per review). This harness
+        # runs the entire corpus x arms x runs x models loop in one long-lived
+        # process, so without a reset the cap saturates on the first
+        # ref-heavy diff and every later diff/arm/run in the same process
+        # silently sees an already-exhausted cache -- misreporting them as
+        # "no context available" when a real one-review-per-process run
+        # would not be capped at all. Reset once per run so each run gets its
+        # own fresh budget, matching the real per-review lifecycle.
+        from ai_pr_review.context.symbols import _reset_cache
+        _reset_cache()
+
     async def llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, PROVIDER)
 
@@ -453,6 +468,14 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         max_tokens_per_agent=32768,
         enable_context_enrichment=toggles["context_enrichment"],
         repo_root=script_dir,
+        # Issue #806 measurement bug: this was omitted, so
+        # _detect_primary_language(context.changed_files) always saw an empty
+        # list and extract_symbol_refs always found zero refs -- the
+        # context-enrichment arm was structurally inert on every corpus diff
+        # regardless of toggle state. Production's build_review_runtime()
+        # (ai_pr_review/review/runtime.py) passes changed_files=_changed_list;
+        # mirror that here so this arm actually exercises the feature.
+        changed_files=changed_file_paths,
         shared_context_block=shared_context_block,
         language_profile_text=language_profile_text,
     )
