@@ -246,12 +246,16 @@ def resolve_agent_max_tokens(agent_name: str, default: int) -> int:
     per-agent override on top, it never lowers or otherwise second-guesses
     the caller-supplied fallback.
 
-    Invalid values (non-integer, or outside [256, 65536]) print a WARNING to
-    stderr and fall back to *default* rather than raising -- matching the
-    tolerant clamp-and-warn pattern ``_clamp_max_tokens_per_agent`` and
+    Invalid values print a WARNING to stderr rather than raising, matching
+    the tolerant clamp-and-warn pattern ``_clamp_max_tokens_per_agent`` and
     ``_int()`` already use elsewhere in this module for numeric env vars, so
     a malformed per-agent override degrades gracefully instead of aborting
-    the whole review.
+    the whole review. The two invalid shapes are handled differently
+    (#847): a non-integer value (e.g. "abc") falls back to *default*
+    unchanged, since there is no numeric value to salvage; a value outside
+    ``[AGENT_MAX_TOKENS_MIN, AGENT_MAX_TOKENS_MAX]`` is clamped to whichever
+    bound it crossed and that clamped value is used, not *default* -- an
+    out-of-range override still takes effect, just capped at the bound.
 
     A mistyped agent name in the env var itself (e.g.
     ``AI_MAX_TOKENS_CODE_REVEIWER``) is never looked up here -- callers only
@@ -261,6 +265,9 @@ def resolve_agent_max_tokens(agent_name: str, default: int) -> int:
     ``agents.roster.AGENT_NAMES``, so a typo still surfaces the existing
     "Unknown AI_* variable... Did you mean...?" warning at startup.
     """
+    from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MAX as _MAX  # noqa: PLC0415
+    from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MIN as _MIN  # noqa: PLC0415
+
     env_name = _agent_max_tokens_env_var(agent_name)
     raw = os.environ.get(env_name, "").strip()
     if not raw:
@@ -274,7 +281,6 @@ def resolve_agent_max_tokens(agent_name: str, default: int) -> int:
             file=sys.stderr,
         )
         return default
-    _MIN, _MAX = 256, 65536
     if value < _MIN:
         print(
             f"WARNING: {env_name}={value} is below minimum {_MIN}; clamping to {_MIN}. "
@@ -290,6 +296,38 @@ def resolve_agent_max_tokens(agent_name: str, default: int) -> int:
         )
         return _MAX
     return value
+
+
+def _check_per_agent_max_tokens_overrides() -> None:
+    """Eagerly validate every set ``AI_MAX_TOKENS_<AGENT>`` override (#847).
+
+    ``resolve_agent_max_tokens()`` only runs when the corresponding agent is
+    actually dispatched -- an override for an agent that is excluded via
+    ``AI_EXCLUDE_AGENTS``, not in the ``AI_AGENTS`` allowlist, or skipped by
+    a conditional gate this run, previously had its value (non-integer, or
+    outside ``[AGENT_MAX_TOKENS_MIN, AGENT_MAX_TOKENS_MAX]``) validated
+    never: a typo'd or out-of-range value silently became a dead override
+    that would only surface a warning on some future run where that agent
+    happens to dispatch, if ever.
+
+    Called from ``ReviewConfig.from_env()`` for every set override, this
+    reuses ``resolve_agent_max_tokens()``'s own parse/clamp/warn logic (so
+    there is exactly one implementation of what counts as invalid) and
+    discards the resolved value -- only the WARNING side effect matters
+    here. The *default* passed through is each agent's own roster
+    ``max_output_tokens`` purely so the "not a valid integer; using {default}"
+    message names a real, meaningful number; it has no bearing on whether a
+    warning fires. If the agent later does dispatch, the same override is
+    resolved again there with the actual precedence-aware default -- an
+    intentional, harmless duplicate warning in that case, not a second
+    source of truth.
+    """
+    from ai_pr_review.agents.roster import AGENT_NAMES, get_agent  # noqa: PLC0415
+
+    for name in AGENT_NAMES:
+        env_name = _agent_max_tokens_env_var(name)
+        if os.environ.get(env_name, "").strip():
+            resolve_agent_max_tokens(name, get_agent(name).max_output_tokens)
 
 
 def _check_unknown_ai_vars() -> None:
@@ -580,7 +618,9 @@ class ReviewConfig(BaseModel):
     @field_validator("max_tokens_per_agent")
     @classmethod
     def _clamp_max_tokens_per_agent(cls, v: int) -> int:
-        _MIN, _MAX = 256, 65536
+        from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MAX as _MAX  # noqa: PLC0415
+        from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MIN as _MIN  # noqa: PLC0415
+
         if v < _MIN:
             print(
                 f"WARNING: AI_MAX_TOKENS_PER_AGENT={v} is below minimum {_MIN}; clamping to {_MIN}. "
@@ -654,6 +694,7 @@ class ReviewConfig(BaseModel):
         """Load config from environment variables. Raises ConfigError on unknown AI_* vars."""
         _check_unknown_ai_vars()
         _check_deprecated_noop_env_vars()
+        _check_per_agent_max_tokens_overrides()
 
         review_target = os.environ.get("REVIEW_TARGET", "pr").strip().lower()
         _check_deprecated_review_target(review_target)

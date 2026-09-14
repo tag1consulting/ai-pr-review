@@ -170,20 +170,26 @@ class TestRunIssueLinkerUserMessage:
         assert "## Open Issues" in user_msg
         assert "#42 A real issue" in user_msg
 
-    def test_default_max_tokens_unchanged_at_4096(
+    def test_default_max_tokens_matches_roster_default(
         self, prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """#191: with no AI_MAX_TOKENS_ISSUE_LINKER override set, the
-        pre-existing hardcoded 4096 default must be unchanged."""
+        """#191/#847: with no AI_MAX_TOKENS_ISSUE_LINKER override set, the base
+        default must come from the roster (get_agent(...).max_output_tokens),
+        not a hand-typed literal -- it happens to equal 4096 today, same as
+        the pre-#847 hardcoded value, but this pins that it's the roster
+        value doing the work, not a second copy of the same number."""
+        from ai_pr_review.agents.roster import ISSUE_LINKER_AGENT_NAME, get_agent
+
         monkeypatch.delenv("AI_MAX_TOKENS_ISSUE_LINKER", raising=False)
         _result, captured = self._run(prompt_dir)
+        assert captured[0].max_tokens == get_agent(ISSUE_LINKER_AGENT_NAME).max_output_tokens
         assert captured[0].max_tokens == 4096
 
     def test_per_agent_max_tokens_override_applied(
         self, prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """#191: AI_MAX_TOKENS_ISSUE_LINKER overrides the hardcoded 4096
-        default for this preflight-dispatched agent."""
+        """#191: AI_MAX_TOKENS_ISSUE_LINKER overrides the roster default for
+        this preflight-dispatched agent."""
         monkeypatch.setenv("AI_MAX_TOKENS_ISSUE_LINKER", "2048")
         _result, captured = self._run(prompt_dir)
         assert captured[0].max_tokens == 2048

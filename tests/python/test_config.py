@@ -632,6 +632,81 @@ def test_per_agent_max_tokens_typo_still_flagged_unknown(
 
 
 # ---------------------------------------------------------------------------
+# #847: AI_MAX_TOKENS_<AGENT> is validated eagerly at config-load time, not
+# only when the corresponding agent actually dispatches.
+# ---------------------------------------------------------------------------
+
+def test_per_agent_max_tokens_override_validated_at_config_load_even_when_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An out-of-range override for an agent excluded from this run (via
+    AI_EXCLUDE_AGENTS) must still warn at from_env() time. Before #847,
+    resolve_agent_max_tokens() was only ever called for an agent that
+    actually dispatches, so an override for an excluded agent was a silent
+    dead value -- an out-of-range or malformed override could sit unvalidated
+    indefinitely if that agent was always excluded."""
+    monkeypatch.setenv("AI_MAX_TOKENS_ARCHITECTURE_REVIEWER", "99999")
+    monkeypatch.setenv("AI_EXCLUDE_AGENTS", "architecture-reviewer")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_ARCHITECTURE_REVIEWER=99999 exceeds maximum 65536" in captured.err
+
+
+def test_per_agent_max_tokens_invalid_value_validated_at_config_load(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-integer override warns immediately at from_env() time, even
+    though the actual resolved value used at dispatch is determined later."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "not-a-number")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_CODE_REVIEWER='not-a-number' is not a valid integer" in captured.err
+
+
+def test_per_agent_max_tokens_valid_override_no_warning_at_config_load(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A valid in-range override produces no warning at config-load time."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "6000")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_CODE_REVIEWER" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# #847: the [256, 65536] per-agent-max-tokens clamp bound is a single shared
+# constant pair (ai_pr_review.agents.roster.AGENT_MAX_TOKENS_MIN/MAX), not
+# three independently hardcoded literals.
+# ---------------------------------------------------------------------------
+
+def test_agent_max_tokens_bounds_constants_match_documented_range() -> None:
+    from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MAX, AGENT_MAX_TOKENS_MIN
+
+    assert AGENT_MAX_TOKENS_MIN == 256
+    assert AGENT_MAX_TOKENS_MAX == 65536
+
+
+def test_agent_spec_rejects_max_output_tokens_outside_shared_bounds() -> None:
+    """AgentSpec.__post_init__ enforces the same shared bounds roster.py
+    exports, not an independent hardcoded copy."""
+    from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MAX, AgentSpec
+
+    with pytest.raises(ValueError, match=r"\[256, 65536\]"):
+        AgentSpec(
+            name="test-agent",
+            prompt_path="prompts/test-agent.md",
+            tier=1,
+            conditional_trigger=None,
+            max_output_tokens=AGENT_MAX_TOKENS_MAX + 1,
+            full_mode_only=False,
+            context_enrichment_eligible=False,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Allow/deny selection: analyzers and agents
 # ---------------------------------------------------------------------------
 

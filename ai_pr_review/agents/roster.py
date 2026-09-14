@@ -27,6 +27,22 @@ ConditionalTrigger = Literal[
 
 _VALID_TRIGGERS: frozenset[str] = frozenset(get_args(ConditionalTrigger))
 
+# Shared clamp bounds for any per-agent output-token budget (#847). Three
+# sites need this same [MIN, MAX] range: AgentSpec.max_output_tokens
+# validation right below, config.py's AI_MAX_TOKENS_PER_AGENT field clamp,
+# and config.py's resolve_agent_max_tokens() per-agent AI_MAX_TOKENS_<AGENT>
+# override clamp. Previously each site hardcoded its own copy of (256,
+# 65536); a single shared pair here keeps them from silently drifting apart.
+AGENT_MAX_TOKENS_MIN = 256
+AGENT_MAX_TOKENS_MAX = 65536
+
+# Canonical names for the two preflight-dispatched agents (#847), used by
+# both the roster entries below and ai_pr_review/review/preflight.py, so
+# preflight.py never has to hand-type "pr-summarizer" / "issue-linker" as
+# bare string literals that could silently drift from the roster.
+PR_SUMMARIZER_AGENT_NAME = "pr-summarizer"
+ISSUE_LINKER_AGENT_NAME = "issue-linker"
+
 
 @dataclass(frozen=True)
 class AgentSpec:
@@ -57,9 +73,10 @@ class AgentSpec:
             raise ValueError("AgentSpec.name must be non-empty")
         if self.tier not in (1, 2):
             raise ValueError(f"AgentSpec.tier must be 1 or 2, got {self.tier!r}")
-        if not (256 <= self.max_output_tokens <= 65536):
+        if not (AGENT_MAX_TOKENS_MIN <= self.max_output_tokens <= AGENT_MAX_TOKENS_MAX):
             raise ValueError(
-                f"AgentSpec.max_output_tokens must be in [256, 65536], "
+                f"AgentSpec.max_output_tokens must be in "
+                f"[{AGENT_MAX_TOKENS_MIN}, {AGENT_MAX_TOKENS_MAX}], "
                 f"got {self.max_output_tokens}"
             )
         if self.conditional_trigger is not None and self.conditional_trigger not in _VALID_TRIGGERS:
@@ -80,7 +97,7 @@ class AgentSpec:
 AGENTS: list[AgentSpec] = [
     # --- Tier 1: run in both quick and full mode ---
     AgentSpec(
-        name="pr-summarizer",
+        name=PR_SUMMARIZER_AGENT_NAME,
         prompt_path="prompts/pr-summarizer.md",
         tier=1,
         conditional_trigger="no_prior_summary",
@@ -178,7 +195,7 @@ AGENTS: list[AgentSpec] = [
         # without any tool-calling loop.  Dispatched separately via
         # _run_issue_linker() in cli.py; excluded from generic run_tier dispatch via
         # separately_dispatched=True.
-        name="issue-linker",
+        name=ISSUE_LINKER_AGENT_NAME,
         prompt_path="prompts/issue-linker.md",
         tier=2,
         conditional_trigger=None,
