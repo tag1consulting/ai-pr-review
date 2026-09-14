@@ -140,6 +140,44 @@ to change them.
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_EDGE_CASE` | `false` | Disables the control-flow heuristic gate; `edge-case-hunter` always runs regardless of diff content. |
 
+### Per-agent max-tokens overrides (env-var only)
+
+`AI_MAX_TOKENS_PER_AGENT` (see [Action inputs](#action-inputs) /
+[Repository variables](#repository-variables) above) sets one output-token
+budget for every tier-dispatched agent. `AI_MAX_TOKENS_<AGENT>` overrides that
+budget for one named agent, taking precedence over both
+`AI_MAX_TOKENS_PER_AGENT` and the agent's own roster default. The agent name is
+uppercased with `-` replaced by `_` (e.g. `code-reviewer` →
+`AI_MAX_TOKENS_CODE_REVIEWER`). Invalid values (non-integer, or outside
+256–65536) print a warning and fall back to the pre-override value rather than
+failing the run, matching `AI_MAX_TOKENS_PER_AGENT`'s own clamp behavior. See
+[issue #191](https://github.com/tag1consulting/ai-pr-review/issues/191).
+
+`pr-summarizer` and `issue-linker` are dispatched separately from the other
+seven agents (they compose their own prompts and never go through the
+tier-dispatch path that reads `AI_MAX_TOKENS_PER_AGENT`), and their pre-#191
+budget was a hardcoded `4096` with no override of any kind. `AI_MAX_TOKENS_<AGENT>`
+is therefore the *only* way to change their budget; `AI_MAX_TOKENS_PER_AGENT`
+still has no effect on either.
+
+| Variable | Effective default | Notes |
+|----------|--------------------|-------|
+| `AI_MAX_TOKENS_PR_SUMMARIZER` | `4096` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; see above. |
+| `AI_MAX_TOKENS_CODE_REVIEWER` | `32768` | Tier-dispatched; falls back to `AI_MAX_TOKENS_PER_AGENT` when unset. |
+| `AI_MAX_TOKENS_SILENT_FAILURE_HUNTER` | `32768` | Tier-dispatched. |
+| `AI_MAX_TOKENS_ARCHITECTURE_REVIEWER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_SECURITY_REVIEWER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_BLIND_HUNTER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_EDGE_CASE_HUNTER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_ADVERSARIAL_GENERAL` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_ISSUE_LINKER` | `4096` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; see above. |
+
+Not implemented: a bulk JSON-map override form (e.g. `AI_MAX_TOKENS_OVERRIDES`)
+was suggested in issue #191 but deliberately left out of this change — the
+per-agent env vars above cover the same ground with less surface area to
+document and validate, and can be revisited if real usage shows the JSON form
+is actually needed.
+
 ### Legacy compatibility
 
 | Variable | Default | Description |

@@ -61,6 +61,7 @@ async def run_summarizer(
         parse_summarizer_output,
         wrap_walkthrough_in_details,
     )
+    from ai_pr_review.config import resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -91,11 +92,23 @@ async def run_summarizer(
                 commit_log = proc.stdout.strip()
 
         user_message = build_summarizer_user_message(manifest_text, commit_log, diff_text)
+        # #191: this preflight path composes its own LLMRequest and previously
+        # hardcoded max_tokens=4096, bypassing both the roster's per-agent
+        # default and the AI_MAX_TOKENS_PER_AGENT global override entirely.
+        # resolve_agent_max_tokens() only adds a higher-precedence per-agent
+        # override on top; the hardcoded 4096 default is preserved unchanged
+        # when AI_MAX_TOKENS_PR_SUMMARIZER is unset, so existing behavior is
+        # not altered by this change.
+        max_tokens = resolve_agent_max_tokens("pr-summarizer", 4096)
+        logger.debug(
+            "pr-summarizer: effective max_output_tokens=%d (source=%s)",
+            max_tokens, "per-agent override" if max_tokens != 4096 else "hardcoded default",
+        )
         request = LLMRequest(
             model_id=model,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
@@ -199,6 +212,7 @@ async def run_issue_linker(
     the open-issue list is injected as plain text so the model can match and cite real
     issue numbers without any tool-calling loop.
     """
+    from ai_pr_review.config import resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -270,11 +284,19 @@ async def run_issue_linker(
             f"## File Manifest\n\n{manifest_text}\n"
         )
 
+        # #191: same rationale as pr-summarizer above -- adds a per-agent
+        # override on top of the pre-existing hardcoded 4096 default without
+        # changing that default when unset.
+        max_tokens = resolve_agent_max_tokens("issue-linker", 4096)
+        logger.debug(
+            "issue-linker: effective max_output_tokens=%d (source=%s)",
+            max_tokens, "per-agent override" if max_tokens != 4096 else "hardcoded default",
+        )
         request = LLMRequest(
             model_id=model,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
