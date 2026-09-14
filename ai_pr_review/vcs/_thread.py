@@ -15,13 +15,14 @@ the single source of truth for it.
 
 `count_unresolved_owned_threads` factors out the "map review id -> count of
 currently-unresolved threads we own" loop that `github.py`'s
-`_dismiss_stale_reviews` and `slash/github_orchestration.py`'s `_approve_if_pr_fully_resolved`
-(and, filtered to one review id, `_dismiss_if_all_resolved`) each
-independently built via a near-identical `for t in threads: ...` loop. The
-one deliberate difference between call sites — `bot_login=None` in
-github_orchestration.py's two call sites vs. a normalized `graphql_bot_login(...)` in
-github.py's — is preserved as a caller-supplied parameter, not flattened
-away; see `github_orchestration._dismiss_if_all_resolved`'s docstring for why that
+`_dismiss_stale_reviews` and `slash/github_orchestration.py`'s
+`_approve_if_pr_fully_resolved` (and, filtered to one review id,
+`_dismiss_if_all_resolved`) each independently built via a near-identical
+`for t in threads: ...` loop. The one deliberate difference between call
+sites — `bot_login=None` in github_orchestration.py's two call sites vs. a
+normalized `graphql_bot_login(...)` in github.py's — is preserved as a
+caller-supplied parameter, not flattened away; see
+`github_orchestration._dismiss_if_all_resolved`'s docstring for why that
 difference is intentional, not a bug.
 """
 

@@ -311,7 +311,8 @@ def _feedback_reply(command: SlashCommand) -> str:
         # learning-loop store -- it never resolves a thread, dismisses a
         # review, or clears a blocking finding (unlike false-positive/
         # wont-fix/dismiss, whose reply lives separately in
-        # ai_pr_review/slash/github_orchestration.py and is NOT changed by this branch).
+        # ai_pr_review/slash/github_orchestration.py and is NOT changed by
+        # this branch).
         # The old wording ("recorded ... Thank you for the feedback.") read
         # as confirmation that the finding was handled, which is exactly
         # what caused a PR to sit blocked for hours with the reporter

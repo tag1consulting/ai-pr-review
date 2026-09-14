@@ -562,7 +562,7 @@ def _dismiss_if_all_resolved(
     could trigger dismissal of the attacker's own review, not ours. This is a
     genuine, intentional inconsistency between the two groups of call sites
     (not a bug in either), and `test_dismiss_inline_reply_graphql_style_author_still_owned`
-    (`tests/python/vcs/test_dismiss_github.py`) pins it: it fails on purpose
+    (`tests/python/vcs/test_github_orchestration_http.py`) pins it: it fails on purpose
     if `None` is ever swapped for a real `bot_login` here without that
     tradeoff being re-examined first.
     """
