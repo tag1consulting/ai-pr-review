@@ -10,7 +10,7 @@ import httpx
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _blob_link
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER
+from ai_pr_review.vcs.marker import INLINE_MARKER, extract_judge_map
 from ai_pr_review.vcs.protocol import DiffContext
 
 
@@ -174,6 +174,76 @@ def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:
     )
     # It must NOT appear inline — that's the whole point of downrank.
     assert result.inline_posted == 0, "a demoted_to_body finding must not post inline"
+
+
+def test_post_findings_body_finding_judge_verdict_reaches_judge_map_marker() -> None:
+    """A body-level finding that went through the judge pass (#841) gets a
+    corresponding entry in the posted body's judge-map marker, keyed by its
+    fingerprint -- the write-side counterpart of dismiss.py's
+    `_judge_data_for_finding_id` read."""
+    from ai_pr_review.vcs._finding_ids import fingerprint
+
+    demoted = Finding(
+        severity="High",
+        confidence=50,
+        finding="author_association is not a reliable authorization check",
+        source="code-reviewer",
+        file=".github/workflows/ai-pr-review.yml",
+        line=195,
+        demoted_to_body=True,
+        judge_verdict="downrank",
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            body = json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 1, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([demoted], diff, event="REQUEST_CHANGES")
+    assert result.ok
+
+    assert bodies, "no review body posted"
+    judge_map = extract_judge_map(bodies[0])
+    assert judge_map.get(fingerprint(demoted)) == {
+        "jv": "downrank", "corr": False, "conf": 50,
+    }
+
+
+def test_post_findings_body_finding_never_judged_has_no_judge_map_entry() -> None:
+    """A body finding that never went through the judge pass
+    (judge_verdict=None, the default) must not appear in the judge-map at
+    all -- keeps the marker's growth bounded to findings actually judged."""
+    from ai_pr_review.vcs._finding_ids import fingerprint
+
+    ood = Finding(
+        severity="Low", confidence=80, finding="pre-existing style issue",
+        source="phpcs", file="app.py", line=99, out_of_diff=True,
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+    bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            body = json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 1, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([ood], diff, event="COMMENT")
+    assert result.ok
+    assert bodies
+    assert fingerprint(ood) not in extract_judge_map(bodies[0])
 
 
 def test_ood_only_prior_review_preserves_finding_id() -> None:

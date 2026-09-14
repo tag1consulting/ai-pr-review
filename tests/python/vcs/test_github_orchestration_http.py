@@ -30,6 +30,7 @@ from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import (
     INLINE_MARKER,
     build_id_map_marker,
+    build_judge_map_marker,
     extract_verdicts,
 )
 
@@ -146,6 +147,66 @@ def test_dismiss_by_finding_id_body_finding_no_thread_or_dismiss_put() -> None:
     # The original bullet must survive the patch -- this is a surgical
     # upsert, not a re-render of the whole body.
     assert bullet in new_body
+
+
+def test_dismiss_by_finding_id_body_finding_recovers_judge_data_from_judge_map() -> None:
+    """A BODY finding's judge-pass state (#841) is recoverable from the
+    review body's sibling judge-map marker, keyed by the same fingerprint
+    the bullet itself reconstructs to."""
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    judge_map_marker = build_judge_map_marker(
+        {fingerprint(f): {"jv": "downrank", "corr": False, "conf": 42}}
+    )
+    review_body = (
+        "### Findings not attached to specific lines\n\n"
+        + bullet + "\n" + judge_map_marker
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/1"):
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 3, actor="alice", command="dismiss")
+
+    assert result.feedback_judge_verdict == "downrank"
+    assert result.feedback_corroborated is False
+    assert result.feedback_confidence == 42
+
+
+def test_dismiss_by_finding_id_body_finding_no_judge_map_defaults_absent() -> None:
+    """A BODY finding with no judge-map marker at all (predates the feature,
+    or never went through the judge pass) degrades to the same
+    None/False/None defaults as before -- no crash, no fabricated data."""
+    f = _finding("style issue", source="phpcs", file="legacy.py", line=5)
+    bullet = format_body_finding(f, finding_id=3)
+    review_body = "### Findings not attached to specific lines\n\n" + bullet + "\n"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}, "body": review_body}],
+            )
+        if req.method == "PUT" and url.endswith("/reviews/1"):
+            return httpx.Response(200, json={"id": 1})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = dismiss_by_finding_id(prov, 3, actor="alice", command="dismiss")
+
+    assert result.feedback_judge_verdict is None
+    assert result.feedback_corroborated is False
+    assert result.feedback_confidence is None
 
 
 def test_dismiss_by_finding_id_unknown_id() -> None:

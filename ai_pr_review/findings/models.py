@@ -10,6 +10,7 @@ from typing import Literal, get_args
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["Critical", "High", "Medium", "Low"]
+JudgeVerdict = Literal["keep", "downrank"]
 
 # Shared taxonomy ported from claude-comprehensive-review#76. Finding.category
 # is typed `Category` below, but what actually prevents an unrecognized value
@@ -76,6 +77,20 @@ class Finding(BaseModel):
     # source — independent corroboration of the same file+line region.
     # Internal-only: not serialised by to_dict().
     corroborated: bool = False
+    # Set by judge._apply_verdicts to the judge's raw per-finding verdict
+    # ("keep" or "downrank"), or left at the default `None` when this finding
+    # never went through the judge pass at all (AI_JUDGE_PASS=false, no
+    # judge_model/judge_prompt_path configured, an empty candidate list, or a
+    # fail-soft judge error/parse failure — see judge_findings' docstring).
+    # Deliberately records the judge's raw verdict even for a `corroborated`
+    # finding, whose `demoted_to_body`/`confidence` are never actually
+    # touched by a "downrank" verdict (corroboration always overrides the
+    # placement decision) — collapsing the two into one "effective" value
+    # would destroy the ability to later ask "how often does corroboration
+    # save a finding the judge wanted to downrank?" against exactly the
+    # `corroborated` field this Finding already carries. Internal-only: not
+    # serialised by to_dict().
+    judge_verdict: JudgeVerdict | None = None
 
     @field_validator("severity", mode="before")
     @classmethod

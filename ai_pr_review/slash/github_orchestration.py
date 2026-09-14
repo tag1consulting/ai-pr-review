@@ -51,9 +51,10 @@ from ai_pr_review.vcs._finding_ids import (
     BODY_SECTION_START_MARKERS,
     _ends_body_section,
     _pick_primary_source,
+    fingerprint_for_finding_id,
     safe_review_id,
 )
-from ai_pr_review.vcs.marker import extract_id_map
+from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, extract_judge_map
 
 if TYPE_CHECKING:
     from ai_pr_review.vcs.github import GitHubProvider
@@ -105,6 +106,29 @@ class FeedbackContext:
 
 
 @dataclass(frozen=True)
+class InlineFeedbackContext:
+    """Result of `_inline_feedback_context` -- an INLINE finding's
+    feedback-store context, resolved from its own comment body.
+
+    A named dataclass rather than a positional tuple specifically because
+    `corroborated: bool` and `confidence: int | None` sit adjacent to each
+    other: `bool` is a subtype of `int` in Python's type system, so a
+    positional swap between them would type-check cleanly and only surface
+    as bad data in the feedback store. Matches this file's existing
+    convention (`ClassifiedFinding`, `FeedbackContext`, `DismissResult`) for
+    exactly this reason.
+    """
+
+    eligible: bool
+    source: str
+    rule_id: str
+    finding_id: int | None
+    judge_verdict: str | None
+    corroborated: bool
+    confidence: int | None
+
+
+@dataclass(frozen=True)
 class DismissResult:
     """Outcome of a dismiss/false-positive/wont-fix orchestration call."""
 
@@ -136,6 +160,18 @@ class DismissResult:
     # (ab)used as BODY-vs-INLINE classification signals elsewhere; this field
     # exists so that distinction never has to double as "should we write".
     feedback_eligible: bool = False
+    # Judge-pass state for the feedback-store entry's `extras` (judge-verdict
+    # instrumentation, #841): read back from the inline comment's own
+    # metadata marker (`vcs.marker.extract_inline_meta`) for an INLINE
+    # finding, or from the review body's sibling judge-map marker
+    # (`vcs.marker.extract_judge_map`, via `_judge_data_for_finding_id`) for a
+    # BODY finding -- either way, since this CLI process has no access to the
+    # original in-memory `Finding`. Default (None/False/None) when the
+    # fingerprint can't be resolved, the finding predates this feature, or it
+    # never went through the judge pass at all.
+    feedback_judge_verdict: str | None = None
+    feedback_corroborated: bool = False
+    feedback_confidence: int | None = None
     # True whenever this call resolved/dismissed/recorded/approved something
     # real -- drives the done/confused reaction. Explicit rather than derived
     # from the fields above (issue #769): a successful BODY `fixed` sets none
@@ -410,11 +446,41 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
     return ClassifiedFinding(location=FindingLocation.INLINE, source=source, rule_id=rule_id)
 
 
+def _judge_data_for_finding_id(
+    bodies: Sequence[str], finding_id: int
+) -> tuple[str | None, bool, int | None]:
+    """Recover a BODY-level finding's judge-pass state (judge-verdict
+    instrumentation, #841), or (None, False, None) if unavailable.
+
+    Mirrors `_scan_body_bullets_one`'s reverse-lookup pattern: resolve the
+    fingerprint first, then scan `bodies` (already newest-first) for the
+    first judge-map marker (`vcs.marker.extract_judge_map`) carrying an
+    entry for that fingerprint. Returns the defaults whenever the fingerprint
+    can't be resolved, no body carries a judge-map entry for it (the finding
+    predates this feature, or never went through the judge pass), or the
+    entry fails validation inside `extract_judge_map` itself.
+    """
+    fp = fingerprint_for_finding_id(bodies, finding_id)
+    if fp is None:
+        return None, False, None
+    for body in bodies:
+        entry = extract_judge_map(body).get(fp)
+        if entry is not None:
+            jv = entry.get("jv")
+            conf = entry.get("conf")
+            return (
+                jv if isinstance(jv, str) else None,
+                entry.get("corr") is True,
+                conf if isinstance(conf, int) else None,
+            )
+    return None, False, None
+
+
 def _inline_feedback_context(
     body: str, *, resolved: bool, command: str
-) -> tuple[bool, str, str, int | None]:
-    """Compute ``(feedback_eligible, source, rule_id, finding_id)`` for an
-    INLINE finding's feedback-store entry.
+) -> InlineFeedbackContext:
+    """Compute an `InlineFeedbackContext` for an INLINE finding's
+    feedback-store entry.
 
     Shared by `dismiss_by_finding_id`'s INLINE branch (top-level comment
     naming an inline F<n>) and `dismiss_inline_reply` (reply on the inline
@@ -433,13 +499,35 @@ def _inline_feedback_context(
     here, two DIFFERENT findings dismissed within the feedback store's dedup
     window would collide on the same key and the second would be silently
     dropped -- see `feedback/store.py`'s `_dedup_key`).
+
+    `judge_verdict`/`corroborated`/`confidence` (judge-verdict instrumentation):
+    read from the comment's own metadata marker via
+    `ai_pr_review.vcs.marker.extract_inline_meta`, the same marker
+    `classified`/`finding_id` above are recovered from -- no extra API call.
+    All three fall back to `None`/`False`/`None` when the marker is absent,
+    predates this feature, or the finding never went through the judge pass.
     """
     if not (resolved and command != "fixed"):
-        return False, "", "", None
+        return InlineFeedbackContext(
+            eligible=False, source="", rule_id="", finding_id=None,
+            judge_verdict=None, corroborated=False, confidence=None,
+        )
     classified = parse_inline_comment_header(body)
     finding_id_match = _ID_RE.search(body)
     finding_id = int(finding_id_match.group(1)) if finding_id_match is not None else None
-    return True, classified.source, classified.rule_id, finding_id
+    meta = extract_inline_meta(body)
+    judge_verdict = meta.judge_verdict if meta is not None else None
+    corroborated = meta.corroborated if meta is not None else False
+    confidence = meta.confidence if meta is not None else None
+    return InlineFeedbackContext(
+        eligible=True,
+        source=classified.source,
+        rule_id=classified.rule_id,
+        finding_id=finding_id,
+        judge_verdict=judge_verdict,
+        corroborated=corroborated,
+        confidence=confidence,
+    )
 
 
 _BOT_LOGIN: Final[str] = "github-actions[bot]"

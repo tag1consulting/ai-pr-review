@@ -1141,6 +1141,24 @@ class GitHubProvider:
             ),
         )
 
+        # Judge-verdict instrumentation (#841) for body-level findings: a
+        # body bullet has no per-comment marker of its own (unlike an inline
+        # finding), so this is the only recovery mechanism for a body
+        # finding's judge state at dismiss time. Only findings that actually
+        # went through the judge pass are included — see
+        # `build_judge_map_marker`'s docstring.
+
+        judge_map: dict[str, dict[str, object]] = {}
+        for f in body_findings:
+            if f.judge_verdict is None:
+                continue
+            entry: dict[str, object] = {"jv": f.judge_verdict}
+            if f.corroborated:
+                entry["corr"] = True
+            if f.confidence is not None:
+                entry["conf"] = f.confidence
+            judge_map[fingerprint(f)] = entry
+
         in_diff_body, ood_body = split_body_findings(body_findings)
         body_bullets = self._render_body_bullets(
             in_diff_body,
@@ -1281,7 +1299,7 @@ class GitHubProvider:
             agent_prompt=agent_prompt,
         )
         body = self._finalize_body_with_markers(
-            body, id_map=id_map, verdicts=updated_verdicts
+            body, id_map=id_map, verdicts=updated_verdicts, judge_map=judge_map
         )
 
         if action == "put" and canonical is not None:
@@ -1569,30 +1587,47 @@ class GitHubProvider:
         )
 
     def _finalize_body_with_markers(
-        self, body: str, *, id_map: dict[str, int], verdicts: dict[str, str]
+        self,
+        body: str,
+        *,
+        id_map: dict[str, int],
+        verdicts: dict[str, str],
+        judge_map: dict[str, dict[str, object]] | None = None,
     ) -> str:
         """Truncate `body` to GitHub's limit, then append the inline-ownership
-        marker plus (space permitting) the id-map and verdicts markers.
+        marker plus (space permitting) the id-map, judge-map, and verdicts
+        markers.
 
-        Reserves room for ALL THREE markers before truncating the visible
+        Reserves room for ALL applicable markers before truncating the visible
         body -- fixes a pre-existing bug where only the id-map marker's size
         was reserved and the inline-ownership marker (`INLINE_MARKER`,
         always appended) was added *after* truncation, letting the final
         body exceed `GITHUB_MAX_BODY_SIZE` by `len(INLINE_MARKER)` bytes. If
-        the id-map and verdicts markers together don't fit, the id-map
-        marker is dropped first (it's reconstructible from prior review
-        bodies via the fallback bullet-scan in `_finding_ids.py`); the
-        verdicts marker -- durable human dismiss/fixed decisions, not
-        reconstructible from anything else -- is kept even if it still
-        doesn't fit, with a loud warning rather than a silent drop.
+        space is tight, drop order is: judge-map first (pure instrumentation,
+        never anything else's source of truth), then id-map (reconstructible
+        from prior review bodies via the fallback bullet-scan in
+        `_finding_ids.py`); the verdicts marker -- durable human dismiss/fixed
+        decisions, not reconstructible from anything else -- is kept even if
+        it still doesn't fit, with a loud warning rather than a silent drop.
         """
-        from ai_pr_review.vcs.marker import build_id_map_marker, build_verdicts_marker
+        from ai_pr_review.vcs.marker import (
+            build_id_map_marker,
+            build_judge_map_marker,
+            build_verdicts_marker,
+        )
 
         id_map_marker = ""
         try:
             id_map_marker = build_id_map_marker(id_map)
         except Exception as exc:  # noqa: BLE001
             _log.warning("github: failed to build id-map marker: %s", exc)
+
+        judge_map_marker = ""
+        if judge_map:
+            try:
+                judge_map_marker = build_judge_map_marker(judge_map)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("github: failed to build judge-map marker: %s", exc)
 
         verdicts_marker = ""
         if verdicts:
@@ -1604,10 +1639,24 @@ class GitHubProvider:
         _MIN_BODY_BYTES = 4096
         inline_reserve = len(INLINE_MARKER.encode("utf-8")) + 1
         id_map_reserve = len(id_map_marker.encode("utf-8")) + 1 if id_map_marker else 0
+        judge_map_reserve = (
+            len(judge_map_marker.encode("utf-8")) + 1 if judge_map_marker else 0
+        )
         verdicts_reserve = (
             len(verdicts_marker.encode("utf-8")) + 1 if verdicts_marker else 0
         )
-        reserve = inline_reserve + id_map_reserve + verdicts_reserve
+        reserve = inline_reserve + id_map_reserve + judge_map_reserve + verdicts_reserve
+
+        if judge_map_marker and reserve > GITHUB_MAX_BODY_SIZE - _MIN_BODY_BYTES:
+            _log.warning(
+                "github: markers (%d bytes) too large to fit in review body for "
+                "%s/%s PR #%s; dropping judge-map marker for this cycle — "
+                "body-level judge-verdict instrumentation degrades for this run",
+                reserve, self.config.owner, self.config.repo, self.config.pr_number,
+            )
+            judge_map_marker = ""
+            judge_map_reserve = 0
+            reserve = inline_reserve + id_map_reserve + verdicts_reserve
 
         if id_map_marker and reserve > GITHUB_MAX_BODY_SIZE - _MIN_BODY_BYTES:
             _log.warning(
@@ -1638,6 +1687,8 @@ class GitHubProvider:
         body = append_inline_marker(body)
         if id_map_marker:
             body += "\n" + id_map_marker
+        if judge_map_marker:
+            body += "\n" + judge_map_marker
         if verdicts_marker:
             body += "\n" + verdicts_marker
         return body
@@ -2576,6 +2627,9 @@ def _build_inline_comment_body(
         category=f.category,
         severity=f.severity,
         prior_fingerprints=prior_fingerprints,
+        judge_verdict=f.judge_verdict,
+        corroborated=f.corroborated,
+        confidence=f.confidence,
     )
     return f"{body}\n{meta_marker}"
 

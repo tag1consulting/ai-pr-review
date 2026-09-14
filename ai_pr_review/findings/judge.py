@@ -30,17 +30,15 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from ai_pr_review.agents.dispatch import LLMCall
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.findings.models import JudgeVerdict as JudgeVerdict  # re-exported
 from ai_pr_review.llm.base import LLMRequest
 
 logger = logging.getLogger(__name__)
 
 JUDGE_DOWNRANK_AMOUNT: int = 15
-
-JudgeVerdict = Literal["keep", "downrank"]
 
 
 @dataclass(frozen=True)
@@ -85,12 +83,21 @@ def _apply_verdicts(
     """Apply judge verdicts deterministically. Returns (modified list, downrank count).
 
     Rules:
-    - ``corroborated is True`` → always ``keep``, log DEBUG.
+    - ``corroborated is True`` → the *placement* verdict is always ``keep``
+      regardless of what the judge said (log DEBUG), but ``Finding.
+      judge_verdict`` still records the judge's raw per-finding verdict (see
+      #841). Rationale for recording the raw verdict rather than the
+      overridden one lives on ``Finding.judge_verdict``'s field comment in
+      findings/models.py — not repeated here to avoid two copies drifting.
     - ``downrank`` → lower confidence by JUDGE_DOWNRANK_AMOUNT (floor 0),
-      set demoted_to_body=True so the finding routes to the review body.
-      Severity is intentionally untouched.
-    - ``keep`` → unchanged.
-    - Missing verdict id defaults to ``keep``.
+      set demoted_to_body=True so the finding routes to the review body, and
+      set judge_verdict="downrank". Severity is intentionally untouched.
+    - ``keep`` → unchanged apart from judge_verdict="keep".
+    - Missing verdict id defaults to ``keep`` (placement-wise, this is the
+      correct fail-soft default). A verdict id the judge's response omitted
+      entirely is logged as a coverage gap — see the warning below — so it
+      stays distinguishable in logs from a genuine "keep" verdict, even
+      though both persist the same ``judge_verdict="keep"`` value today.
 
     Note: the judge pass runs on ``kept`` *after* ``apply_diff_scope`` (see
     orchestrate.py's pipeline order), so a finding can legitimately reach this
@@ -117,29 +124,46 @@ def _apply_verdicts(
         except (KeyError, TypeError, ValueError):
             continue
 
+    if len(id_to_verdict) < len(kept):
+        logger.warning(
+            "judge: response covered %d/%d candidate id(s); %d finding(s) "
+            "will persist judge_verdict=\"keep\" with no way to distinguish "
+            "an omitted id from a genuine keep verdict",
+            len(id_to_verdict), len(kept), len(kept) - len(id_to_verdict),
+        )
+
     result: list[Finding] = []
     downrank_count = 0
 
     for idx, finding in enumerate(kept):
+        # Computed for every finding, corroborated or not: this is the raw
+        # verdict the judge assigned, independent of whether corroboration
+        # goes on to override its placement effect below.
+        verdict_raw = id_to_verdict.get(idx, "keep")
+        verdict: JudgeVerdict = "downrank" if verdict_raw == "downrank" else "keep"
+
         if finding.corroborated:
             logger.debug(
                 "judge: corroborated finding %d kept regardless of verdict (file=%s line=%s)",
                 idx, finding.file, finding.line,
             )
-            result.append(finding)
+            result.append(finding.model_copy(update={"judge_verdict": verdict}))
             continue
 
-        verdict = id_to_verdict.get(idx, "keep")
         if verdict == "downrank":
             new_confidence = max(0, finding.confidence - JUDGE_DOWNRANK_AMOUNT)
-            # model_copy skips validator re-runs; safe here — only confidence
-            # and demoted_to_body are updated and neither has cross-field
-            # validation. severity is deliberately untouched: downrank means
-            # "less prominent placement," not "lower risk."
-            result.append(finding.model_copy(update={"confidence": new_confidence, "demoted_to_body": True}))
+            # model_copy skips validator re-runs; safe here — only confidence,
+            # demoted_to_body, and judge_verdict are updated and none has
+            # cross-field validation. severity is deliberately untouched:
+            # downrank means "less prominent placement," not "lower risk."
+            result.append(finding.model_copy(update={
+                "confidence": new_confidence,
+                "demoted_to_body": True,
+                "judge_verdict": verdict,
+            }))
             downrank_count += 1
         else:
-            result.append(finding)
+            result.append(finding.model_copy(update={"judge_verdict": verdict}))
 
     return result, downrank_count
 

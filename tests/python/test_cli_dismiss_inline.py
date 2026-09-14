@@ -821,6 +821,195 @@ def test_feedback_store_write_full_context_from_thread(monkeypatch) -> None:
     assert appended[0].command == "false-positive"
 
 
+def test_feedback_store_write_includes_judge_data_when_present(monkeypatch) -> None:
+    """Issue: persist the judge pass's verdict/corroboration/confidence into
+    the feedback-store entry's extras (judge-verdict instrumentation). A
+    finding whose inline comment marker carries real judge-pass state must
+    have that state show up verbatim in the persisted FeedbackEntry.extras,
+    even though this CLI process only ever sees the finding through the
+    bot's own rendered comment body -- never the original in-memory
+    Finding."""
+    f = Finding(
+        severity="medium",
+        confidence=63,
+        finding="unsafe eval",
+        source="code-reviewer",
+        file="src/foo.py",
+        line=12,
+        judge_verdict="downrank",
+        corroborated=True,
+    )
+    body = _build_inline_comment_body(f, finding_id=None)
+    nodes = [
+        _inline_thread(
+            "T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py"
+        )
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    appended: list = []
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: (appended.append(entry), True)[1])})(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41) + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(appended) == 1
+    assert appended[0].extras.get("judge_verdict") == "downrank"
+    assert appended[0].extras.get("corroborated") is True
+    assert appended[0].extras.get("confidence") == 63
+
+
+def test_feedback_store_write_judge_data_absent_when_never_judged(monkeypatch) -> None:
+    """A finding that never went through the judge pass (default
+    Finding.judge_verdict=None, corroborated=False) must still persist a
+    FeedbackEntry -- absent-safe defaults, not a crash -- while its always-
+    known raw confidence still comes through untouched."""
+    f = Finding(
+        severity="medium",
+        confidence=80,
+        finding="unsafe eval",
+        source="code-reviewer",
+        file="src/foo.py",
+        line=12,
+    )
+    body = _build_inline_comment_body(f, finding_id=None)
+    nodes = [
+        _inline_thread(
+            "T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py"
+        )
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    appended: list = []
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: (appended.append(entry), True)[1])})(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41) + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(appended) == 1
+    assert appended[0].extras.get("judge_verdict") is None
+    assert appended[0].extras.get("corroborated") is False
+    assert appended[0].extras.get("confidence") == 80
+
+
+def test_feedback_store_write_judge_data_absent_for_old_format_marker(monkeypatch) -> None:
+    """A marker posted by a pre-instrumentation bot version carries none of
+    the judge_verdict/corroborated/confidence keys at all. Reading it back
+    must degrade to the same None/False/None defaults, not a KeyError or
+    crash -- proving old, already-posted comments stay safely parseable."""
+    from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
+    from ai_pr_review.vcs._finding_ids import fingerprint
+    from ai_pr_review.vcs.marker import append_inline_marker, build_inline_meta_marker
+
+    f = Finding(
+        severity="medium",
+        confidence=80,
+        finding="unsafe eval",
+        source="code-reviewer",
+        file="src/foo.py",
+        line=12,
+    )
+    icon = severity_icon(f.severity)
+    tag = format_source_tag(f)
+    header = f"{icon} **[{f.severity}]** {tag} {sanitize_display_text(f.finding)}".strip()
+    body = append_inline_marker(header)
+    # Pre-instrumentation call shape: no judge_verdict/corroborated/confidence
+    # kwargs at all, matching a marker posted before this feature shipped.
+    old_marker = build_inline_meta_marker(
+        fingerprint=fingerprint(f), category=f.category, severity=f.severity,
+    )
+    body = f"{body}\n{old_marker}"
+    nodes = [
+        _inline_thread(
+            "T1", resolved=False, body=body, comment_db_id=55, review_db_id=41, path="src/foo.py"
+        )
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "POST" and url.endswith("/graphql"):
+            gql_body = _json.loads(req.content)
+            if "resolveReviewThread" in gql_body.get("query", ""):
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    appended: list = []
+    monkeypatch.setattr(
+        "ai_pr_review.feedback.store.make_store",
+        lambda config: type("_S", (), {"append": staticmethod(lambda entry: (appended.append(entry), True)[1])})(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41) + ["--enable-feedback-loop", "1", "--feedback-write-allowed", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(appended) == 1
+    assert appended[0].extras.get("judge_verdict") is None
+    assert appended[0].extras.get("corroborated") is False
+    assert appended[0].extras.get("confidence") is None
+
+
 def test_feedback_write_allowed_false_blocks_store_write(monkeypatch) -> None:
     f = Finding(
         severity="medium", confidence=80, finding="unsafe eval", source="code-reviewer", file="src/foo.py", line=12

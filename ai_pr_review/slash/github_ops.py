@@ -49,6 +49,7 @@ from ai_pr_review.slash.github_orchestration import (
     FeedbackContext,
     FindingLocation,
     _inline_feedback_context,
+    _judge_data_for_finding_id,
     _not_found_reply,
     _sha_citation,
     _thread_by_comment_id,
@@ -486,6 +487,9 @@ def dismiss_by_finding_id(
         )
         if is_analyzer_source(classified.source):
             reply += _ANALYZER_SUPPRESSION_HINT
+        judge_verdict, corroborated, confidence = _judge_data_for_finding_id(
+            bodies, finding_id
+        )
         return DismissResult(
             reply=reply,
             feedback_source=classified.source,
@@ -493,6 +497,9 @@ def dismiss_by_finding_id(
             feedback_rule_id=classified.rule_id,
             feedback_finding_id=finding_id,
             feedback_eligible=True,
+            feedback_judge_verdict=judge_verdict,
+            feedback_corroborated=corroborated,
+            feedback_confidence=confidence,
             acted=True,
             active_body_ids=tuple(list_active_body_ids(bodies)),
             errors=tuple(errors),
@@ -617,15 +624,10 @@ def dismiss_by_finding_id(
     # with no extra API call, since `target_thread` is already in hand -- see
     # `_inline_feedback_context`'s docstring. Computed before the reply text
     # below so a static-analyzer source (issue #775) can append the durable-
-    # suppression hint to that same reply; `inline_feedback_eligible` already
+    # suppression hint to that same reply; `inline_ctx.eligible` already
     # encodes "thread actually resolved and command is a real verdict", which
     # is exactly the gate the hint needs too.
-    (
-        inline_feedback_eligible,
-        inline_source,
-        inline_rule_id,
-        inline_finding_id,
-    ) = _inline_feedback_context(
+    inline_ctx = _inline_feedback_context(
         _first_comment_body(target_thread), resolved=resolved, command=command
     )
 
@@ -647,7 +649,7 @@ def dismiss_by_finding_id(
             f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
-    if inline_feedback_eligible and is_analyzer_source(inline_source):
+    if inline_ctx.eligible and is_analyzer_source(inline_ctx.source):
         reply += _ANALYZER_SUPPRESSION_HINT
 
     return DismissResult(
@@ -655,11 +657,14 @@ def dismiss_by_finding_id(
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         pr_approved=pr_approved,
-        feedback_source=inline_source,
-        feedback_file=str(target_thread.get("path") or "") if inline_feedback_eligible else "",
-        feedback_rule_id=inline_rule_id,
-        feedback_finding_id=inline_finding_id,
-        feedback_eligible=inline_feedback_eligible,
+        feedback_source=inline_ctx.source,
+        feedback_file=str(target_thread.get("path") or "") if inline_ctx.eligible else "",
+        feedback_rule_id=inline_ctx.rule_id,
+        feedback_finding_id=inline_ctx.finding_id,
+        feedback_eligible=inline_ctx.eligible,
+        feedback_judge_verdict=inline_ctx.judge_verdict,
+        feedback_corroborated=inline_ctx.corroborated,
+        feedback_confidence=inline_ctx.confidence,
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
@@ -911,14 +916,9 @@ def dismiss_inline_reply(
     # fetch_review_comment. See `_inline_feedback_context`'s docstring.
     # Computed before the reply text below so a static-analyzer source
     # (issue #775) can append the durable-suppression hint to that same
-    # reply; `inline_feedback_eligible` already encodes "thread actually
+    # reply; `inline_ctx.eligible` already encodes "thread actually
     # resolved and command is a real verdict", the same gate the hint needs.
-    (
-        inline_feedback_eligible,
-        inline_source,
-        inline_rule_id,
-        inline_finding_id,
-    ) = _inline_feedback_context(body, resolved=resolved, command=command)
+    inline_ctx = _inline_feedback_context(body, resolved=resolved, command=command)
 
     sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
     if resolved and pr_approved:
@@ -935,7 +935,7 @@ def dismiss_inline_reply(
             f"@{actor} marked as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
-    if inline_feedback_eligible and is_analyzer_source(inline_source):
+    if inline_ctx.eligible and is_analyzer_source(inline_ctx.source):
         reply += _ANALYZER_SUPPRESSION_HINT
 
     return DismissResult(
@@ -943,11 +943,14 @@ def dismiss_inline_reply(
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         pr_approved=pr_approved,
-        feedback_source=inline_source,
-        feedback_file=str(target_thread.get("path") or "") if inline_feedback_eligible else "",
-        feedback_rule_id=inline_rule_id,
-        feedback_finding_id=inline_finding_id,
-        feedback_eligible=inline_feedback_eligible,
+        feedback_source=inline_ctx.source,
+        feedback_file=str(target_thread.get("path") or "") if inline_ctx.eligible else "",
+        feedback_rule_id=inline_ctx.rule_id,
+        feedback_finding_id=inline_ctx.finding_id,
+        feedback_eligible=inline_ctx.eligible,
+        feedback_judge_verdict=inline_ctx.judge_verdict,
+        feedback_corroborated=inline_ctx.corroborated,
+        feedback_confidence=inline_ctx.confidence,
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
@@ -1010,6 +1013,9 @@ def persist_verdict(
         source=result.feedback_source,
         file=result.feedback_file,
         rule_id=result.feedback_rule_id,
+        judge_verdict=result.feedback_judge_verdict,
+        corroborated=result.feedback_corroborated,
+        confidence=result.feedback_confidence,
     )
     stored = make_store(_DismissConfig()).append(entry)
     if stored:

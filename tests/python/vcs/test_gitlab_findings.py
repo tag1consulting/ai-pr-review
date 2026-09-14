@@ -125,6 +125,71 @@ def test_post_findings_embeds_per_finding_meta_marker() -> None:
     assert meta.sev == "High"
 
 
+def test_post_findings_embeds_judge_verdict_in_meta_marker() -> None:
+    """Judge-verdict instrumentation (#841): a finding's judge_verdict/
+    corroborated/confidence reach the discussion's metadata marker exactly
+    like GitHub's equivalent (test_cli_dismiss_inline.py), via the same
+    `build_inline_meta_marker` call -- this is the GitLab-side wiring test
+    that path lacked."""
+    posts: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/discussions" in str(req.url):
+            posts.append(json.loads(req.content))
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    f = Finding(
+        severity="High", confidence=50, finding="unsafe call", source="blind",
+        file="app.py", line=4, category="injection",
+        judge_verdict="downrank", corroborated=True,
+    )
+    result = prov.post_findings(
+        [f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_posted == 1
+    meta = extract_inline_meta(posts[0]["body"])
+    assert meta is not None
+    assert meta.judge_verdict == "downrank"
+    assert meta.corroborated is True
+    assert meta.confidence == 50
+
+
+def test_post_findings_no_judge_verdict_omits_jv_from_meta_marker() -> None:
+    """A finding that never went through the judge pass (judge_verdict=None,
+    the default) must decode judge_verdict/corroborated back to None/False --
+    no fabricated verdict for an unjudged finding. `confidence` is always
+    Finding.confidence's real value regardless of judge pass (it's a
+    required field, not judge-specific), so it round-trips unchanged."""
+    posts: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/discussions" in str(req.url):
+            posts.append(json.loads(req.content))
+            return httpx.Response(201, json={"id": "d1"})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    f = Finding(
+        severity="High", confidence=90, finding="unsafe call", source="blind",
+        file="app.py", line=4, category="injection",
+    )
+    result = prov.post_findings(
+        [f], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.inline_posted == 1
+    meta = extract_inline_meta(posts[0]["body"])
+    assert meta is not None
+    assert meta.judge_verdict is None
+    assert meta.corroborated is False
+    assert meta.confidence == 90
+
+
 def test_post_findings_all_kept_alive_no_candidates_is_not_a_failure() -> None:
     """Regression for the any_failure fix: a run with zero inline candidates
     (nothing eligible) must not be reported as a failure just because some

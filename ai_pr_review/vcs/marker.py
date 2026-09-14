@@ -223,6 +223,87 @@ def extract_id_map(body: str) -> dict[str, int]:
     return {}
 
 
+JUDGE_MAP_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-judge-map:"
+_JUDGE_MAP_MARKER_RE = re.compile(r"<!-- ai-pr-review-judge-map: (\{.*\}) -->")
+
+
+def build_judge_map_marker(judge_map: dict[str, dict[str, object]]) -> str:
+    """Produce a marker embedding judge-pass state for body-level findings.
+
+    Sibling to ``build_id_map_marker`` (same fingerprint key, same
+    HTML-comment JSON form — no hidden/Bitbucket variant needed since this
+    is GitHub-only for now, matching the id-map marker's own GitHub-only
+    reach today). A body-level finding has no per-comment marker of its own
+    (unlike an inline finding — see ``build_inline_meta_marker``), so this
+    is the only recovery mechanism for judge state on that path.
+
+    Only fingerprints whose finding actually went through the judge pass
+    belong in `judge_map` — a finding with `judge_verdict is None` has
+    nothing to record and should be omitted by the caller, keeping this
+    marker's growth bounded by "findings actually judged", not "all body
+    findings ever". Each per-fingerprint value omits `corr`/`conf` at their
+    defaults (`False`/`None`), matching ``build_inline_meta_marker``'s same
+    additive-omit convention.
+    """
+    payload = json.dumps(judge_map, separators=(",", ":"), sort_keys=True)
+    return f"{JUDGE_MAP_MARKER_PREFIX} {payload} -->"
+
+
+def extract_judge_map(body: str) -> dict[str, dict[str, object]]:
+    """Extract the fingerprint -> judge-state map from a review body.
+
+    Returns an empty dict when no marker is present. Logs a warning and
+    returns an empty dict when a marker is present but its JSON is
+    malformed or not the expected shape — mirroring ``extract_id_map``'s
+    same "no marker" vs. "corrupt marker" distinction via the log.
+
+    Each fingerprint's value is validated the same way
+    ``extract_inline_meta`` validates a single comment's marker: `jv` must
+    be `"keep"`/`"downrank"` or the whole entry is dropped (a fingerprint
+    with no recoverable verdict is the same as it never having been
+    recorded), `corr` is coerced to a strict bool via `is True`, and `conf`
+    must be a real (non-bool) int in [0, 100] or it drops to `None`.
+    """
+    match = _JUDGE_MAP_MARKER_RE.search(body)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log.warning(
+            "ai-pr-review: judge-map marker present but unparseable: %s — raw: %.200s",
+            exc, match.group(1),
+        )
+        return {}
+    if not isinstance(data, dict):
+        _log.warning(
+            "ai-pr-review: judge-map marker present but not a JSON object (got %s)",
+            type(data).__name__,
+        )
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    for fp, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        jv_raw = entry.get("jv")
+        if jv_raw not in ("keep", "downrank"):
+            continue
+        conf_raw = entry.get("conf")
+        confidence = (
+            conf_raw
+            if isinstance(conf_raw, int)
+            and not isinstance(conf_raw, bool)
+            and 0 <= conf_raw <= 100
+            else None
+        )
+        result[str(fp)] = {
+            "jv": jv_raw,
+            "corr": entry.get("corr") is True,
+            "conf": confidence,
+        }
+    return result
+
+
 def _hidden_marker_separator(body: str) -> str:
     """Separator to append a `[//]: # (...)` reference-link marker after.
 
@@ -498,12 +579,23 @@ class InlineMeta:
     `ai_pr_review.vcs._canonical._find_thread_by_fingerprint` checks `fp` and
     `prior_fps` together so the thread stays discoverable by any fingerprint
     it has ever carried, not just its current one.
+
+    `judge_verdict`/`corroborated`/`confidence` carry the judge-pass state a
+    later `/ai-pr-review dismiss` invocation (a fresh CLI process with no
+    access to the original in-memory `Finding`) needs to populate a
+    feedback-store entry's `extras`. All three are `None`/`False`/`None` when
+    absent from the payload — either because the finding predates this field
+    (a marker posted before this feature shipped) or because it never went
+    through the judge pass at all (see `Finding.judge_verdict`'s docstring).
     """
 
     fp: str
     cat: str | None
     sev: str | None
     prior_fps: tuple[str, ...] = ()
+    judge_verdict: str | None = None
+    corroborated: bool = False
+    confidence: int | None = None
 
 
 def _valid_categories() -> frozenset[str]:
@@ -526,6 +618,9 @@ def build_inline_meta_marker(
     category: str,
     severity: str,
     prior_fingerprints: Sequence[str] = (),
+    judge_verdict: str | None = None,
+    corroborated: bool = False,
+    confidence: int | None = None,
 ) -> str:
     """Produce the base64-encoded per-comment metadata marker.
 
@@ -540,11 +635,25 @@ def build_inline_meta_marker(
     bound. Omitted from the payload entirely when empty, matching the
     pre-#720 marker shape exactly (no behavior change for a thread that has
     never been through the fuzzy "update"/"escalate" path).
+
+    `judge_verdict`/`corroborated`/`confidence` (judge-verdict-instrumentation
+    plumbing): the finding's judge-pass state, threaded from `Finding.
+    judge_verdict`/`.corroborated`/`.confidence` so a later `/ai-pr-review
+    dismiss` can attach it to a feedback-store entry's `extras`. Each is
+    omitted from the payload at its default (`None`, `False`, `None`
+    respectively) — additive-only, so a marker built with none of these set
+    is byte-for-byte identical to the pre-instrumentation payload shape.
     """
     payload: dict[str, object] = {"fp": fingerprint, "cat": category, "sev": severity}
     if prior_fingerprints:
         deduped = list(dict.fromkeys(prior_fingerprints))
         payload["pfp"] = deduped[-_MAX_PRIOR_FINGERPRINTS:]
+    if judge_verdict is not None:
+        payload["jv"] = judge_verdict
+    if corroborated:
+        payload["corr"] = True
+    if confidence is not None:
+        payload["conf"] = confidence
     encoded_payload = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     encoded = base64.b64encode(encoded_payload.encode("utf-8")).decode("ascii")
     return f"{INLINE_META_MARKER_PREFIX}{encoded} -->"
@@ -590,4 +699,27 @@ def extract_inline_meta(body: str) -> InlineMeta | None:
         if isinstance(pfp_raw, list)
         else ()
     )
-    return InlineMeta(fp=fp, cat=cat, sev=sev, prior_fps=prior_fps)
+    # judge_verdict/corroborated/confidence: absent from a pre-instrumentation
+    # marker (or an unrecognized/malformed value) degrades to None/False/None
+    # — never a crash, and never trusted as a real value. See InlineMeta's
+    # docstring.
+    jv_raw = data.get("jv")
+    judge_verdict = jv_raw if jv_raw in ("keep", "downrank") else None
+    corroborated = data.get("corr") is True
+    conf_raw = data.get("conf")
+    confidence = (
+        conf_raw
+        if isinstance(conf_raw, int)
+        and not isinstance(conf_raw, bool)
+        and 0 <= conf_raw <= 100
+        else None
+    )
+    return InlineMeta(
+        fp=fp,
+        cat=cat,
+        sev=sev,
+        prior_fps=prior_fps,
+        judge_verdict=judge_verdict,
+        corroborated=corroborated,
+        confidence=confidence,
+    )
