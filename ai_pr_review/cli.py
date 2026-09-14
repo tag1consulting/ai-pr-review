@@ -28,6 +28,10 @@ from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.review.compute import run_compute
 from ai_pr_review.review.preflight import run_issue_linker as _run_issue_linker
 from ai_pr_review.review.preflight import run_summarizer as _run_summarizer
+from ai_pr_review.review.preflight import should_run_issue_linker as _should_run_issue_linker
+from ai_pr_review.review.preflight import (
+    should_run_pr_summarizer as _should_run_pr_summarizer,
+)
 from ai_pr_review.review.reporting import (
     build_full_token_table as _build_full_token_table,
 )
@@ -45,6 +49,9 @@ from ai_pr_review.review.reporting import (
     emit_post_failure_annotation as _emit_post_failure_annotation,
 )
 from ai_pr_review.review.reporting import emit_review_result as _emit_review_result
+from ai_pr_review.review.reporting import (
+    log_cost_reconciliation as _log_cost_reconciliation,
+)
 from ai_pr_review.review.reporting import (
     render_token_usage_block as _render_token_usage_block,
 )
@@ -225,20 +232,27 @@ async def _run_review_async(config: ReviewConfig) -> int:
         click.echo(f"Skipping review: {runtime.reason}", err=True)
         result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config.resolve_models())
         _emit_post_failure_annotation(result)
-        if config.telemetry_enabled:
-            try:
-                resolved_cfg = config.resolve_models()
-            except Exception:
-                resolved_cfg = config
-            await _emit_telemetry(result, resolved_cfg, 0, outcome_override="skipped")
         # #24: a pre-flight cost-ceiling skip always aborts before any LLM
         # call, but only becomes a CI failure (exit 2, mirroring
         # fail_on_findings' own opt-in exit code) when the operator has
         # explicitly opted in via AI_FAIL_ON_COST_CEILING -- otherwise one
         # unusually large PR shouldn't break a required status check.
-        if runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok:
-            return 2
-        return 0 if result.ok else 1
+        # Computed once, before telemetry, so both the returned exit code
+        # and the emitted event agree on it (#848 -- telemetry previously
+        # always reported "skipped"/exit 0 here even on the exit-2 path).
+        exit_code = (
+            2 if (runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok)
+            else (0 if result.ok else 1)
+        )
+        if config.telemetry_enabled:
+            try:
+                resolved_cfg = config.resolve_models()
+            except Exception:
+                resolved_cfg = config
+            await _emit_telemetry(
+                result, resolved_cfg, 0, outcome_override="skipped", exit_code=exit_code,
+            )
+        return exit_code
 
     # Use the post-resolve_models() config stored on the runtime for all downstream use.
     rc = runtime.config
@@ -247,12 +261,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, rc.provider)
 
-    from ai_pr_review.agents.roster import agent_allowed as _agent_allowed
-
     # Run pr-summarizer on first review (fail-soft; skip on incremental runs).
     # Also skip if the consumer has excluded it via the agents denylist or allowlist.
+    # should_run_pr_summarizer (#848) is the single source of truth for this
+    # gate, shared with review/runtime.py's pre-flight cost estimate.
     summary_text = runtime.summary_prefix
-    if not runtime.is_incremental and _agent_allowed("pr-summarizer", rc.agents, rc.exclude_agents):
+    if _should_run_pr_summarizer(
+        is_incremental=runtime.is_incremental, agents=rc.agents, exclude_agents=rc.exclude_agents,
+    ):
         summary_text += await _run_summarizer(
             diff_text=runtime.diff.diff_text,
             manifest_text=runtime.manifest_text,
@@ -273,11 +289,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # NONE immediately otherwise.
     # Also skip if the consumer has excluded it via the agents denylist or allowlist.
     # Fail-soft: if it returns NONE or errors, summary_text is unchanged.
-    if (
-        not runtime.is_incremental
-        and rc.review_mode == "full"
-        and rc.vcs_provider == "github"
-        and _agent_allowed("issue-linker", rc.agents, rc.exclude_agents)
+    # should_run_issue_linker (#848) is the single source of truth for this
+    # gate, shared with review/runtime.py's pre-flight cost estimate.
+    if _should_run_issue_linker(
+        is_incremental=runtime.is_incremental,
+        review_mode=rc.review_mode,
+        vcs_provider=rc.vcs_provider,
+        agents=rc.agents,
+        exclude_agents=rc.exclude_agents,
     ):
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,
@@ -362,7 +381,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
         if rc.telemetry_enabled:
             try:
                 await _emit_telemetry(None, rc, outcome_override="dry_run",
-                                      is_incremental=runtime.is_incremental)
+                                      is_incremental=runtime.is_incremental, exit_code=0)
             except Exception as _tel_exc:
                 logger.warning("[ai-pr-review] dry-run telemetry failed: %s", _tel_exc)
         return 0
@@ -418,15 +437,41 @@ async def _run_review_async(config: ReviewConfig) -> int:
     if result.ok:
         _post_policy_gate_check_run(runtime)
 
+    # #848: log the pre-flight cost estimate next to this run's actual total
+    # cost, purely for comparison in the logs -- no feedback loop, no
+    # adjustment of future estimates, and never fails/affects the outcome
+    # (log_cost_reconciliation is a no-op when either side is unavailable).
+    try:
+        _actual_totals = _compute_token_totals(
+            result.agent_results, runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+            judge_input_tokens=result.judge_input_tokens,
+            judge_output_tokens=result.judge_output_tokens,
+            judge_cache_creation_tokens=result.judge_cache_creation_tokens,
+            judge_cache_read_tokens=result.judge_cache_read_tokens,
+            judge_model=result.judge_model,
+        )
+        _log_cost_reconciliation(runtime.cost_estimate_usd, _actual_totals)
+    except Exception as exc:
+        logger.warning("cost reconciliation: could not log estimate-vs-actual: %s", exc, exc_info=True)
+
+    # Exit code decided before telemetry so the emitted event's exit_code
+    # field always matches what this function actually returns (#848 --
+    # previously telemetry was emitted first, unconditionally reporting
+    # whatever result.outcome.event said even when fail_on_findings would
+    # turn that into exit 2).
+    if not result.ok:
+        exit_code = 1
+    elif rc.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
+        exit_code = 2
+    else:
+        exit_code = 0
+
     if rc.telemetry_enabled:
         await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,
-                              is_incremental=runtime.is_incremental)
+                              is_incremental=runtime.is_incremental, exit_code=exit_code)
 
-    if not result.ok:
-        return 1
-    if rc.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
-        return 2
-    return 0
+    return exit_code
 
 
 async def _emit_telemetry(
@@ -437,11 +482,17 @@ async def _emit_telemetry(
     *,
     is_incremental: bool = False,
     outcome_override: str = "",
+    exit_code: int = 0,
 ) -> None:
     """Assemble and emit a telemetry event (fail-soft on any error).
 
     When ``result`` is None (skip or dry-run paths), all agent-dependent fields
     default to zero/empty so a single call site covers all three paths.
+
+    ``exit_code`` (#848) should be the exact value the calling code path
+    returns from ``_run_review_async``/``review()`` -- every call site
+    computes its real exit code before calling this, so the emitted event
+    never disagrees with what the process actually exits with.
     """
     import datetime
     from collections import Counter
@@ -485,12 +536,13 @@ async def _emit_telemetry(
             agent_latency_ms={ar.name: ar.elapsed_ms for ar in agent_results},
             sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
-            telemetry_schema_version="3",
+            telemetry_schema_version="4",
             provider=config.provider,
             model_standard=config.model_standard,
             model_premium=config.model_premium,
             review_mode=config.review_mode,
             is_incremental=is_incremental,
+            exit_code=exit_code,
             failed_agent_latency_ms={
                 f.name: f.elapsed_ms
                 for f in failed_agents

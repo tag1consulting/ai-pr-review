@@ -325,6 +325,59 @@ class TestMergeCostEstimates:
         assert merged.total_cost_units == 0
         assert merged.any_unknown_pricing is False
 
+    def test_accepts_bare_agent_cost_estimate_without_wrapping(self) -> None:
+        """#848: merge_cost_estimates should accept an AgentCostEstimate
+        directly, without the caller wrapping it in a throwaway CostEstimate
+        first (the shape review/runtime.py used to build by hand)."""
+        main = estimate_review_cost(
+            agents=[_agent("code-reviewer")],
+            diff_text="a" * 1000,
+            shared_context_text="",
+            language_profile_text="",
+            standard_model="known-model",
+            premium_model="",
+            review_mode="quick",
+            effective_max_output_tokens=1000,
+            pricing_data=_PRICING,
+        )
+        summarizer_cost = estimate_preflight_agent_cost(
+            agent_name="pr-summarizer",
+            model="known-model",
+            diff_text="a" * 1000,
+            output_tokens=4096,
+            pricing_data=_PRICING,
+        )
+
+        merged = merge_cost_estimates(main, summarizer_cost)
+
+        assert len(merged.per_agent) == 2
+        assert {a.agent for a in merged.per_agent} == {"code-reviewer", "pr-summarizer"}
+        assert merged.total_cost_units == main.total_cost_units + summarizer_cost.estimated_cost_units
+
+    def test_mix_of_cost_estimate_and_agent_cost_estimate_parts(self) -> None:
+        summarizer_cost = estimate_preflight_agent_cost(
+            agent_name="pr-summarizer",
+            model="known-model",
+            diff_text="",
+            output_tokens=4096,
+            pricing_data=_PRICING,
+        )
+        issue_linker_cost = estimate_preflight_agent_cost(
+            agent_name="issue-linker",
+            model="known-model",
+            diff_text="",
+            output_tokens=4096,
+            pricing_data=_PRICING,
+        )
+        empty = CostEstimate(per_agent=(), total_cost_units=0, any_unknown_pricing=False)
+
+        merged = merge_cost_estimates(empty, summarizer_cost, issue_linker_cost)
+
+        assert {a.agent for a in merged.per_agent} == {"pr-summarizer", "issue-linker"}
+        assert merged.total_cost_units == (
+            summarizer_cost.estimated_cost_units + issue_linker_cost.estimated_cost_units
+        )
+
 
 class TestEnforceCostCeiling:
     def _estimate_with_total_units(self, units: int) -> object:
@@ -375,3 +428,89 @@ class TestEnforceCostCeiling:
         receives one directly."""
         estimate = self._estimate_with_total_units(1_000_000)
         enforce_cost_ceiling(estimate, ceiling_usd=-5.0)  # must not raise
+
+    def test_message_addresses_a_repo_maintainer_not_the_pr_author(self) -> None:
+        """#848: the remediation text is posted verbatim to the PR as the
+        skip comment (see cli.py/_orchestrate_skip -> post_skip_comment), so
+        it must not imply a PR author can set these repo/workflow-level
+        env vars themselves."""
+        estimate = self._estimate_with_total_units(20000)
+        with pytest.raises(CostCeilingExceeded) as exc_info:
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)
+        message = str(exc_info.value)
+        assert "maintainer" in message
+        assert "AI_MAX_COST_USD" in message
+        # Still names the knobs a maintainer needs, just not addressed at
+        # the PR author.
+        assert "AI_REVIEW_MODE" in message
+        assert "AI_AGENTS" in message
+
+    def test_unpriced_top_contributor_is_flagged_in_message(self) -> None:
+        """#848: a $0 top contributor must be distinguishable as "no pricing
+        data" rather than reading as "genuinely free", matching
+        log_cost_estimate's existing "(unpriced)" convention."""
+        priced_agent = _agent("code-reviewer")  # tier 1 -> standard_model (priced)
+        unpriced_agent = _agent("mystery-agent", tier=2)  # tier 2, full mode -> premium_model (unpriced)
+        estimate = estimate_review_cost(
+            agents=[priced_agent, unpriced_agent],
+            diff_text="",
+            shared_context_text="",
+            language_profile_text="",
+            standard_model="known-model",
+            premium_model="unrecognised-model-xyz",
+            review_mode="full",
+            effective_max_output_tokens=5000,  # -> 10000 units for the priced agent ($1.00)
+            pricing_data=_PRICING,
+        )
+        by_name = {a.agent: a for a in estimate.per_agent}
+        assert by_name["mystery-agent"].unknown_pricing is True
+        assert by_name["mystery-agent"].estimated_cost_units == 0
+
+        with pytest.raises(CostCeilingExceeded) as exc_info:
+            enforce_cost_ceiling(estimate, ceiling_usd=0.50)
+        message = str(exc_info.value)
+        assert "mystery-agent" in message
+        assert "unpriced" in message
+
+    def test_unpriced_agent_logs_loud_warning_even_when_ceiling_not_exceeded(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """#848 follow-up: an unpriced agent contributes $0 to
+        estimate.total_cost_usd, so the ceiling can silently never see its
+        real spend. Previously `any_unknown_pricing` was computed and logged
+        by `log_cost_estimate` but never consulted at the enforcement
+        decision point -- a run with an unpriced agent that "passes" the
+        ceiling was indistinguishable in the log from one that genuinely
+        came in under budget. This must fire whenever a ceiling is
+        configured and any agent is unpriced, whether or not the estimate
+        ends up exceeding it."""
+        priced_agent = _agent("code-reviewer")
+        unpriced_agent = _agent("mystery-agent", tier=2)
+        estimate = estimate_review_cost(
+            agents=[priced_agent, unpriced_agent],
+            diff_text="",
+            shared_context_text="",
+            language_profile_text="",
+            standard_model="known-model",
+            premium_model="unrecognised-model-xyz",
+            review_mode="full",
+            effective_max_output_tokens=100,  # tiny -- priced agent stays well under ceiling
+            pricing_data=_PRICING,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"):
+            enforce_cost_ceiling(estimate, ceiling_usd=1000.00)  # must not raise
+
+        assert "COST_CEILING_GAP" in caplog.text
+        assert "not enforceable" in caplog.text
+        assert "1 agent(s) unpriced" in caplog.text
+
+    def test_no_unpriced_agents_does_not_log_the_gap_warning(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        estimate = self._estimate_with_total_units(5000)  # $0.50, fully priced
+
+        with caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"):
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)  # must not raise
+
+        assert "COST_CEILING_GAP" not in caplog.text

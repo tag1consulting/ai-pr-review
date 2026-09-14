@@ -22,6 +22,55 @@ logger = logging.getLogger(__name__)
 
 _SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"
 
+PREFLIGHT_AGENT_MAX_TOKENS = 4096
+"""Output token cap actually sent as both preflight agents' (pr-summarizer,
+issue-linker) ``LLMRequest.max_tokens`` below -- hardcoded here (not read
+from ``AgentSpec.max_output_tokens`` in ``agents/roster.py``, which is *not*
+what's applied to either agent's real call; see ``estimate_preflight_agent_
+cost``'s docstring in ``review/cost_ceiling.py``). Exported so
+``review/runtime.py``'s pre-flight cost estimate can pass the exact same
+value rather than a second, independently-maintained ``4096`` literal that
+could silently drift from what these two functions actually send (#848)."""
+
+
+def should_run_pr_summarizer(
+    *, is_incremental: bool, agents: tuple[str, ...], exclude_agents: tuple[str, ...],
+) -> bool:
+    """True when pr-summarizer will actually be dispatched this run.
+
+    Shared by ``cli.py`` (the real dispatch gate) and ``review/runtime.py``'s
+    pre-flight cost estimate (#848) so the two can't drift -- previously each
+    reimplemented this exact condition inline.
+    """
+    from ai_pr_review.agents.roster import agent_allowed
+
+    return not is_incremental and agent_allowed("pr-summarizer", agents, exclude_agents)
+
+
+def should_run_issue_linker(
+    *,
+    is_incremental: bool,
+    review_mode: str,
+    vcs_provider: str,
+    agents: tuple[str, ...],
+    exclude_agents: tuple[str, ...],
+) -> bool:
+    """True when issue-linker will actually be dispatched this run.
+
+    Shared by ``cli.py`` (the real dispatch gate) and ``review/runtime.py``'s
+    pre-flight cost estimate (#848) so the two can't drift -- previously each
+    reimplemented this exact condition inline. issue-linker is GitHub-only
+    and full-mode-only; see ``run_issue_linker``'s docstring below.
+    """
+    from ai_pr_review.agents.roster import agent_allowed
+
+    return (
+        not is_incremental
+        and review_mode == "full"
+        and vcs_provider == "github"
+        and agent_allowed("issue-linker", agents, exclude_agents)
+    )
+
 
 async def run_summarizer(
     *,
@@ -95,7 +144,7 @@ async def run_summarizer(
             model_id=model,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=4096,
+            max_tokens=PREFLIGHT_AGENT_MAX_TOKENS,
             temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)
@@ -274,7 +323,7 @@ async def run_issue_linker(
             model_id=model,
             system_prompt=system_prompt,
             user_message=user_message,
-            max_tokens=4096,
+            max_tokens=PREFLIGHT_AGENT_MAX_TOKENS,
             temperature=temperature,
         )
         response: LLMResponse = await llm_call(request)

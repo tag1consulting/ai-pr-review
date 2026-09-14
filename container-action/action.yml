@@ -247,8 +247,13 @@ inputs:
       ceiling, the run aborts before any LLM call is made. The estimate is
       always logged as a COST_ESTIMATE line regardless of whether a ceiling is
       set. This is an approximation, not a precise invoice preview -- real
-      input tokenization and actual output length are not known in advance.
-      Set to '0' (default) to disable the ceiling.
+      input tokenization and actual output length are not known in advance,
+      and the estimate is structurally biased high, often by 5-10x against
+      actual spend: every agent is priced at its full output-token cap (not
+      the shorter length most calls actually generate), prompt-cache reads
+      are not discounted at all, and the judge pass's own LLM call is
+      omitted entirely. Treat this as "no more than N times a bad-case run,"
+      not "no more than $N." Set to '0' (default) to disable the ceiling.
     required: false
     default: '0'
 
@@ -520,7 +525,7 @@ runs:
           -e AI_TOKEN_USAGE_DISPLAY \
           -e AI_TOKEN_USAGE_WARN_USD \
           -e AI_MAX_COST_USD \
-          -e AI_FAIL_ON_COST_CEILING \
+          ${AI_FAIL_ON_COST_CEILING:+-e AI_FAIL_ON_COST_CEILING} \
           -e AI_EXCLUDE_PATTERNS \
           -e AI_EXCLUDE_PATTERNS_MODE \
           -e AI_ANALYZERS \

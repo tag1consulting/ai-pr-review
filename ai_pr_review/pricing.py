@@ -108,17 +108,31 @@ def format_cost(microdollars: int) -> str:
     return f"${whole}.{frac:04d}"
 
 
+def compute_cost_units(*token_rate_pairs: tuple[int, int]) -> int:
+    """Compute cost in $0.0001 units from ``(token_count, rate)`` pairs.
+
+    Sums every ``token_count * rate`` product first, then floor-divides the
+    total by ``100_000_000`` exactly once -- NOT ``sum(t * r // 100_000_000
+    for t, r in pairs)``, which floor-divides each term separately and can
+    yield a smaller (wrong) total than dividing the combined sum once, since
+    floor division does not distribute over addition. Shared by
+    ``_row_cost`` (actual per-run usage, below) and
+    ``review/cost_ceiling.py``'s pre-flight estimate (#848) so this one
+    formula can't drift between the two call sites.
+    """
+    return sum(tokens * rate for tokens, rate in token_rate_pairs) // 100_000_000
+
+
 def _row_cost(entry: TokenEntry, rates: ModelRates) -> int | None:
     """Return cost in $0.0001 units, or None if rates are unknown."""
     if rates.input_rate == 0 and rates.output_rate == 0:
         return None
-    cost = (
-        entry.input_tokens * rates.input_rate
-        + entry.output_tokens * rates.output_rate
-        + entry.cache_creation_tokens * rates.cache_write_rate
-        + entry.cache_read_tokens * rates.cache_read_rate
-    ) // 100_000_000
-    return cost
+    return compute_cost_units(
+        (entry.input_tokens, rates.input_rate),
+        (entry.output_tokens, rates.output_rate),
+        (entry.cache_creation_tokens, rates.cache_write_rate),
+        (entry.cache_read_tokens, rates.cache_read_rate),
+    )
 
 
 @dataclass(frozen=True)

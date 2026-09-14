@@ -596,6 +596,112 @@ class TestBuildReviewRuntimeCostCeiling:
         assert isinstance(result, ReviewRuntime)
         assert "no pricing entry" in caplog.text
 
+    @pytest.mark.anyio
+    async def test_ceiling_not_exceeded_runtime_carries_cost_estimate_usd(
+        self, tmp_path: Path,
+    ) -> None:
+        """#848: ReviewRuntime.cost_estimate_usd lets cli.py log an
+        estimate-vs-actual reconciliation line once the run completes."""
+        config = _make_config(max_cost_usd=1000.00)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, ReviewRuntime)
+        assert result.cost_estimate_usd is not None
+        assert result.cost_estimate_usd > 0
+
+    @pytest.mark.anyio
+    async def test_ceiling_exceeded_still_runs_sarif_and_logs_count_not_in_reason(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """#848: a cost-ceiling skip must not also suppress the free static-
+        analyzer/SARIF pass -- previously the whole 9b step (analyzers) and
+        10 (SARIF) never ran at all when the ceiling check short-circuited
+        first. SARIF findings are cheap to inject via load_sarif_files (real
+        native analyzers would need real files on disk to find anything);
+        this asserts SARIF loading itself is no longer skipped.
+
+        A follow-up review pass (#848) found the finding count leaking into
+        the *public* skip reason (posted verbatim to the PR) both disclosed
+        suppressed/out-of-scope finding counts and made a false promise ("a
+        future run ... will include them" -- not true once suppression,
+        dedup, or diff-scoping are considered). The count is now logged only,
+        never appended to `result.reason`; this asserts both halves of that
+        fix."""
+        sarif_finding = Finding(
+            finding="test-rule-id",
+            path="src/main.py",
+            line=5,
+            severity="high",
+            title="Test SARIF finding",
+            body="details",
+            source="semgrep",
+            confidence=90,
+        )
+        config = _make_config(
+            max_cost_usd=0.000001, sarif_paths=(str(tmp_path / "results.sarif"),),
+        )
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch(
+                "ai_pr_review.analyzers.sarif.load_sarif_files",
+                return_value=([sarif_finding], 0.1),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            caplog.at_level(logging.INFO, logger="ai_pr_review.review.runtime"),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, SkipPlan)
+        assert result.is_cost_ceiling_skip is True
+        assert "static-analyzer/SARIF finding" not in result.reason
+        assert "1 static-analyzer/SARIF finding(s)" in caplog.text
+
+
+class TestBuildReviewRuntimeAnalyzerImportErrorIsFailSoft:
+    """#848 follow-up: the static-analyzer step (9b) now runs unconditionally,
+    before the cost-ceiling check (9d) -- previously the ceiling check ran
+    first, so a huge diff that would trip it never reached analyzer dispatch
+    at all. A bare `except ImportError: raise` in that block (as it had
+    before this fix) would have turned a missing/broken analyzer dependency
+    into a hard crash of the whole review on *every* run now, not just the
+    ones that would have tripped the ceiling. This asserts the block is
+    fail-soft for ImportError, same as any other analyzer failure."""
+
+    @pytest.mark.anyio
+    async def test_analyzer_import_error_does_not_crash_the_review(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        config = _make_config()
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch(
+                "ai_pr_review.analyzers.bridge.run_analyzers",
+                side_effect=ImportError("some-analyzer-dependency not installed"),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            caplog.at_level(logging.WARNING, logger="ai_pr_review.review.runtime"),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, ReviewRuntime)
+        assert "static analyzer run failed" in caplog.text
+
 
 class TestSarifRoutedViaExtraFindings:
     """SARIF findings from config.sarif_paths flow through orch_config.extra_findings."""

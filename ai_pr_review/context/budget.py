@@ -20,7 +20,23 @@ from ai_pr_review.context.symbols import (
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate: 4 chars ≈ 1 token, with a 10% safety margin."""
+    """Rough token estimate: 4 chars ≈ 1 token, with a 10% safety margin.
+
+    Known limitation (#848): the 4-chars-per-token ratio is calibrated for
+    English-like source and prose. Real tokenizers assign roughly one token
+    per CJK (Chinese/Japanese/Korean) character, not one token per four --
+    so this heuristic can undercount a diff or comment block containing
+    substantial CJK or other dense/non-Latin-script text by a factor of
+    several times, in the *opposite* direction from every other bias this
+    codebase's cost/budget estimates document (those over-estimate; this one
+    can under-estimate for non-English-heavy content). A full CJK-aware
+    tokenizer is out of scope here (this function has no dependency on any
+    provider's real tokenizer, by design -- see callers' own docstrings);
+    this is disclosed so callers relying on it for a hard budget or cost
+    ceiling (``context/budget.py``'s own truncation, and
+    ``review/cost_ceiling.py``'s pre-flight estimate) know where the number
+    can run low, rather than assuming it is only ever conservative.
+    """
     return int(len(text) / 4 * 1.1)
 
 

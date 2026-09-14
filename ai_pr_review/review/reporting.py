@@ -302,6 +302,68 @@ def compute_token_totals(
         return None
 
 
+def log_cost_reconciliation(
+    estimate_usd: float | None, totals: TokenTotals | None,
+) -> None:
+    """Log the pre-flight cost estimate next to this run's actual total cost,
+    for comparison (#848).
+
+    This is data-collection only, not a feedback loop: nothing here alerts,
+    blocks, or adjusts a future estimate -- it just puts both numbers in the
+    same log line so the gap between them is visible to anyone reading logs,
+    which is otherwise nowhere recorded (the pre-flight estimate, logged by
+    ``review/cost_ceiling.py``'s ``COST_ESTIMATE`` line, and the actual cost,
+    computed only after the run completes, were previously never compared).
+
+    Logged at WARNING to match ``COST_ESTIMATE``'s own level (this repo's
+    shipped default is ``AI_LOG_LEVEL=WARNING``; an INFO line here would
+    silently never appear for a consumer running at the default level).
+
+    A ``None`` estimate (pre-flight estimation itself failed, fail-soft --
+    see ``review/runtime.py``) or ``None`` totals (no agent token usage to
+    compute from, e.g. every agent was gate-filtered out) skips the line
+    entirely rather than logging a misleading zero/absent comparison.
+
+    **The two sides do not cover the same set of LLM calls, in opposite
+    directions, and this is disclosed here rather than silently baked into
+    ``delta`` (#848 follow-up):**
+
+    - ``estimate_usd`` (``ReviewRuntime.cost_estimate_usd``) deliberately
+      *includes* the separately-dispatched ``pr-summarizer``/``issue-linker``
+      preflight agents, via ``cost_ceiling.estimate_preflight_agent_cost`` +
+      ``merge_cost_estimates`` -- but *excludes* the judge pass, since the
+      judge only knows what to score after the main roster's findings exist,
+      well after the pre-flight estimate runs.
+    - ``totals`` (``actual_usd``, from ``_compute_token_totals(result.
+      agent_results, ...)``) is exactly the opposite: it structurally
+      *cannot* include pr-summarizer/issue-linker, because
+      ``review/preflight.py``'s ``run_summarizer``/``run_issue_linker``
+      return bare text with no token-usage plumbing anywhere -- but it
+      *does* include the judge pass's real cost (folded in via the
+      ``judge-pass`` synthetic ``TokenEntry`` row, see ``_build_token_log``).
+
+    So ``delta`` is biased in two directions at once: it is inflated by
+    whatever pr-summarizer/issue-linker actually cost (present in the
+    estimate, absent from actual) and deflated by the judge pass's real cost
+    (absent from the estimate, present in actual). Narrowing this gap would
+    need either plumbing token usage through the two preflight agents or
+    adding a judge-pass placeholder to the estimate -- not done here; this
+    docstring and the log line's own text are the disclosure, not a fix.
+    """
+    if estimate_usd is None or totals is None:
+        return
+    actual_usd = totals.cost_units / 10000
+    logger.warning(
+        "COST_RECONCILIATION estimate=$%.4f actual=$%.4f delta=$%.4f "
+        "(estimate excludes the judge-pass call; actual excludes "
+        "pr-summarizer/issue-linker, which have no token-usage plumbing)%s",
+        estimate_usd,
+        actual_usd,
+        actual_usd - estimate_usd,
+        " (actual also excludes unpriced agent(s))" if totals.any_unknown else "",
+    )
+
+
 def ci_run_url() -> str:
     """Best-effort URL to the current CI run, for the compact usage line's
     "full breakdown" link (#758). Returns "" when the platform can't be

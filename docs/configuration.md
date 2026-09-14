@@ -223,7 +223,7 @@ These variables enable optional capabilities that are off by default.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_MAX_COST_USD` | `0` | Maximum estimated cost (USD) for a single review run. Before any agent dispatches, the run's cost is estimated from the diff size, the selected agent roster (including the separately-dispatched `pr-summarizer`/`issue-linker` preflight agents, when they will run), and per-model rates in `config/model-pricing.json`, and logged as a `COST_ESTIMATE` line (always, regardless of whether a ceiling is set). If a ceiling is set and the estimate exceeds it, the run aborts before any LLM call is made — no dispatch, no partial spend — by posting a skip comment (the same mechanism the `max-diff-lines` skip uses) and exiting 0 by default; see `AI_FAIL_ON_COST_CEILING` to make this a CI-gate failure instead. This is an approximation, not a precise invoice preview: input tokens are estimated from character counts (not a real tokenizer), and output tokens are assumed at each agent's configured cap rather than the (unknowable in advance) actual generation length — real spend is usually lower than the estimate. A model with no pricing entry is treated as fail-soft: its cost is excluded from the estimate (logged as a warning) rather than aborting the run. Set to `0` (default) to disable the ceiling. |
+| `AI_MAX_COST_USD` | `0` | Maximum estimated cost (USD) for a single review run. Before any agent dispatches, the run's cost is estimated from the diff size, the selected agent roster (including the separately-dispatched `pr-summarizer`/`issue-linker` preflight agents, when they will run), and per-model rates in `config/model-pricing.json`, and logged as a `COST_ESTIMATE` line (always, regardless of whether a ceiling is set). If a ceiling is set and the estimate exceeds it, the run aborts before any LLM call is made — no dispatch, no partial spend — by posting a skip comment (the same mechanism the `max-diff-lines` skip uses) and exiting 0 by default; see `AI_FAIL_ON_COST_CEILING` to make this a CI-gate failure instead. **This estimate is structurally biased *high*, often by 5-10x against what a run actually spends** — not a precise invoice preview. Three compounding reasons, none corrected for: output tokens are priced at each agent's full configured cap, not the (unknowable in advance) actual generation length, and most calls finish well under that cap; prompt caching is not modeled at all, so every agent's shared-context/language-profile tokens are priced as full-price input even though only the first context-enrichment-eligible agent's call is realistically a full-price cache write and the rest are cheap cache reads; and the judge pass's own LLM call (`AI_JUDGE_PASS`, on by default) is omitted entirely, since it only runs after the main roster's findings exist. Treat `AI_MAX_COST_USD` as "no more than N times a bad-case run," not "no more than $N." A model with no pricing entry is treated as fail-soft: its cost is excluded from the estimate (logged as a warning, and as a distinct `COST_CEILING_GAP` warning at enforcement time) rather than aborting the run — meaning the ceiling cannot see that agent's real spend at all. Set to `0` (default) to disable the ceiling. See `review/cost_ceiling.py`'s module docstring for the full accounting. |
 | `AI_FAIL_ON_COST_CEILING` | `false` | When `true`, an exceeded `AI_MAX_COST_USD` ceiling exits with code 2 instead of the default 0 — mirroring `AI_FAIL_ON_FINDINGS`'s own opt-in exit code — so a required CI check can be gated on it. The run always aborts before any LLM call regardless of this setting; this only controls the exit code. No effect when `AI_MAX_COST_USD` is unset/`0`. |
 
 #### Quiet reruns and cross-run finding dedup
@@ -252,15 +252,23 @@ These variables configure the telemetry system. Telemetry is fail-soft: all I/O 
 | `AI_TELEMETRY_ENABLED` | `false` | Set to `true` to emit a structured JSON event per review run. |
 | `AI_TELEMETRY_SINK` | — | Where to send telemetry. Accepts `file:///absolute/path/events.jsonl` (appended line-by-line) or an `http(s)://` endpoint (POST). |
 
-Each event (schema version `"2"`) includes:
+Each event (currently schema version `"4"`) includes:
 
 - Identity and run context: `correlation_id`, `timestamp`, `repository`, `pr_number`, `telemetry_schema_version`.
 - Outcome: `outcome` (one of `"success"`, `"failure"`, `"skipped"`, `"dry_run"`), `findings_count`, `findings_by_severity`, `failed_agents`.
-- Per-agent metrics: `token_usage_by_agent`, `agent_latency_ms`, `failed_agent_latency_ms`.
+- Per-agent metrics: `token_usage_by_agent` (each agent's entry includes `thinking_tokens` and `stop_reason`, v3 additions — see below), `agent_latency_ms`, `failed_agent_latency_ms`.
 - Configuration shape (v2 additions): `provider`, `model_standard`, `model_premium`, `review_mode`, `is_incremental`.
+- Exit status (v4 addition): `exit_code` — the exact value `cli.py` returns for this run (skip, dry-run, and the normal review path all compute their real exit code before emitting telemetry, so this never disagrees with what the process actually exits with; e.g. a cost-ceiling skip with `AI_FAIL_ON_COST_CEILING=true` reports `2` here, not just `outcome: "skipped"` with no numeric signal).
 - Other: `sarif_elapsed_s`, `learning_store_entries_loaded`.
 
-All v2 additions are forward-compatible: consumers parsing v1 events that ignore unknown keys continue to work. Consumers that switch on `telemetry_schema_version` should add `"2"` to their accepted set, and consumers that switch on `outcome` should handle the new `"skipped"` and `"dry_run"` values.
+Schema version history:
+
+- **v1** — initial fields.
+- **v2** — added `provider`, `model_standard`, `model_premium`, `review_mode`, `is_incremental`, `failed_agent_latency_ms`.
+- **v3** (#592) — each `token_usage_by_agent` entry gained `thinking_tokens` and `stop_reason`, so a consumer can alert on max-tokens truncation or thinking-budget exhaustion without waiting for a user to hit a crash.
+- **v4** (#848) — added `exit_code`; previously a cost-ceiling skip (`AI_FAIL_ON_COST_CEILING`) always reported `outcome: "skipped"` with no numeric field distinguishing it from an ordinary exit-0 skip, even on a run where `cli.py`'s process actually exited 2.
+
+All additions since v1 are forward-compatible: consumers parsing older events that ignore unknown keys continue to work. Consumers that switch on `telemetry_schema_version` should accept `"1"` through `"4"`, and consumers that switch on `outcome` should handle the `"skipped"` and `"dry_run"` values.
 
 ### Structured logging
 
