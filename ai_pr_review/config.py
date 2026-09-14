@@ -321,6 +321,19 @@ def _check_per_agent_max_tokens_overrides() -> None:
     resolved again there with the actual precedence-aware default -- an
     intentional, harmless duplicate warning in that case, not a second
     source of truth.
+
+    Considered and rejected: memoizing "already warned about this env var"
+    in module-level state so the second (dispatch-time) call stays silent.
+    Rejected because (a) several existing tests call
+    ``resolve_agent_max_tokens()`` directly and assert its own WARNING
+    appears, so it cannot become silent-by-default without breaking them or
+    threading a new parameter through every call site, and (b) a
+    process-lifetime cache is a real hazard in this test suite specifically
+    -- tests share one process, so a cache entry set by one test would
+    silently suppress the warning assertion in an unrelated, later test
+    unless every test remembered to reset it. A rare extra stderr line for
+    an actually-misconfigured override is a smaller cost than that global
+    mutable state.
     """
     from ai_pr_review.agents.roster import AGENT_NAMES, get_agent  # noqa: PLC0415
 
