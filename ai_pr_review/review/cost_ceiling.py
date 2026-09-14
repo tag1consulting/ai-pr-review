@@ -43,6 +43,44 @@ could spend more than this estimate says. Modeling that would require
 guessing a retry rate, which is not knowable pre-flight either; the ceiling
 is a guard against gross overruns from diff size and roster choice, not a
 hard cap on worst-case spend.
+
+Known estimation bias (#848), disclosed explicitly rather than left implicit
+like the approximations above: this estimate is structurally biased *high*,
+often by 5-10x against what a run actually spends, for three compounding
+reasons, none of which this module corrects for:
+
+  - **Output tokens are the cap, not a prediction.** Every agent's output
+    contribution is priced at its full effective cap (``AI_MAX_TOKENS_
+    PER_AGENT`` or the agent's own ``max_output_tokens``) -- see
+    ``estimate_review_cost``'s docstring. Most calls finish well under that
+    cap; the estimate has no way to know how far under before the call is
+    actually made, so it prices every agent as if it will use the entire
+    budget.
+  - **Prompt caching is not modeled at all.** ``llm/anthropic.py`` and
+    ``llm/bedrock.py`` mark the shared context block and language-profile
+    text ``cache_control: ephemeral``, and a cache *read* is priced far
+    below a full input read on every provider that supports it (see
+    ``config/model-pricing.json``'s ``cache_read_rate`` vs ``input_rate``
+    per model). This estimate prices every agent's shared-context and
+    language-profile tokens as full-price input on every call, as if no
+    caching were configured -- on a run with several context-enrichment-
+    eligible agents sharing the same cached blocks, only the first agent's
+    call is realistically a full-price cache write; the rest are cheap
+    cache reads this estimate does not discount.
+  - **The judge-pass LLM call is omitted from the total.** ``AI_JUDGE_PASS``
+    (on by default) makes one additional cheap-model call after the findings
+    pipeline (``findings/judge.py``) -- a real cost the pre-flight estimate
+    never accounts for, because the judge pass only knows what to score
+    after the main roster's findings exist, which is well after this
+    estimate runs.
+
+Net effect: a ceiling configured against real historical run costs (rather
+than against this estimate's own output) will trip far more often than the
+actual spend would justify, since the estimate is not calibrated to be
+close to actual cost -- only to never be *low*. Narrowing this gap (partial
+caching-aware discounting, a judge-pass cost placeholder) is future work;
+until then, treat ``AI_MAX_COST_USD`` as "no more than N times a bad-case
+run," not "no more than $N."
 """
 
 from __future__ import annotations
@@ -53,7 +91,7 @@ from dataclasses import dataclass
 
 from ai_pr_review.agents.roster import AgentSpec
 from ai_pr_review.context.budget import estimate_tokens
-from ai_pr_review.pricing import format_cost, model_pricing
+from ai_pr_review.pricing import compute_cost_units, format_cost, model_pricing
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +182,9 @@ def estimate_review_cost(
 
         rates = model_pricing(model_id, pricing_data)
         unknown = rates.input_rate == 0 and rates.output_rate == 0
-        cost_units = (
-            input_tokens * rates.input_rate + output_tokens * rates.output_rate
-        ) // 100_000_000
+        cost_units = compute_cost_units(
+            (input_tokens, rates.input_rate), (output_tokens, rates.output_rate)
+        )
 
         if unknown:
             any_unknown = True
@@ -210,9 +248,9 @@ def estimate_preflight_agent_cost(
     input_tokens = estimate_tokens(diff_text)
     rates = model_pricing(model, pricing_data)
     unknown = rates.input_rate == 0 and rates.output_rate == 0
-    cost_units = (
-        input_tokens * rates.input_rate + output_tokens * rates.output_rate
-    ) // 100_000_000
+    cost_units = compute_cost_units(
+        (input_tokens, rates.input_rate), (output_tokens, rates.output_rate)
+    )
     if unknown:
         logger.warning(
             "cost estimate: no pricing entry for model %r (agent=%s); "
@@ -231,17 +269,30 @@ def estimate_preflight_agent_cost(
     )
 
 
-def merge_cost_estimates(*parts: CostEstimate) -> CostEstimate:
-    """Combine multiple CostEstimates (e.g. the main roster's plus any
-    separately-computed preflight-agent estimates) into one aggregate.
+def merge_cost_estimates(*parts: CostEstimate | AgentCostEstimate) -> CostEstimate:
+    """Combine CostEstimates and/or individual AgentCostEstimates (e.g. the
+    main roster's CostEstimate plus one AgentCostEstimate per
+    separately-dispatched preflight agent) into one aggregate.
+
+    Accepting bare ``AgentCostEstimate`` entries directly (#848) avoids
+    callers having to wrap a single agent's estimate in a throwaway
+    ``CostEstimate(per_agent=(x,), total_cost_units=x.estimated_cost_units,
+    any_unknown_pricing=x.unknown_pricing)`` just to satisfy this function's
+    signature -- ``review/runtime.py``'s pr-summarizer/issue-linker cost
+    folding does exactly that.
 
     Recomputes total_cost_units/any_unknown_pricing from the merged
     per-agent list rather than summing the parts' own totals, so this stays
     correct regardless of how each part was built.
     """
-    per_agent = tuple(a for part in parts for a in part.per_agent)
+    per_agent: list[AgentCostEstimate] = []
+    for part in parts:
+        if isinstance(part, AgentCostEstimate):
+            per_agent.append(part)
+        else:
+            per_agent.extend(part.per_agent)
     return CostEstimate(
-        per_agent=per_agent,
+        per_agent=tuple(per_agent),
         total_cost_units=sum(a.estimated_cost_units for a in per_agent),
         any_unknown_pricing=any(a.unknown_pricing for a in per_agent),
     )
@@ -293,13 +344,20 @@ def enforce_cost_ceiling(estimate: CostEstimate, *, ceiling_usd: float) -> None:
 
     top = sorted(estimate.per_agent, key=lambda a: a.estimated_cost_units, reverse=True)[:3]
     contributors = ", ".join(
-        f"{a.agent} ({format_cost(a.estimated_cost_units)})" for a in top
+        f"{a.agent} ({format_cost(a.estimated_cost_units)}"
+        + (", unpriced -- no cost data, not necessarily free" if a.unknown_pricing else "")
+        + ")"
+        for a in top
     )
     raise CostCeilingExceeded(
         f"Pre-flight cost estimate ${estimate.total_cost_usd:.4f} exceeds the "
         f"configured ceiling ${ceiling_usd:.2f} (AI_MAX_COST_USD / "
         f"max-cost-usd). Top contributing agents: {contributors}. "
-        "Raise AI_MAX_COST_USD, switch AI_REVIEW_MODE to quick, reduce the "
-        "agent roster via AI_AGENTS/AI_EXCLUDE_AGENTS, or lower "
-        "AI_MAX_TOKENS_PER_AGENT to proceed."
+        "This PR's LLM-agent review was skipped before any LLM call was "
+        "made. A repo maintainer can raise AI_MAX_COST_USD, switch "
+        "AI_REVIEW_MODE to quick, reduce the agent roster via "
+        "AI_AGENTS/AI_EXCLUDE_AGENTS, or lower AI_MAX_TOKENS_PER_AGENT in "
+        "this repository's workflow/action configuration to allow larger "
+        "reviews -- these are repo/workflow-level settings a PR author "
+        "cannot change from the PR itself."
     )

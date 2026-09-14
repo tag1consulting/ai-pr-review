@@ -5,6 +5,7 @@ from pathlib import Path
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.pricing import (
     TokenEntry,
+    compute_cost_units,
     compute_totals,
     emit_token_table,
     format_cost,
@@ -26,6 +27,43 @@ _SAMPLE_PRICING = [
         "cache_read_rate": 300000,
     }
 ]
+
+
+class TestComputeCostUnits:
+    """#848: the shared (tokens * rate) summed-then-divided-once formula,
+    consolidating what cost_ceiling.py's pre-flight estimate used to
+    duplicate as its own inline expression."""
+
+    def test_single_pair(self) -> None:
+        assert compute_cost_units((1000, 100_000_000)) == 1000
+
+    def test_multiple_pairs_summed_before_dividing(self) -> None:
+        assert compute_cost_units(
+            (1000, 100_000_000), (500, 200_000_000),
+        ) == (1000 * 100_000_000 + 500 * 200_000_000) // 100_000_000
+
+    def test_no_pairs_is_zero(self) -> None:
+        assert compute_cost_units() == 0
+
+    def test_matches_row_cost_for_a_known_entry(self) -> None:
+        """Sums-then-divides-once must agree with _row_cost's real output
+        (exercised indirectly via compute_totals) for the same inputs --
+        this is the exact non-distributivity compute_cost_units's docstring
+        warns about, so pin it against the real four-term row rather than
+        just the two-term pre-flight shape."""
+        entry = TokenEntry(
+            agent="a", model="claude-sonnet-4-6",
+            input_tokens=777, output_tokens=333,
+            cache_creation_tokens=11, cache_read_tokens=22,
+        )
+        totals = compute_totals([entry], _SAMPLE_PRICING)
+        rates = model_pricing("claude-sonnet-4-6", _SAMPLE_PRICING)
+        assert totals.cost_units == compute_cost_units(
+            (entry.input_tokens, rates.input_rate),
+            (entry.output_tokens, rates.output_rate),
+            (entry.cache_creation_tokens, rates.cache_write_rate),
+            (entry.cache_read_tokens, rates.cache_read_rate),
+        )
 
 
 def test_format_cost_zero() -> None:

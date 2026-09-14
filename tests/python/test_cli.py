@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1256,45 +1257,121 @@ class TestFailOnFindings:
         assert config.fail_on_findings is False
 
 
-class TestCostCeilingSkipExitCode:
-    """#24: exit code 2 only when AI_FAIL_ON_COST_CEILING=true and the skip
-    was specifically a cost-ceiling one.
+@dataclass
+class _SkipExitCodeFakeProvider:
+    """Minimal VcsProvider fake for driving _run_review_async end-to-end
+    through a cost-ceiling skip (#848 -- see TestCostCeilingSkipExitCode)."""
 
-    Mirrors TestFailOnFindings above: exercises the exit-code decision logic
-    directly rather than driving _run_review_async end-to-end.
+    skip_comments: list[str] = field(default_factory=list)
+
+    def get_last_reviewed_sha(self) -> str | None:
+        return None
+
+    def get_summary_body(self) -> str | None:
+        return None
+
+    def get_pr_description(self) -> tuple[str, str] | None:
+        return None
+
+    def post_summary(self, summary_body: str, head_sha: str) -> object:
+        raise AssertionError("post_summary should not be called on a skip path")
+
+    def post_findings(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError("post_findings should not be called on a skip path")
+
+    def resolve_stale(self) -> object:
+        raise AssertionError("resolve_stale should not be called on a skip path")
+
+    def advance_sha_watermark(self, new_sha: str) -> bool:
+        raise AssertionError("advance_sha_watermark should not be called on a skip path")
+
+    def post_skip_comment(self, reason: str) -> object:
+        from ai_pr_review.vcs.protocol import SummaryResult
+
+        self.skip_comments.append(reason)
+        return SummaryResult(comment_id=1, created=True, updated=False)
+
+
+class TestCostCeilingSkipExitCode:
+    """#24/#848: exit code 2 only when AI_FAIL_ON_COST_CEILING=true and the
+    skip was specifically a cost-ceiling one.
+
+    These drive ``_run_review_async`` end to end -- real ``build_review_
+    runtime`` (real cost estimate against a real, tiny AI_MAX_COST_USD),
+    real SkipPlan branch, real ``_orchestrate_skip``/``run_review`` --
+    rather than reimplementing cli.py's exit-code conditional inline and
+    asserting it against itself (the tautological shape #848 flagged in the
+    prior version of this test class: it could never catch a real
+    regression in cli.py's own logic, only in a hand-copied paraphrase of
+    it).
     """
 
-    def _exit_code(
-        self, *, is_cost_ceiling_skip: bool, fail_on_cost_ceiling: bool, ok: bool = True,
-    ) -> int:
-        config = _make_config(fail_on_cost_ceiling=fail_on_cost_ceiling)
+    async def _run(
+        self, *, max_cost_usd: float, fail_on_cost_ceiling: bool,
+    ) -> tuple[int, _SkipExitCodeFakeProvider]:
+        from ai_pr_review.cli import _run_review_async
 
-        runtime = MagicMock()
-        runtime.is_cost_ceiling_skip = is_cost_ceiling_skip
+        config = _make_config(
+            max_cost_usd=max_cost_usd, fail_on_cost_ceiling=fail_on_cost_ceiling,
+        )
+        provider = _SkipExitCodeFakeProvider()
+        diff = _make_diff_result()
 
-        result = MagicMock()
-        result.ok = ok
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=provider),
+        ):
+            exit_code = await _run_review_async(config)
+        return exit_code, provider
 
-        # Mirror the exact logic from cli._run_review_async's SkipPlan branch.
-        if runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok:
-            return 2
-        return 0 if result.ok else 1
+    @pytest.mark.anyio
+    async def test_ceiling_exceeded_and_opted_in_exits_2_end_to_end(self) -> None:
+        # A vanishingly small ceiling that any non-zero real cost estimate
+        # exceeds, against config/model-pricing.json's real rates for
+        # _make_config's model_standard -- mirrors test_runtime.py's own
+        # TestBuildReviewRuntimeCostCeiling ceiling-exceeded test.
+        exit_code, provider = await self._run(
+            max_cost_usd=0.000001, fail_on_cost_ceiling=True,
+        )
+        assert exit_code == 2
+        assert len(provider.skip_comments) == 1
+        assert "exceeds" in provider.skip_comments[0]
+        assert "AI_MAX_COST_USD" in provider.skip_comments[0]
 
-    def test_cost_ceiling_skip_exits_0_by_default(self) -> None:
-        assert self._exit_code(is_cost_ceiling_skip=True, fail_on_cost_ceiling=False) == 0
+    @pytest.mark.anyio
+    async def test_ceiling_exceeded_but_not_opted_in_exits_0_end_to_end(self) -> None:
+        exit_code, provider = await self._run(
+            max_cost_usd=0.000001, fail_on_cost_ceiling=False,
+        )
+        assert exit_code == 0
+        assert len(provider.skip_comments) == 1
 
-    def test_cost_ceiling_skip_exits_2_when_opted_in(self) -> None:
-        assert self._exit_code(is_cost_ceiling_skip=True, fail_on_cost_ceiling=True) == 2
+    @pytest.mark.anyio
+    async def test_ceiling_not_exceeded_runs_normally_end_to_end(self) -> None:
+        # A ceiling no real small-diff estimate could exceed -- this run
+        # follows the ordinary (non-skip) ReviewRuntime path instead: no
+        # skip comment is posted (asserted below via the fake provider),
+        # regardless of AI_FAIL_ON_COST_CEILING. This end-to-end fake
+        # provider does not stub a real LLM call, so the run instead
+        # proceeds all the way to pr-summarizer's real dispatch and fails
+        # there (SystemExit(1), no ANTHROPIC_API_KEY) -- which is itself
+        # proof the skip path was never taken; the assertion below on
+        # provider.skip_comments is the actual thing under test.
+        provider = _SkipExitCodeFakeProvider()
+        diff = _make_diff_result()
+        config = _make_config(max_cost_usd=1000.00, fail_on_cost_ceiling=True)
 
-    def test_non_cost_ceiling_skip_exits_0_even_when_opted_in(self) -> None:
-        """A diff-too-large/no-changes skip must not be affected by
-        AI_FAIL_ON_COST_CEILING."""
-        assert self._exit_code(is_cost_ceiling_skip=False, fail_on_cost_ceiling=True) == 0
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=provider),
+            pytest.raises(SystemExit),
+        ):
+            from ai_pr_review.cli import _run_review_async
+            await _run_review_async(config)
 
-    def test_posting_failure_exits_1_regardless_of_flag(self) -> None:
-        assert self._exit_code(
-            is_cost_ceiling_skip=True, fail_on_cost_ceiling=True, ok=False,
-        ) == 1
+        assert provider.skip_comments == []
 
     def test_fail_on_cost_ceiling_default_is_false(self) -> None:
         config = _make_config()
@@ -1337,10 +1414,52 @@ class TestEmitTelemetryThinkingTokens:
         lines = sink_path.read_text().splitlines()
         assert len(lines) == 1
         event = json.loads(lines[0])
-        assert event["telemetry_schema_version"] == "3"
+        assert event["telemetry_schema_version"] == "4"
         agent_usage = event["token_usage_by_agent"]["code-reviewer"]
         assert agent_usage["thinking_tokens"] == 16384
         assert agent_usage["stop_reason"] == "max_tokens"
+
+
+class TestEmitTelemetryExitCode:
+    """#848: the emitted event's exit_code must reflect what the calling
+    code path actually returns, not just default to 0 regardless of outcome
+    (previously true for every cost-ceiling exit-2 skip)."""
+
+    @pytest.mark.anyio
+    async def test_exit_code_defaults_to_zero(self, tmp_path: Path) -> None:
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+        result = MagicMock()
+        result.agent_results = []
+        result.failed_agents = []
+        result.findings = []
+        result.outcome = MagicMock()
+        result.outcome.event = "APPROVE"
+
+        await _emit_telemetry(result, config, 0)
+
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        assert event["exit_code"] == 0
+
+    @pytest.mark.anyio
+    async def test_exit_code_is_forwarded_verbatim(self, tmp_path: Path) -> None:
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+        result = MagicMock()
+        result.agent_results = []
+        result.failed_agents = []
+        result.findings = []
+        result.outcome = MagicMock()
+        result.outcome.event = "REQUEST_CHANGES"
+
+        await _emit_telemetry(result, config, 0, exit_code=2)
+
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        assert event["exit_code"] == 2
 
     @pytest.mark.anyio
     async def test_per_agent_dict_thinking_tokens_zero_when_absent(

@@ -520,7 +520,7 @@ runs:
           -e AI_TOKEN_USAGE_DISPLAY \
           -e AI_TOKEN_USAGE_WARN_USD \
           -e AI_MAX_COST_USD \
-          -e AI_FAIL_ON_COST_CEILING \
+          ${AI_FAIL_ON_COST_CEILING:+-e AI_FAIL_ON_COST_CEILING} \
           -e AI_EXCLUDE_PATTERNS \
           -e AI_EXCLUDE_PATTERNS_MODE \
           -e AI_ANALYZERS \

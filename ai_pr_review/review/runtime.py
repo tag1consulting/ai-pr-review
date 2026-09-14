@@ -84,6 +84,12 @@ class ReviewRuntime:
     # applies to this PR; the CLI's post_check_run step is a no-op then.
     policy_gate_required: str | None
     policy_gate_satisfied: bool
+    # The pre-flight cost estimate's total (#848), when it was computed
+    # successfully -- None if pre-flight estimation itself failed (fail-soft;
+    # see the cost-estimate step below). Carried through so cli.py can log it
+    # alongside this run's actual total cost once the review completes, for
+    # estimate-vs-actual comparison (see reporting.log_cost_reconciliation).
+    cost_estimate_usd: float | None
 
 
 def _merge_allowlist(
@@ -472,97 +478,10 @@ async def build_review_runtime(
             list(gates),
         )
 
-    # 9b. Pre-flight cost estimate + ceiling (#24), now that the agent roster
-    # is final. Runs before any LLM call in this run, including the
-    # pr-summarizer/issue-linker preflight calls cli.py makes next. Always
-    # logs the COST_ESTIMATE line. When AI_MAX_COST_USD is exceeded, this
-    # returns a SkipPlan -- the same "post a skip comment, dispatch nothing"
-    # mechanism review/compute.py's max-diff-lines skip already uses -- so by
-    # default this is informational (exit 0), not a CI failure;
-    # AI_FAIL_ON_COST_CEILING (checked in cli.py) opts into exit code 2.
-    # A failure computing the estimate itself (e.g. a corrupt pricing file)
-    # is fail-soft: log a warning and proceed with no ceiling check for this
-    # run rather than abort a review over a diagnostic feature.
-    try:
-        from ai_pr_review.pricing import load_pricing
-        from ai_pr_review.review.cost_ceiling import (
-            CostEstimate,
-            enforce_cost_ceiling,
-            estimate_preflight_agent_cost,
-            estimate_review_cost,
-            log_cost_estimate,
-            merge_cost_estimates,
-        )
-
-        pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
-        cost_estimate = estimate_review_cost(
-            agents=agents,
-            diff_text=diff_text,
-            shared_context_text=shared_context_block,
-            language_profile_text=_language_profile_text,
-            standard_model=config.model_standard,
-            premium_model=config.model_premium,
-            review_mode=config.review_mode,
-            effective_max_output_tokens=config.max_tokens_per_agent,
-            pricing_data=pricing_data,
-        )
-
-        # Fold in the two separately-dispatched preflight agents when they
-        # will actually run this review -- mirrors the exact gating cli.py
-        # applies before calling _run_summarizer/_run_issue_linker.
-        preflight_parts: list[CostEstimate] = []
-        if not is_incremental and agent_allowed(
-            "pr-summarizer", config.agents, config.exclude_agents
-        ):
-            summarizer_cost = estimate_preflight_agent_cost(
-                agent_name="pr-summarizer",
-                model=config.model_standard,
-                diff_text=diff_text,
-                output_tokens=4096,
-                pricing_data=pricing_data,
-            )
-            preflight_parts.append(
-                CostEstimate(
-                    per_agent=(summarizer_cost,),
-                    total_cost_units=summarizer_cost.estimated_cost_units,
-                    any_unknown_pricing=summarizer_cost.unknown_pricing,
-                )
-            )
-        if (
-            not is_incremental
-            and config.review_mode == "full"
-            and config.vcs_provider == "github"
-            and agent_allowed("issue-linker", config.agents, config.exclude_agents)
-        ):
-            issue_linker_cost = estimate_preflight_agent_cost(
-                agent_name="issue-linker",
-                model=config.model_standard,
-                diff_text=diff_text,
-                output_tokens=4096,
-                pricing_data=pricing_data,
-            )
-            preflight_parts.append(
-                CostEstimate(
-                    per_agent=(issue_linker_cost,),
-                    total_cost_units=issue_linker_cost.estimated_cost_units,
-                    any_unknown_pricing=issue_linker_cost.unknown_pricing,
-                )
-            )
-        if preflight_parts:
-            cost_estimate = merge_cost_estimates(cost_estimate, *preflight_parts)
-
-        log_cost_estimate(cost_estimate, ceiling_usd=config.max_cost_usd)
-        enforce_cost_ceiling(cost_estimate, ceiling_usd=config.max_cost_usd)
-    except CostCeilingExceeded as exc:
-        return SkipPlan(reason=str(exc), provider=provider, is_cost_ceiling_skip=True)
-    except Exception as exc:
-        logger.warning(
-            "cost estimate: pre-flight estimation failed (fail-soft; "
-            "proceeding without a cost ceiling check for this run): %s",
-            exc, exc_info=True,
-        )
-
-    # 10. Run native static analyzers — fail-soft; findings merged via extra_findings.
+    # 9b. Run native static analyzers — fail-soft; findings merged via extra_findings.
+    # Deliberately runs *before* the pre-flight cost-ceiling check below (#848):
+    # analyzers make no LLM call, so a run whose LLM-agent estimate exceeds
+    # AI_MAX_COST_USD must not also suppress this free signal.
     analyzer_findings: list[_Finding] = []
     try:
         from ai_pr_review.analyzers.bridge import (
@@ -596,7 +515,8 @@ async def build_review_runtime(
             "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
         )
 
-    # 11. Load SARIF findings and merge with analyzer findings into extra_findings.
+    # 9c. Load SARIF findings and merge with analyzer findings into extra_findings.
+    # Also runs before the cost-ceiling check below, for the same reason.
     sarif_findings: list[_Finding] = []
     sarif_elapsed_s: float | None = None
     if config.sarif_paths:
@@ -621,7 +541,117 @@ async def build_review_runtime(
 
     extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
 
-    # 12. Load global + local suppression rules (fail-soft — malformed rules file
+    # 9d. Pre-flight cost estimate + ceiling (#24), now that the agent roster
+    # is final. Runs before any LLM call in this run, including the
+    # pr-summarizer/issue-linker preflight calls cli.py makes next. Always
+    # logs the COST_ESTIMATE line. When AI_MAX_COST_USD is exceeded, this
+    # returns a SkipPlan -- the same "post a skip comment, dispatch nothing"
+    # mechanism review/compute.py's max-diff-lines skip already uses -- so by
+    # default this is informational (exit 0), not a CI failure;
+    # AI_FAIL_ON_COST_CEILING (checked in cli.py) opts into exit code 2.
+    # A failure computing the estimate itself (e.g. a corrupt pricing file)
+    # is fail-soft: log a warning and proceed with no ceiling check for this
+    # run rather than abort a review over a diagnostic feature.
+    #
+    # Note (#848): this SkipPlan only stops the *LLM-agent* roster (and the
+    # pr-summarizer/issue-linker preflight calls) from dispatching -- the
+    # static-analyzer/SARIF findings computed just above in 9b/9c are already
+    # in hand and their count is folded into the skip reason below, so a
+    # maintainer reading the skip comment knows real, free signal exists even
+    # though it isn't posted by this code path. Actually posting those
+    # findings to the PR despite the LLM-agent skip would require changing
+    # orchestrate.run_review()'s skip_reason contract (a much larger, riskier
+    # change) and is deliberately left as a follow-up.
+    cost_estimate_usd: float | None = None
+    try:
+        from ai_pr_review.pricing import load_pricing
+        from ai_pr_review.review.cost_ceiling import (
+            AgentCostEstimate,
+            enforce_cost_ceiling,
+            estimate_preflight_agent_cost,
+            estimate_review_cost,
+            log_cost_estimate,
+            merge_cost_estimates,
+        )
+        from ai_pr_review.review.preflight import (
+            PREFLIGHT_AGENT_MAX_TOKENS,
+            should_run_issue_linker,
+            should_run_pr_summarizer,
+        )
+
+        pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
+        cost_estimate = estimate_review_cost(
+            agents=agents,
+            diff_text=diff_text,
+            shared_context_text=shared_context_block,
+            language_profile_text=_language_profile_text,
+            standard_model=config.model_standard,
+            premium_model=config.model_premium,
+            review_mode=config.review_mode,
+            effective_max_output_tokens=config.max_tokens_per_agent,
+            pricing_data=pricing_data,
+        )
+
+        # Fold in the two separately-dispatched preflight agents when they
+        # will actually run this review -- should_run_pr_summarizer/
+        # should_run_issue_linker (#848) are the single source of truth for
+        # this gate, shared with the exact same check cli.py makes before
+        # calling _run_summarizer/_run_issue_linker.
+        preflight_parts: list[AgentCostEstimate] = []
+        if should_run_pr_summarizer(
+            is_incremental=is_incremental,
+            agents=config.agents,
+            exclude_agents=config.exclude_agents,
+        ):
+            preflight_parts.append(
+                estimate_preflight_agent_cost(
+                    agent_name="pr-summarizer",
+                    model=config.model_standard,
+                    diff_text=diff_text,
+                    output_tokens=PREFLIGHT_AGENT_MAX_TOKENS,
+                    pricing_data=pricing_data,
+                )
+            )
+        if should_run_issue_linker(
+            is_incremental=is_incremental,
+            review_mode=config.review_mode,
+            vcs_provider=config.vcs_provider,
+            agents=config.agents,
+            exclude_agents=config.exclude_agents,
+        ):
+            preflight_parts.append(
+                estimate_preflight_agent_cost(
+                    agent_name="issue-linker",
+                    model=config.model_standard,
+                    diff_text=diff_text,
+                    output_tokens=PREFLIGHT_AGENT_MAX_TOKENS,
+                    pricing_data=pricing_data,
+                )
+            )
+        if preflight_parts:
+            cost_estimate = merge_cost_estimates(cost_estimate, *preflight_parts)
+
+        log_cost_estimate(cost_estimate, ceiling_usd=config.max_cost_usd)
+        cost_estimate_usd = cost_estimate.total_cost_usd
+        enforce_cost_ceiling(cost_estimate, ceiling_usd=config.max_cost_usd)
+    except CostCeilingExceeded as exc:
+        reason = str(exc)
+        n_extra = len(extra_findings)
+        if n_extra:
+            reason += (
+                f" {n_extra} static-analyzer/SARIF finding(s) were computed "
+                "for this PR but are not posted by this skip -- a future run "
+                "that completes under the ceiling will include them."
+            )
+        return SkipPlan(reason=reason, provider=provider, is_cost_ceiling_skip=True)
+    except Exception as exc:
+        logger.warning(
+            "cost estimate: pre-flight estimation failed (fail-soft; "
+            "proceeding without a cost ceiling check for this run): %s",
+            exc, exc_info=True,
+        )
+
+    # 10. Load global + local suppression rules (fail-soft — malformed rules file
     # must not abort the review; proceed with no suppressions and log a warning).
     from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
     try:
@@ -634,7 +664,7 @@ async def build_review_runtime(
         )
         suppression_rules = ()
 
-    # 13. Build orchestrator config.
+    # 11. Build orchestrator config.
     _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"
     _judge_prompt_resolved = _judge_prompt_path if _judge_prompt_path.exists() else None
     if config.enable_judge_pass and _judge_prompt_resolved is None:
@@ -675,4 +705,5 @@ async def build_review_runtime(
         sarif_elapsed_s=sarif_elapsed_s,
         policy_gate_required=policy_gate_required,
         policy_gate_satisfied=policy_gate_satisfied,
+        cost_estimate_usd=cost_estimate_usd,
     )

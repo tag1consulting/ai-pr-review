@@ -32,6 +32,12 @@ class TelemetryEvent:
           "stop_reason" per agent (#592: lets a telemetry consumer alert
           on max_tokens-truncation rate or thinking-budget exhaustion
           without waiting for a user to hit a crash)
+      4 — added exit_code (#848): previously a cost-ceiling skip
+          (AI_FAIL_ON_COST_CEILING) always reported outcome="skipped" with
+          no numeric field distinguishing it from an ordinary exit-0 skip,
+          even on the run that made cli.py's process actually exit(2).
+          exit_code now carries the real value cli.py returns for every
+          call site (skip, dry-run, and the normal review path).
     """
 
     correlation_id: str
@@ -54,6 +60,8 @@ class TelemetryEvent:
     review_mode: str = ""
     is_incremental: bool = False
     failed_agent_latency_ms: dict[str, int] = dataclasses.field(default_factory=dict)
+    # Schema v4 addition (#848)
+    exit_code: int = 0
 
 
 def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
