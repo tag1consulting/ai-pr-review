@@ -42,12 +42,26 @@ class TestStripWorkspacePrefix:
         assert result == ""
 
     def test_prefix_mismatch_returned_unchanged(self) -> None:
-        # A filename absolute under a *different* root than GITHUB_WORKSPACE
-        # (e.g. a symlinked or unrelated path) is left alone rather than
-        # mangled -- fail-soft, matching this analyzer family's conventions.
+        # A filename that matches NEITHER GITHUB_WORKSPACE nor the actual cwd
+        # (e.g. a symlinked or genuinely unrelated path) is left alone rather
+        # than mangled -- fail-soft, matching this analyzer family's
+        # conventions.
         with patch.dict(os.environ, {"GITHUB_WORKSPACE": "/workspace/ai-pr-review"}):
             result = strip_workspace_prefix("/other/root/ai_pr_review/vcs/github.py")
         assert result == "/other/root/ai_pr_review/vcs/github.py"
+
+    def test_github_workspace_mismatch_falls_back_to_cwd(self, tmp_path: object) -> None:
+        """Regression test (#846 review): GITHUB_WORKSPACE being *set* but not
+        matching must still try the actual cwd before giving up -- an earlier
+        version treated GITHUB_WORKSPACE as exclusive once set (`or`, not a
+        fallback chain), so a mismatch silently disabled stripping entirely.
+        This is exactly the scenario CI itself caught: a self-hosted-runner
+        or nested-checkout (`actions/checkout` with `path:`) layout where
+        GITHUB_WORKSPACE and the analyzer subprocess's own cwd diverge."""
+        cwd = os.getcwd()
+        with patch.dict(os.environ, {"GITHUB_WORKSPACE": "/workspace/unrelated-repo"}):
+            result = strip_workspace_prefix(f"{cwd}/ai_pr_review/vcs/github.py")
+        assert result == "ai_pr_review/vcs/github.py"
 
 
 class TestStripWorkspacePrefixDiffScopeOutcome:
