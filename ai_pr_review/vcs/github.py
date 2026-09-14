@@ -420,12 +420,12 @@ class GitHubProvider:
             listing failure as a hard `FindingsResult` error.
 
             `False` (every `list_bot_reviews()` caller: `_dismiss_stale_reviews`,
-            `ai_pr_review.slash.github_orchestration`'s classification, and
-            `ai_pr_review.slash.github_ops`'s verdict-recording call sites):
-            appends to `self._errors` and
-            returns whatever was collected so far on an HTTP error (partial
-            results) -- these callers have long-standing partial-result
-            tolerance built into their own error handling.
+            `ai_pr_review.slash.github_ops`'s F-id classification and
+            verdict-recording call sites, and `ai_pr_review.cli`'s `dismiss`
+            command): appends to `self._errors` and returns whatever was
+            collected so far on an HTTP error (partial results) -- these
+            callers have long-standing partial-result tolerance built into
+            their own error handling.
 
         states:
             Optional set of review `state` values to keep (e.g. excluding

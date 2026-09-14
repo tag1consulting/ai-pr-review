@@ -10,10 +10,12 @@ genuinely different concerns that happened to share one file --
   templates, and the thin CLI-adjacent helpers that need no HTTP mocking to
   test (`tests/python/slash/test_github_orchestration.py` /
   `test_github_orchestration_cli_helpers.py`).
-- `github_ops.py` (this module): everything that actually calls a
-  `GitHubProvider`'s HTTP/GraphQL methods to resolve threads, dismiss or
-  approve reviews, record verdict markers, or fetch a parent comment --
-  tested via the `RecordingClient`/`TapeRecorder` HTTP-mock harness in
+- `github_ops.py` (this module): everything that needs network I/O -- most of
+  it a `GitHubProvider` HTTP/GraphQL call to resolve threads, dismiss or
+  approve reviews, record verdict markers, or fetch a parent comment, plus
+  `persist_verdict`'s feedback-store call (`feedback/store.py`'s
+  `GitBranchStore`, no `GitHubProvider` involved) -- tested via the
+  `RecordingClient`/`TapeRecorder` HTTP-mock harness in
   `tests/python/vcs/test_github_orchestration_http.py` /
   `test_github_orchestration_verdicts.py`.
 
@@ -46,7 +48,6 @@ from ai_pr_review.slash.github_orchestration import (
     DismissResult,
     FeedbackContext,
     FindingLocation,
-    _fingerprint_for_finding_id,
     _inline_feedback_context,
     _not_found_reply,
     _sha_citation,
@@ -57,7 +58,7 @@ from ai_pr_review.slash.github_orchestration import (
     list_active_body_ids,
     parse_inline_comment_header,
 )
-from ai_pr_review.vcs._finding_ids import _ID_RE
+from ai_pr_review.vcs._finding_ids import _ID_RE, fingerprint_for_finding_id
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs._thread import (
     count_unresolved_owned_threads,
@@ -454,7 +455,7 @@ def dismiss_by_finding_id(
 
     if classified.location is FindingLocation.BODY:
         errors.extend(provider._errors[errors_before:])
-        fingerprint = _fingerprint_for_finding_id(bodies, finding_id)
+        fingerprint = fingerprint_for_finding_id(bodies, finding_id)
         if command == "fixed":
             # No thread exists for a body-level finding, and "fixed" must
             # never write a feedback-store entry (it isn't a verdict on
@@ -515,7 +516,7 @@ def dismiss_by_finding_id(
     # one -- picking a resolved match instead would repeat exactly the #787
     # bug this exists to fix.
     threads = provider.fetch_review_threads()
-    target_fp = _fingerprint_for_finding_id(bodies, finding_id)
+    target_fp = fingerprint_for_finding_id(bodies, finding_id)
     candidates: list[dict[str, Any]] = []
     for t in threads:
         body = _first_comment_body(t)
@@ -861,7 +862,7 @@ def dismiss_inline_reply(
                     "resolve/dismiss error): " + "; ".join(_truncated_verdict_errors)
                 )
             bodies_for_verdict = [r.get("body") or "" for r in reviews_for_verdict]
-            fingerprint = _fingerprint_for_finding_id(
+            fingerprint = fingerprint_for_finding_id(
                 bodies_for_verdict, int(id_match.group(1))
             )
             _record_verdict(

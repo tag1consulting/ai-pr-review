@@ -1,16 +1,16 @@
 """Shared GraphQL review-thread first-comment accessors — issue #822.
 
 `github.py`'s stale-cleanup/review-dismissal paths (`resolve_stale`'s marker
-check, `_dismiss_stale_reviews`) and `slash/github_ops.py`'s (F-ID
-classification stays in the sibling `slash/github_orchestration.py`;
-auto-approve is the HTTP-orchestration half, split into `github_ops.py` in
-#849) auto-approve paths (`_dismiss_if_all_resolved`,
-`_approve_if_pr_fully_resolved`, and friends) each independently
-re-implemented an identical accessor set for "read the first comment off a
-GitHub GraphQL `reviewThreads` node" — github.py's own module-level
+check, `_dismiss_stale_reviews`) and `slash/github_ops.py`'s auto-approve
+paths (`_dismiss_if_all_resolved`, `_approve_if_pr_fully_resolved`, and
+friends) each independently re-implemented an identical accessor set for
+"read the first comment off a GitHub GraphQL `reviewThreads` node" —
+github.py's own module-level
 `_first_comment_body`/`_first_comment_author_login`/`_first_comment_review_id`,
 and github_ops.py's `_first_comment`/`_first_comment_body`/
-`_first_comment_author_login`/`_thread_review_id`/`_first_comment_id`. Both
+`_first_comment_author_login`/`_thread_review_id`/`_first_comment_id`.
+(`github_ops.py` is the HTTP-orchestration half of the #849 split; F-ID
+classification stays in the sibling `slash/github_orchestration.py`.) Both
 operate on the exact same shape (`thread["comments"]["nodes"][0]`) returned
 by `GitHubProvider.fetch_review_threads()`'s GraphQL query, so this module is
 the single source of truth for it.

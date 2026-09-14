@@ -7,15 +7,20 @@ in #833: the module had grown past that name well before this rename.
 Split in #849: this module now holds only the pure classification logic (no
 I/O) plus the CLI-adjacent helpers that need no HTTP mocking to test
 (`tests/python/slash/test_github_orchestration.py` /
-`test_github_orchestration_cli_helpers.py`). Everything that actually calls a
-`GitHubProvider`'s HTTP/GraphQL methods -- `dismiss_by_finding_id`,
-`dismiss_inline_reply`, `resolve_only`, `context_from_parent_comment`,
-`_record_verdict`, `persist_verdict`, `resolve_feedback_context`, and their
-private helpers -- moved to `ai_pr_review.slash.github_ops`, whose own
-docstring lays out the reasoning (including why that module stayed under
-`ai_pr_review.slash` rather than `ai_pr_review.vcs`, despite its tests living
-in `tests/python/vcs/`). This module has no dependency on `github_ops.py`;
-the dependency runs one way, `github_ops.py` -> this module.
+`test_github_orchestration_cli_helpers.py`). Everything that needs network
+I/O moved to `ai_pr_review.slash.github_ops`: `dismiss_by_finding_id`,
+`dismiss_inline_reply`, `resolve_only`, `context_from_parent_comment`, and
+`_record_verdict` make a live GitHub API call; `persist_verdict` and
+`resolve_feedback_context` need a separate feedback-store call instead --
+neither takes a `provider` argument or calls a `GitHubProvider` method,
+`persist_verdict` writes through `feedback/store.py`'s `GitBranchStore`. All
+of the above, plus their private helpers, moved together since they share
+the same "needs network I/O" boundary even though the I/O differs.
+`github_ops.py`'s own docstring lays out the full reasoning (including why
+that module stayed under `ai_pr_review.slash` rather than `ai_pr_review.vcs`,
+despite its tests living in `tests/python/vcs/`). This module has no
+dependency on `github_ops.py`; the dependency runs one way, `github_ops.py`
+-> this module.
 
 GitHub-only: GitLab and Bitbucket have no F-ID / id-map system.
 
@@ -46,7 +51,6 @@ from ai_pr_review.vcs._finding_ids import (
     BODY_SECTION_START_MARKERS,
     _ends_body_section,
     _pick_primary_source,
-    fingerprint_for_finding_id,
     safe_review_id,
 )
 from ai_pr_review.vcs.marker import extract_id_map
@@ -127,7 +131,7 @@ class DismissResult:
     # took effect (BODY or INLINE) -- never for `fixed` (not a maintainer
     # verdict on validity) or UNKNOWN (nothing to record). This is the caller's
     # single signal for whether to persist a feedback-store entry -- see
-    # cli.py's `_persist_verdict`. Kept distinct from
+    # github_ops.py's `persist_verdict`. Kept distinct from
     # feedback_source/feedback_file being non-empty because those are also
     # (ab)used as BODY-vs-INLINE classification signals elsewhere; this field
     # exists so that distinction never has to double as "should we write".
@@ -308,18 +312,6 @@ def list_active_body_ids(bodies: Sequence[str]) -> list[int]:
     )
 
 
-def _fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | None:
-    """Reverse-lookup a stable F<n> ID to its fingerprint.
-
-    Thin wrapper over `ai_pr_review.vcs._finding_ids.fingerprint_for_finding_id`
-    (factored out there so `ai_pr_review.vcs._canonical` can reuse the exact
-    same lookup for legacy-thread fallback without this module's own
-    `vcs.github` import creating a cycle). Kept here, still private, since
-    every existing call site in this module refers to it by this name.
-    """
-    return fingerprint_for_finding_id(bodies, finding_id)
-
-
 def _thread_by_comment_id(
     threads: Sequence[dict[str, Any]], comment_id: int
 ) -> dict[str, Any] | None:
@@ -488,9 +480,11 @@ def context_from_body_finding_id(bodies: Sequence[str], finding_id: int) -> Feed
 # resolve_github_provider, no_finding_id_reply, dismiss_failure_annotation)
 # need no HTTP mocking to test -- they format text or resolve config, never
 # call a GitHubProvider's HTTP/GraphQL methods themselves. The two CLI
-# helpers that DO need a live provider call (persist_verdict,
-# resolve_feedback_context) moved to ai_pr_review.slash.github_ops in #849
-# alongside the rest of that module's HTTP/GraphQL orchestration.
+# helpers that DO need network I/O (persist_verdict, resolve_feedback_context)
+# moved to ai_pr_review.slash.github_ops in #849 alongside the rest of that
+# module's I/O-needing code -- persist_verdict's I/O is a feedback-store
+# call (feedback/store.py's GitBranchStore), not a GitHubProvider method;
+# resolve_feedback_context does call a GitHubProvider method.
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)

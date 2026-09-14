@@ -1,10 +1,12 @@
 """Verdict-marker recording — the write side of the canonical-review-reuse
 cross-run dedup design (see #714's PR description). Covers
-`_fingerprint_for_finding_id` (ai_pr_review.slash.github_orchestration) and
-`_record_verdict`'s (ai_pr_review.slash.github_ops, since #849) wiring into
+`fingerprint_for_finding_id` (ai_pr_review.vcs._finding_ids, called directly
+by ai_pr_review.slash.github_ops since #849 -- no wrapper in
+github_orchestration.py anymore) and `_record_verdict`'s
+(ai_pr_review.slash.github_ops, since #849) wiring into
 `dismiss_by_finding_id` / `dismiss_inline_reply`.
 
-Follows the `_make_provider(handler)` harness from `test_dismiss_github.py`.
+Follows the `_make_provider(handler)` harness from `test_github_orchestration_http.py`.
 """
 
 from __future__ import annotations
@@ -20,11 +22,10 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.slash.github_ops import dismiss_by_finding_id, dismiss_inline_reply
 from ai_pr_review.slash.github_orchestration import (
     FindingLocation,
-    _fingerprint_for_finding_id,
     classify_finding,
 )
 from ai_pr_review.vcs._body import format_body_finding
-from ai_pr_review.vcs._finding_ids import fingerprint
+from ai_pr_review.vcs._finding_ids import fingerprint, fingerprint_for_finding_id
 from ai_pr_review.vcs.github import (
     GitHubConfig,
     GitHubProvider,
@@ -620,7 +621,7 @@ def test_dismiss_inline_reply_verdict_lookup_http_failure_is_logged_not_silently
 
 
 # ---------------------------------------------------------------------------
-# _fingerprint_for_finding_id vs. classify_finding: documented, safe
+# fingerprint_for_finding_id vs. classify_finding: documented, safe
 # divergence when the id-map marker is present but incomplete.
 # ---------------------------------------------------------------------------
 
@@ -628,7 +629,7 @@ def test_dismiss_inline_reply_verdict_lookup_http_failure_is_logged_not_silently
 def test_fingerprint_lookup_safely_diverges_from_classify_when_marker_omits_the_id() -> None:
     """`classify_finding` unconditionally bullet-scans every body first
     (`_scan_body_bullets`), so it finds F5 as BODY regardless of the marker.
-    `_fingerprint_for_finding_id` reuses `_parse_existing_ids`, which takes a
+    `fingerprint_for_finding_id` reuses `_parse_existing_ids`, which takes a
     marker fast-path and skips bullet-scanning entirely whenever a body's
     id-map marker is non-empty -- even if that marker doesn't happen to
     include the specific ID being looked up. This is a real, reachable
@@ -650,7 +651,7 @@ def test_fingerprint_lookup_safely_diverges_from_classify_when_marker_omits_the_
     )
 
     assert classify_finding([review_body], 5).location == FindingLocation.BODY
-    assert _fingerprint_for_finding_id([review_body], 5) is None
+    assert fingerprint_for_finding_id([review_body], 5) is None
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "GET" and "/reviews" in str(req.url):

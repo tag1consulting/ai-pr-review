@@ -80,9 +80,8 @@ def test_strict_false_returns_partial_results_and_records_error() -> None:
     """Same two-page failure shape, but strict=False must keep page 1's
     results and append the failure to self._errors instead of discarding
     everything -- the contract every list_bot_reviews() caller (e.g.
-    ai_pr_review.slash.github_orchestration's classification and
-    ai_pr_review.slash.github_ops's verdict-recording call sites) already
-    relies on."""
+    ai_pr_review.slash.github_ops's F-id classification and
+    verdict-recording call sites) already relies on."""
     page1 = [_review(1, "COMMENTED")]
 
     def handler(req: httpx.Request) -> httpx.Response:
