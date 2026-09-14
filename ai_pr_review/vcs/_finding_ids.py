@@ -209,7 +209,7 @@ def known_fingerprints(prior_bodies: Sequence[str]) -> frozenset[str]:
     body (id-map marker fast path, or bullet-scan fallback for pre-marker
     reviews).
 
-    A pure presence/membership test -- unlike `_fingerprint_for_finding_id`
+    A pure presence/membership test -- unlike `fingerprint_for_finding_id`
     (a reverse ID->fingerprint lookup) this makes no claim about which
     render bucket (inline/in-diff-body/out-of-diff) a fingerprint came from,
     only that it was rendered somewhere before. Used by
@@ -353,12 +353,13 @@ def fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | 
     (bullet-scan) path can recover -- most commonly a legacy pre-marker
     review whose inline findings were never in bullet form to begin with.
 
-    Factored out of `ai_pr_review.slash.github_orchestration._fingerprint_for_finding_id`
-    (which now delegates here) so `ai_pr_review.vcs._canonical` can reuse the
-    same reverse lookup for legacy inline-thread fallback without importing
-    from `ai_pr_review.slash.github_orchestration` (which imports `vcs.github`, and
-    `vcs.github` needs to import `vcs._canonical` -- importing the other way
-    would create a cycle).
+    Lives here (rather than in `ai_pr_review.slash`) so `ai_pr_review.vcs._canonical`
+    can reuse this same reverse lookup for legacy inline-thread fallback
+    without importing from `ai_pr_review.slash.github_orchestration` (which
+    imports `vcs.github`, and `vcs.github` needs to import `vcs._canonical` --
+    importing the other way would create a cycle). `ai_pr_review.slash.github_ops`
+    (split out of `github_orchestration.py` in #849) imports this function
+    directly rather than through a wrapper.
     """
     for fp, fid in _parse_existing_ids(bodies).items():
         if fid == finding_id:

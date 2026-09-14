@@ -247,7 +247,7 @@ def test_parse_error_reply_falls_back_without_a_token() -> None:
 def test_fixed_command_never_writes_to_feedback_store() -> None:
     """"fixed" is not a feedback-store verdict (see SlashCommand.is_feedback_command)
     and does not route through handle_command in production -- it rides the
-    dismiss/dismiss-inline CLI path instead (ai_pr_review/slash/github_orchestration.py).
+    dismiss/dismiss-inline CLI path instead (ai_pr_review/slash/github_ops.py).
     This locks in defense-in-depth: if handle_command ever receives a
     "fixed" command by accident (e.g. a workflow routing bug), it must fail
     soft -- no store write, no crash -- rather than silently persisting a

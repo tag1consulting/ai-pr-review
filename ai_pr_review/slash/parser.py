@@ -132,7 +132,7 @@ class SlashCommand:
         with command="fixed" would reach the model with no interpretive
         rule, and could be misread as a suppression signal for a finding
         that was actually correct. "fixed" rides the dismiss/resolve path
-        only (ai_pr_review/slash/github_orchestration.py) and never touches the
+        only (ai_pr_review/slash/github_ops.py) and never touches the
         learning-loop store.
         """
         return self.canonical_name in ("false-positive", "wont-fix", "feedback")
