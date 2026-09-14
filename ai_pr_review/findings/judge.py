@@ -85,17 +85,19 @@ def _apply_verdicts(
     Rules:
     - ``corroborated is True`` → the *placement* verdict is always ``keep``
       regardless of what the judge said (log DEBUG), but ``Finding.
-      judge_verdict`` still records the judge's raw per-finding verdict
-      (issue tracking this: see PR description). Recording the raw verdict
-      here — rather than collapsing it to the overridden "keep" — is what
-      lets a later analysis distinguish "corroboration saved a finding the
-      judge wanted to downrank" from "the judge agreed with keeping it" by
-      cross-referencing ``judge_verdict`` against ``corroborated``.
+      judge_verdict`` still records the judge's raw per-finding verdict (see
+      #841). Rationale for recording the raw verdict rather than the
+      overridden one lives on ``Finding.judge_verdict``'s field comment in
+      findings/models.py — not repeated here to avoid two copies drifting.
     - ``downrank`` → lower confidence by JUDGE_DOWNRANK_AMOUNT (floor 0),
       set demoted_to_body=True so the finding routes to the review body, and
       set judge_verdict="downrank". Severity is intentionally untouched.
     - ``keep`` → unchanged apart from judge_verdict="keep".
-    - Missing verdict id defaults to ``keep``.
+    - Missing verdict id defaults to ``keep`` (placement-wise, this is the
+      correct fail-soft default). A verdict id the judge's response omitted
+      entirely is logged as a coverage gap — see the warning below — so it
+      stays distinguishable in logs from a genuine "keep" verdict, even
+      though both persist the same ``judge_verdict="keep"`` value today.
 
     Note: the judge pass runs on ``kept`` *after* ``apply_diff_scope`` (see
     orchestrate.py's pipeline order), so a finding can legitimately reach this
@@ -121,6 +123,14 @@ def _apply_verdicts(
             id_to_verdict[vid] = verdict_str
         except (KeyError, TypeError, ValueError):
             continue
+
+    if len(id_to_verdict) < len(kept):
+        logger.warning(
+            "judge: response covered %d/%d candidate id(s); %d finding(s) "
+            "will persist judge_verdict=\"keep\" with no way to distinguish "
+            "an omitted id from a genuine keep verdict",
+            len(id_to_verdict), len(kept), len(kept) - len(id_to_verdict),
+        )
 
     result: list[Finding] = []
     downrank_count = 0

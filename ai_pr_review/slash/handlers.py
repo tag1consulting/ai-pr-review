@@ -73,16 +73,17 @@ def build_entry(
     judge_verdict, corroborated, confidence:
         Judge-pass state for this finding at the moment it was posted,
         recovered by the caller from the inline comment's own metadata
-        marker (``ai_pr_review.vcs.marker.extract_inline_meta``) since this
-        process has no access to the original in-memory ``Finding``. Always
-        written into ``extras`` (as ``"judge_verdict"``/``"corroborated"``/
-        ``"confidence"``) regardless of whether real data was found, so
-        every persisted entry has a consistent, analyzable shape:
-        ``judge_verdict`` is ``None`` and ``confidence`` is ``None`` when the
-        finding predates this feature, was never judged (e.g.
-        ``AI_JUDGE_PASS=false``), or has no per-finding metadata mechanism at
-        all (a body-level finding — see ``DismissResult``'s docstring in
-        ``slash/dismiss.py``); ``corroborated`` defaults to ``False`` in
+        marker (``ai_pr_review.vcs.marker.extract_inline_meta``) for an
+        INLINE finding, or the review body's sibling judge-map marker
+        (``ai_pr_review.vcs.marker.extract_judge_map``) for a BODY finding —
+        either way, since this process has no access to the original
+        in-memory ``Finding``. Always written into ``extras`` (as
+        ``"judge_verdict"``/``"corroborated"``/``"confidence"``) regardless
+        of whether real data was found, so every persisted entry has a
+        consistent, analyzable shape: ``judge_verdict`` is ``None`` and
+        ``confidence`` is ``None`` when the fingerprint can't be resolved,
+        the finding predates this feature, or it was never judged (e.g.
+        ``AI_JUDGE_PASS=false``); ``corroborated`` defaults to ``False`` in
         those same cases.
     """
     extras: dict[str, Any] = {}

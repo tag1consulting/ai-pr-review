@@ -55,7 +55,12 @@ from ai_pr_review.vcs._thread import (
 from ai_pr_review.vcs._thread import (
     first_comment_review_id as _thread_review_id,
 )
-from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, upsert_verdicts_marker
+from ai_pr_review.vcs.marker import (
+    extract_id_map,
+    extract_inline_meta,
+    extract_judge_map,
+    upsert_verdicts_marker,
+)
 
 if TYPE_CHECKING:
     from ai_pr_review.slash.parser import SlashCommand
@@ -110,6 +115,29 @@ class FeedbackContext:
 
 
 @dataclass(frozen=True)
+class InlineFeedbackContext:
+    """Result of `_inline_feedback_context` -- an INLINE finding's
+    feedback-store context, resolved from its own comment body.
+
+    A named dataclass rather than a positional tuple specifically because
+    `corroborated: bool` and `confidence: int | None` sit adjacent to each
+    other: `bool` is a subtype of `int` in Python's type system, so a
+    positional swap between them would type-check cleanly and only surface
+    as bad data in the feedback store. Matches this file's existing
+    convention (`ClassifiedFinding`, `FeedbackContext`, `DismissResult`) for
+    exactly this reason.
+    """
+
+    eligible: bool
+    source: str
+    rule_id: str
+    finding_id: int | None
+    judge_verdict: str | None
+    corroborated: bool
+    confidence: int | None
+
+
+@dataclass(frozen=True)
 class DismissResult:
     """Outcome of a dismiss/false-positive/wont-fix orchestration call."""
 
@@ -142,15 +170,14 @@ class DismissResult:
     # exists so that distinction never has to double as "should we write".
     feedback_eligible: bool = False
     # Judge-pass state for the feedback-store entry's `extras` (judge-verdict
-    # instrumentation): read back from the inline comment's own metadata
-    # marker (`vcs.marker.extract_inline_meta`) for an INLINE finding, since
-    # this CLI process has no access to the original in-memory `Finding`.
-    # Always at their defaults (None/False/None) for a BODY-level finding —
-    # the id-map marker backing body findings carries only a bare
-    # fingerprint-to-F-id map, no per-finding metadata, so there is no
-    # mechanism to recover this state for that path today. Also default when
-    # the finding predates this feature (old-format marker) or never went
-    # through the judge pass at all.
+    # instrumentation, #841): read back from the inline comment's own
+    # metadata marker (`vcs.marker.extract_inline_meta`) for an INLINE
+    # finding, or from the review body's sibling judge-map marker
+    # (`vcs.marker.extract_judge_map`, via `_judge_data_for_finding_id`) for a
+    # BODY finding — either way, since this CLI process has no access to the
+    # original in-memory `Finding`. Default (None/False/None) when the
+    # fingerprint can't be resolved, the finding predates this feature, or it
+    # never went through the judge pass at all.
     feedback_judge_verdict: str | None = None
     feedback_corroborated: bool = False
     feedback_confidence: int | None = None
@@ -340,6 +367,36 @@ def _fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str |
     every existing call site in this module refers to it by this name.
     """
     return fingerprint_for_finding_id(bodies, finding_id)
+
+
+def _judge_data_for_finding_id(
+    bodies: Sequence[str], finding_id: int
+) -> tuple[str | None, bool, int | None]:
+    """Recover a BODY-level finding's judge-pass state (judge-verdict
+    instrumentation, #841), or (None, False, None) if unavailable.
+
+    Mirrors `_fingerprint_for_finding_id`'s reverse-lookup pattern: resolve
+    the fingerprint first, then scan `bodies` (already newest-first) for the
+    first judge-map marker (`vcs.marker.extract_judge_map`) carrying an
+    entry for that fingerprint. Returns the defaults whenever the fingerprint
+    can't be resolved, no body carries a judge-map entry for it (the finding
+    predates this feature, or never went through the judge pass), or the
+    entry fails validation inside `extract_judge_map` itself.
+    """
+    fp = _fingerprint_for_finding_id(bodies, finding_id)
+    if fp is None:
+        return None, False, None
+    for body in bodies:
+        entry = extract_judge_map(body).get(fp)
+        if entry is not None:
+            jv = entry.get("jv")
+            conf = entry.get("conf")
+            return (
+                jv if isinstance(jv, str) else None,
+                entry.get("corr") is True,
+                conf if isinstance(conf, int) else None,
+            )
+    return None, False, None
 
 
 def _record_verdict(
@@ -810,6 +867,9 @@ def dismiss_by_finding_id(
         )
         if is_analyzer_source(classified.source):
             reply += _ANALYZER_SUPPRESSION_HINT
+        judge_verdict, corroborated, confidence = _judge_data_for_finding_id(
+            bodies, finding_id
+        )
         return DismissResult(
             reply=reply,
             feedback_source=classified.source,
@@ -817,6 +877,9 @@ def dismiss_by_finding_id(
             feedback_rule_id=classified.rule_id,
             feedback_finding_id=finding_id,
             feedback_eligible=True,
+            feedback_judge_verdict=judge_verdict,
+            feedback_corroborated=corroborated,
+            feedback_confidence=confidence,
             acted=True,
             active_body_ids=tuple(list_active_body_ids(bodies)),
             errors=tuple(errors),
@@ -941,18 +1004,10 @@ def dismiss_by_finding_id(
     # with no extra API call, since `target_thread` is already in hand -- see
     # `_inline_feedback_context`'s docstring. Computed before the reply text
     # below so a static-analyzer source (issue #775) can append the durable-
-    # suppression hint to that same reply; `inline_feedback_eligible` already
+    # suppression hint to that same reply; `inline_ctx.eligible` already
     # encodes "thread actually resolved and command is a real verdict", which
     # is exactly the gate the hint needs too.
-    (
-        inline_feedback_eligible,
-        inline_source,
-        inline_rule_id,
-        inline_finding_id,
-        inline_judge_verdict,
-        inline_corroborated,
-        inline_confidence,
-    ) = _inline_feedback_context(
+    inline_ctx = _inline_feedback_context(
         _first_comment_body(target_thread), resolved=resolved, command=command
     )
 
@@ -974,7 +1029,7 @@ def dismiss_by_finding_id(
             f"@{actor} marked **F{finding_id}** as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
-    if inline_feedback_eligible and is_analyzer_source(inline_source):
+    if inline_ctx.eligible and is_analyzer_source(inline_ctx.source):
         reply += _ANALYZER_SUPPRESSION_HINT
 
     return DismissResult(
@@ -982,14 +1037,14 @@ def dismiss_by_finding_id(
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         pr_approved=pr_approved,
-        feedback_source=inline_source,
-        feedback_file=str(target_thread.get("path") or "") if inline_feedback_eligible else "",
-        feedback_rule_id=inline_rule_id,
-        feedback_finding_id=inline_finding_id,
-        feedback_eligible=inline_feedback_eligible,
-        feedback_judge_verdict=inline_judge_verdict,
-        feedback_corroborated=inline_corroborated,
-        feedback_confidence=inline_confidence,
+        feedback_source=inline_ctx.source,
+        feedback_file=str(target_thread.get("path") or "") if inline_ctx.eligible else "",
+        feedback_rule_id=inline_ctx.rule_id,
+        feedback_finding_id=inline_ctx.finding_id,
+        feedback_eligible=inline_ctx.eligible,
+        feedback_judge_verdict=inline_ctx.judge_verdict,
+        feedback_corroborated=inline_ctx.corroborated,
+        feedback_confidence=inline_ctx.confidence,
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )
@@ -1029,9 +1084,8 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
 
 def _inline_feedback_context(
     body: str, *, resolved: bool, command: str
-) -> tuple[bool, str, str, int | None, str | None, bool, int | None]:
-    """Compute ``(feedback_eligible, source, rule_id, finding_id,
-    judge_verdict, corroborated, confidence)`` for an INLINE finding's
+) -> InlineFeedbackContext:
+    """Compute an `InlineFeedbackContext` for an INLINE finding's
     feedback-store entry.
 
     Shared by `dismiss_by_finding_id`'s INLINE branch (top-level comment
@@ -1060,7 +1114,10 @@ def _inline_feedback_context(
     predates this feature, or the finding never went through the judge pass.
     """
     if not (resolved and command != "fixed"):
-        return False, "", "", None, None, False, None
+        return InlineFeedbackContext(
+            eligible=False, source="", rule_id="", finding_id=None,
+            judge_verdict=None, corroborated=False, confidence=None,
+        )
     classified = parse_inline_comment_header(body)
     finding_id_match = _ID_RE.search(body)
     finding_id = int(finding_id_match.group(1)) if finding_id_match is not None else None
@@ -1068,14 +1125,14 @@ def _inline_feedback_context(
     judge_verdict = meta.judge_verdict if meta is not None else None
     corroborated = meta.corroborated if meta is not None else False
     confidence = meta.confidence if meta is not None else None
-    return (
-        True,
-        classified.source,
-        classified.rule_id,
-        finding_id,
-        judge_verdict,
-        corroborated,
-        confidence,
+    return InlineFeedbackContext(
+        eligible=True,
+        source=classified.source,
+        rule_id=classified.rule_id,
+        finding_id=finding_id,
+        judge_verdict=judge_verdict,
+        corroborated=corroborated,
+        confidence=confidence,
     )
 
 
@@ -1353,17 +1410,9 @@ def dismiss_inline_reply(
     # fetch_review_comment. See `_inline_feedback_context`'s docstring.
     # Computed before the reply text below so a static-analyzer source
     # (issue #775) can append the durable-suppression hint to that same
-    # reply; `inline_feedback_eligible` already encodes "thread actually
+    # reply; `inline_ctx.eligible` already encodes "thread actually
     # resolved and command is a real verdict", the same gate the hint needs.
-    (
-        inline_feedback_eligible,
-        inline_source,
-        inline_rule_id,
-        inline_finding_id,
-        inline_judge_verdict,
-        inline_corroborated,
-        inline_confidence,
-    ) = _inline_feedback_context(body, resolved=resolved, command=command)
+    inline_ctx = _inline_feedback_context(body, resolved=resolved, command=command)
 
     sha_citation = _sha_citation(commit_sha) if command == "fixed" else ""
     if resolved and pr_approved:
@@ -1380,7 +1429,7 @@ def dismiss_inline_reply(
             f"@{actor} marked as `{command}`{sha_citation}, "
             "but could not resolve the thread; see errors."
         )
-    if inline_feedback_eligible and is_analyzer_source(inline_source):
+    if inline_ctx.eligible and is_analyzer_source(inline_ctx.source):
         reply += _ANALYZER_SUPPRESSION_HINT
 
     return DismissResult(
@@ -1388,14 +1437,14 @@ def dismiss_inline_reply(
         thread_resolved=resolved,
         review_dismissed=review_dismissed,
         pr_approved=pr_approved,
-        feedback_source=inline_source,
-        feedback_file=str(target_thread.get("path") or "") if inline_feedback_eligible else "",
-        feedback_rule_id=inline_rule_id,
-        feedback_finding_id=inline_finding_id,
-        feedback_eligible=inline_feedback_eligible,
-        feedback_judge_verdict=inline_judge_verdict,
-        feedback_corroborated=inline_corroborated,
-        feedback_confidence=inline_confidence,
+        feedback_source=inline_ctx.source,
+        feedback_file=str(target_thread.get("path") or "") if inline_ctx.eligible else "",
+        feedback_rule_id=inline_ctx.rule_id,
+        feedback_finding_id=inline_ctx.finding_id,
+        feedback_eligible=inline_ctx.eligible,
+        feedback_judge_verdict=inline_ctx.judge_verdict,
+        feedback_corroborated=inline_ctx.corroborated,
+        feedback_confidence=inline_ctx.confidence,
         acted=bool(resolved or review_dismissed or pr_approved),
         errors=tuple(errors),
     )

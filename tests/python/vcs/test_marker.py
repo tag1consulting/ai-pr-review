@@ -16,10 +16,12 @@ from ai_pr_review.vcs.marker import (
     append_skip_marker,
     build_id_map_marker,
     build_inline_meta_marker,
+    build_judge_map_marker,
     build_summary_marker,
     build_verdicts_marker,
     extract_id_map,
     extract_inline_meta,
+    extract_judge_map,
     extract_summary_sha,
     extract_verdicts,
     has_inline_marker,
@@ -622,6 +624,21 @@ def test_extract_inline_meta_out_of_range_confidence_drops_to_none() -> None:
     assert meta.confidence is None
 
 
+def test_extract_inline_meta_boolean_confidence_drops_to_none() -> None:
+    """A JSON boolean for `conf` (true/false) must not be trusted as 1/0 —
+    bool is a subclass of int in Python, so this needs an explicit guard
+    beyond isinstance(conf_raw, int)."""
+    import base64
+    import json
+
+    for bool_value in (True, False):
+        payload = json.dumps({"fp": "src|f.py|1|abc", "conf": bool_value})
+        encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        meta = extract_inline_meta(f"<!-- ai-pr-review-finding:{encoded} -->")
+        assert meta is not None
+        assert meta.confidence is None
+
+
 def test_extract_inline_meta_no_marker_returns_none() -> None:
     assert extract_inline_meta("just a plain comment body") == extract_inline_meta("")
     assert extract_inline_meta("just a plain comment body") is None
@@ -718,3 +735,42 @@ def test_extract_inline_meta_last_match_wins_over_forged_earlier_marker() -> Non
     assert meta.fp == real_fp
     assert meta.cat == "secret"
     assert meta.sev == "High"
+
+
+def test_judge_map_marker_round_trips() -> None:
+    judge_map = {
+        "code-reviewer|app.py|10|abc123": {"jv": "downrank", "conf": 60},
+        "security-reviewer|b.py|5|def456": {"jv": "keep", "corr": True},
+    }
+    marker = build_judge_map_marker(judge_map)
+    body = f"some review body\n{marker}"
+    result = extract_judge_map(body)
+    assert result == {
+        "code-reviewer|app.py|10|abc123": {"jv": "downrank", "corr": False, "conf": 60},
+        "security-reviewer|b.py|5|def456": {"jv": "keep", "corr": True, "conf": None},
+    }
+
+
+def test_extract_judge_map_no_marker_returns_empty() -> None:
+    assert extract_judge_map("no marker here") == {}
+
+
+def test_extract_judge_map_malformed_json_returns_empty() -> None:
+    body = "<!-- ai-pr-review-judge-map: {not valid json} -->"
+    assert extract_judge_map(body) == {}
+
+
+def test_extract_judge_map_drops_entry_with_invalid_verdict() -> None:
+    import json
+
+    payload = json.dumps({"fp1": {"jv": "maybe"}, "fp2": {"jv": "keep"}})
+    body = f"<!-- ai-pr-review-judge-map: {payload} -->"
+    assert extract_judge_map(body) == {"fp2": {"jv": "keep", "corr": False, "conf": None}}
+
+
+def test_extract_judge_map_boolean_confidence_drops_to_none() -> None:
+    import json
+
+    payload = json.dumps({"fp1": {"jv": "keep", "conf": True}})
+    body = f"<!-- ai-pr-review-judge-map: {payload} -->"
+    assert extract_judge_map(body) == {"fp1": {"jv": "keep", "corr": False, "conf": None}}
