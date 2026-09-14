@@ -18,6 +18,7 @@ The action uses the Python engine in `ai_pr_review/`.
 | `ai_pr_review/review/preflight.py` | Pre-review LLM agents: `run_summarizer` (pr-summarizer) and `run_issue_linker` (issue-linker); `fetch_open_issues` gh-CLI helper; all fail-soft |
 | `ai_pr_review/review/reporting.py` | Post-review output. Token usage (#758): `build_token_table_accordion` (full `<details>` table, `full` mode + step summary), `build_token_usage_line` (compact one-line summary, default mode), `build_high_usage_warning` (threshold-gated warning, kept structurally separate from the table/line), `build_full_token_table` (bare table for the job-log echo), `compute_token_totals`/`ci_run_url` (shared totals + best-effort run link). Plus `write_step_summary` (GITHUB_STEP_SUMMARY, always full table) and `emit_review_result` (stderr echo, includes the job-log table echo). |
 | `ai_pr_review/review/{compute,outcome,watermark}.py` | Pre-flight diff compute / `APPROVE`/`REQUEST_CHANGES`/`COMMENT` decision / SHA-marker rewrite |
+| `ai_pr_review/review/cost_ceiling.py` | (#24) Pre-flight cost estimate/ceiling, run before any agent dispatches: `estimate_review_cost()` (main `run_tier`-dispatched roster), `estimate_preflight_agent_cost()` (`pr-summarizer`/`issue-linker`), `merge_cost_estimates()`, `log_cost_estimate()` (always-on structured `COST_ESTIMATE` log line), `enforce_cost_ceiling()`/`CostCeilingExceeded` (raised when `AI_MAX_COST_USD` is set and exceeded, caught in `runtime.py` and turned into a `SkipPlan`, reusing the existing skip-comment machinery) |
 | `ai_pr_review/agents/dispatch.py` | Agent dispatch: `dispatch_tier` runs eligible agents concurrently via `LLMClient`, builds system + user prompts, applies per-agent token budgets |
 | `ai_pr_review/agents/{roster,gates,summarizer}.py` | Agent specs and tier mapping / conditional eligibility / pr-summarizer wrapper |
 | `ai_pr_review/llm/client.py` + `llm/{anthropic,openai,openai_compatible,google,bedrock}.py` | Provider-specific `LLMRequest`/`LLMResponse` plumbing; Anthropic + Bedrock paths use `cache_control: ephemeral` for prompt caching |
@@ -65,6 +66,12 @@ Before merging a model-default or new-model-support PR:
 3. Disclose in the PR description what was verified: which model(s), against which diff, what the canary reported. "Verified" means verified against something hard, not verified against something.
 
 See `tests/canary/live_model_canary.py`'s module docstring and the #592 test-plan writeup for the full reasoning; this is one required step from that plan (the "process" tier), not the whole plan.
+
+### CHECKPOINT: live-model harness runs require explicit human approval first
+
+`tests/canary/live_model_canary.py` and `tests/canary/consistency_eval.py` (and the `Live Model Canary` GitHub workflow's `workflow_dispatch` trigger) make **real, billed Anthropic API calls** against a full corpus (`tests/canary/corpus/`, 14 fixtures as of E9.S2) — not a single request. They are known to have exhausted the shared `ANTHROPIC_API_KEY` used by both this repo's CI and local harness testing (workspace-level quota, blocked until 2026-10-01): Anthropic's own usage export shows ~$142 of a ~$149 six-day total for that key landed on 2026-09-12/09-13, correlating exactly with Epic 9's harness/corpus work (#800, #809, #811, #834, #835), against a same-window CI-workflow total of only ~$7.32 measured directly from GitHub Actions job logs — confirming the harness runs, not the CI review workflow, were the overwhelming majority of the spend.
+
+**Before running either script locally, triggering the `Live Model Canary` workflow, or running any corpus-mode multi-fixture/multi-run evaluation against a real provider key: stop and get explicit confirmation from a human first.** State what you're about to run, against which corpus/fixture count, how many models/runs, and that it will incur real API cost — then wait. This applies regardless of any earlier approval in the same session; a green-light for a single canary check does not authorize a full corpus sweep or a repeated consistency-eval run. A single narrow `live_model_canary.py` run against one model/one diff (the "process" tier step above) is comparatively cheap and is not itself the concern — the corpus-mode and consistency-eval multi-run sweeps are the expensive ones.
 
 ## Adding a new agent (Python engine)
 
@@ -124,7 +131,7 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 ```bash
 pip install -e ".[dev,context]"
 pytest tests/python -q                  # < 60s
-mypy ai_pr_review/                      # 97 source files, must be clean
+mypy ai_pr_review/                      # 99 source files, must be clean
 ruff check ai_pr_review/ tests/python/  # E,F,W,I,UP,B,SIM rules
 ```
 
