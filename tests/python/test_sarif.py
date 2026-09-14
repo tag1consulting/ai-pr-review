@@ -4,6 +4,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from ai_pr_review.analyzers.sarif import _sanitize_sarif_path, load_sarif_files
 
 
@@ -288,27 +290,73 @@ def test_sanitize_sarif_path_rejects_extra_leading_slashes() -> None:
     assert _sanitize_sarif_path("file://///abs/path") == ""
 
 
-def test_sanitize_sarif_path_strips_github_actions_workspace_prefix() -> None:
+def test_sanitize_sarif_path_strips_github_actions_workspace_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Ruff emits file:///home/runner/work/<owner>/<repo>/src/foo.py.
     After scheme stripping this is home/runner/work/<owner>/<repo>/src/foo.py,
-    which must be reduced to src/foo.py to match diff paths."""
+    which must be reduced to src/foo.py to match diff paths.
+
+    GITHUB_WORKSPACE is explicitly unset here so this exercises the
+    regex-fallback path (no GITHUB_WORKSPACE prefix to match against)."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
     uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
     assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
 
 
-def test_sanitize_sarif_path_strips_runner_prefix_without_home() -> None:
+def test_sanitize_sarif_path_strips_runner_prefix_without_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Some runner configurations omit /home, giving runner/work/... directly."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
     uri = "file:///runner/work/myorg/myrepo/src/bar.py"
     assert _sanitize_sarif_path(uri) == "src/bar.py"
 
 
-def test_sanitize_sarif_path_does_not_strip_non_runner_paths() -> None:
+def test_sanitize_sarif_path_does_not_strip_non_runner_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Paths that look like workspace dirs but aren't the runner pattern
     must not be silently truncated."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
     # Plain relative path — unchanged
     assert _sanitize_sarif_path("ai_pr_review/sarif_smoke_test.py") == "ai_pr_review/sarif_smoke_test.py"
     # file:// with a non-runner absolute path — stripped of scheme/slash only
     assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
+
+
+def test_sanitize_sarif_path_strips_github_workspace_prefix_self_hosted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #846: a self-hosted runner can check out anywhere, so the
+    hardcoded runner/work/<owner>/<repo>/ regex never matches its paths.
+    GITHUB_WORKSPACE names the real checkout root regardless of runner type
+    and must be preferred over the regex heuristic."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/opt/actions-runner/_work/ai-pr-review/ai-pr-review")
+    uri = "file:///opt/actions-runner/_work/ai-pr-review/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_github_workspace_takes_priority_over_regex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When GITHUB_WORKSPACE is set and matches, it must be used even for a
+    path shaped like the GitHub-hosted-runner regex pattern -- the regex is
+    a fallback, not a competing strategy."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/home/runner/work/tag1consulting/ai-pr-review")
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_github_workspace_mismatch_falls_back_to_regex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GITHUB_WORKSPACE that doesn't prefix-match the given path (e.g. a
+    stale/misconfigured env, or a path from a different job) must fall back
+    to the regex heuristic rather than leaving the path untouched."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/some/other/checkout/root")
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
 
 
 def test_finding_with_traversal_uri_drops_file_field() -> None:

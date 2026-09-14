@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
@@ -48,12 +49,18 @@ def _sanitize_sarif_path(uri: str) -> str:
     and raw relative paths.
 
     Workspace-root stripping: tools like Ruff emit absolute ``file://`` URIs
-    rooted at the GitHub Actions runner workspace
-    (``/home/runner/work/<owner>/<repo>/``).  After scheme stripping this
-    becomes ``home/runner/work/<owner>/<repo>/src/foo.py``, which never matches
-    repo-relative diff paths.  We detect this pattern and strip the leading
-    ``home/runner/work/<two-segment-repo-path>/`` prefix so the result is the
-    bare repo-relative path that the diff uses.
+    rooted at the job's checkout directory.  On a GitHub-hosted runner that is
+    ``/home/runner/work/<owner>/<repo>/``; a self-hosted runner can check out
+    anywhere (a custom `_work` root, a persistent agent directory, etc.), and
+    the hardcoded runner-path pattern below never matches those.  ``GITHUB_WORKSPACE``
+    is set by the Actions runtime to the actual checkout root regardless of
+    runner type, so it is checked first and stripped when present; the
+    ``runner/work/<owner>/<repo>/`` regex remains as a fallback for the case
+    where ``GITHUB_WORKSPACE`` isn't set at all (e.g. a SARIF file produced
+    outside of Actions and fed in via the `sarif-paths` input).  This is a
+    SARIF/host-side normalization distinct from
+    `analyzers/native/_paths.py::strip_workspace_prefix()` (container-side,
+    used by native analyzer subprocess output) -- see issue #846.
     """
     import re as _re
 
@@ -90,16 +97,26 @@ def _sanitize_sarif_path(uri: str) -> str:
         logger.warning("SARIF: rejecting path with '..' segments: %r", uri)
         return ""
 
-    # Strip GitHub Actions runner workspace prefix so repo-relative paths
-    # produced by tools (Ruff, etc.) match the diff.
-    # Pattern: home/runner/work/<owner>/<repo>/<rest>
-    #      or: runner/work/<owner>/<repo>/<rest>  (some runner configurations)
-    stripped = _re.sub(
+    # Strip the job's checkout-root prefix so repo-relative paths produced by
+    # tools (Ruff, etc.) match the diff. Prefer GITHUB_WORKSPACE -- the
+    # Actions runtime sets it to the real checkout root on every runner type,
+    # hosted or self-hosted -- over the hardcoded GitHub-hosted-runner regex
+    # below, which a self-hosted runner's own checkout path won't match.
+    path_str = str(pp)
+    workspace = os.environ.get("GITHUB_WORKSPACE", "")
+    if workspace:
+        workspace_prefix = workspace.strip("/") + "/"
+        if path_str.startswith(workspace_prefix):
+            return path_str[len(workspace_prefix):]
+
+    # Fallback for when GITHUB_WORKSPACE isn't set (e.g. a SARIF file
+    # produced outside of Actions). Pattern: home/runner/work/<owner>/<repo>/<rest>
+    #                                    or: runner/work/<owner>/<repo>/<rest>
+    return _re.sub(
         r"^(?:home/)?runner/work/[^/]+/[^/]+/",
         "",
-        str(pp),
+        path_str,
     )
-    return stripped
 
 
 def _parse_sarif_file(path: str) -> list[Finding]:

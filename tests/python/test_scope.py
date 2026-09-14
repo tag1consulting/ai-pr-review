@@ -90,6 +90,30 @@ def test_phpstan_out_of_diff_capped() -> None:
     assert result[0].out_of_diff
 
 
+def test_absolute_file_path_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Issue #846: an absolute Finding.file is always demoted to Low/
+    out_of_diff (it can never match the diff's repo-relative (file, line)
+    pairs) with no signal beyond that silent severity drop -- exactly how
+    #713's ruff/docs-api-check path leak hid until a human noticed it. A
+    cheap warning must fire so this bug class surfaces in logs immediately."""
+    f = _phpcs("/workspace/ai-pr-review/web/quickbooks.inc", 10)
+    with caplog.at_level("WARNING"):
+        result = apply_diff_scope([f], _DIFF)
+    assert result[0].severity == "Low"
+    assert result[0].out_of_diff
+    assert "absolute file path" in caplog.text
+    assert "/workspace/ai-pr-review/web/quickbooks.inc" in caplog.text
+    assert "phpcs" in caplog.text
+
+
+def test_relative_file_path_does_not_log_warning(caplog: pytest.LogCaptureFixture) -> None:
+    f = _phpcs("web/quickbooks.inc", 10)
+    with caplog.at_level("WARNING"):
+        result = apply_diff_scope([f], _DIFF)
+    assert not result[0].out_of_diff
+    assert "absolute file path" not in caplog.text
+
+
 def test_finding_without_line_not_capped() -> None:
     f = Finding(severity="High", confidence=80, finding="body finding", source="phpcs", file="web/quickbooks.inc")
     result = apply_diff_scope([f], _DIFF)

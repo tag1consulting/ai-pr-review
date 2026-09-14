@@ -21,7 +21,10 @@ from ai_pr_review.analyzers.native.docs_comments import (
     _run_docs_api_check,
     _tree_sitter_api_findings,
 )
+from ai_pr_review.diff.linemap import parse_added_lines
+from ai_pr_review.findings.scope import apply_diff_scope
 from ai_pr_review.manifest import ChangedFiles
+from ai_pr_review.vcs._inline import is_inline_eligible
 
 # tree-sitter-language-pack is an optional dependency (the [context] extra);
 # CI's lint/test workflow installs only [dev], never [context] (verified
@@ -383,6 +386,33 @@ class TestPythonPaths:
         assert len(findings) == 1
         assert findings[0].file == "ai_pr_review/vcs/github.py"
         assert not findings[0].file.startswith("/")
+
+        # Issue #846: the string-shape assertions above are necessary but not
+        # sufficient -- #713's actual user-visible symptom was an absolute
+        # path silently losing diff-scope/inline-comment eligibility (an
+        # unstripped path can never match the diff's repo-relative (file,
+        # line) pairs). Prove the *stripped* Finding is actually usable: a
+        # diff touching ai_pr_review/vcs/github.py's line 1122 (the finding's
+        # own line) must keep it in-diff, not capped to Low/out_of_diff, and
+        # it must be eligible for an inline PR comment on that exact line.
+        diff_text = (
+            "diff --git a/ai_pr_review/vcs/github.py b/ai_pr_review/vcs/github.py\n"
+            "index 0000000..1111111 100644\n"
+            "--- a/ai_pr_review/vcs/github.py\n"
+            "+++ b/ai_pr_review/vcs/github.py\n"
+            "@@ -1122,1 +1122,1 @@\n"
+            "-def _build_inline_comment_body(f):\n"
+            "+def _build_inline_comment_body(f: str):\n"
+        )
+        scoped = apply_diff_scope(findings, diff_text)
+        assert len(scoped) == 1
+        assert not scoped[0].out_of_diff, "stripped path should be recognized as in-diff, not capped"
+        assert scoped[0].severity == findings[0].severity, "in-diff findings keep their original severity"
+
+        eligible_new = {(lr.file, lr.line) for lr in parse_added_lines(diff_text)}
+        assert is_inline_eligible(findings[0], eligible_new), (
+            "stripped repo-relative path must be inline-comment-eligible on its own diff line"
+        )
 
     def test_ruff_timeout_returns_none_gracefully(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp

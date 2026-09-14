@@ -192,6 +192,32 @@ class TestRunPhpstanFindings:
             findings = _run_phpstan(cf, Path("/dev/null"))
         assert findings[0].file == "src/MyService.php"
 
+    def test_github_workspace_prefix_stripped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Issue #846: consolidated onto _paths.strip_workspace_prefix(), which
+        prefers GITHUB_WORKSPACE over cwd -- needed for a self-hosted runner
+        whose checkout root isn't this process's cwd."""
+        monkeypatch.setenv("GITHUB_WORKSPACE", "/opt/actions-runner/_work/repo/repo")
+        payload = json.dumps({
+            "totals": {"errors": 1, "file_errors": 1},
+            "files": {
+                "/opt/actions-runner/_work/repo/repo/src/MyService.php": {
+                    "errors": 1,
+                    "messages": [{"message": "Type error", "line": 10, "ignorable": True}],
+                }
+            },
+            "errors": [],
+        })
+        f = tmp_path / "MyService.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_phpstan(cf, Path("/dev/null"))
+        assert findings[0].file == "src/MyService.php"
+
     def test_exitcode_2_returns_empty_with_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         f = tmp_path / "MyService.php"
         f.write_text("<?php\n")

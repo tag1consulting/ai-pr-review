@@ -22,11 +22,14 @@ analyzer findings entirely instead of downgrading them.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 
 from ai_pr_review.diff.linemap import parse_added_lines
 from ai_pr_review.findings.models import Finding
+
+logger = logging.getLogger(__name__)
 
 # Analyzer source prefixes that identify native-tool findings.  LLM-agent
 # findings use agent names (code-reviewer, security-reviewer, etc.) which
@@ -106,6 +109,22 @@ def apply_diff_scope(
         if not _is_analyzer(f) or not f.file or not f.line:
             result.append(f)
             continue
+
+        # An absolute Finding.file can never match the repo-relative
+        # (file, line) pairs parse_added_lines() derives from the diff, so it
+        # is always treated as out-of-diff and silently capped to Low below —
+        # exactly how issue #713's ruff/docs-api-check path-leak hid until a
+        # dogfood review caught it by hand. Every analyzer is expected to emit
+        # repo-relative paths (see CONTRIBUTING.md); this warning is a cheap,
+        # pipeline-wide tripwire so the next instance of this bug class (#846)
+        # surfaces in logs immediately instead of just quietly losing severity.
+        if f.file.startswith("/"):
+            logger.warning(
+                "[ai-pr-review] WARNING: analyzer finding has an absolute file path %r "
+                "(source=%s) -- Finding.file must be repo-relative; this analyzer likely "
+                "needs path normalization (see issue #713/#846). Treating as out-of-diff.",
+                f.file, f.source,
+            )
 
         in_diff = (f.file, f.line) in eligible
         if in_diff:

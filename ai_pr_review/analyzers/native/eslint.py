@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
+from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -131,13 +132,12 @@ def _eslint_items(data: Any) -> list[tuple[str, dict[str, Any]]] | None:
         logger.warning("[ai-pr-review] WARNING: eslint produced unexpected output structure; skipping.")
         return None
 
-    cwd_prefix = str(Path.cwd()) + "/"
     items: list[tuple[str, dict[str, Any]]] = []
     for file_entry in data:
         if not isinstance(file_entry, dict):
             continue
         file_path = file_entry.get("filePath") or ""
-        rel_path = file_path[len(cwd_prefix):] if file_path.startswith(cwd_prefix) else file_path
+        rel_path = strip_workspace_prefix(file_path)
         messages = file_entry.get("messages") or []
         if not isinstance(messages, list):
             continue
