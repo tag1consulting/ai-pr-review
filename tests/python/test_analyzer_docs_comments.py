@@ -349,6 +349,41 @@ class TestPythonPaths:
         assert findings[0].source == "docs-api-check"
         assert findings[0].line == 3
 
+    def test_container_absolute_path_stripped_to_repo_relative(self, tmp_path: Path) -> None:
+        """Regression test for #713.
+
+        ruff's JSON `filename` field is always absolute/cwd-resolved, even
+        when the file was named relatively on the command line -- this repo's
+        own dogfood review observed this as a leaked `/workspace/...`
+        container path in a docs-api-check Finding. GITHUB_WORKSPACE simulates
+        running from a different cwd than the repo root (the containerized
+        case): the file "lives" at <workspace>/ai_pr_review/vcs/github.py, and
+        ruff reports that absolute path verbatim in its JSON, exactly as
+        observed live. Finding.file must come out repo-relative like every
+        other analyzer/agent's, not as the raw absolute path.
+        """
+        import os as _os
+
+        workspace = "/workspace/ai-pr-review"
+        f = tmp_path / "a.py"
+        f.write_text("def foo():\n    pass\n")
+        cf = _make_cf(python=[str(f)])
+        payload = json.dumps([{
+            "code": "D417", "filename": f"{workspace}/ai_pr_review/vcs/github.py",
+            "location": {"row": 1122, "column": 5},
+            "message": "Missing argument description in the docstring for `_build_inline_comment_body`: `f`",
+        }])
+        with (
+            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/ruff"),
+            patch("ai_pr_review.analyzers.native.docs_comments.subprocess.run") as mock_run,
+            patch.dict(_os.environ, {"GITHUB_WORKSPACE": workspace}),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            findings = _run_docs_api_check(cf, Path("/dev/null"))
+        assert len(findings) == 1
+        assert findings[0].file == "ai_pr_review/vcs/github.py"
+        assert not findings[0].file.startswith("/")
+
     def test_ruff_timeout_returns_none_gracefully(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp
         f = tmp_path / "a.py"

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`docs-api-check` emitted absolute container paths as `Finding.file` instead of repo-relative paths (issue #713)**. Root cause: ruff's JSON output is always cwd-resolved/absolute regardless of input path style; the general `ruff` analyzer already stripped a workspace-prefix to compensate, but `docs_comments.py`'s separate `ruff --isolated` invocation (kept isolated deliberately to avoid inheriting a consumer repo's own ruff config) never got that treatment. Extracted the shared stripping logic into `ai_pr_review/analyzers/native/_paths.py::strip_workspace_prefix()`, used by both call sites.
+
 ### Changed
 
 - **Unified duplicated VCS-provider CRUD/thread-counting logic (issue #822, Epic 9 Phase C)**. `github.py`/`gitlab.py`/`bitbucket.py`'s `post_summary`/`post_skip_comment`/`advance_sha_watermark` each independently re-implemented the same find-or-create-then-update / patch-in-place control flow; extracted into shared `ai_pr_review/vcs/_upsert.py` helpers. `github.py`'s module-level `_first_comment_body`/`_first_comment_author_login`/`_first_comment_review_id` duplicated `slash/dismiss.py`'s equivalents; both now share `ai_pr_review/vcs/_thread.py`, which also factors out the "unresolved threads per owning review" counting loop duplicated across `github.py`'s `_dismiss_stale_reviews` and `dismiss.py`'s `_dismiss_if_all_resolved`/`_approve_if_pr_fully_resolved`. Pure refactor, zero behavior change — see PR body for what was verified and what was intentionally left alone (the `bot_login=None` vs. normalized `graphql_bot_login(...)` difference between `dismiss.py` and `github.py`'s call sites is a deliberate, test-locked design choice, not something this PR "fixes").
