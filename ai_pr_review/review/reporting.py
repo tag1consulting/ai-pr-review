@@ -35,10 +35,18 @@ def _build_token_log(
     builds them from ``AgentResult.token_log`` plus the synthetic
     ``judge-pass`` row.
 
-    ``effective_max_tokens`` is the user-configured cap from
-    ``DispatchContext.max_tokens_per_agent`` (i.e. ``AI_MAX_TOKENS_PER_AGENT``).
-    When > 0 it overrides the per-agent roster default so the table reflects
-    the actual cap sent to the LLM rather than the hard-coded roster value.
+    ``effective_max_tokens`` is a fallback only, for an ``AgentResult`` that
+    predates the ``effective_max_tokens`` field (e.g. replayed/historical
+    data, or a test fixture built without it) -- it's the user-configured
+    cap from ``DispatchContext.max_tokens_per_agent`` (i.e.
+    ``AI_MAX_TOKENS_PER_AGENT``). A real, freshly-dispatched
+    ``AgentResult.effective_max_tokens`` always takes precedence: it's the
+    exact value `agents/dispatch.py` resolved through the full precedence
+    chain (per-agent ``AI_MAX_TOKENS_<AGENT>`` override > this global
+    override > the roster default), so it's never stale even when a
+    per-agent override (#191) is in effect -- unlike re-deriving the cap
+    from just the roster default and this one global override, which has
+    no way to know a per-agent override fired.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.agents.roster import AGENTS
@@ -49,7 +57,12 @@ def _build_token_log(
     for ar in successes:
         if isinstance(ar, AgentResult) and ar.token_log is not None:
             tl = ar.token_log
-            cap = effective_max_tokens if effective_max_tokens > 0 else _roster_max_by_name.get(ar.name, 0)
+            cap = (
+                ar.effective_max_tokens
+                if ar.effective_max_tokens > 0
+                else effective_max_tokens if effective_max_tokens > 0
+                else _roster_max_by_name.get(ar.name, 0)
+            )
             token_log.append(TokenEntry(
                 agent=ar.name,
                 model=tl.model,

@@ -198,6 +198,27 @@ def test_no_unexpected_ai_var_forwarded() -> None:
     )
 
 
+def test_every_per_agent_max_tokens_var_is_forwarded() -> None:
+    """Every AI_MAX_TOKENS_<AGENT> override (#191, one per current roster
+    agent) must actually be forwarded. These vars are deliberately NOT
+    static members of _KNOWN_AI_VARS (see _per_agent_max_tokens_vars'
+    docstring), so test_every_known_ai_var_is_forwarded_or_deliberately_
+    excluded's `_KNOWN_AI_VARS`-based check never expected them and can't
+    catch one going missing -- this is the "all present" counterpart to
+    test_no_unexpected_ai_var_forwarded's "no unexpected extras" check.
+    Empirically confirmed as a real gap: deleting one `-e AI_MAX_TOKENS_*`
+    line from action.yml left the suite green before this test existed.
+    """
+    forwarded = _forwarded_vars()
+    missing = _per_agent_max_tokens_vars() - forwarded
+    assert not missing, (
+        f"These per-agent AI_MAX_TOKENS_<AGENT> vars are expected in "
+        f"container-action/action.yml's docker run -e passthrough list "
+        f"(one per ai_pr_review.agents.roster.AGENT_NAMES) but are missing: "
+        f"{sorted(missing)}"
+    )
+
+
 def test_expected_non_ai_vars_all_forwarded() -> None:
     forwarded = _forwarded_vars()
     missing = _EXPECTED_NON_AI_VARS - forwarded

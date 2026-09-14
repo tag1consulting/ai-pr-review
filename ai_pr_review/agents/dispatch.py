@@ -58,6 +58,14 @@ class AgentResult:
     Zero when no profile text was available (or the agent is not
     context_enrichment_eligible). Used by the CLI to populate the Language
     profiles row in the token cost table."""
+    effective_max_tokens: int = 0
+    """The actual `max_tokens` sent to the LLM for this call, after
+    resolving the full precedence chain (per-agent AI_MAX_TOKENS_<AGENT>
+    override > AI_MAX_TOKENS_PER_AGENT > roster default -- see
+    `resolve_agent_max_tokens`). `reporting.py`'s token table reads this
+    directly rather than re-deriving an approximation from the roster plus
+    the global override alone, which would show a stale/wrong cap whenever
+    a per-agent override (#191) is actually in effect."""
     elapsed_ms: int = 0
     """Wall-clock milliseconds from call start to response received.
     E4.S4: used by cli.py to populate agent_latency_ms in TelemetryEvent."""
@@ -553,7 +561,16 @@ async def _run_single_agent(
             max_tokens_source = "AI_MAX_TOKENS_PER_AGENT"
         else:
             max_tokens_source = "roster default"
-        _log.info(
+        # WARNING (not INFO) specifically when an override actually fired:
+        # the shipped default AI_LOG_LEVEL is WARNING (config.py), so an
+        # override sitting at INFO would be invisible in the common case --
+        # someone who just set AI_MAX_TOKENS_<AGENT> has no default-log-level
+        # way to confirm it took effect at all, let alone that it resolved to
+        # the value they expected. The routine "nothing overridden" case
+        # stays at INFO -- it's not something a default-level log should
+        # surface on every single run.
+        _log.log(
+            logging.WARNING if max_tokens_source != "roster default" else logging.INFO,
             "agent %r: effective max_output_tokens=%d (source=%s)",
             spec.name, max_tokens, max_tokens_source,
         )
@@ -654,6 +671,7 @@ async def _run_single_agent(
             prompt_degraded=prompt_degraded,
             context_tokens_used=context_tokens_used,
             profile_tokens_used=profile_tokens_used,
+            effective_max_tokens=max_tokens,
             elapsed_ms=elapsed,
             stop_reason=response.stop_reason,
             fallback_from_model=fallback_from_model,
