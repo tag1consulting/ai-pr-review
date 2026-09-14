@@ -743,11 +743,11 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     Shared by the `dismiss` and `dismiss-inline` subcommands: both are
     GitHub-only (F-IDs and inline id-maps only exist on that provider). The
     actual construction logic lives in
-    `ai_pr_review.slash.dismiss.resolve_github_provider` (#825); this wrapper
+    `ai_pr_review.slash.github_orchestration.resolve_github_provider` (#825); this wrapper
     only decides what to do on failure (exit 1), matching the CLI-level
     concern this module owns.
     """
-    from ai_pr_review.slash.dismiss import GitHubProviderError, resolve_github_provider
+    from ai_pr_review.slash.github_orchestration import GitHubProviderError, resolve_github_provider
 
     result = resolve_github_provider(command_label)
     if isinstance(result, GitHubProviderError):
@@ -871,12 +871,11 @@ def dismiss(
       0 — handled (including "not found" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
-    from ai_pr_review.slash.dismiss import (
+    from ai_pr_review.slash.github_ops import dismiss_by_finding_id, persist_verdict
+    from ai_pr_review.slash.github_orchestration import (
         bodies_newest_first,
-        dismiss_by_finding_id,
         list_active_body_ids,
         no_finding_id_reply,
-        persist_verdict,
     )
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
@@ -1062,7 +1061,7 @@ def dismiss_inline(
       0 — handled (including "could not find thread" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
-    from ai_pr_review.slash.dismiss import dismiss_inline_reply, persist_verdict
+    from ai_pr_review.slash.github_ops import dismiss_inline_reply, persist_verdict
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
     os.environ["PR_NUMBER"] = str(pr_number)
@@ -1126,10 +1125,10 @@ def _emit_dismiss_failure_annotation(
     false-positive command that hit a VCS API error (#611), if any.
 
     Delegates the decision of whether/what to say to
-    `ai_pr_review.slash.dismiss.dismiss_failure_annotation` (#825); this
+    `ai_pr_review.slash.github_orchestration.dismiss_failure_annotation` (#825); this
     wrapper only performs the actual stderr echo, the one CLI-specific bit.
     """
-    from ai_pr_review.slash.dismiss import dismiss_failure_annotation
+    from ai_pr_review.slash.github_orchestration import dismiss_failure_annotation
 
     line = dismiss_failure_annotation(command_label, errors, thread_resolved=thread_resolved)
     if line is not None:
@@ -1148,7 +1147,7 @@ def _build_github_provider_or_none(command_label: str) -> GitHubProvider | None:
     `_build_github_provider_or_exit`; only the failure mode (return `None`
     here, `sys.exit(1)` there) differs.
     """
-    from ai_pr_review.slash.dismiss import GitHubProviderError, resolve_github_provider
+    from ai_pr_review.slash.github_orchestration import GitHubProviderError, resolve_github_provider
 
     result = resolve_github_provider(command_label)
     if isinstance(result, GitHubProviderError):
@@ -1203,7 +1202,7 @@ def feedback_context(
     all diagnostics go to stderr. Never exits non-zero — context extraction
     is always best-effort, mirroring the two bash steps it replaces.
     """
-    from ai_pr_review.slash.dismiss import resolve_feedback_context
+    from ai_pr_review.slash.github_ops import resolve_feedback_context
 
     os.environ["PR_NUMBER"] = str(pr_number)
 
@@ -1271,7 +1270,7 @@ def resolve_thread_command(parent_comment_id: int, pr_number: int) -> None:
     matching the bash job's "feedback already persisted, thread resolution
     is best-effort" contract.
     """
-    from ai_pr_review.slash.dismiss import resolve_only
+    from ai_pr_review.slash.github_ops import resolve_only
 
     os.environ["PR_NUMBER"] = str(pr_number)
 

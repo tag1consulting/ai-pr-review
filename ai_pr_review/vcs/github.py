@@ -127,8 +127,8 @@ def strip_carried_forward_entry(body: str, comment_id: int) -> str:
     comment id its `#discussion_r{id}` link points at, and update or remove
     the section header's count to match.
 
-    `_record_verdict` (slash/dismiss.py) calls this when a human resolves the
-    exact thread a carried-forward bullet still names: the invisible verdict
+    `_record_verdict` (slash/github_ops.py) calls this when a human
+    resolves the exact thread a carried-forward bullet still names: the invisible verdict
     marker gets updated in the same PUT via `upsert_verdicts_marker`, but
     without this, the *visible* markdown would still read "Still open from
     earlier reviews (1)" for a finding that was just marked fixed/dismissed —
@@ -420,11 +420,12 @@ class GitHubProvider:
             listing failure as a hard `FindingsResult` error.
 
             `False` (every `list_bot_reviews()` caller: `_dismiss_stale_reviews`,
-            and `ai_pr_review.slash.dismiss`'s classification and
-            verdict-recording call sites): appends to `self._errors` and
-            returns whatever was collected so far on an HTTP error (partial
-            results) -- these callers have long-standing partial-result
-            tolerance built into their own error handling.
+            `ai_pr_review.slash.github_ops`'s F-id classification and
+            verdict-recording call sites, and `ai_pr_review.cli`'s `dismiss`
+            command): appends to `self._errors` and returns whatever was
+            collected so far on an HTTP error (partial results) -- these
+            callers have long-standing partial-result tolerance built into
+            their own error handling.
 
         states:
             Optional set of review `state` values to keep (e.g. excluding
@@ -1049,8 +1050,8 @@ class GitHubProvider:
         # new id for the finding's (possibly just-changed) fingerprint,
         # which is never rendered anywhere a human sees it. Re-point that
         # fingerprint at the thread's existing id instead, so this run's
-        # id-map marker (and any future dismiss.py reverse F-id lookup that
-        # reads it) agrees with what the comment actually shows.
+        # id-map marker (and any future github_orchestration.py reverse F-id
+        # lookup that reads it) agrees with what the comment actually shows.
         for c in classified:
             if (
                 c.kind in ("update", "escalate")
@@ -1747,8 +1748,8 @@ class GitHubProvider:
         (`unresolved_by_review.get(rid, 0) > 0`, now `_thread.count_unresolved_owned_threads`):
         a `CHANGES_REQUESTED` review must never be dismissed while it still
         has open findings, or the slash-command PR-wide auto-approve check
-        (`ai_pr_review.slash.dismiss._approve_if_pr_fully_resolved`) — which
-        only counts unresolved threads on reviews whose *current* state is
+        (`ai_pr_review.slash.github_ops._approve_if_pr_fully_resolved`)
+        — which only counts unresolved threads on reviews whose *current* state is
         `CHANGES_REQUESTED` — would no longer see them and could approve a
         PR with a High finding still open on the review this method just
         allowed to be dismissed.
@@ -2021,8 +2022,9 @@ class GitHubProvider:
         """PUT a dismissal for a single review. Returns (ok, status, body_snippet).
 
         Thin primitive with no policy about *which* review to dismiss or
-        *when* — that decision belongs to the caller (e.g. `_dismiss_stale_reviews`
-        for the review-posting path, or `ai_pr_review.slash.dismiss` for the
+        *when* — that decision belongs to the caller (e.g.
+        `_dismiss_stale_reviews` for the review-posting path, or
+        `ai_pr_review.slash.github_ops` for the
         slash-command path, which has different semantics: it dismisses the
         review whose thread was just resolved, not "all but the current run's
         review").
@@ -2061,8 +2063,8 @@ class GitHubProvider:
         `list_bot_reviews()` — that method paginates the full review list and
         filters to bot-authored reviews, which is unnecessary work when the
         caller already has a specific `review_id` in hand (e.g.
-        `ai_pr_review.slash.dismiss._dismiss_if_all_resolved`, which needs
-        this immediately before a dismiss PUT to avoid attempting one against
+        `ai_pr_review.slash.github_ops._dismiss_if_all_resolved`,
+        which needs this immediately before a dismiss PUT to avoid attempting one against
         a review no longer in a dismissable state — issue #562).
         """
         resp = self.client.request("GET", self._review_url(review_id))
@@ -2135,8 +2137,8 @@ class GitHubProvider:
         usable `state`.
 
         A sibling to `get_review_state` (which returns only `state`, for the
-        pre-existing `slash/dismiss.py` call sites this method deliberately
-        does not touch) rather than a breaking change to that method's
+        pre-existing `slash/github_ops.py` call sites this method
+        deliberately does not touch) rather than a breaking change to that method's
         contract. Used by `post_findings`'s pre-write concurrency re-check
         immediately before PUTing/PATCHing the canonical review: if the
         state or body has changed since the canonical was selected --
@@ -2330,8 +2332,8 @@ class GitHubProvider:
 
         Originally factored out of `_dismiss_stale_reviews`, which used to
         inline this same paginated `/pulls/{n}/reviews` walk; now also the
-        write-side source for `ai_pr_review.slash.dismiss`'s classification
-        (`dismiss_by_finding_id` needs every prior review's body, regardless
+        write-side source for `ai_pr_review.slash.github_ops`'s
+        classification (`dismiss_by_finding_id` needs every prior review's body, regardless
         of state, to scan for `**[F<n>]**` tokens) and verdict-recording
         (`_record_verdict`, via `select_canonical`/`merge_verdicts`) call
         sites. On a mid-pagination HTTP error, appends to `self._errors` and

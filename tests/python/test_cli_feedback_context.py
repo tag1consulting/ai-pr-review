@@ -6,7 +6,7 @@ Wires `context_from_parent_comment` / `context_from_body_finding_id` /
 `feedback-command` and must never fail the step on a provider construction
 or lookup error — unlike `dismiss`/`dismiss-inline`, they degrade to a
 warning and exit 0. Follows the `_make_provider(handler)` HTTP-mocking
-harness established in `tests/python/vcs/test_dismiss_github.py`.
+harness established in `tests/python/vcs/test_github_orchestration_http.py`.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Wires story 13-1's `dismiss_by_finding_id`/`list_active_body_ids` to the CLI.
 Follows the `_make_provider(handler)` HTTP-mocking harness established in
-`tests/python/vcs/test_dismiss_github.py`, invoked through Click's CliRunner.
+`tests/python/vcs/test_github_orchestration_http.py`, invoked through Click's CliRunner.
 """
 
 from __future__ import annotations
@@ -270,7 +270,7 @@ def test_inline_finding_does_not_touch_feedback_store(monkeypatch) -> None:
 def test_top_level_inline_finding_writes_full_context_feedback(monkeypatch) -> None:
     """This PR's headline new capability, end-to-end through the actual
     `dismiss` CLI command (previously covered only at the
-    `dismiss_by_finding_id` unit level in test_dismiss_verdicts.py, and at
+    `dismiss_by_finding_id` unit level in test_github_orchestration_verdicts.py, and at
     the CLI level only for `dismiss-inline`): a top-level `/ai-pr-review
     dismiss F<n>` naming an F-id that classifies as an INLINE finding (an
     id-map entry with no matching body bullet) resolves its thread AND
@@ -281,7 +281,7 @@ def test_top_level_inline_finding_writes_full_context_feedback(monkeypatch) -> N
     # Review body carries the id-map marker only (no body bullet for F4), so
     # classify_finding resolves it as INLINE -- see
     # test_inline_finding_classifies_via_id_map_not_bullet in
-    # tests/python/slash/test_dismiss.py for the minimal fixture this mirrors.
+    # tests/python/slash/test_github_orchestration.py for the minimal fixture this mirrors.
     #
     # The id-map key must be the real `fingerprint(f)` (what `assemble_id_map`
     # actually writes in production), not an arbitrary stand-in:

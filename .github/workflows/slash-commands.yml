@@ -594,7 +594,7 @@ jobs:
       - name: Lookup body finding or list active IDs (explain/revise only)
         # Only explain/revise reach this step now — dismiss/false-positive/wont-fix
         # are handled by the "Invoke Python dismiss handler" step below, which
-        # runs ai_pr_review.slash.dismiss's pytest-covered classification instead
+        # runs ai_pr_review.slash.github_ops's pytest-covered dismiss handler instead
         # of this bash re-implementation. Kept for explain/revise because their
         # "valid" gate (does F<n> exist?) still lives here; porting those two
         # stub commands is out of scope for this story (see story 13-2 Dev Notes).
@@ -1220,7 +1220,7 @@ jobs:
         # finding) or from an F<n> token in the comment body (top-level
         # comment). Ported from two bash steps (issue #554 phase 4) into
         # `ai-pr-review feedback-context`, unit-tested in
-        # tests/python/slash/test_dismiss.py.
+        # tests/python/slash/test_github_orchestration.py.
         #
         # All failure modes are best-effort: the FeedbackEntry is still
         # persisted (the reviewer's intent is captured) but with empty

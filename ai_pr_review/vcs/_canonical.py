@@ -20,10 +20,10 @@ original design doc it implements (canonical-review-reuse). Two verdict
 sources feed `classify()`:
 
 - The **verdicts marker** (`ai_pr_review.vcs.marker.extract_verdicts`),
-  written by `ai_pr_review.slash.dismiss._record_verdict` whenever a human
-  runs `/ai-pr-review dismiss|false-positive|wont-fix|fixed`. Keyed by the
-  *exact* `fingerprint()` (source|file|line|text-hash) of the finding the
-  command was run against.
+  written by `ai_pr_review.slash.github_ops._record_verdict`
+  whenever a human runs `/ai-pr-review dismiss|false-positive|wont-fix|fixed`.
+  Keyed by the *exact* `fingerprint()` (source|file|line|text-hash) of the
+  finding the command was run against.
 - The **per-comment metadata marker**
   (`ai_pr_review.vcs.marker.extract_inline_meta`), written by this PR onto
   every inline comment at post time, carrying that finding's own exact
@@ -112,8 +112,8 @@ def select_canonical(reviews: Sequence[Mapping[str, Any]]) -> CanonicalReview | 
     """Pick the canonical review: the highest-id bot review with a
     non-empty body, any state.
 
-    `ai_pr_review.slash.dismiss._record_verdict` calls this function
-    directly rather than reimplementing the rule, so both sides of the
+    `ai_pr_review.slash.github_ops._record_verdict` calls this
+    function directly rather than reimplementing the rule, so both sides of the
     write/read split are structurally guaranteed to agree on which review
     is canonical *given the same review list* — a verdict written to one
     review can never be invisible to classification reading from another
@@ -184,8 +184,8 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     single-body read (just the canonical's own `extract_verdicts`) cannot
     guarantee that, since not every prior review is guaranteed to carry
     every verdict ever recorded (this is also why
-    `ai_pr_review.slash.dismiss._record_verdict` seeds from this same
-    union rather than from the canonical body alone).
+    `ai_pr_review.slash.github_ops._record_verdict` seeds from this
+    same union rather than from the canonical body alone).
 
     Observation only, not a guard (issue #755, revisited by #771 / ADR 0003):
     a review whose own id-map shows a fingerprint as rendered, while that
@@ -196,7 +196,7 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
     overwritten to the `"recurred"` tombstone in the same
     `_apply_classification_side_effects` call that renders it
     (`ai_pr_review.vcs.github`) -- but this exact shape is also produced by
-    every ordinary, correct dismissal: `ai_pr_review.slash.dismiss
+    every ordinary, correct dismissal: `ai_pr_review.slash.github_ops
     ._record_verdict` PATCHes a verdict onto a review whose id-map was
     already rendered, by design, and does not touch the id-map. This
     function cannot tell a genuinely corrupted body (#755's single

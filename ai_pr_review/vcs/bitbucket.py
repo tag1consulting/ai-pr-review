@@ -319,15 +319,16 @@ class BitbucketProvider:
             id_map_marker = build_id_map_marker(id_map, hidden=True)
         except Exception as exc:  # noqa: BLE001
             # Logged (not just appended to self._errors): orchestrate.py never
-            # reads this provider's _errors list for a normal review run (only
-            # slash/dismiss.py's command handlers do), and this failure must
-            # not set FindingsResult.error either -- the comment itself still
-            # posts fine below, just without F-ID stability for this cycle,
-            # and orchestrate.py gates watermark-advance/stale-cleanup on
-            # .ok/.error (#493) -- failing that gate over a cosmetic marker
-            # loss would force an unnecessary full re-diff next cycle, a worse
-            # outcome than the degraded F-IDs this is actually about. Mirrors
-            # github.py's identical failure-class handling.
+            # reads this provider's _errors list for a normal review run
+            # (only slash/github_ops.py's command handlers do), and
+            # this failure must not set FindingsResult.error either -- the
+            # comment itself still posts fine below, just without F-ID
+            # stability for this cycle, and orchestrate.py gates
+            # watermark-advance/stale-cleanup on .ok/.error (#493) -- failing
+            # that gate over a cosmetic marker loss would force an
+            # unnecessary full re-diff next cycle, a worse outcome than the
+            # degraded F-IDs this is actually about. Mirrors github.py's
+            # identical failure-class handling.
             _log.warning("bitbucket: failed to build id-map marker: %s", exc)
             self._errors.append(f"post_findings: failed to build id-map marker: {exc}")
         marker_bytes = len(id_map_marker.encode("utf-8")) if id_map_marker else 0

@@ -1,9 +1,9 @@
-"""Tests for ai_pr_review.slash.dismiss — pure classification logic (no HTTP)."""
+"""Tests for ai_pr_review.slash.github_orchestration — pure classification logic (no HTTP)."""
 
 from __future__ import annotations
 
 from ai_pr_review.findings.models import Finding
-from ai_pr_review.slash.dismiss import (
+from ai_pr_review.slash.github_orchestration import (
     FindingLocation,
     bodies_newest_first,
     classify_finding,

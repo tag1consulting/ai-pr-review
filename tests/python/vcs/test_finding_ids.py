@@ -466,7 +466,7 @@ def test_known_fingerprints_excludes_a_never_seen_fingerprint() -> None:
 
 # ---------------------------------------------------------------------------
 # _ends_body_section() — #758: shared exit check used by both the fallback
-# scanner here and slash.dismiss._scan_body_bullets_one, so the two body
+# scanner here and slash.github_orchestration._scan_body_bullets_one, so the two body
 # scanners cannot drift apart on what terminates a body-findings section.
 # ---------------------------------------------------------------------------
 
@@ -495,11 +495,11 @@ def test_ends_body_section_shared_by_both_scanners() -> None:
     """A pre-marker-era body whose usage block uses the new #758 marker
     (rather than the legacy `<details>` accordion) must have scanning stop
     at the marker in BOTH `_parse_existing_ids` (this module) and
-    `slash.dismiss._scan_body_bullets_one` — proving the two route through
+    `slash.github_orchestration._scan_body_bullets_one` — proving the two route through
     the same `_ends_body_section` check rather than two independently
     maintained copies of it.
     """
-    from ai_pr_review.slash.dismiss import _scan_body_bullets_one
+    from ai_pr_review.slash.github_orchestration import _scan_body_bullets_one
 
     f = _finding("some issue")
     body = (
