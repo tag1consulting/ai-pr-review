@@ -76,15 +76,18 @@ def test_default_max_tokens_matches_roster_default(
     prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No AI_MAX_TOKENS_PR_SUMMARIZER set -- the base default must come from
-    the roster (16384), not a hand-typed literal that can drift from it (#847:
-    the literal used to be 4096, which silently did not match the roster)."""
+    the roster lookup, not a hand-typed literal that can drift from it (#847),
+    even though the roster's own value is 4096 here (#850 review: the roster
+    briefly held a dead, never-exercised 16384 that this fix would otherwise
+    have made live for the first time with no behavior verification -- see
+    roster.py's pr-summarizer comment)."""
     from ai_pr_review.agents.roster import PR_SUMMARIZER_AGENT_NAME, get_agent
 
     monkeypatch.delenv("AI_MAX_TOKENS_PR_SUMMARIZER", raising=False)
     captured = _run(prompt_dir)
     assert len(captured) == 1
     assert captured[0].max_tokens == get_agent(PR_SUMMARIZER_AGENT_NAME).max_output_tokens
-    assert captured[0].max_tokens == 16384
+    assert captured[0].max_tokens == 4096
 
 
 def test_per_agent_max_tokens_override_applied(

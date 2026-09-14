@@ -22,6 +22,7 @@ import anyio
 import click
 from pydantic import ValidationError
 
+from ai_pr_review.agents.roster import ISSUE_LINKER_AGENT_NAME, PR_SUMMARIZER_AGENT_NAME
 from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
 from ai_pr_review.orchestrate import ReviewResult
@@ -242,7 +243,9 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # Run pr-summarizer on first review (fail-soft; skip on incremental runs).
     # Also skip if the consumer has excluded it via the agents denylist or allowlist.
     summary_text = runtime.summary_prefix
-    if not runtime.is_incremental and _agent_allowed("pr-summarizer", rc.agents, rc.exclude_agents):
+    if not runtime.is_incremental and _agent_allowed(
+        PR_SUMMARIZER_AGENT_NAME, rc.agents, rc.exclude_agents
+    ):
         summary_text += await _run_summarizer(
             diff_text=runtime.diff.diff_text,
             manifest_text=runtime.manifest_text,
@@ -267,7 +270,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
         not runtime.is_incremental
         and rc.review_mode == "full"
         and rc.vcs_provider == "github"
-        and _agent_allowed("issue-linker", rc.agents, rc.exclude_agents)
+        and _agent_allowed(ISSUE_LINKER_AGENT_NAME, rc.agents, rc.exclude_agents)
     ):
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,

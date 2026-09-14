@@ -161,14 +161,14 @@ silent no-op. See [issue #191](https://github.com/tag1consulting/ai-pr-review/is
 `pr-summarizer` and `issue-linker` are dispatched separately from the other
 seven agents (they compose their own prompts and never go through the
 tier-dispatch path that reads `AI_MAX_TOKENS_PER_AGENT`), and their base
-default is resolved directly from the roster (`16384` and `4096`
-respectively) rather than `AI_MAX_TOKENS_PER_AGENT`. `AI_MAX_TOKENS_<AGENT>`
-is therefore the *only* way to override either budget; `AI_MAX_TOKENS_PER_AGENT`
-still has no effect on either.
+default is resolved directly from the roster (`4096` for both) rather than
+`AI_MAX_TOKENS_PER_AGENT`. `AI_MAX_TOKENS_<AGENT>` is therefore the *only*
+way to override either budget; `AI_MAX_TOKENS_PER_AGENT` still has no effect
+on either.
 
 | Variable | Effective default | Notes |
 |----------|--------------------|-------|
-| `AI_MAX_TOKENS_PR_SUMMARIZER` | `16384` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; matches the roster default (#847). See above. |
+| `AI_MAX_TOKENS_PR_SUMMARIZER` | `4096` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; matches the roster default (#847). See above. |
 | `AI_MAX_TOKENS_CODE_REVIEWER` | `32768` | Tier-dispatched; falls back to `AI_MAX_TOKENS_PER_AGENT` when unset. |
 | `AI_MAX_TOKENS_SILENT_FAILURE_HUNTER` | `32768` | Tier-dispatched. |
 | `AI_MAX_TOKENS_ARCHITECTURE_REVIEWER` | `32768` | Tier-dispatched, full mode only. |

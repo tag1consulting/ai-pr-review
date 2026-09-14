@@ -15,7 +15,7 @@ conditional_trigger values (consumed by dispatch/gates layers):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Final, Literal, get_args
 
 ConditionalTrigger = Literal[
     "has_error_patterns",
@@ -33,15 +33,15 @@ _VALID_TRIGGERS: frozenset[str] = frozenset(get_args(ConditionalTrigger))
 # and config.py's resolve_agent_max_tokens() per-agent AI_MAX_TOKENS_<AGENT>
 # override clamp. Previously each site hardcoded its own copy of (256,
 # 65536); a single shared pair here keeps them from silently drifting apart.
-AGENT_MAX_TOKENS_MIN = 256
-AGENT_MAX_TOKENS_MAX = 65536
+AGENT_MAX_TOKENS_MIN: Final[int] = 256
+AGENT_MAX_TOKENS_MAX: Final[int] = 65536
 
 # Canonical names for the two preflight-dispatched agents (#847), used by
 # both the roster entries below and ai_pr_review/review/preflight.py, so
 # preflight.py never has to hand-type "pr-summarizer" / "issue-linker" as
 # bare string literals that could silently drift from the roster.
-PR_SUMMARIZER_AGENT_NAME = "pr-summarizer"
-ISSUE_LINKER_AGENT_NAME = "issue-linker"
+PR_SUMMARIZER_AGENT_NAME: Final[str] = "pr-summarizer"
+ISSUE_LINKER_AGENT_NAME: Final[str] = "issue-linker"
 
 
 @dataclass(frozen=True)
@@ -90,9 +90,21 @@ class AgentSpec:
 # Agent roster — extracted from review.sh + lib/diff.sh
 # ---------------------------------------------------------------------------
 # max_output_tokens uses the per-agent default (32768 for prose agents, 4096 for
-# issue-linker). The dispatch layer may apply a global override via
+# pr-summarizer/issue-linker). The dispatch layer may apply a global override via
 # AI_MAX_TOKENS_PER_AGENT; this field provides the per-agent budget for cost-table
 # rendering (2.NFR-4).
+#
+# pr-summarizer's 4096 (#847 review): this used to sit at 16384 here, entirely
+# unread by anything at runtime -- pr-summarizer is `separately_dispatched=True`,
+# so review/preflight.py's own hand-typed 4096 literal was the only value that
+# ever had effect. #847 fixed preflight.py to look this field up instead of
+# hand-typing it, which made the stale 16384 live for the first time -- a real
+# 4x budget increase with no live verification, on the one preflight agent whose
+# token usage never reaches reporting.py's cost table. Lowered back to 4096
+# (the value production has always actually used) so that fix is genuinely
+# zero-behavior-change; raising it for real is a separate decision that needs
+# a live e2e check against provider body-size caps (Bitbucket's is only 32,000
+# bytes, well under what a 16384-token summary can produce) before it ships.
 
 AGENTS: list[AgentSpec] = [
     # --- Tier 1: run in both quick and full mode ---
@@ -101,7 +113,7 @@ AGENTS: list[AgentSpec] = [
         prompt_path="prompts/pr-summarizer.md",
         tier=1,
         conditional_trigger="no_prior_summary",
-        max_output_tokens=16384,
+        max_output_tokens=4096,
         full_mode_only=False,
         context_enrichment_eligible=True,
         separately_dispatched=True,

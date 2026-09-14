@@ -676,6 +676,39 @@ def test_per_agent_max_tokens_valid_override_no_warning_at_config_load(
     assert "AI_MAX_TOKENS_CODE_REVIEWER" not in captured.err
 
 
+def test_per_agent_max_tokens_eager_validation_covers_preflight_agents(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Eager validation iterates every roster agent, including the two
+    separately-dispatched preflight agents (pr-summarizer, issue-linker) --
+    not just tier-dispatched ones. Neither ever goes through dispatch.py's
+    resolve_agent_max_tokens() call site, so this is the only place either
+    would ever get validated at all."""
+    monkeypatch.setenv("AI_MAX_TOKENS_PR_SUMMARIZER", "abc")
+    monkeypatch.setenv("AI_MAX_TOKENS_ISSUE_LINKER", "99999999")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_PR_SUMMARIZER='abc' is not a valid integer" in captured.err
+    assert "AI_MAX_TOKENS_ISSUE_LINKER=99999999 exceeds maximum 65536" in captured.err
+
+
+def test_per_agent_max_tokens_eager_validation_warning_order_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Multiple invalid overrides must warn in a stable order (sorted by
+    agent name), not frozenset iteration order, so log output -- and any
+    test asserting on it -- isn't flaky across runs/PYTHONHASHSEED."""
+    monkeypatch.setenv("AI_MAX_TOKENS_SILENT_FAILURE_HUNTER", "not-a-number")
+    monkeypatch.setenv("AI_MAX_TOKENS_ARCHITECTURE_REVIEWER", "also-not-a-number")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    arch_pos = captured.err.index("AI_MAX_TOKENS_ARCHITECTURE_REVIEWER")
+    silent_pos = captured.err.index("AI_MAX_TOKENS_SILENT_FAILURE_HUNTER")
+    assert arch_pos < silent_pos, "expected alphabetical (sorted) warning order"
+
+
 # ---------------------------------------------------------------------------
 # #847: the [256, 65536] per-agent-max-tokens clamp bound is a single shared
 # constant pair (ai_pr_review.agents.roster.AGENT_MAX_TOKENS_MIN/MAX), not
@@ -692,9 +725,11 @@ def test_agent_max_tokens_bounds_constants_match_documented_range() -> None:
 def test_agent_spec_rejects_max_output_tokens_outside_shared_bounds() -> None:
     """AgentSpec.__post_init__ enforces the same shared bounds roster.py
     exports, not an independent hardcoded copy."""
-    from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MAX, AgentSpec
+    from ai_pr_review.agents.roster import AGENT_MAX_TOKENS_MAX, AGENT_MAX_TOKENS_MIN, AgentSpec
 
-    with pytest.raises(ValueError, match=r"\[256, 65536\]"):
+    with pytest.raises(
+        ValueError, match=re.escape(f"[{AGENT_MAX_TOKENS_MIN}, {AGENT_MAX_TOKENS_MAX}]")
+    ):
         AgentSpec(
             name="test-agent",
             prompt_path="prompts/test-agent.md",
@@ -703,6 +738,34 @@ def test_agent_spec_rejects_max_output_tokens_outside_shared_bounds() -> None:
             max_output_tokens=AGENT_MAX_TOKENS_MAX + 1,
             full_mode_only=False,
             context_enrichment_eligible=False,
+        )
+
+
+def test_docs_configuration_max_tokens_table_matches_roster_defaults() -> None:
+    """docs/configuration.md hand-maintains a table of each agent's effective
+    max_output_tokens default, keyed by its AI_MAX_TOKENS_<AGENT> env var
+    name. This is exactly the class of hand-maintained duplicate that #847
+    fixed inside the code (preflight.py's hardcoded 4096 silently drifting
+    from the roster) -- without this test, the same drift could reopen in
+    the docs instead of the code the next time a roster default changes."""
+    from ai_pr_review.agents.roster import AGENT_NAMES, get_agent
+    from ai_pr_review.config import _agent_max_tokens_env_var
+
+    docs_path = Path(__file__).resolve().parent.parent.parent / "docs" / "configuration.md"
+    docs_text = docs_path.read_text()
+
+    row_re = re.compile(r"^\| `(AI_MAX_TOKENS_[A-Z0-9_]+)` \| `(\d+)` \|", re.MULTILINE)
+    documented = dict(row_re.findall(docs_text))
+    assert documented, "expected at least one AI_MAX_TOKENS_<AGENT> row in docs/configuration.md"
+
+    for name in AGENT_NAMES:
+        env_name = _agent_max_tokens_env_var(name)
+        if env_name not in documented:
+            continue  # not every agent is necessarily documented in this table
+        assert int(documented[env_name]) == get_agent(name).max_output_tokens, (
+            f"docs/configuration.md's {env_name} row says "
+            f"{documented[env_name]}, but ai_pr_review.agents.roster's actual "
+            f"default for {name!r} is {get_agent(name).max_output_tokens}"
         )
 
 

@@ -62,7 +62,7 @@ async def run_summarizer(
         parse_summarizer_output,
         wrap_walkthrough_in_details,
     )
-    from ai_pr_review.config import resolve_agent_max_tokens
+    from ai_pr_review.config import per_agent_max_tokens_override_is_set, resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -98,15 +98,18 @@ async def run_summarizer(
         # resolve its own base default; AI_MAX_TOKENS_PER_AGENT never applies
         # here (it's only read by dispatch.py's tier-dispatch loop). #847:
         # that base default previously was a hand-typed literal 4096 that
-        # silently drifted from the roster's real pr-summarizer default
-        # (16384) -- looked up here instead so the two can never disagree
-        # again. resolve_agent_max_tokens() then applies a higher-precedence
+        # could in principle drift from the roster's own pr-summarizer
+        # default -- looked up here instead so the two can never disagree.
+        # resolve_agent_max_tokens() then applies a higher-precedence
         # AI_MAX_TOKENS_PR_SUMMARIZER override on top when set.
         roster_default = get_agent(PR_SUMMARIZER_AGENT_NAME).max_output_tokens
         max_tokens = resolve_agent_max_tokens(PR_SUMMARIZER_AGENT_NAME, roster_default)
         logger.debug(
             "pr-summarizer: effective max_output_tokens=%d (source=%s)",
-            max_tokens, "per-agent override" if max_tokens != roster_default else "roster default",
+            max_tokens,
+            "per-agent override"
+            if per_agent_max_tokens_override_is_set(PR_SUMMARIZER_AGENT_NAME)
+            else "roster default",
         )
         request = LLMRequest(
             model_id=model,
@@ -217,7 +220,7 @@ async def run_issue_linker(
     issue numbers without any tool-calling loop.
     """
     from ai_pr_review.agents.roster import ISSUE_LINKER_AGENT_NAME, get_agent
-    from ai_pr_review.config import resolve_agent_max_tokens
+    from ai_pr_review.config import per_agent_max_tokens_override_is_set, resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -297,7 +300,10 @@ async def run_issue_linker(
         max_tokens = resolve_agent_max_tokens(ISSUE_LINKER_AGENT_NAME, roster_default)
         logger.debug(
             "issue-linker: effective max_output_tokens=%d (source=%s)",
-            max_tokens, "per-agent override" if max_tokens != roster_default else "roster default",
+            max_tokens,
+            "per-agent override"
+            if per_agent_max_tokens_override_is_set(ISSUE_LINKER_AGENT_NAME)
+            else "roster default",
         )
         request = LLMRequest(
             model_id=model,
