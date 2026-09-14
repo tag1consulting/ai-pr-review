@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
+from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -157,7 +158,6 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         logger.warning("[ai-pr-review] WARNING: phpstan 'files' is not a dict; skipping.")
         return []
 
-    cwd_prefix = str(Path.cwd()) + "/"
     severity = _severity_for_level(level)
     findings: list[Finding] = []
 
@@ -167,8 +167,8 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         messages = file_data.get("messages") or []
         if not isinstance(messages, list):
             continue
-        # Strip CWD prefix so paths are repo-relative
-        rel_path = file_path[len(cwd_prefix):] if file_path.startswith(cwd_prefix) else file_path
+        # Strip workspace/CWD prefix so paths are repo-relative
+        rel_path = strip_workspace_prefix(file_path)
 
         for msg in messages:
             if not isinstance(msg, dict):

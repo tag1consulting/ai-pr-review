@@ -217,6 +217,29 @@ class TestRunEslintFindings:
             findings = _run_eslint(cf, Path("/dev/null"))
         assert findings[0].file == "src/app.ts"
 
+    def test_github_workspace_prefix_stripped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Issue #846: consolidated onto _paths.strip_workspace_prefix(), which
+        prefers GITHUB_WORKSPACE over cwd -- needed for a self-hosted runner
+        whose checkout root isn't this process's cwd."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GITHUB_WORKSPACE", "/opt/actions-runner/_work/repo/repo")
+        (tmp_path / ".eslintrc.json").write_text('{"rules":{}}\n')
+        payload = json.dumps([{
+            "filePath": "/opt/actions-runner/_work/repo/repo/src/app.ts",
+            "messages": [{"ruleId": "no-unused-vars", "severity": 2, "message": "unused", "line": 1}],
+        }])
+        f = tmp_path / "app.ts"
+        f.write_text("const x = 1;\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.eslint._find_eslint_bin", return_value=["/usr/bin/eslint"]),
+            patch("ai_pr_review.analyzers.native.eslint._supports_no_warn_ignored", return_value=False),
+            patch("ai_pr_review.analyzers.native.eslint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_eslint(cf, Path("/dev/null"))
+        assert findings[0].file == "src/app.ts"
+
     def test_remediation_includes_rule_url(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         findings = self._run_with_fixture("eslint-error.json", tmp_path, monkeypatch)
         assert "eslint.org/docs/rules/no-unused-vars" in findings[0].remediation

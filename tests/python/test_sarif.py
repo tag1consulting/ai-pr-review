@@ -4,6 +4,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from ai_pr_review.analyzers.sarif import _sanitize_sarif_path, load_sarif_files
 
 
@@ -134,7 +136,11 @@ def test_file_uri_prefix_stripped() -> None:
     )
     path = _write_sarif(sarif)
     findings, _ = load_sarif_files([path])
-    assert findings[0].file == "workspace/src/x.py"
+    # No GITHUB_WORKSPACE/AI_SARIF_HOST_WORKSPACE configured and this path
+    # doesn't match the runner-path regex fallback either, so it correctly
+    # stays absolute (#846 review) rather than being silently truncated to a
+    # relative-looking string scope.py's tripwire could never catch.
+    assert findings[0].file == "/workspace/src/x.py"
 
 
 def test_multiple_runs_merged() -> None:
@@ -255,16 +261,22 @@ def test_sanitize_sarif_path_accepts_relative_path() -> None:
     assert _sanitize_sarif_path("src/main.py") == "src/main.py"
 
 
-def test_sanitize_sarif_path_strips_file_scheme() -> None:
-    # file:///abs/path → abs/path (stripped leading slash)
-    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
+def test_sanitize_sarif_path_strips_file_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    # file:///abs/path with a matching GITHUB_WORKSPACE → repo-relative
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/workspace")
+    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "src/x.py"
 
 
-def test_sanitize_sarif_path_drops_authority() -> None:
-    """file://hostname/path must not leave 'hostname' in the result."""
+def test_sanitize_sarif_path_drops_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    """file://hostname/path must not leave 'hostname' in the result, and the
+    scheme itself is still stripped even when nothing else matches."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.delenv("AI_SARIF_HOST_WORKSPACE", raising=False)
     result = _sanitize_sarif_path("file://hostname/path/x.py")
     assert "hostname" not in result
-    assert result == "path/x.py"
+    # Nothing configured to strip this prefix against, so it correctly stays
+    # absolute (#846 review) rather than masquerading as a relative path.
+    assert result == "/path/x.py"
 
 
 def test_sanitize_sarif_path_rejects_unknown_scheme() -> None:
@@ -288,27 +300,119 @@ def test_sanitize_sarif_path_rejects_extra_leading_slashes() -> None:
     assert _sanitize_sarif_path("file://///abs/path") == ""
 
 
-def test_sanitize_sarif_path_strips_github_actions_workspace_prefix() -> None:
+def test_sanitize_sarif_path_strips_github_actions_workspace_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Ruff emits file:///home/runner/work/<owner>/<repo>/src/foo.py.
     After scheme stripping this is home/runner/work/<owner>/<repo>/src/foo.py,
-    which must be reduced to src/foo.py to match diff paths."""
+    which must be reduced to src/foo.py to match diff paths.
+
+    GITHUB_WORKSPACE is explicitly unset here so this exercises the
+    regex-fallback path (no GITHUB_WORKSPACE prefix to match against)."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
     uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
     assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
 
 
-def test_sanitize_sarif_path_strips_runner_prefix_without_home() -> None:
+def test_sanitize_sarif_path_strips_runner_prefix_without_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Some runner configurations omit /home, giving runner/work/... directly."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
     uri = "file:///runner/work/myorg/myrepo/src/bar.py"
     assert _sanitize_sarif_path(uri) == "src/bar.py"
 
 
-def test_sanitize_sarif_path_does_not_strip_non_runner_paths() -> None:
+def test_sanitize_sarif_path_does_not_strip_non_runner_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Paths that look like workspace dirs but aren't the runner pattern
-    must not be silently truncated."""
+    must not be silently truncated -- and, if genuinely unresolvable, must
+    stay absolute rather than being handed back as a relative-looking
+    string (#846 review)."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.delenv("AI_SARIF_HOST_WORKSPACE", raising=False)
     # Plain relative path — unchanged
     assert _sanitize_sarif_path("ai_pr_review/sarif_smoke_test.py") == "ai_pr_review/sarif_smoke_test.py"
-    # file:// with a non-runner absolute path — stripped of scheme/slash only
-    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
+    # file:// with a non-runner absolute path and nothing to strip it against
+    # — stays absolute (scheme/leading-slash accounting only, no truncation)
+    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "/workspace/src/x.py"
+
+
+def test_sanitize_sarif_path_strips_github_workspace_prefix_self_hosted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #846: a self-hosted runner can check out anywhere, so the
+    hardcoded runner/work/<owner>/<repo>/ regex never matches its paths.
+    GITHUB_WORKSPACE names the real checkout root on the composite
+    (non-container) action, and must be preferred over the regex heuristic
+    when it matches. (This engine's container-action variant remaps
+    GITHUB_WORKSPACE inside the container -- see AI_SARIF_HOST_WORKSPACE
+    below for that case.)"""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/opt/actions-runner/_work/ai-pr-review/ai-pr-review")
+    uri = "file:///opt/actions-runner/_work/ai-pr-review/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_ai_sarif_host_workspace_takes_priority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#846 review: under container-action, GITHUB_WORKSPACE is remapped to
+    the container's own mount point (e.g. /workspace) and can never match a
+    SARIF file's host-rooted path. AI_SARIF_HOST_WORKSPACE lets a caller
+    supply the real host checkout root for exactly that case, and it must
+    be tried before GITHUB_WORKSPACE."""
+    monkeypatch.setenv("AI_SARIF_HOST_WORKSPACE", "/opt/actions-runner/_work/ai-pr-review/ai-pr-review")
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/workspace")
+    uri = "file:///opt/actions-runner/_work/ai-pr-review/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_relative_uri_never_workspace_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#846 review: an already-relative SARIF URI must never be treated as a
+    workspace-prefix candidate, even when it happens to start with a
+    segment matching GITHUB_WORKSPACE's own basename -- otherwise a
+    genuinely relative path under a top-level `workspace/` directory
+    (plausible in Cargo/pnpm/Bazel-style monorepos) gets its first segment
+    silently truncated."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/workspace")
+    assert _sanitize_sarif_path("workspace/src/x.py") == "workspace/src/x.py"
+    assert _sanitize_sarif_path("workspace/x.py") == "workspace/x.py"
+
+
+def test_sanitize_sarif_path_github_workspace_takes_priority_over_regex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When GITHUB_WORKSPACE is set and matches, it must be used -- and this
+    must genuinely be the branch doing the work, not the regex fallback
+    coincidentally succeeding on the same input (#846 review: the original
+    version of this test used a runner-shaped path that the regex alone
+    would also resolve correctly, so it passed even with the whole
+    GITHUB_WORKSPACE branch deleted). A self-hosted-style checkout root the
+    regex cannot match ensures only the GITHUB_WORKSPACE branch can produce
+    the correct result here."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/opt/self-hosted-runner/_work/ai-pr-review")
+    uri = "file:///opt/self-hosted-runner/_work/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_github_workspace_mismatch_falls_back_to_regex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GITHUB_WORKSPACE that doesn't prefix-match the given path (e.g. a
+    stale/misconfigured env, or a path from a different job) must fall
+    through to the regex heuristic rather than short-circuiting on the
+    mismatch and leaving the path untouched. (This specific input is also
+    resolvable by the regex alone -- see the priority test above for the
+    complementary case that isolates the GITHUB_WORKSPACE branch itself --
+    so this test's real value is guarding the fall-through logic, not
+    branch selection: a buggy mismatch handler that raises, returns early,
+    or corrupts the path on a partial/non-prefix match would fail here.)"""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/some/other/checkout/root")
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
 
 
 def test_finding_with_traversal_uri_drops_file_field() -> None:

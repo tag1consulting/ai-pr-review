@@ -22,11 +22,14 @@ analyzer findings entirely instead of downgrading them.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 
 from ai_pr_review.diff.linemap import parse_added_lines
 from ai_pr_review.findings.models import Finding
+
+logger = logging.getLogger(__name__)
 
 # Analyzer source prefixes that identify native-tool findings.  LLM-agent
 # findings use agent names (code-reviewer, security-reviewer, etc.) which
@@ -98,6 +101,13 @@ def apply_diff_scope(
 
     eligible = {(lr.file, lr.line) for lr in parse_added_lines(diff_text)}
 
+    # Counts absolute-path findings per source for one aggregated WARNING
+    # after the loop, instead of one per finding — a single misbehaving
+    # analyzer can emit hundreds of these on one file (see this module's own
+    # docstring on the DisallowLongArraySyntax-x55 pattern), which would
+    # otherwise bury the signal this tripwire exists to surface (#846 review).
+    absolute_path_counts: dict[str, int] = defaultdict(int)
+
     result: list[Finding] = []
     for f in findings:
         # Treat line=None and line=0 as "no specific line" — some analyzers emit
@@ -107,6 +117,18 @@ def apply_diff_scope(
             result.append(f)
             continue
 
+        # An absolute Finding.file can never match the repo-relative
+        # (file, line) pairs parse_added_lines() derives from the diff, so it
+        # is always treated as out-of-diff (or dropped, under mode="drop")
+        # below — exactly how issue #713's ruff/docs-api-check path-leak hid
+        # until a dogfood review caught it by hand. Every analyzer is
+        # expected to emit repo-relative paths (see CONTRIBUTING.md); this
+        # tripwire exists so the next instance of this bug class (#846)
+        # surfaces in logs immediately instead of just quietly losing
+        # severity or vanishing outright.
+        if f.file.startswith("/"):
+            absolute_path_counts[f.source] += 1
+
         in_diff = (f.file, f.line) in eligible
         if in_diff:
             result.append(f)
@@ -114,6 +136,16 @@ def apply_diff_scope(
             pass
         else:
             result.append(f.model_copy(update={"severity": "Low", "out_of_diff": True}))
+
+    for source, count in absolute_path_counts.items():
+        outcome = "dropped entirely" if mode == "drop" else "capped to Low/out-of-diff"
+        logger.warning(
+            "[ai-pr-review] WARNING: %d analyzer finding(s) from %r have an "
+            "absolute file path -- Finding.file must be repo-relative; this "
+            "analyzer likely needs path normalization (see issue #713/#846). "
+            "%s.",
+            count, source, outcome.capitalize(),
+        )
 
     return result
 

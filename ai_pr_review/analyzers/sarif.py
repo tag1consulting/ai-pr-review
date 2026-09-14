@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
@@ -48,12 +49,39 @@ def _sanitize_sarif_path(uri: str) -> str:
     and raw relative paths.
 
     Workspace-root stripping: tools like Ruff emit absolute ``file://`` URIs
-    rooted at the GitHub Actions runner workspace
-    (``/home/runner/work/<owner>/<repo>/``).  After scheme stripping this
-    becomes ``home/runner/work/<owner>/<repo>/src/foo.py``, which never matches
-    repo-relative diff paths.  We detect this pattern and strip the leading
-    ``home/runner/work/<two-segment-repo-path>/`` prefix so the result is the
-    bare repo-relative path that the diff uses.
+    rooted at the job's checkout directory.  On a GitHub-hosted runner that is
+    ``/home/runner/work/<owner>/<repo>/``; a self-hosted runner can check out
+    anywhere (a custom `_work` root, a persistent agent directory, etc.), and
+    the hardcoded runner-path pattern below never matches those.
+    ``GITHUB_WORKSPACE`` is set by the Actions runtime to the real checkout
+    root on the host -- but this engine's ``container-action`` variant runs
+    inside a container that remaps ``GITHUB_WORKSPACE`` to its own mount
+    point (``/workspace``), which is unrelated to the host path baked into a
+    SARIF file produced by a separate, non-containerized job (e.g. this
+    repo's own ``sarif-prep`` job). So ``GITHUB_WORKSPACE`` alone is only
+    reliable for the composite (non-container) action; ``AI_SARIF_HOST_WORKSPACE``
+    is checked first when set, for exactly that container case (#846 review) --
+    a caller can set it to the real host checkout root when it differs from
+    the container's own ``GITHUB_WORKSPACE``. The ``runner/work/<owner>/<repo>/``
+    regex remains as a last-resort fallback for when neither is set or
+    matches (e.g. a SARIF file produced outside of Actions and fed in via the
+    `sarif-paths` input). This is a SARIF/host-side normalization distinct
+    from `analyzers/native/_paths.py::strip_workspace_prefix()`
+    (container-side, used by native analyzer subprocess output) -- see issue
+    #846.
+
+    This stripping only ever applies to a path that was actually absolute in
+    the original URI (a ``file://`` scheme, or an unqualified absolute path
+    already rejected above) -- never to an already-relative URI, which would
+    otherwise be misinterpreted as workspace-prefixed and truncated (#846
+    review: e.g. a genuinely relative ``workspace/src/x.py`` losing its first
+    segment when ``GITHUB_WORKSPACE`` happens to end in ``/workspace``).
+
+    A path that stays absolute after all three strip attempts (none
+    matched) has its leading ``/`` restored before being returned, rather
+    than silently handed back as a relative-looking string -- so that
+    `findings/scope.py`'s absolute-path tripwire still catches it instead of
+    the failure going unnoticed a second time (#846 review).
     """
     import re as _re
 
@@ -69,11 +97,18 @@ def _sanitize_sarif_path(uri: str) -> str:
         return ""
     path = unquote(parsed.path or uri)
 
+    # Tracks whether *uri* represented an absolute filesystem path -- only
+    # such a path is a candidate for workspace-prefix stripping below. A
+    # bare (no-scheme) relative URI never sets this and is returned as-is
+    # once past the traversal check (#846 review).
+    was_absolute = False
+
     # For file:// URIs, urlparse leaves a single leading slash on the path
     # (file:///x → "/x").  Strip exactly one — lstrip("/") would also accept
     # "file:////etc/passwd" → "etc/passwd", bypassing the absolute-path check.
     # An absolute path with no scheme (e.g. /etc/passwd) is rejected outright.
     if parsed.scheme == "file":
+        was_absolute = True
         path = path.removeprefix("/")
         # A remaining leading slash means the original URI was an attempt to
         # smuggle an absolute path through extra slashes — reject it.
@@ -90,16 +125,44 @@ def _sanitize_sarif_path(uri: str) -> str:
         logger.warning("SARIF: rejecting path with '..' segments: %r", uri)
         return ""
 
-    # Strip GitHub Actions runner workspace prefix so repo-relative paths
-    # produced by tools (Ruff, etc.) match the diff.
-    # Pattern: home/runner/work/<owner>/<repo>/<rest>
-    #      or: runner/work/<owner>/<repo>/<rest>  (some runner configurations)
-    stripped = _re.sub(
-        r"^(?:home/)?runner/work/[^/]+/[^/]+/",
-        "",
-        str(pp),
+    path_str = str(pp)
+    if not was_absolute:
+        # Already relative -- never a workspace-prefix candidate. Applying
+        # the stripping below to a relative path would silently truncate it
+        # whenever it happens to start with a segment that looks like a
+        # workspace prefix (#846 review).
+        return path_str
+
+    # Strip the job's checkout-root prefix so repo-relative paths produced by
+    # tools (Ruff, etc.) match the diff. Try, in order: AI_SARIF_HOST_WORKSPACE
+    # (the host checkout root, for callers running inside a container whose
+    # own GITHUB_WORKSPACE has been remapped -- see this function's
+    # docstring), then GITHUB_WORKSPACE (correct for the composite,
+    # non-container action), then the hardcoded GitHub-hosted-runner regex.
+    for env_name in ("AI_SARIF_HOST_WORKSPACE", "GITHUB_WORKSPACE"):
+        workspace = os.environ.get(env_name, "")
+        if not workspace:
+            continue
+        workspace_prefix = workspace.strip("/") + "/"
+        if path_str.startswith(workspace_prefix):
+            return path_str[len(workspace_prefix):]
+
+    # Fallback: home/runner/work/<owner>/<repo>/<rest> or runner/work/<owner>/<repo>/<rest>
+    stripped = _re.sub(r"^(?:home/)?runner/work/[^/]+/[^/]+/", "", path_str)
+    if stripped != path_str:
+        return stripped
+
+    # Nothing matched: this path is still really absolute under the hood,
+    # just missing its leading slash from the earlier scheme-stripping step.
+    # Restore it rather than handing back a relative-looking string, so
+    # findings/scope.py's absolute-path tripwire still catches this case
+    # instead of the normalization failure going unnoticed (#846 review).
+    logger.warning(
+        "SARIF: could not resolve %r to a repo-relative path (no workspace "
+        "prefix matched); leaving it absolute so downstream scoping flags it",
+        uri,
     )
-    return stripped
+    return "/" + path_str
 
 
 def _parse_sarif_file(path: str) -> list[Finding]:

@@ -30,13 +30,28 @@ import os
 def strip_workspace_prefix(filename: str) -> str:
     """Strip a GITHUB_WORKSPACE- or cwd-based absolute prefix from *filename*.
 
-    Uses `GITHUB_WORKSPACE` when set (the repo checkout root inside the
-    GitHub Actions container this action normally runs in) and falls back to
-    the process's own current working directory otherwise (local/dev runs,
-    where cwd is expected to already be the repo root). A filename that does
-    not start with that prefix is returned unchanged.
+    Tries `GITHUB_WORKSPACE` first when set (the repo checkout root inside
+    the GitHub Actions container this action normally runs in), then falls
+    back to the process's own current working directory (local/dev runs, or
+    a self-hosted-runner/`actions/checkout`-with-`path:` layout where
+    `GITHUB_WORKSPACE` and the analyzer subprocess's actual cwd diverge). A
+    filename that starts with neither candidate prefix is returned
+    unchanged.
+
+    This is a genuine try-then-fallback chain (#846 review), not an
+    either/or preference: an earlier version used `GITHUB_WORKSPACE` when
+    set with no cwd fallback on a prefix mismatch, which silently stopped
+    stripping whenever the two diverged -- exactly the class of bug this
+    module exists to prevent, and the one CI itself caught (a `chdir`'d test
+    failing under a `GITHUB_WORKSPACE` unrelated to the new cwd).
     """
-    workspace_prefix = (os.environ.get("GITHUB_WORKSPACE") or os.getcwd()).rstrip("/") + "/"
-    if filename.startswith(workspace_prefix):
-        return filename[len(workspace_prefix):]
+    candidates = []
+    github_workspace = os.environ.get("GITHUB_WORKSPACE")
+    if github_workspace:
+        candidates.append(github_workspace)
+    candidates.append(os.getcwd())
+    for candidate in candidates:
+        workspace_prefix = candidate.rstrip("/") + "/"
+        if filename.startswith(workspace_prefix):
+            return filename[len(workspace_prefix):]
     return filename

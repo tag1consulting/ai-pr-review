@@ -90,6 +90,62 @@ def test_phpstan_out_of_diff_capped() -> None:
     assert result[0].out_of_diff
 
 
+def test_absolute_file_path_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Issue #846: an absolute Finding.file is always demoted to Low/
+    out_of_diff (it can never match the diff's repo-relative (file, line)
+    pairs) with no signal beyond that silent severity drop -- exactly how
+    #713's ruff/docs-api-check path leak hid until a human noticed it. A
+    cheap warning must fire so this bug class surfaces in logs immediately.
+
+    The warning is aggregated per source (one line naming the count), not
+    once per finding -- a single misbehaving analyzer can emit hundreds of
+    these on one file, and a warning-per-finding would bury the signal
+    (#846 review) -- so this does not assert on the specific path text."""
+    f = _phpcs("/workspace/ai-pr-review/web/quickbooks.inc", 10)
+    with caplog.at_level("WARNING"):
+        result = apply_diff_scope([f], _DIFF)
+    assert result[0].severity == "Low"
+    assert result[0].out_of_diff
+    assert "absolute file path" in caplog.text
+    assert "phpcs" in caplog.text
+    assert "1 analyzer finding(s)" in caplog.text
+
+
+def test_absolute_file_path_warning_aggregates_per_source(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Multiple absolute-path findings from the same source produce one
+    aggregated warning naming the count, not one warning per finding."""
+    findings = [_phpcs(f"/workspace/web/file{i}.inc", i) for i in range(1, 6)]
+    with caplog.at_level("WARNING"):
+        apply_diff_scope(findings, _DIFF)
+    matching = [r for r in caplog.records if "absolute file path" in r.message]
+    assert len(matching) == 1
+    assert "5 analyzer finding(s)" in matching[0].message
+
+
+def test_absolute_file_path_warning_wording_reflects_drop_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """mode='drop' actually discards the finding rather than capping it to
+    Low/out-of-diff -- the warning wording must say so, not always claim
+    the cap outcome regardless of mode (#846 review)."""
+    f = _phpcs("/workspace/ai-pr-review/web/quickbooks.inc", 10)
+    with caplog.at_level("WARNING"):
+        result = apply_diff_scope([f], _DIFF, mode="drop")
+    assert result == []
+    assert "dropped entirely" in caplog.text.lower()
+    assert "capped to low" not in caplog.text.lower()
+
+
+def test_relative_file_path_does_not_log_warning(caplog: pytest.LogCaptureFixture) -> None:
+    f = _phpcs("web/quickbooks.inc", 10)
+    with caplog.at_level("WARNING"):
+        result = apply_diff_scope([f], _DIFF)
+    assert not result[0].out_of_diff
+    assert "absolute file path" not in caplog.text
+
+
 def test_finding_without_line_not_capped() -> None:
     f = Finding(severity="High", confidence=80, finding="body finding", source="phpcs", file="web/quickbooks.inc")
     result = apply_diff_scope([f], _DIFF)
