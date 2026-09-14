@@ -861,12 +861,11 @@ def dismiss(
       0 — handled (including "not found" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
+    from ai_pr_review.slash.github_ops import dismiss_by_finding_id, persist_verdict
     from ai_pr_review.slash.github_orchestration import (
         bodies_newest_first,
-        dismiss_by_finding_id,
         list_active_body_ids,
         no_finding_id_reply,
-        persist_verdict,
     )
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
@@ -1052,7 +1051,7 @@ def dismiss_inline(
       0 — handled (including "could not find thread" — not a command failure)
       1 — provider construction failed (non-GitHub VCS_PROVIDER, missing token)
     """
-    from ai_pr_review.slash.github_orchestration import dismiss_inline_reply, persist_verdict
+    from ai_pr_review.slash.github_ops import dismiss_inline_reply, persist_verdict
     from ai_pr_review.slash.parser import SlashCommand, parse_command
 
     os.environ["PR_NUMBER"] = str(pr_number)
@@ -1193,7 +1192,7 @@ def feedback_context(
     all diagnostics go to stderr. Never exits non-zero — context extraction
     is always best-effort, mirroring the two bash steps it replaces.
     """
-    from ai_pr_review.slash.github_orchestration import resolve_feedback_context
+    from ai_pr_review.slash.github_ops import resolve_feedback_context
 
     os.environ["PR_NUMBER"] = str(pr_number)
 
@@ -1261,7 +1260,7 @@ def resolve_thread_command(parent_comment_id: int, pr_number: int) -> None:
     matching the bash job's "feedback already persisted, thread resolution
     is best-effort" contract.
     """
-    from ai_pr_review.slash.github_orchestration import resolve_only
+    from ai_pr_review.slash.github_ops import resolve_only
 
     os.environ["PR_NUMBER"] = str(pr_number)
 

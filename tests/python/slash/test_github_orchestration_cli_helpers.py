@@ -1,23 +1,26 @@
-"""Tests for the CLI-adjacent pure helpers moved into ai_pr_review.slash.github_orchestration
-by issue #825 (out of ai_pr_review/cli.py).
+"""Tests for the CLI-adjacent helpers moved out of ai_pr_review/cli.py by issue
+#825. Most live in ai_pr_review.slash.github_orchestration (no HTTP mocking
+needed); `resolve_feedback_context` moved on to ai_pr_review.slash.github_ops
+in #849 since it dispatches into that module's `context_from_parent_comment`
+for the review-comment path.
 
 These back cli.py's `_build_github_provider_or_exit`/`_build_github_provider_or_none`,
 `dismiss`'s "no finding ID" reply, `_emit_dismiss_failure_annotation`, and
 `feedback-context`'s context resolution -- exercised indirectly and extensively
 by the CLI-level tests (test_cli_dismiss.py, test_cli_dismiss_inline.py,
 test_cli_feedback_context.py) via Click's CliRunner, but covered here directly
-since the logic itself now lives in this module.
+since the logic itself now lives in these two modules.
 """
 
 from __future__ import annotations
 
 import ai_pr_review.vcs as vcs_module
+from ai_pr_review.slash.github_ops import resolve_feedback_context
 from ai_pr_review.slash.github_orchestration import (
     FeedbackContext,
     GitHubProviderError,
     dismiss_failure_annotation,
     no_finding_id_reply,
-    resolve_feedback_context,
     resolve_github_provider,
 )
 from ai_pr_review.vcs import ProviderConfigError

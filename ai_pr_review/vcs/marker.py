@@ -364,7 +364,7 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
 # human said this specific thing" from "resolved as part of unrelated
 # housekeeping." Embedded in whichever review is currently canonical,
 # parallel to ID_MAP_MARKER_PREFIX; written by
-# `ai_pr_review.slash.github_orchestration` at command-handling time via
+# `ai_pr_review.slash.github_ops` at command-handling time via
 # `GitHubProvider.update_review_body`.
 VERDICTS_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-verdicts:"
 _VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
