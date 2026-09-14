@@ -2,7 +2,7 @@
 
 Wires story 13-1's `dismiss_inline_reply` to the CLI. Follows the
 `_make_provider(handler)` HTTP-mocking harness established in
-`tests/python/vcs/test_dismiss_github.py`, invoked through Click's CliRunner.
+`tests/python/vcs/test_github_orchestration_http.py`, invoked through Click's CliRunner.
 """
 
 from __future__ import annotations

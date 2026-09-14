@@ -60,7 +60,7 @@ def safe_review_id(review: Mapping[str, Any]) -> int:
     anything that isn't already an int/float/str/bytes numeral.
 
     Shared by `ai_pr_review.vcs._canonical.select_canonical`/`merge_verdicts`
-    (sorting/selecting by review id) and `ai_pr_review.slash.dismiss.
+    (sorting/selecting by review id) and `ai_pr_review.slash.github_orchestration.
     bodies_newest_first` (ordering bodies newest-first) -- both need the same
     tolerant coercion so a single malformed `id` entry degrades ordering
     rather than raising and losing the whole selection/merge/sort, and so the
@@ -136,7 +136,7 @@ _LOCATION_RE = re.compile(r"\*\(at `([^`]+)`")
 # out-of-diff analyzer bucket (no heading of its own, matched by its
 # containing <details> label instead), and APPROVE reviews with only
 # Medium/Low findings (issue #645 — this third heading was missing from both
-# this fallback scanner and `ai_pr_review/slash/dismiss.py`'s
+# this fallback scanner and `ai_pr_review/slash/github_orchestration.py`'s
 # `_scan_body_bullets_one`, so an approved review's body findings were never
 # locatable by `/ai-pr-review dismiss|false-positive|wont-fix F<n>`). Shared
 # here so the two scanners cannot drift out of sync again over a future
@@ -176,7 +176,7 @@ def _ends_body_section(stripped_line: str) -> bool:
       and the token table stopped always being an accordion in the body.
 
     Shared by `_parse_existing_ids` (this module) and
-    `ai_pr_review.slash.dismiss._scan_body_bullets_one`, which used to
+    `ai_pr_review.slash.github_orchestration._scan_body_bullets_one`, which used to
     duplicate this exact check independently in two files — extracted so the
     two cannot silently drift apart again.
     """
@@ -209,7 +209,7 @@ def known_fingerprints(prior_bodies: Sequence[str]) -> frozenset[str]:
     body (id-map marker fast path, or bullet-scan fallback for pre-marker
     reviews).
 
-    A pure presence/membership test -- unlike `_fingerprint_for_finding_id`
+    A pure presence/membership test -- unlike `fingerprint_for_finding_id`
     (a reverse ID->fingerprint lookup) this makes no claim about which
     render bucket (inline/in-diff-body/out-of-diff) a fingerprint came from,
     only that it was rendered somewhere before. Used by
@@ -291,7 +291,7 @@ def _parse_existing_ids(bodies: Sequence[str]) -> dict[str, int]:
             # name, which `_pick_primary_source` would get wrong here more
             # often than the plain first-name fallback it would replace.
             # `_pick_primary_source` stays correctly scoped to
-            # `slash.dismiss`'s two call sites, where "which analyzer
+            # `slash.github_orchestration`'s two call sites, where "which analyzer
             # flagged this" for attribution/reply-text purposes is the right
             # question to ask -- this call site's question ("what string
             # produces this exact fingerprint") is a different one.
@@ -353,12 +353,13 @@ def fingerprint_for_finding_id(bodies: Sequence[str], finding_id: int) -> str | 
     (bullet-scan) path can recover -- most commonly a legacy pre-marker
     review whose inline findings were never in bullet form to begin with.
 
-    Factored out of `ai_pr_review.slash.dismiss._fingerprint_for_finding_id`
-    (which now delegates here) so `ai_pr_review.vcs._canonical` can reuse the
-    same reverse lookup for legacy inline-thread fallback without importing
-    from `ai_pr_review.slash.dismiss` (which imports `vcs.github`, and
-    `vcs.github` needs to import `vcs._canonical` -- importing the other way
-    would create a cycle).
+    Lives here (rather than in `ai_pr_review.slash`) so `ai_pr_review.vcs._canonical`
+    can reuse this same reverse lookup for legacy inline-thread fallback
+    without importing from `ai_pr_review.slash.github_orchestration` (which
+    imports `vcs.github`, and `vcs.github` needs to import `vcs._canonical` --
+    importing the other way would create a cycle). `ai_pr_review.slash.github_ops`
+    (split out of `github_orchestration.py` in #849) imports this function
+    directly rather than through a wrapper.
     """
     for fp, fid in _parse_existing_ids(bodies).items():
         if fid == finding_id:
