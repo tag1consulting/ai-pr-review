@@ -178,9 +178,12 @@ def review() -> None:
     posting target.
 
     Exit codes:
-      0 — review posted successfully (or skipped cleanly)
+      0 — review posted successfully (or skipped cleanly, including a
+          pre-flight cost-ceiling skip when AI_FAIL_ON_COST_CEILING is unset)
       1 — configuration / posting error
-      2 — review posted but outcome is REQUEST_CHANGES or COMMENT (when AI_FAIL_ON_FINDINGS=true)
+      2 — review posted but outcome is REQUEST_CHANGES or COMMENT (when
+          AI_FAIL_ON_FINDINGS=true); or a pre-flight cost estimate exceeded
+          AI_MAX_COST_USD (when AI_FAIL_ON_COST_CEILING=true) — see #24
     """
     try:
         config = ReviewConfig.from_env()
@@ -228,6 +231,13 @@ async def _run_review_async(config: ReviewConfig) -> int:
             except Exception:
                 resolved_cfg = config
             await _emit_telemetry(result, resolved_cfg, 0, outcome_override="skipped")
+        # #24: a pre-flight cost-ceiling skip always aborts before any LLM
+        # call, but only becomes a CI failure (exit 2, mirroring
+        # fail_on_findings' own opt-in exit code) when the operator has
+        # explicitly opted in via AI_FAIL_ON_COST_CEILING -- otherwise one
+        # unusually large PR shouldn't break a required status check.
+        if runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok:
+            return 2
         return 0 if result.ok else 1
 
     # Use the post-resolve_models() config stored on the runtime for all downstream use.

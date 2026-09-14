@@ -7,6 +7,7 @@ vars raise ConfigError with a nearest-match suggestion.
 from __future__ import annotations
 
 import difflib
+import math
 import os
 import sys
 
@@ -84,6 +85,9 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Token usage display (#758) ---
         "AI_TOKEN_USAGE_DISPLAY",
         "AI_TOKEN_USAGE_WARN_USD",
+        # --- Pre-flight cost ceiling (#24) ---
+        "AI_MAX_COST_USD",
+        "AI_FAIL_ON_COST_CEILING",
         # --- Structured logging ---
         "AI_LOG_FORMAT",
         "AI_LOG_LEVEL",
@@ -213,6 +217,85 @@ def _validate_analyzer_names_list(values: tuple[str, ...]) -> tuple[str, ...]:
     )
 
 
+def _agent_max_tokens_env_var(agent_name: str) -> str:
+    """Return the per-agent max-tokens override env var name for *agent_name*.
+
+    e.g. "code-reviewer" -> AI_MAX_TOKENS_CODE_REVIEWER (#191). Shared by
+    resolve_agent_max_tokens() and _check_unknown_ai_vars() so the accepted-
+    var set and the resolution lookup can never drift apart from each other
+    or from agents.roster.AGENT_NAMES.
+    """
+    return f"AI_MAX_TOKENS_{agent_name.upper().replace('-', '_')}"
+
+
+def _per_agent_max_tokens_vars() -> frozenset[str]:
+    """Return the set of valid AI_MAX_TOKENS_<AGENT> var names for the current roster.
+
+    Lazy import (mirrors _validate_analyzer_names_list/_validate_agent_names
+    above) so importing config.py doesn't eagerly pull in the agent roster.
+    """
+    from ai_pr_review.agents.roster import AGENT_NAMES  # noqa: PLC0415
+
+    return frozenset(_agent_max_tokens_env_var(name) for name in AGENT_NAMES)
+
+
+def resolve_agent_max_tokens(agent_name: str, default: int) -> int:
+    """Resolve the effective max_output_tokens for one agent (#191).
+
+    Reads ``AI_MAX_TOKENS_<AGENT_NAME_UPPER_SNAKE>`` from the environment as a
+    higher-precedence override on top of *default* -- *default* is normally
+    whatever the caller already resolved from the roster default or the
+    global ``AI_MAX_TOKENS_PER_AGENT`` override. When the env var is unset or
+    blank, *default* is returned unchanged: this function only ever adds a
+    per-agent override on top, it never lowers or otherwise second-guesses
+    the caller-supplied fallback.
+
+    Invalid values (non-integer, or outside [256, 65536]) print a WARNING to
+    stderr and fall back to *default* rather than raising -- matching the
+    tolerant clamp-and-warn pattern ``_clamp_max_tokens_per_agent`` and
+    ``_int()`` already use elsewhere in this module for numeric env vars, so
+    a malformed per-agent override degrades gracefully instead of aborting
+    the whole review.
+
+    A mistyped agent name in the env var itself (e.g.
+    ``AI_MAX_TOKENS_CODE_REVEIWER``) is never looked up here -- callers only
+    ever pass a real ``AgentSpec.name`` -- so it has no effect on dispatch.
+    It is still caught separately: ``_check_unknown_ai_vars()`` only
+    recognizes ``AI_MAX_TOKENS_<NAME>`` for names currently in
+    ``agents.roster.AGENT_NAMES``, so a typo still surfaces the existing
+    "Unknown AI_* variable... Did you mean...?" warning at startup.
+    """
+    env_name = _agent_max_tokens_env_var(agent_name)
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"WARNING: {env_name}={raw!r} is not a valid integer; using {default}. "
+            "Review will proceed with this default.",
+            file=sys.stderr,
+        )
+        return default
+    _MIN, _MAX = 256, 65536
+    if value < _MIN:
+        print(
+            f"WARNING: {env_name}={value} is below minimum {_MIN}; clamping to {_MIN}. "
+            "Review will proceed with this value.",
+            file=sys.stderr,
+        )
+        return _MIN
+    if value > _MAX:
+        print(
+            f"WARNING: {env_name}={value} exceeds maximum {_MAX}; clamping to {_MAX}. "
+            "Review will proceed with this value.",
+            file=sys.stderr,
+        )
+        return _MAX
+    return value
+
+
 def _check_unknown_ai_vars() -> None:
     """Warn (not raise) for any AI_* env var not in the documented set.
 
@@ -221,10 +304,11 @@ def _check_unknown_ai_vars() -> None:
     was introduced after the image was built.  The warning still catches typos
     without hard-breaking forward-compatibility.
     """
+    per_agent_vars = _per_agent_max_tokens_vars()
     for key in os.environ:
         if not key.startswith("AI_"):
             continue
-        if key in _KNOWN_AI_VARS:
+        if key in _KNOWN_AI_VARS or key in per_agent_vars:
             continue
         if key in _DEPRECATED_NOOP_AI_VARS:
             reason = _DEPRECATED_NOOP_AI_VARS[key]
@@ -249,7 +333,7 @@ def _check_unknown_ai_vars() -> None:
                 )
             continue
         # Find closest documented match for a helpful hint.
-        matches = difflib.get_close_matches(key, _KNOWN_AI_VARS, n=1, cutoff=0.6)
+        matches = difflib.get_close_matches(key, _KNOWN_AI_VARS | per_agent_vars, n=1, cutoff=0.6)
         suggestion = f" Did you mean {matches[0]!r}?" if matches else ""
         print(
             f"WARNING: Unknown AI_* variable {key!r} will be ignored.{suggestion}",
@@ -388,6 +472,21 @@ class ReviewConfig(BaseModel):
     # warning line is added to the comment, separately from whichever
     # token_usage_display payload is shown. 0 disables the warning entirely.
     token_usage_warn_usd: float = 1.00
+
+    # --- Pre-flight cost ceiling (#24) ---
+    # Estimated USD ceiling on a single review run's LLM spend, checked
+    # before any agent dispatches (see review/cost_ceiling.py). 0 (default)
+    # disables the ceiling -- the estimate is still computed and logged via
+    # the COST_ESTIMATE line, just never enforced.
+    max_cost_usd: float = 0.0
+    # When the ceiling is exceeded, the run always aborts before any LLM call
+    # (a skip comment is posted, same mechanism as the max-diff-lines skip)
+    # -- but by default this is NOT treated as a CI failure (exit 0), mirroring
+    # fail_on_findings' "off by default" design: one unusually large PR
+    # shouldn't break a required status check on its own. Set true to exit
+    # code 2 instead, the same code fail_on_findings uses for its own
+    # opt-in "treat this as blocking" gate.
+    fail_on_cost_ceiling: bool = False
 
     # --- Slash commands + feedback loop ---
     enable_feedback_loop: bool = False
@@ -546,6 +645,31 @@ class ReviewConfig(BaseModel):
             return 0.0
         return v
 
+    @field_validator("max_cost_usd")
+    @classmethod
+    def _clamp_max_cost_usd(cls, v: float) -> float:
+        # NaN and +-inf both defeat enforce_cost_ceiling's own <= comparisons
+        # (any comparison against NaN is False; inf's "never exceeded" side
+        # effect is an accident of float semantics, not an intentional
+        # "no ceiling" spelling) -- reject both the same way a negative
+        # value already is, rather than let either reach enforcement.
+        if not math.isfinite(v):
+            print(
+                f"WARNING: AI_MAX_COST_USD={v} is not a finite number; "
+                "clamping to 0 (ceiling disabled). Review will proceed with "
+                "this value.",
+                file=sys.stderr,
+            )
+            return 0.0
+        if v < 0:
+            print(
+                f"WARNING: AI_MAX_COST_USD={v} is negative; clamping to 0 "
+                "(ceiling disabled). Review will proceed with this value.",
+                file=sys.stderr,
+            )
+            return 0.0
+        return v
+
     @field_validator("log_format")
     @classmethod
     def _validate_log_format(cls, v: str) -> str:
@@ -673,6 +797,8 @@ class ReviewConfig(BaseModel):
             fail_on_findings=_bool("AI_FAIL_ON_FINDINGS"),
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
+            max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
+            fail_on_cost_ceiling=_bool("AI_FAIL_ON_COST_CEILING"),
             enable_feedback_loop=_bool("AI_FEEDBACK_LOOP"),
             feedback_branch=os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot"),
             feedback_max_tokens=_int("AI_FEEDBACK_MAX_TOKENS", 2048),

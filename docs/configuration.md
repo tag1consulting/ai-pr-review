@@ -71,6 +71,8 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_CONTEXT_MAX_QUERIES` | `200` | `context-max-queries` | Cap on ripgrep symbol-lookup queries shared across all agents in a run. Increase if logs show `context enrichment: max_queries=N reached`. Container-action only. |
 | `AI_REVIEW_TOKEN_USAGE_DISPLAY` | `compact` | `token-usage-display` | How token-usage/cost information appears in the posted review comment: `compact` (default, a one-line summary), `full` (the pre-#758 `<details>` table), or `off` (no token-usage content in the comment). The full breakdown is always in `GITHUB_STEP_SUMMARY` and the CI job log regardless. See [Features: Token usage](features#token-usage). |
 | `AI_REVIEW_TOKEN_USAGE_WARN_USD` | `1.00` | `token-usage-warn-usd` | Estimated-cost threshold (USD) above which a high-usage warning line is added to the comment. Set to `0` to disable. |
+| `AI_REVIEW_MAX_COST_USD` | `0` | `max-cost-usd` | Maximum estimated cost (USD) for a single review run. If the pre-flight estimate (computed before any agent dispatches) exceeds this, the run aborts before any LLM call. Set to `0` (default) to disable the ceiling. See [Cost ceiling](#cost-ceiling). |
+| `AI_REVIEW_FAIL_ON_COST_CEILING` | `false` | `fail-on-cost-ceiling` | When `true`, an exceeded `max-cost-usd` ceiling exits with code 2 (a CI-gate failure) instead of the default exit 0. The run still aborts before any LLM call either way. See [Cost ceiling](#cost-ceiling). |
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -139,6 +141,44 @@ to change them.
 | `AI_DISABLE_GATE_ARCHITECTURE` | `false` | Disables the docs-only heuristic gate; `architecture-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_SECURITY` | `false` | Disables the keyword/path heuristic gate; `security-reviewer` always runs regardless of diff content. |
 | `AI_DISABLE_GATE_EDGE_CASE` | `false` | Disables the control-flow heuristic gate; `edge-case-hunter` always runs regardless of diff content. |
+
+### Per-agent max-tokens overrides (env-var only)
+
+`AI_MAX_TOKENS_PER_AGENT` (see [Action inputs](#action-inputs) /
+[Repository variables](#repository-variables) above) sets one output-token
+budget for every tier-dispatched agent. `AI_MAX_TOKENS_<AGENT>` overrides that
+budget for one named agent, taking precedence over both
+`AI_MAX_TOKENS_PER_AGENT` and the agent's own roster default. The agent name is
+uppercased with `-` replaced by `_` (e.g. `code-reviewer` →
+`AI_MAX_TOKENS_CODE_REVIEWER`). Invalid values (non-integer, or outside
+256–65536) print a warning and fall back to the pre-override value rather than
+failing the run, matching `AI_MAX_TOKENS_PER_AGENT`'s own clamp behavior. See
+[issue #191](https://github.com/tag1consulting/ai-pr-review/issues/191).
+
+`pr-summarizer` and `issue-linker` are dispatched separately from the other
+seven agents (they compose their own prompts and never go through the
+tier-dispatch path that reads `AI_MAX_TOKENS_PER_AGENT`), and their pre-#191
+budget was a hardcoded `4096` with no override of any kind. `AI_MAX_TOKENS_<AGENT>`
+is therefore the *only* way to change their budget; `AI_MAX_TOKENS_PER_AGENT`
+still has no effect on either.
+
+| Variable | Effective default | Notes |
+|----------|--------------------|-------|
+| `AI_MAX_TOKENS_PR_SUMMARIZER` | `4096` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; see above. |
+| `AI_MAX_TOKENS_CODE_REVIEWER` | `32768` | Tier-dispatched; falls back to `AI_MAX_TOKENS_PER_AGENT` when unset. |
+| `AI_MAX_TOKENS_SILENT_FAILURE_HUNTER` | `32768` | Tier-dispatched. |
+| `AI_MAX_TOKENS_ARCHITECTURE_REVIEWER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_SECURITY_REVIEWER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_BLIND_HUNTER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_EDGE_CASE_HUNTER` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_ADVERSARIAL_GENERAL` | `32768` | Tier-dispatched, full mode only. |
+| `AI_MAX_TOKENS_ISSUE_LINKER` | `4096` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; see above. |
+
+Not implemented: a bulk JSON-map override form (e.g. `AI_MAX_TOKENS_OVERRIDES`)
+was suggested in issue #191 but deliberately left out of this change — the
+per-agent env vars above cover the same ground with less surface area to
+document and validate, and can be revisited if real usage shows the JSON form
+is actually needed.
 
 ### Legacy compatibility
 
@@ -216,6 +256,13 @@ These variables enable optional capabilities that are off by default.
 |----------|---------|-------------|
 | `AI_TOKEN_USAGE_DISPLAY` | `compact` | How token-usage/cost information appears in the posted review comment. `compact` (default): a single cost/token/agent-count summary line. `full`: the full `<details>`-wrapped per-agent table, as posted before this input existed. `off`: no token-usage content in the comment at all. Independent of where the full breakdown is otherwise available: it's always written to `GITHUB_STEP_SUMMARY` (GitHub only) and always echoed to the CI job log (every provider), regardless of this setting. See [Features: Token usage](features#token-usage). |
 | `AI_TOKEN_USAGE_WARN_USD` | `1.00` | Estimated-cost threshold (USD) above which a separate high-usage warning line is added to the review comment — never combined into the same string as the table or compact line. Set to `0` to disable. When a run includes a model with no entry in `config/model-pricing.json`, the warning (if it fires) says the figure is a floor rather than a precise number, since the true cost may be higher. |
+
+#### Cost ceiling
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_MAX_COST_USD` | `0` | Maximum estimated cost (USD) for a single review run. Before any agent dispatches, the run's cost is estimated from the diff size, the selected agent roster (including the separately-dispatched `pr-summarizer`/`issue-linker` preflight agents, when they will run), and per-model rates in `config/model-pricing.json`, and logged as a `COST_ESTIMATE` line (always, regardless of whether a ceiling is set). If a ceiling is set and the estimate exceeds it, the run aborts before any LLM call is made — no dispatch, no partial spend — by posting a skip comment (the same mechanism the `max-diff-lines` skip uses) and exiting 0 by default; see `AI_FAIL_ON_COST_CEILING` to make this a CI-gate failure instead. This is an approximation, not a precise invoice preview: input tokens are estimated from character counts (not a real tokenizer), and output tokens are assumed at each agent's configured cap rather than the (unknowable in advance) actual generation length — real spend is usually lower than the estimate. A model with no pricing entry is treated as fail-soft: its cost is excluded from the estimate (logged as a warning) rather than aborting the run. Set to `0` (default) to disable the ceiling. |
+| `AI_FAIL_ON_COST_CEILING` | `false` | When `true`, an exceeded `AI_MAX_COST_USD` ceiling exits with code 2 instead of the default 0 — mirroring `AI_FAIL_ON_FINDINGS`'s own opt-in exit code — so a required CI check can be gated on it. The run always aborts before any LLM call regardless of this setting; this only controls the exit code. No effect when `AI_MAX_COST_USD` is unset/`0`. |
 
 #### Quiet reruns and cross-run finding dedup
 

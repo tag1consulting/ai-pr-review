@@ -22,6 +22,42 @@ def _make_agent_result(name: str = "code-reviewer", model: str = "claude-sonnet-
 # ---------------------------------------------------------------------------
 
 
+def test_build_token_log_uses_agent_result_effective_max_tokens_over_roster_default() -> None:
+    """#844 review finding: the token table must reflect a per-agent
+    AI_MAX_TOKENS_<AGENT> override (#191), not the roster's hard-coded
+    default -- AgentResult.effective_max_tokens is the real value dispatch.py
+    resolved through the full precedence chain, and must win over both the
+    roster default and any global AI_MAX_TOKENS_PER_AGENT passed in here."""
+    from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+    from ai_pr_review.review.reporting import _build_token_log
+
+    tl = TokenUsage(model="claude-sonnet-5", input=1000, output=500, cache_creation=0, cache_read=0)
+    # code-reviewer's roster default is nowhere near 12345 -- if the fix
+    # regresses back to re-deriving the cap from the roster/global override
+    # alone, this would come back as the roster default instead.
+    ar = AgentResult(
+        name="code-reviewer", output="", token_log=tl, truncated=False,
+        effective_max_tokens=12345,
+    )
+    entries = _build_token_log([ar])
+    assert len(entries) == 1
+    assert entries[0].max_output_tokens == 12345
+
+
+def test_build_token_log_falls_back_when_effective_max_tokens_unset() -> None:
+    """An AgentResult predating the effective_max_tokens field (default 0,
+    e.g. old replayed data or a bare fixture) still falls back to the
+    global-override-or-roster-default logic rather than showing 0/no cap."""
+    from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+    from ai_pr_review.review.reporting import _build_token_log
+
+    tl = TokenUsage(model="claude-sonnet-5", input=1000, output=500, cache_creation=0, cache_read=0)
+    ar = AgentResult(name="code-reviewer", output="", token_log=tl, truncated=False)
+    entries = _build_token_log([ar], effective_max_tokens=9999)
+    assert len(entries) == 1
+    assert entries[0].max_output_tokens == 9999
+
+
 def test_compute_token_totals_none_on_no_data() -> None:
     from ai_pr_review.review.reporting import compute_token_totals
 

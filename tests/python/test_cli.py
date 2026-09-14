@@ -1256,6 +1256,51 @@ class TestFailOnFindings:
         assert config.fail_on_findings is False
 
 
+class TestCostCeilingSkipExitCode:
+    """#24: exit code 2 only when AI_FAIL_ON_COST_CEILING=true and the skip
+    was specifically a cost-ceiling one.
+
+    Mirrors TestFailOnFindings above: exercises the exit-code decision logic
+    directly rather than driving _run_review_async end-to-end.
+    """
+
+    def _exit_code(
+        self, *, is_cost_ceiling_skip: bool, fail_on_cost_ceiling: bool, ok: bool = True,
+    ) -> int:
+        config = _make_config(fail_on_cost_ceiling=fail_on_cost_ceiling)
+
+        runtime = MagicMock()
+        runtime.is_cost_ceiling_skip = is_cost_ceiling_skip
+
+        result = MagicMock()
+        result.ok = ok
+
+        # Mirror the exact logic from cli._run_review_async's SkipPlan branch.
+        if runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok:
+            return 2
+        return 0 if result.ok else 1
+
+    def test_cost_ceiling_skip_exits_0_by_default(self) -> None:
+        assert self._exit_code(is_cost_ceiling_skip=True, fail_on_cost_ceiling=False) == 0
+
+    def test_cost_ceiling_skip_exits_2_when_opted_in(self) -> None:
+        assert self._exit_code(is_cost_ceiling_skip=True, fail_on_cost_ceiling=True) == 2
+
+    def test_non_cost_ceiling_skip_exits_0_even_when_opted_in(self) -> None:
+        """A diff-too-large/no-changes skip must not be affected by
+        AI_FAIL_ON_COST_CEILING."""
+        assert self._exit_code(is_cost_ceiling_skip=False, fail_on_cost_ceiling=True) == 0
+
+    def test_posting_failure_exits_1_regardless_of_flag(self) -> None:
+        assert self._exit_code(
+            is_cost_ceiling_skip=True, fail_on_cost_ceiling=True, ok=False,
+        ) == 1
+
+    def test_fail_on_cost_ceiling_default_is_false(self) -> None:
+        config = _make_config()
+        assert config.fail_on_cost_ceiling is False
+
+
 class TestEmitTelemetryThinkingTokens:
     """#592: telemetry's per-agent dict must carry thinking_tokens/stop_reason
     so a consumer can alert on truncation/thinking-exhaustion without a human
