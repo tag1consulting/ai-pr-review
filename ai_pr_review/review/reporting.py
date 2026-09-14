@@ -725,8 +725,11 @@ def emit_review_result(
             err=True,
         )
 
-    # Canonical-review reuse activity (GitHub only; these fields are always
-    # 0/False on GitLab/Bitbucket). Surfacing them is the difference between
+    # Canonical-review reuse activity. GitHub uses the full suppress/recur/
+    # update/escalate table; GitLab reaches only update/escalate (no verdict
+    # system, so reused_review/suppressed stay False there); these fields
+    # are still always 0/False on Bitbucket (no cross-run dedup at all,
+    # tracked at #839). Surfacing them is the difference between
     # a maintainer being able to tell from the run log whether reuse engaged
     # at all versus having to reason about it from GitHub's UI after the fact.
     if posted is not None and (
