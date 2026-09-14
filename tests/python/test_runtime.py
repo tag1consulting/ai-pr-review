@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -504,6 +505,96 @@ class TestBuildReviewRuntimeSkip:
 
         assert isinstance(result, SkipPlan)
         assert "too large" in result.reason
+
+
+class TestBuildReviewRuntimeCostCeiling:
+    """#24: pre-flight cost estimate + ceiling, checked inside
+    build_review_runtime after the agent roster is finalized."""
+
+    @pytest.mark.anyio
+    async def test_ceiling_not_configured_returns_runtime_and_logs_estimate(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        config = _make_config()  # max_cost_usd defaults to 0 (disabled)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            caplog.at_level(logging.INFO, logger="ai_pr_review.review.cost_ceiling"),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, ReviewRuntime)
+        assert "COST_ESTIMATE" in caplog.text
+        assert "ceiling=none" in caplog.text
+
+    @pytest.mark.anyio
+    async def test_ceiling_exceeded_returns_cost_ceiling_skip_plan(
+        self, tmp_path: Path,
+    ) -> None:
+        # A vanishingly small ceiling that any non-zero estimate exceeds,
+        # against the real config/model-pricing.json rates for
+        # claude-sonnet-4-6 (matches _make_config's model_standard).
+        config = _make_config(max_cost_usd=0.000001)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, SkipPlan)
+        assert result.is_cost_ceiling_skip is True
+        assert "exceeds" in result.reason
+        assert "AI_MAX_COST_USD" in result.reason
+        assert result.provider is provider
+
+    @pytest.mark.anyio
+    async def test_ceiling_not_exceeded_returns_runtime(self, tmp_path: Path) -> None:
+        config = _make_config(max_cost_usd=1000.00)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, ReviewRuntime)
+
+    @pytest.mark.anyio
+    async def test_unrecognised_model_is_fail_soft_not_a_crash(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        config = _make_config(
+            model_standard="totally-unrecognised-model-xyz",
+            model_premium="totally-unrecognised-model-xyz",
+            max_cost_usd=0.01,
+        )
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        # An unrecognised model contributes 0 estimated cost (fail-soft) --
+        # with no known-cost agents, the ceiling is never exceeded and the
+        # review proceeds normally rather than crashing or wrongly skipping.
+        assert isinstance(result, ReviewRuntime)
+        assert "no pricing entry" in caplog.text
 
 
 class TestSarifRoutedViaExtraFindings:

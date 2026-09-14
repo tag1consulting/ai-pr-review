@@ -71,6 +71,8 @@ These optional variables can be set in **Settings → Secrets and variables → 
 | `AI_REVIEW_CONTEXT_MAX_QUERIES` | `200` | `context-max-queries` | Cap on ripgrep symbol-lookup queries shared across all agents in a run. Increase if logs show `context enrichment: max_queries=N reached`. Container-action only. |
 | `AI_REVIEW_TOKEN_USAGE_DISPLAY` | `compact` | `token-usage-display` | How token-usage/cost information appears in the posted review comment: `compact` (default, a one-line summary), `full` (the pre-#758 `<details>` table), or `off` (no token-usage content in the comment). The full breakdown is always in `GITHUB_STEP_SUMMARY` and the CI job log regardless. See [Features: Token usage](features#token-usage). |
 | `AI_REVIEW_TOKEN_USAGE_WARN_USD` | `1.00` | `token-usage-warn-usd` | Estimated-cost threshold (USD) above which a high-usage warning line is added to the comment. Set to `0` to disable. |
+| `AI_REVIEW_MAX_COST_USD` | `0` | `max-cost-usd` | Maximum estimated cost (USD) for a single review run. If the pre-flight estimate (computed before any agent dispatches) exceeds this, the run aborts before any LLM call. Set to `0` (default) to disable the ceiling. See [Cost ceiling](#cost-ceiling). |
+| `AI_REVIEW_FAIL_ON_COST_CEILING` | `false` | `fail-on-cost-ceiling` | When `true`, an exceeded `max-cost-usd` ceiling exits with code 2 (a CI-gate failure) instead of the default exit 0. The run still aborts before any LLM call either way. See [Cost ceiling](#cost-ceiling). |
 
 To set a variable via the GitHub CLI:
 ```bash
@@ -254,6 +256,13 @@ These variables enable optional capabilities that are off by default.
 |----------|---------|-------------|
 | `AI_TOKEN_USAGE_DISPLAY` | `compact` | How token-usage/cost information appears in the posted review comment. `compact` (default): a single cost/token/agent-count summary line. `full`: the full `<details>`-wrapped per-agent table, as posted before this input existed. `off`: no token-usage content in the comment at all. Independent of where the full breakdown is otherwise available: it's always written to `GITHUB_STEP_SUMMARY` (GitHub only) and always echoed to the CI job log (every provider), regardless of this setting. See [Features: Token usage](features#token-usage). |
 | `AI_TOKEN_USAGE_WARN_USD` | `1.00` | Estimated-cost threshold (USD) above which a separate high-usage warning line is added to the review comment — never combined into the same string as the table or compact line. Set to `0` to disable. When a run includes a model with no entry in `config/model-pricing.json`, the warning (if it fires) says the figure is a floor rather than a precise number, since the true cost may be higher. |
+
+#### Cost ceiling
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_MAX_COST_USD` | `0` | Maximum estimated cost (USD) for a single review run. Before any agent dispatches, the run's cost is estimated from the diff size, the selected agent roster (including the separately-dispatched `pr-summarizer`/`issue-linker` preflight agents, when they will run), and per-model rates in `config/model-pricing.json`, and logged as a `COST_ESTIMATE` line (always, regardless of whether a ceiling is set). If a ceiling is set and the estimate exceeds it, the run aborts before any LLM call is made — no dispatch, no partial spend — by posting a skip comment (the same mechanism the `max-diff-lines` skip uses) and exiting 0 by default; see `AI_FAIL_ON_COST_CEILING` to make this a CI-gate failure instead. This is an approximation, not a precise invoice preview: input tokens are estimated from character counts (not a real tokenizer), and output tokens are assumed at each agent's configured cap rather than the (unknowable in advance) actual generation length — real spend is usually lower than the estimate. A model with no pricing entry is treated as fail-soft: its cost is excluded from the estimate (logged as a warning) rather than aborting the run. Set to `0` (default) to disable the ceiling. |
+| `AI_FAIL_ON_COST_CEILING` | `false` | When `true`, an exceeded `AI_MAX_COST_USD` ceiling exits with code 2 instead of the default 0 — mirroring `AI_FAIL_ON_FINDINGS`'s own opt-in exit code — so a required CI check can be gated on it. The run always aborts before any LLM call regardless of this setting; this only controls the exit code. No effect when `AI_MAX_COST_USD` is unset/`0`. |
 
 #### Quiet reruns and cross-run finding dedup
 

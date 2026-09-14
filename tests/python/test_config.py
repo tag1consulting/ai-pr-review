@@ -849,3 +849,122 @@ def test_token_usage_warn_usd_unparseable_env_falls_back_to_default(
     assert cfg.token_usage_warn_usd == 1.00
     captured = capsys.readouterr()
     assert "WARNING" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# max_cost_usd (#24 -- pre-flight cost ceiling)
+# ---------------------------------------------------------------------------
+
+
+def test_max_cost_usd_default_is_zero_disabled() -> None:
+    cfg = ReviewConfig()
+    assert cfg.max_cost_usd == 0.0
+
+
+def test_max_cost_usd_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_MAX_COST_USD", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_cost_usd == 0.0
+
+
+def test_max_cost_usd_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_MAX_COST_USD", "2.50")
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_cost_usd == 2.50
+
+
+def test_max_cost_usd_negative_clamped_to_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = ReviewConfig(max_cost_usd=-1.0)
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_nan_clamped_to_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """NaN defeats enforce_cost_ceiling's own <= comparisons in BOTH
+    directions (any comparison against NaN is False), so a NaN ceiling
+    would neither disable itself nor ever register as "not exceeded" --
+    tripping on every single run regardless of actual cost. Must be
+    rejected here, before it ever reaches enforcement."""
+    cfg = ReviewConfig(max_cost_usd=float("nan"))
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_inf_clamped_to_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """+inf happens to make enforce_cost_ceiling's "not exceeded" check
+    always true (anything <= inf), which looks like harmless "no ceiling"
+    behavior -- but it's an accident of float semantics, not an intentional
+    spelling for that, and -inf would behave very differently (always
+    "exceeded", tripping every run). Reject both explicitly rather than
+    rely on which side of infinity a typo happens to land on."""
+    cfg = ReviewConfig(max_cost_usd=float("inf"))
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_env_nan_string_clamped_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """float("nan") succeeds (no ValueError), so AI_MAX_COST_USD=nan reaches
+    the validator as a real float, not the unparseable-string fallback
+    path -- must be caught by the finite check specifically."""
+    monkeypatch.setenv("AI_MAX_COST_USD", "nan")
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_unparseable_env_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AI_MAX_COST_USD", "not-a-number")
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_known_ai_var_no_unknown_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AI_MAX_COST_USD must be registered in _KNOWN_AI_VARS or from_env()
+    prints a spurious "Unknown AI_* variable" warning for every run that sets it.
+    """
+    monkeypatch.setenv("AI_MAX_COST_USD", "3.00")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "Unknown AI_* variable" not in captured.err
+
+
+def test_fail_on_cost_ceiling_default_is_false() -> None:
+    cfg = ReviewConfig()
+    assert cfg.fail_on_cost_ceiling is False
+
+
+def test_fail_on_cost_ceiling_env_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_FAIL_ON_COST_CEILING", "true")
+    cfg = ReviewConfig.from_env()
+    assert cfg.fail_on_cost_ceiling is True
+
+
+def test_fail_on_cost_ceiling_known_ai_var_no_unknown_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AI_FAIL_ON_COST_CEILING", "true")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "Unknown AI_* variable" not in captured.err

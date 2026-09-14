@@ -25,6 +25,7 @@ from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
+from ai_pr_review.review.cost_ceiling import CostCeilingExceeded
 from ai_pr_review.review.pr_context import build_shared_context_block
 from ai_pr_review.vcs import provider_from_env
 from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
@@ -37,10 +38,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SkipPlan:
-    """Compute returned skip — caller posts a skip comment and returns 0."""
+    """Compute (or the pre-flight cost-ceiling check) returned skip — caller
+    posts a skip comment and returns 0 by default."""
 
     reason: str
     provider: VcsProvider
+    is_cost_ceiling_skip: bool = False
+    """True when this skip was produced by the #24 pre-flight cost-ceiling
+    check rather than the diff-too-large/no-changes compute-phase skips.
+    cli.py uses this to decide whether AI_FAIL_ON_COST_CEILING should turn
+    the otherwise-0 exit code into 2."""
 
 
 @dataclass(frozen=True)
@@ -463,6 +470,96 @@ async def build_review_runtime(
             "review proceeding with 0 agents after gate filtering "
             "(gates=%s); only pre-computed findings will be posted",
             list(gates),
+        )
+
+    # 9b. Pre-flight cost estimate + ceiling (#24), now that the agent roster
+    # is final. Runs before any LLM call in this run, including the
+    # pr-summarizer/issue-linker preflight calls cli.py makes next. Always
+    # logs the COST_ESTIMATE line. When AI_MAX_COST_USD is exceeded, this
+    # returns a SkipPlan -- the same "post a skip comment, dispatch nothing"
+    # mechanism review/compute.py's max-diff-lines skip already uses -- so by
+    # default this is informational (exit 0), not a CI failure;
+    # AI_FAIL_ON_COST_CEILING (checked in cli.py) opts into exit code 2.
+    # A failure computing the estimate itself (e.g. a corrupt pricing file)
+    # is fail-soft: log a warning and proceed with no ceiling check for this
+    # run rather than abort a review over a diagnostic feature.
+    try:
+        from ai_pr_review.pricing import load_pricing
+        from ai_pr_review.review.cost_ceiling import (
+            CostEstimate,
+            enforce_cost_ceiling,
+            estimate_preflight_agent_cost,
+            estimate_review_cost,
+            log_cost_estimate,
+            merge_cost_estimates,
+        )
+
+        pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
+        cost_estimate = estimate_review_cost(
+            agents=agents,
+            diff_text=diff_text,
+            shared_context_text=shared_context_block,
+            language_profile_text=_language_profile_text,
+            standard_model=config.model_standard,
+            premium_model=config.model_premium,
+            review_mode=config.review_mode,
+            effective_max_output_tokens=config.max_tokens_per_agent,
+            pricing_data=pricing_data,
+        )
+
+        # Fold in the two separately-dispatched preflight agents when they
+        # will actually run this review -- mirrors the exact gating cli.py
+        # applies before calling _run_summarizer/_run_issue_linker.
+        preflight_parts: list[CostEstimate] = []
+        if not is_incremental and agent_allowed(
+            "pr-summarizer", config.agents, config.exclude_agents
+        ):
+            summarizer_cost = estimate_preflight_agent_cost(
+                agent_name="pr-summarizer",
+                model=config.model_standard,
+                diff_text=diff_text,
+                output_tokens=4096,
+                pricing_data=pricing_data,
+            )
+            preflight_parts.append(
+                CostEstimate(
+                    per_agent=(summarizer_cost,),
+                    total_cost_units=summarizer_cost.estimated_cost_units,
+                    any_unknown_pricing=summarizer_cost.unknown_pricing,
+                )
+            )
+        if (
+            not is_incremental
+            and config.review_mode == "full"
+            and config.vcs_provider == "github"
+            and agent_allowed("issue-linker", config.agents, config.exclude_agents)
+        ):
+            issue_linker_cost = estimate_preflight_agent_cost(
+                agent_name="issue-linker",
+                model=config.model_standard,
+                diff_text=diff_text,
+                output_tokens=4096,
+                pricing_data=pricing_data,
+            )
+            preflight_parts.append(
+                CostEstimate(
+                    per_agent=(issue_linker_cost,),
+                    total_cost_units=issue_linker_cost.estimated_cost_units,
+                    any_unknown_pricing=issue_linker_cost.unknown_pricing,
+                )
+            )
+        if preflight_parts:
+            cost_estimate = merge_cost_estimates(cost_estimate, *preflight_parts)
+
+        log_cost_estimate(cost_estimate, ceiling_usd=config.max_cost_usd)
+        enforce_cost_ceiling(cost_estimate, ceiling_usd=config.max_cost_usd)
+    except CostCeilingExceeded as exc:
+        return SkipPlan(reason=str(exc), provider=provider, is_cost_ceiling_skip=True)
+    except Exception as exc:
+        logger.warning(
+            "cost estimate: pre-flight estimation failed (fail-soft; "
+            "proceeding without a cost ceiling check for this run): %s",
+            exc, exc_info=True,
         )
 
     # 10. Run native static analyzers — fail-soft; findings merged via extra_findings.
