@@ -126,7 +126,9 @@ Create `prompts/<agent-name>.md`. The prompt must instruct the model to output a
 
 ### 2. Register in the agent roster
 
-Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag.
+Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag. `max_output_tokens` must be in `[AGENT_MAX_TOKENS_MIN, AGENT_MAX_TOKENS_MAX]` (256–65536, same module) — `AgentSpec.__post_init__` raises otherwise.
+
+That `max_output_tokens` value is also the agent's effective default budget at runtime: `ai_pr_review/agents/dispatch.py` reads it directly for any tier-dispatched agent (falling back to it when `AI_MAX_TOKENS_PER_AGENT` is unset), and it's what a consumer can override per-agent with `AI_MAX_TOKENS_<AGENT_UPPER_SNAKE>` (`-` → `_`, e.g. `AI_MAX_TOKENS_CODE_REVIEWER`; see [issue #191](https://github.com/tag1consulting/ai-pr-review/issues/191) and `docs/configuration.md`'s "Per-agent max-tokens overrides" section) — no registration step needed for that override to work, since `resolve_agent_max_tokens()` derives the env var name from the agent's own roster `name` at call time. If your new agent is dispatched separately (`separately_dispatched=True`, like `pr-summarizer`/`issue-linker` in `ai_pr_review/review/preflight.py`) rather than through the generic tier-dispatch loop, its call site must look up `max_output_tokens` from the roster itself (`get_agent(name).max_output_tokens`) as the base default passed to `resolve_agent_max_tokens()` — do not hand-type a second copy of the number, which is exactly the bug issue #847 fixed for the two existing separately-dispatched agents.
 
 ### 3. Add conditional gate logic (if needed)
 

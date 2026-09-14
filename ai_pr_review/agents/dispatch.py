@@ -11,8 +11,8 @@ from pathlib import Path
 
 import anyio
 
-from ai_pr_review.agents.roster import AgentSpec, get_agent
-from ai_pr_review.config import resolve_agent_max_tokens
+from ai_pr_review.agents.roster import PR_SUMMARIZER_AGENT_NAME, AgentSpec, get_agent
+from ai_pr_review.config import per_agent_max_tokens_override_is_set, resolve_agent_max_tokens
 from ai_pr_review.languages import detect_language
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
@@ -465,7 +465,7 @@ async def _run_single_agent(
         # would silently degrade summarizer output. Callers dispatching
         # pr-summarizer must use the summarizer module directly; until a
         # per-agent builder hook lands on AgentSpec, refuse the mismatch.
-        if spec.name == "pr-summarizer":
+        if spec.name == PR_SUMMARIZER_AGENT_NAME:
             raise RuntimeError(
                 "pr-summarizer must not be dispatched via run_tier; "
                 "use ai_pr_review.agents.summarizer.build_summarizer_* helpers "
@@ -555,7 +555,11 @@ async def _run_single_agent(
         # not just the number -- so a per-agent override that silently didn't
         # take effect (e.g. a typo'd env var name) is diagnosable from logs
         # alone, without cross-referencing config.py's precedence rules.
-        if max_tokens != base_max_tokens:
+        # Checked via the env var directly (not `max_tokens != base_max_tokens`):
+        # an override whose value happens to equal base_max_tokens is still a
+        # real override and must not be misattributed to "roster default" at
+        # INFO level, which would defeat this log's whole purpose (#850 review).
+        if per_agent_max_tokens_override_is_set(spec.name):
             max_tokens_source = "per-agent override"
         elif context.max_tokens_per_agent > 0:
             max_tokens_source = "AI_MAX_TOKENS_PER_AGENT"

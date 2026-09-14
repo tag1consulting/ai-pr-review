@@ -268,6 +268,10 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 
 Additional settings are available as **env-var-only** knobs for advanced tuning — see [docs/configuration.md](docs/configuration.md#advanced-tuning-env-var-only) for the full list (`FORCE_FULL_DIFF`, `STANDALONE_DEPTH`, `LLM_RETRY_COUNT`, `AI_CONFIDENCE_THRESHOLD`).
 
+### Per-agent max-tokens overrides
+
+`max-tokens-per-agent` (`AI_MAX_TOKENS_PER_AGENT`) sets one output-token budget for every tier-dispatched agent. `AI_MAX_TOKENS_<AGENT>` (env-var only, no action input) overrides that budget for one named agent — e.g. `AI_MAX_TOKENS_SECURITY_REVIEWER=16384` — taking precedence over both `AI_MAX_TOKENS_PER_AGENT` and the agent's own roster default. The agent name is uppercased with `-` replaced by `_`. `pr-summarizer` and `issue-linker` are dispatched separately from the other agents and never read `AI_MAX_TOKENS_PER_AGENT` at all, so `AI_MAX_TOKENS_PR_SUMMARIZER` / `AI_MAX_TOKENS_ISSUE_LINKER` are the only way to change their budgets. Out-of-range values (outside 256–65536) are clamped rather than rejected, and every set override is validated at startup regardless of whether that agent runs this review. See [docs/configuration.md](docs/configuration.md#per-agent-max-tokens-overrides-env-var-only) for the full per-agent variable table and [issue #191](https://github.com/tag1consulting/ai-pr-review/issues/191).
+
 ## Opt-in capabilities
 
 Three optional features can be enabled independently — all off by default.

@@ -1,11 +1,16 @@
-"""Tests for ai_pr_review.review.preflight.run_summarizer's effective max_tokens (#191).
+"""Tests for ai_pr_review.review.preflight.run_summarizer's effective max_tokens (#191, #847).
 
 run_summarizer composes its own LLMRequest (it is dispatched separately from
 run_tier -- see dispatch.py's explicit refusal to dispatch pr-summarizer
 generically) and, before #191, hardcoded max_tokens=4096 regardless of the
-roster default or AI_MAX_TOKENS_PER_AGENT. These tests confirm the pre-existing
-default is unchanged when no override is set, and that AI_MAX_TOKENS_PR_SUMMARIZER
-now reaches the LLMRequest.
+roster default or AI_MAX_TOKENS_PER_AGENT. #191 added an AI_MAX_TOKENS_PR_SUMMARIZER
+override on top of that hardcoded 4096 without changing it. #847 fixed the
+hardcoded 4096 itself: it had silently drifted from the roster's real
+pr-summarizer default (16384, see ai_pr_review/agents/roster.py) -- the base
+default with no override set is now looked up from the roster instead of a
+second, independently-maintained literal. These tests confirm the roster
+default is used when no override is set, and that AI_MAX_TOKENS_PR_SUMMARIZER
+still overrides it.
 """
 
 from __future__ import annotations
@@ -67,21 +72,28 @@ def _run(prompt_dir: Path) -> list[LLMRequest]:
     return captured
 
 
-def test_default_max_tokens_unchanged_at_4096(
+def test_default_max_tokens_matches_roster_default(
     prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No AI_MAX_TOKENS_PR_SUMMARIZER set -- the pre-existing hardcoded 4096
-    default must be unchanged."""
+    """No AI_MAX_TOKENS_PR_SUMMARIZER set -- the base default must come from
+    the roster lookup, not a hand-typed literal that can drift from it (#847),
+    even though the roster's own value is 4096 here (#850 review: the roster
+    briefly held a dead, never-exercised 16384 that this fix would otherwise
+    have made live for the first time with no behavior verification -- see
+    roster.py's pr-summarizer comment)."""
+    from ai_pr_review.agents.roster import PR_SUMMARIZER_AGENT_NAME, get_agent
+
     monkeypatch.delenv("AI_MAX_TOKENS_PR_SUMMARIZER", raising=False)
     captured = _run(prompt_dir)
     assert len(captured) == 1
+    assert captured[0].max_tokens == get_agent(PR_SUMMARIZER_AGENT_NAME).max_output_tokens
     assert captured[0].max_tokens == 4096
 
 
 def test_per_agent_max_tokens_override_applied(
     prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AI_MAX_TOKENS_PR_SUMMARIZER overrides the hardcoded 4096 default."""
+    """AI_MAX_TOKENS_PR_SUMMARIZER overrides the roster default."""
     monkeypatch.setenv("AI_MAX_TOKENS_PR_SUMMARIZER", "2048")
     captured = _run(prompt_dir)
     assert len(captured) == 1
