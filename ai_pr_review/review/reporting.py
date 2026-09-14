@@ -323,16 +323,44 @@ def log_cost_reconciliation(
     see ``review/runtime.py``) or ``None`` totals (no agent token usage to
     compute from, e.g. every agent was gate-filtered out) skips the line
     entirely rather than logging a misleading zero/absent comparison.
+
+    **The two sides do not cover the same set of LLM calls, in opposite
+    directions, and this is disclosed here rather than silently baked into
+    ``delta`` (#848 follow-up):**
+
+    - ``estimate_usd`` (``ReviewRuntime.cost_estimate_usd``) deliberately
+      *includes* the separately-dispatched ``pr-summarizer``/``issue-linker``
+      preflight agents, via ``cost_ceiling.estimate_preflight_agent_cost`` +
+      ``merge_cost_estimates`` -- but *excludes* the judge pass, since the
+      judge only knows what to score after the main roster's findings exist,
+      well after the pre-flight estimate runs.
+    - ``totals`` (``actual_usd``, from ``_compute_token_totals(result.
+      agent_results, ...)``) is exactly the opposite: it structurally
+      *cannot* include pr-summarizer/issue-linker, because
+      ``review/preflight.py``'s ``run_summarizer``/``run_issue_linker``
+      return bare text with no token-usage plumbing anywhere -- but it
+      *does* include the judge pass's real cost (folded in via the
+      ``judge-pass`` synthetic ``TokenEntry`` row, see ``_build_token_log``).
+
+    So ``delta`` is biased in two directions at once: it is inflated by
+    whatever pr-summarizer/issue-linker actually cost (present in the
+    estimate, absent from actual) and deflated by the judge pass's real cost
+    (absent from the estimate, present in actual). Narrowing this gap would
+    need either plumbing token usage through the two preflight agents or
+    adding a judge-pass placeholder to the estimate -- not done here; this
+    docstring and the log line's own text are the disclosure, not a fix.
     """
     if estimate_usd is None or totals is None:
         return
     actual_usd = totals.cost_units / 10000
     logger.warning(
-        "COST_RECONCILIATION estimate=$%.4f actual=$%.4f delta=$%.4f%s",
+        "COST_RECONCILIATION estimate=$%.4f actual=$%.4f delta=$%.4f "
+        "(estimate excludes the judge-pass call; actual excludes "
+        "pr-summarizer/issue-linker, which have no token-usage plumbing)%s",
         estimate_usd,
         actual_usd,
         actual_usd - estimate_usd,
-        " (actual excludes unpriced agent(s))" if totals.any_unknown else "",
+        " (actual also excludes unpriced agent(s))" if totals.any_unknown else "",
     )
 
 

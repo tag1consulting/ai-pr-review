@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class TelemetryEvent:
-    """Structured event emitted after each review run (schema version 3).
+    """Structured event emitted after each review run (schema version 4).
 
     Schema version history:
       1 — initial fields

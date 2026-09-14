@@ -381,7 +381,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
         if rc.telemetry_enabled:
             try:
                 await _emit_telemetry(None, rc, outcome_override="dry_run",
-                                      is_incremental=runtime.is_incremental)
+                                      is_incremental=runtime.is_incremental, exit_code=0)
             except Exception as _tel_exc:
                 logger.warning("[ai-pr-review] dry-run telemetry failed: %s", _tel_exc)
         return 0

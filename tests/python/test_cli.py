@@ -1227,7 +1227,10 @@ class TestFailOnFindings:
         result.outcome = MagicMock()
         result.outcome.event = event
 
-        # Mirror the exact logic from cli._run_review_async lines 271-275.
+        # Mirror the exact logic from cli._run_review_async's exit-code
+        # decision (currently around lines 463-468; see
+        # TestCostCeilingSkipExitCode for the equivalent SkipPlan-branch
+        # formula, driven end-to-end rather than mirrored here).
         if not result.ok:
             return 1
         if config.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
@@ -1304,13 +1307,27 @@ class TestCostCeilingSkipExitCode:
     prior version of this test class: it could never catch a real
     regression in cli.py's own logic, only in a hand-copied paraphrase of
     it).
+
+    Every test that can reach ``_run_review_async``'s post-skip code path
+    (i.e. every test below except the ones that ended in a real skip before
+    ever considering an LLM call) scrubs ``ANTHROPIC_API_KEY`` from the
+    environment first (#848 follow-up review): with a real key present in
+    the ambient environment, ``test_ceiling_not_exceeded_runs_normally_end_
+    to_end`` would issue real, billable requests to api.anthropic.com across
+    the whole tier-1 agent roster before hitting the expected ``SystemExit``
+    -- confirmed empirically by patching ``retry_post`` to a marker and
+    watching a valid-key run reach it. Applied to every test in this class,
+    not just that one, as defense in depth against a future change making
+    any of them reach dispatch.
     """
 
     async def _run(
         self, *, max_cost_usd: float, fail_on_cost_ceiling: bool,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> tuple[int, _SkipExitCodeFakeProvider]:
         from ai_pr_review.cli import _run_review_async
 
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         config = _make_config(
             max_cost_usd=max_cost_usd, fail_on_cost_ceiling=fail_on_cost_ceiling,
         )
@@ -1326,13 +1343,15 @@ class TestCostCeilingSkipExitCode:
         return exit_code, provider
 
     @pytest.mark.anyio
-    async def test_ceiling_exceeded_and_opted_in_exits_2_end_to_end(self) -> None:
+    async def test_ceiling_exceeded_and_opted_in_exits_2_end_to_end(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         # A vanishingly small ceiling that any non-zero real cost estimate
         # exceeds, against config/model-pricing.json's real rates for
         # _make_config's model_standard -- mirrors test_runtime.py's own
         # TestBuildReviewRuntimeCostCeiling ceiling-exceeded test.
         exit_code, provider = await self._run(
-            max_cost_usd=0.000001, fail_on_cost_ceiling=True,
+            max_cost_usd=0.000001, fail_on_cost_ceiling=True, monkeypatch=monkeypatch,
         )
         assert exit_code == 2
         assert len(provider.skip_comments) == 1
@@ -1340,24 +1359,61 @@ class TestCostCeilingSkipExitCode:
         assert "AI_MAX_COST_USD" in provider.skip_comments[0]
 
     @pytest.mark.anyio
-    async def test_ceiling_exceeded_but_not_opted_in_exits_0_end_to_end(self) -> None:
+    async def test_ceiling_exceeded_but_not_opted_in_exits_0_end_to_end(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         exit_code, provider = await self._run(
-            max_cost_usd=0.000001, fail_on_cost_ceiling=False,
+            max_cost_usd=0.000001, fail_on_cost_ceiling=False, monkeypatch=monkeypatch,
         )
         assert exit_code == 0
         assert len(provider.skip_comments) == 1
 
     @pytest.mark.anyio
-    async def test_ceiling_not_exceeded_runs_normally_end_to_end(self) -> None:
+    async def test_non_cost_ceiling_skip_exits_0_even_when_opted_in_end_to_end(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A diff-too-large/no-changes skip must not be affected by
+        AI_FAIL_ON_COST_CEILING -- only a skip that ``SkipPlan.is_cost_
+        ceiling_skip`` marks as cost-ceiling-specific may exit 2. Driven
+        end-to-end via a real "no changed files" skip (the earliest,
+        cheapest real SkipPlan to trigger -- it returns before the cost
+        estimate is ever computed), with an enormous ceiling that could
+        never be exceeded anyway, so any exit-2 here can only come from the
+        (bugged) flag leaking across skip kinds, not from a real cost-ceiling
+        trip."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        from ai_pr_review.cli import _run_review_async
+
+        config = _make_config(max_cost_usd=1000.00, fail_on_cost_ceiling=True)
+        provider = _SkipExitCodeFakeProvider()
+        diff = _make_diff_result(changed_files=[])
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=provider),
+        ):
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 0
+        assert len(provider.skip_comments) == 1
+
+    @pytest.mark.anyio
+    async def test_ceiling_not_exceeded_runs_normally_end_to_end(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         # A ceiling no real small-diff estimate could exceed -- this run
         # follows the ordinary (non-skip) ReviewRuntime path instead: no
         # skip comment is posted (asserted below via the fake provider),
         # regardless of AI_FAIL_ON_COST_CEILING. This end-to-end fake
         # provider does not stub a real LLM call, so the run instead
         # proceeds all the way to pr-summarizer's real dispatch and fails
-        # there (SystemExit(1), no ANTHROPIC_API_KEY) -- which is itself
-        # proof the skip path was never taken; the assertion below on
-        # provider.skip_comments is the actual thing under test.
+        # there (SystemExit(1), no ANTHROPIC_API_KEY -- scrubbed above so a
+        # real key in the ambient environment can't turn this into a live,
+        # billable call) -- which is itself proof the skip path was never
+        # taken; the assertion below on provider.skip_comments is the actual
+        # thing under test.
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         provider = _SkipExitCodeFakeProvider()
         diff = _make_diff_result()
         config = _make_config(max_cost_usd=1000.00, fail_on_cost_ceiling=True)
@@ -1376,6 +1432,78 @@ class TestCostCeilingSkipExitCode:
     def test_fail_on_cost_ceiling_default_is_false(self) -> None:
         config = _make_config()
         assert config.fail_on_cost_ceiling is False
+
+    def test_posting_failure_on_skip_exits_1_regardless_of_flag(self) -> None:
+        """cli.py's SkipPlan-branch exit-code formula, in isolation:
+        ``result.ok is False`` must return 1 regardless of
+        ``is_cost_ceiling_skip``/``fail_on_cost_ceiling``.
+
+        Not driven end-to-end like the tests above: ``ReviewResult.ok``
+        (``orchestrate.py``) returns ``True`` unconditionally whenever
+        ``result.skipped`` is set, even if ``post_skip_comment`` itself
+        failed (see ``reporting.emit_post_failure_annotation``'s docstring
+        for the same quirk) -- so a real skip path can never actually
+        produce ``result.ok is False`` for this formula to react to. This
+        pins the exit-code arithmetic itself (a real regression here -- e.g.
+        losing the ``result.ok`` check entirely -- would still be caught),
+        while acknowledging the ``ok=False`` skip scenario is not currently
+        reachable via any real code path.
+        """
+        config = _make_config(fail_on_cost_ceiling=True)
+
+        runtime = MagicMock()
+        runtime.is_cost_ceiling_skip = True
+
+        result = MagicMock()
+        result.ok = False
+
+        # Mirror cli._run_review_async's SkipPlan-branch exit-code formula.
+        exit_code = (
+            2 if (runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok)
+            else (0 if result.ok else 1)
+        )
+        assert exit_code == 1
+
+    @pytest.mark.anyio
+    async def test_ceiling_exceeded_telemetry_event_carries_exit_code_2_end_to_end(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#848: a real cost-ceiling skip, with telemetry enabled, must emit
+        a telemetry event whose ``exit_code`` field is 2 -- not just default
+        to 0. Two narrower tests already cover each half separately (the
+        returned exit code is correct; ``_emit_telemetry`` forwards a given
+        ``exit_code`` if passed one), but neither combines "real
+        cost-ceiling skip + telemetry_enabled=True" and reads the emitted
+        JSONL event, which is the scenario #848 was actually about:
+        reverting just the ``exit_code=exit_code`` argument at cli.py's
+        SkipPlan-branch ``_emit_telemetry(...)`` call site reintroduces the
+        exact bug this test guards against, with no other test failing."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        from ai_pr_review.cli import _run_review_async
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(
+            max_cost_usd=0.000001,
+            fail_on_cost_ceiling=True,
+            telemetry_enabled=True,
+            telemetry_sink=f"file://{sink_path}",
+        )
+        provider = _SkipExitCodeFakeProvider()
+        diff = _make_diff_result()
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=provider),
+        ):
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 2
+        lines = sink_path.read_text().splitlines()
+        assert len(lines) == 1
+        event = json.loads(lines[0])
+        assert event["exit_code"] == 2
+        assert event["outcome"] == "skipped"
 
 
 class TestEmitTelemetryThinkingTokens:

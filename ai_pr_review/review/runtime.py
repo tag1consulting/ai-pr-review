@@ -508,9 +508,20 @@ async def build_review_runtime(
                 "analyzers: %d finding(s) from native static analysis",
                 len(analyzer_findings),
             )
-    except ImportError:
-        raise
     except Exception as exc:
+        # #848 follow-up: this block now runs unconditionally, before the
+        # pre-flight cost-ceiling check below (9d) -- previously the ceiling
+        # check ran first, so a huge diff that would trip it never reached
+        # this analyzer dispatch at all. A bare `except ImportError: raise`
+        # here (as this block had before) would turn a missing/broken
+        # analyzer dependency into a hard crash of the whole review on every
+        # run now, not just the ones that would have tripped the ceiling --
+        # strictly worse than the silently-inert-feature risk this fail-soft
+        # convention exists to avoid elsewhere (see context/treesitter.py's
+        # and analyzers/native/docs_comments.py's identical ImportError
+        # handling). Catching ImportError here too (it subclasses Exception)
+        # restores the safety property that existed before the reordering,
+        # without reverting the reordering itself.
         logger.warning(
             "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
         )
@@ -638,10 +649,25 @@ async def build_review_runtime(
         reason = str(exc)
         n_extra = len(extra_findings)
         if n_extra:
-            reason += (
-                f" {n_extra} static-analyzer/SARIF finding(s) were computed "
-                "for this PR but are not posted by this skip -- a future run "
-                "that completes under the ceiling will include them."
+            # #848 follow-up: this count is deliberately kept out of the
+            # *public* skip comment (`reason`, posted verbatim to the PR by
+            # post_skip_comment). `extra_findings` here is the raw,
+            # pre-suppression/pre-diff-scope analyzer+SARIF count -- it can
+            # include findings a maintainer explicitly suppressed, or ones
+            # out of diff scope that would never actually surface, so
+            # disclosing the raw number to an outside/fork contributor both
+            # leaks suppressed-finding existence and overstates what a future
+            # run would actually post. It's also not true in general that "a
+            # future run under the ceiling will include them": suppression,
+            # dedup, and out-of-diff scoping all still apply then too, and
+            # the estimate is deterministic for a given diff+roster, so an
+            # unchanged re-run would skip again as well. Logged instead, for
+            # an operator reading logs rather than the PR itself.
+            logger.info(
+                "cost ceiling skip: %d static-analyzer/SARIF finding(s) were "
+                "computed for this PR but are not posted by this skip (kept "
+                "out of the public skip comment; see this log line instead)",
+                n_extra,
             )
         return SkipPlan(reason=reason, provider=provider, is_cost_ceiling_skip=True)
     except Exception as exc:

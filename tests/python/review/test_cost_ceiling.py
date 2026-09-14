@@ -471,3 +471,46 @@ class TestEnforceCostCeiling:
         message = str(exc_info.value)
         assert "mystery-agent" in message
         assert "unpriced" in message
+
+    def test_unpriced_agent_logs_loud_warning_even_when_ceiling_not_exceeded(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """#848 follow-up: an unpriced agent contributes $0 to
+        estimate.total_cost_usd, so the ceiling can silently never see its
+        real spend. Previously `any_unknown_pricing` was computed and logged
+        by `log_cost_estimate` but never consulted at the enforcement
+        decision point -- a run with an unpriced agent that "passes" the
+        ceiling was indistinguishable in the log from one that genuinely
+        came in under budget. This must fire whenever a ceiling is
+        configured and any agent is unpriced, whether or not the estimate
+        ends up exceeding it."""
+        priced_agent = _agent("code-reviewer")
+        unpriced_agent = _agent("mystery-agent", tier=2)
+        estimate = estimate_review_cost(
+            agents=[priced_agent, unpriced_agent],
+            diff_text="",
+            shared_context_text="",
+            language_profile_text="",
+            standard_model="known-model",
+            premium_model="unrecognised-model-xyz",
+            review_mode="full",
+            effective_max_output_tokens=100,  # tiny -- priced agent stays well under ceiling
+            pricing_data=_PRICING,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"):
+            enforce_cost_ceiling(estimate, ceiling_usd=1000.00)  # must not raise
+
+        assert "COST_CEILING_GAP" in caplog.text
+        assert "not enforceable" in caplog.text
+        assert "1 agent(s) unpriced" in caplog.text
+
+    def test_no_unpriced_agents_does_not_log_the_gap_warning(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        estimate = self._estimate_with_total_units(5000)  # $0.50, fully priced
+
+        with caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"):
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)  # must not raise
+
+        assert "COST_CEILING_GAP" not in caplog.text

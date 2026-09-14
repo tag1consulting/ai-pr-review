@@ -336,9 +336,36 @@ def enforce_cost_ceiling(estimate: CostEstimate, *, ceiling_usd: float) -> None:
     convention in this codebase. Equality (estimate == ceiling) does not
     exceed the ceiling and is allowed through, per the issue's acceptance
     criteria.
+
+    Unpriced-model visibility (#848 follow-up): ``estimate.any_unknown_pricing``
+    is computed and logged by ``log_cost_estimate``, but until now was never
+    consulted here, at the actual pass/fail decision. An agent using a model
+    with no ``config/model-pricing.json`` entry (e.g. any ``openai-compatible``
+    deployment, whose model id is user-specified) contributes $0 to
+    ``estimate.total_cost_usd`` -- so the ceiling can silently never trip for
+    that agent's real spend, and a run that "comes in under budget" is
+    indistinguishable in the log from a run where the budget check simply
+    couldn't see part of the cost. This does not fail closed (an unpriced
+    model may legitimately be a free/internal one) -- it only makes the gap
+    loud: whenever a ceiling is configured and any agent is unpriced, a
+    distinct warning fires unconditionally, whether or not the priced portion
+    ends up exceeding the ceiling.
     """
     if ceiling_usd <= 0:
         return
+
+    if estimate.any_unknown_pricing:
+        n_unpriced = sum(1 for a in estimate.per_agent if a.unknown_pricing)
+        logger.warning(
+            "COST_CEILING_GAP ceiling not enforceable this run: %d agent(s) "
+            "unpriced (no entry in config/model-pricing.json) and excluded "
+            "from the $%s estimate this ceiling (%s) is checked against -- "
+            "their real spend is not reflected in that total either way",
+            n_unpriced,
+            format_cost(estimate.total_cost_units),
+            format_cost(int(round(ceiling_usd * 10000))),
+        )
+
     if estimate.total_cost_usd <= ceiling_usd:
         return
 
