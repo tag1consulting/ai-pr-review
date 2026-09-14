@@ -62,7 +62,7 @@ from ai_pr_review.vcs.protocol import (
 )
 
 if TYPE_CHECKING:
-    from ai_pr_review.vcs._canonical import PriorThread
+    from ai_pr_review.vcs._canonical import Classified, PriorThread
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,12 @@ class GitLabProvider:
 
     def _discussion_resolve_url(self, discussion_id: str) -> str:
         return f"{self._discussions_url()}/{discussion_id}"
+
+    def _discussion_notes_url(self, discussion_id: str) -> str:
+        return f"{self._discussion_resolve_url(discussion_id)}/notes"
+
+    def _discussion_note_url(self, discussion_id: str, note_id: int) -> str:
+        return f"{self._discussion_notes_url(discussion_id)}/{note_id}"
 
     # ------------------------------------------------------------------
     # Pagination helpers
@@ -524,12 +530,29 @@ class GitLabProvider:
         classified = dedupe_thread_claims(
             [classify(f, verdicts={}, all_threads=prior_threads) for f in findings]
         )
+        inline_updated = 0
+        replies_posted = 0
         for c in classified:
             if c.kind in ("update", "escalate") and c.thread is not None:
                 # This discussion corresponds to a still-active finding --
                 # resolve_stale must never resolve it out from under one, and
                 # this call must not repost it as a new discussion.
                 self._kept_alive_discussion_ids.add(c.thread.thread_id)
+                patched = self._apply_discussion_update(
+                    c,
+                    enable_suggestions=enable_suggestions,
+                    eligible_context=eligible_ctx,
+                )
+                if patched:
+                    inline_updated += 1
+                    # Only claim an escalation happened if the underlying
+                    # PATCH actually landed -- otherwise the reply would
+                    # assert "severity escalated" for a note that still
+                    # shows the old severity (mirrors github.py's identical
+                    # guard in `_apply_classification_side_effects`).
+                    if c.kind == "escalate":
+                        self._notify_escalation(c.thread, c.finding, diff.head_sha)
+                        replies_posted += 1
         new_findings = [c.finding for c in classified if c.kind == "new"]
 
         inline_candidates, body_findings = partition_findings(
@@ -709,6 +732,8 @@ class GitLabProvider:
                 body_findings=0,
                 event=event,
                 degraded_to_comment=False,
+                inline_updated=inline_updated,
+                replies_posted=replies_posted,
             )
 
         # Scope failure detection to errors generated in this call only, not
@@ -730,6 +755,8 @@ class GitLabProvider:
             event=event,
             degraded_to_comment=False,
             error=("all discussion posts failed" if any_failure else None),
+            inline_updated=inline_updated,
+            replies_posted=replies_posted,
         )
 
     def _build_discussion_payload(
@@ -788,18 +815,104 @@ class GitLabProvider:
             parts.append(f"\n{fence}\n{f.suggested_code}\n```")
         body = "".join(parts)
         body = append_inline_marker(body)
-        # Per-finding metadata marker (#710 plumbing): carries this finding's
-        # exact fingerprint/category/severity so a future run can fuzzy-match
-        # against it (ai_pr_review.vcs._canonical.parse_gitlab_prior_thread).
-        # Not read back by anything yet in this PR -- pure plumbing so
-        # production discussions start carrying real fingerprints before the
-        # matching logic that consumes them ships.
+        # Per-finding metadata marker: carries this finding's exact
+        # fingerprint/category/severity so a later run can fuzzy-match
+        # against it (ai_pr_review.vcs._canonical.parse_gitlab_prior_thread),
+        # consumed by `_load_prior_discussions`/`classify()` since #746/#749
+        # and, for an in-place `update`/`escalate` PATCH, re-rendered fresh by
+        # `_apply_discussion_update` below.
         body += "\n" + build_inline_meta_marker(
             fingerprint=fingerprint(f), category=f.category, severity=f.severity,
             judge_verdict=f.judge_verdict, corroborated=f.corroborated,
             confidence=f.confidence,
         )
         return body
+
+    def _apply_discussion_update(
+        self,
+        classified: Classified,
+        *,
+        enable_suggestions: bool,
+        eligible_context: set[tuple[str, int]],
+    ) -> bool:
+        """PATCH a still-open discussion's note in place for an `update` or
+        `escalate` classification (#710 GitLab parity). Closes the
+        known-limitation `docs/features.md` documents ("no in-place update of
+        an existing discussion's body yet") for the fuzzy cross-run dedup
+        that has classified `update`/`escalate` findings since #746/#749 —
+        until this method, a matched discussion was only kept alive
+        (unresolved, not reposted); its rendered content and severity never
+        changed even when the finding's own severity, remediation, or wording
+        did.
+
+        Mirrors GitHub's `_apply_thread_update`: the suggestion fence is only
+        kept when the matched discussion's anchored line exactly matches
+        this finding's -- GitLab's note-update endpoint cannot move a note's
+        position any more than GitHub's comment PATCH can, so a fuzzy match
+        (up to `PROXIMITY_LINES` of drift) or an outdated discussion would
+        otherwise offer a one-click "Apply suggestion" against the wrong
+        lines, or fail to apply at all.
+
+        Unlike GitHub, this does not carry forward prior fingerprints
+        (`#720` on GitHub, `InlineMeta.prior_fps`): GitLab has no
+        dismiss/false-positive/wont-fix/fixed verdict system to ever look one
+        up against, so there is nothing yet for that plumbing to serve --
+        tracked in the same `docs/features.md` known-limitations list, not
+        silently dropped.
+
+        Returns whether the PATCH succeeded -- the caller only counts
+        `inline_updated` and posts an escalation reply when it did, since a
+        failed PATCH leaves the note showing the old content/severity and a
+        reply claiming otherwise would itself be a silent-failure risk.
+        """
+        thread = classified.thread
+        if thread is None:
+            return False
+        include_fence = (
+            enable_suggestions
+            and not thread.is_outdated
+            and thread.line == classified.finding.line
+            and thread.start_line == classified.finding.start_line
+        )
+        new_body = self._render_inline_comment_body(
+            classified.finding,
+            eligible_context=eligible_context,
+            enable_suggestions=include_fence,
+        )
+        ok, status, snippet = self._update_discussion_note(
+            thread.thread_id, thread.comment_id, new_body
+        )
+        if not ok:
+            logger.warning(
+                "gitlab: failed to update discussion %s note %d for a %s "
+                "classification: HTTP %d",
+                thread.thread_id, thread.comment_id, classified.kind, status,
+            )
+            self._errors.append(
+                f"update discussion {thread.thread_id} note {thread.comment_id}: "
+                f"HTTP {status}: {snippet}"
+            )
+        return ok
+
+    def _notify_escalation(
+        self, thread: PriorThread, finding: Finding, head_sha: str
+    ) -> None:
+        """Reply on an `escalate`-classified discussion noting the severity
+        change. GitLab analog of GitHub's `_notify_escalation`."""
+        old_severity = thread.severity or "an unknown severity"
+        message = (
+            f"Severity escalated from **{old_severity}** to **{finding.severity}** "
+            f"in the latest run (`{head_sha[:7]}`)."
+        )
+        ok, status, snippet = self._reply_to_discussion(thread.thread_id, message)
+        if not ok:
+            logger.warning(
+                "gitlab: failed to post escalation reply on discussion %s: "
+                "HTTP %d", thread.thread_id, status,
+            )
+            self._errors.append(
+                f"escalation reply {thread.thread_id}: HTTP {status}: {snippet}"
+            )
 
     # ------------------------------------------------------------------
     # resolve_stale — marker-gated discussion resolution
@@ -891,5 +1004,38 @@ class GitLabProvider:
             "PUT",
             self._discussion_resolve_url(discussion_id),
             json_body={"resolved": True},
+        )
+        return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def _update_discussion_note(
+        self, discussion_id: str, note_id: int, body: str
+    ) -> tuple[bool, int, str]:
+        """PUT a new body onto one existing note within a discussion.
+
+        Backs `_apply_discussion_update`'s `update`/`escalate` PATCH (#710
+        parity). GitLab's note-update endpoint (unlike `_resolve_discussion`
+        above) only ever changes `body` -- there is no way to move a note's
+        anchored position, mirroring GitHub's own comment-PATCH limitation.
+        """
+        resp = self.client.request(
+            "PUT",
+            self._discussion_note_url(discussion_id, note_id),
+            json_body={"body": body},
+        )
+        return resp.status_code < 400, resp.status_code, resp.text[:200]
+
+    def _reply_to_discussion(
+        self, discussion_id: str, body: str
+    ) -> tuple[bool, int, str]:
+        """POST a new note into an existing discussion (a reply).
+
+        Backs `_notify_escalation` -- GitLab's analog of GitHub's
+        `reply_to_review_comment` for the escalation notice on an `escalate`
+        classification.
+        """
+        resp = self.client.request(
+            "POST",
+            self._discussion_notes_url(discussion_id),
+            json_body={"body": body},
         )
         return resp.status_code < 400, resp.status_code, resp.text[:200]

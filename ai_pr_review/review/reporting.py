@@ -35,10 +35,18 @@ def _build_token_log(
     builds them from ``AgentResult.token_log`` plus the synthetic
     ``judge-pass`` row.
 
-    ``effective_max_tokens`` is the user-configured cap from
-    ``DispatchContext.max_tokens_per_agent`` (i.e. ``AI_MAX_TOKENS_PER_AGENT``).
-    When > 0 it overrides the per-agent roster default so the table reflects
-    the actual cap sent to the LLM rather than the hard-coded roster value.
+    ``effective_max_tokens`` is a fallback only, for an ``AgentResult`` that
+    predates the ``effective_max_tokens`` field (e.g. replayed/historical
+    data, or a test fixture built without it) -- it's the user-configured
+    cap from ``DispatchContext.max_tokens_per_agent`` (i.e.
+    ``AI_MAX_TOKENS_PER_AGENT``). A real, freshly-dispatched
+    ``AgentResult.effective_max_tokens`` always takes precedence: it's the
+    exact value `agents/dispatch.py` resolved through the full precedence
+    chain (per-agent ``AI_MAX_TOKENS_<AGENT>`` override > this global
+    override > the roster default), so it's never stale even when a
+    per-agent override (#191) is in effect -- unlike re-deriving the cap
+    from just the roster default and this one global override, which has
+    no way to know a per-agent override fired.
     """
     from ai_pr_review.agents.dispatch import AgentResult
     from ai_pr_review.agents.roster import AGENTS
@@ -49,7 +57,12 @@ def _build_token_log(
     for ar in successes:
         if isinstance(ar, AgentResult) and ar.token_log is not None:
             tl = ar.token_log
-            cap = effective_max_tokens if effective_max_tokens > 0 else _roster_max_by_name.get(ar.name, 0)
+            cap = (
+                ar.effective_max_tokens
+                if ar.effective_max_tokens > 0
+                else effective_max_tokens if effective_max_tokens > 0
+                else _roster_max_by_name.get(ar.name, 0)
+            )
             token_log.append(TokenEntry(
                 agent=ar.name,
                 model=tl.model,
@@ -725,8 +738,11 @@ def emit_review_result(
             err=True,
         )
 
-    # Canonical-review reuse activity (GitHub only; these fields are always
-    # 0/False on GitLab/Bitbucket). Surfacing them is the difference between
+    # Canonical-review reuse activity. GitHub uses the full suppress/recur/
+    # update/escalate table; GitLab reaches only update/escalate (no verdict
+    # system, so reused_review/suppressed stay False there); these fields
+    # are still always 0/False on Bitbucket (no cross-run dedup at all,
+    # tracked at #839). Surfacing them is the difference between
     # a maintainer being able to tell from the run log whether reuse engaged
     # at all versus having to reason about it from GitHub's UI after the fact.
     if posted is not None and (

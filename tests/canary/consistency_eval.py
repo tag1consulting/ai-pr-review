@@ -404,19 +404,37 @@ def _gate_report_for_diff(diff_path: Path) -> tuple[frozenset[str], list[str]]:
     return fired, [a.name for a in would_run]
 
 
-async def _one_run(model_id: str, agent_names: tuple[str, ...],
-                   diff_path: Path, arm: str, script_dir: Path) -> RunOutcome:
-    """Run all target agents once over the fixture, then push the results
-    through the real merge/suppress/(judge)/outcome pipeline (issue #800:
-    a verdict-level readout, not just raw per-agent finding clusters)."""
+def _maybe_reset_symbol_cache(arm: str) -> None:
+    """Reset the module-level ripgrep lookup cache before a run, but only for
+    an arm with context-enrichment on -- regression coverage for issue #806's
+    measurement bug (see test_consistency_eval.py).
 
-    async def llm_call(req: LLMRequest) -> LLMResponse:
-        return await call_llm(req, PROVIDER)
+    ai_pr_review.context.symbols._cache is a module-level singleton keyed by
+    (repo_root, symbol), capped at context_max_queries (200) total ripgrep
+    lookups. Production hits this cap once per review (one process per
+    review). This harness runs the entire corpus x arms x runs x models loop
+    in one long-lived process, so without a reset the cap saturates on the
+    first ref-heavy diff and every later diff/arm/run in the same process
+    silently sees an already-exhausted cache -- misreporting them as "no
+    context available" when a real one-review-per-process run would not be
+    capped at all. Reset once per run so each run gets its own fresh budget,
+    matching the real per-review lifecycle.
+    """
+    if _ARM_TOGGLES[arm]["context_enrichment"]:
+        from ai_pr_review.context.symbols import _reset_cache
+        _reset_cache()
 
-    agents = [a for a in AGENTS if a.name in agent_names]
-    if not agents:
-        return RunOutcome(ok=False, detail=f"no agents matched {agent_names!r}")
 
+def _build_dispatch_context(
+    model_id: str, diff_path: Path, arm: str, script_dir: Path,
+) -> DispatchContext:
+    """Build the DispatchContext for one run. Pure and network-free (only
+    reads the fixture diff and language-profile files), so this is unit
+    tested directly in test_consistency_eval.py -- regression coverage for
+    issue #806's measurement bug: `changed_files` below was previously
+    omitted here, which silently made the context-enrichment arm inert on
+    every corpus diff regardless of toggle state (see the field's own
+    comment)."""
     toggles = _ARM_TOGGLES[arm]
     diff_text = diff_path.read_text()
     changed_file_paths = _changed_files_from_diff(diff_text)
@@ -443,7 +461,7 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         shared_context_block = build_shared_context_block(
             manifest_text=manifest_text, pr_title="", pr_body="",
         )
-    context = DispatchContext(
+    return DispatchContext(
         script_dir=script_dir,
         mode="full",
         diff_path=diff_path,
@@ -453,9 +471,51 @@ async def _one_run(model_id: str, agent_names: tuple[str, ...],
         max_tokens_per_agent=32768,
         enable_context_enrichment=toggles["context_enrichment"],
         repo_root=script_dir,
+        # Issue #806 measurement bug: this was omitted, so
+        # _detect_primary_language(context.changed_files) always saw an empty
+        # list and extract_symbol_refs always found zero refs -- the
+        # context-enrichment arm was structurally inert on every corpus diff
+        # regardless of toggle state. Production's build_review_runtime()
+        # (ai_pr_review/review/runtime.py) passes changed_files=_changed_list;
+        # mirror that here so this arm actually exercises the feature.
+        changed_files=changed_file_paths,
         shared_context_block=shared_context_block,
         language_profile_text=language_profile_text,
     )
+
+
+async def _one_run(model_id: str, agent_names: tuple[str, ...],
+                   diff_path: Path, arm: str, script_dir: Path) -> RunOutcome:
+    """Run all target agents once over the fixture, then push the results
+    through the real merge/suppress/(judge)/outcome pipeline (issue #800:
+    a verdict-level readout, not just raw per-agent finding clusters)."""
+
+    _maybe_reset_symbol_cache(arm)
+
+    async def llm_call(req: LLMRequest) -> LLMResponse:
+        return await call_llm(req, PROVIDER)
+
+    agents = [a for a in AGENTS if a.name in agent_names]
+    if not agents:
+        return RunOutcome(ok=False, detail=f"no agents matched {agent_names!r}")
+
+    context = _build_dispatch_context(model_id, diff_path, arm, script_dir)
+    toggles = _ARM_TOGGLES[arm]
+
+    if toggles["context_enrichment"]:
+        # Observability for issue #806's measurement bug class: the harness
+        # previously had no built-in signal for whether context-enrichment
+        # actually fired for a given diff/run -- the only way to tell "fired
+        # but found nothing" from "still structurally broken" was an ad-hoc
+        # script calling this same function directly outside the harness
+        # (see this PR's description). Folding that check in here means a
+        # future regression of this kind shows up in the harness's own
+        # output instead of requiring another manual investigation.
+        from ai_pr_review.agents.dispatch import _compute_context_enrichment_block
+        diff_text = diff_path.read_text()
+        enrichment = _compute_context_enrichment_block(diff_text, context)
+        note = f"{enrichment.tokens} tokens" if enrichment is not None else "none"
+        print(f"    context-enrichment: {note} [{diff_path.name}/{arm}]", file=sys.stderr)
 
     try:
         successes, failures = await run_tier(agents, llm_call, context, semaphore_size=2)

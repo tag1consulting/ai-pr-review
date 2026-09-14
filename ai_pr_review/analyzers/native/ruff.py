@@ -7,7 +7,6 @@ converts its JSON output to Finding instances.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 
 # subprocess is never called directly in this module (run_cli_json_analyzer
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
+from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -59,8 +59,6 @@ def _ruff_items(data: Any) -> list[dict[str, Any]] | None:
 
 
 def _ruff_finding(item: dict[str, Any]) -> Finding:
-    workspace_prefix = (os.environ.get("GITHUB_WORKSPACE") or os.getcwd()).rstrip("/") + "/"
-
     code = item.get("code") or ""
     prefix = code[:1]
     if prefix in ("F", "E"):
@@ -70,9 +68,7 @@ def _ruff_finding(item: dict[str, Any]) -> Finding:
     else:
         severity = "Low"
 
-    filename = item.get("filename") or ""
-    if filename.startswith(workspace_prefix):
-        filename = filename[len(workspace_prefix):]
+    filename = strip_workspace_prefix(item.get("filename") or "")
 
     url = item.get("url")
     remediation = f"See {url}" if url else f"See https://docs.astral.sh/ruff/rules/{code}"

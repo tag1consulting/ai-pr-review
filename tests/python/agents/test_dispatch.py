@@ -188,6 +188,105 @@ async def test_run_tier_happy_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_run_tier_uses_roster_default_max_tokens_when_no_override(
+    tmp_path: Path,
+) -> None:
+    """No AI_MAX_TOKENS_PER_AGENT and no per-agent override set (#316/#191
+    baseline): the roster's own max_output_tokens for the agent is used."""
+    ctx = _make_context(tmp_path)
+    assert ctx.max_tokens_per_agent == 0, (
+        "test premise: _make_context leaves the global override unset"
+    )
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    agent = get_agent("code-reviewer")
+    await run_tier(
+        agents=[agent], llm_call=capture_llm, context=ctx, semaphore_size=1,
+    )
+    assert captured[0].max_tokens == agent.max_output_tokens
+
+
+@pytest.mark.anyio
+async def test_run_tier_per_agent_max_tokens_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#191: AI_MAX_TOKENS_<AGENT> overrides the effective max_tokens sent in
+    the LLMRequest, beating both the roster default and (see next test) the
+    global AI_MAX_TOKENS_PER_AGENT-derived value."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "6000")
+    ctx = _make_context(tmp_path)
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert captured[0].max_tokens == 6000
+
+
+@pytest.mark.anyio
+async def test_run_tier_per_agent_override_beats_global_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A per-agent override takes precedence over a global
+    AI_MAX_TOKENS_PER_AGENT-derived context.max_tokens_per_agent value."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "6000")
+    ctx = _make_context(tmp_path)
+    ctx.max_tokens_per_agent = 20000  # simulates AI_MAX_TOKENS_PER_AGENT=20000
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=1,
+    )
+    assert captured[0].max_tokens == 6000
+
+
+@pytest.mark.anyio
+async def test_run_tier_per_agent_override_does_not_leak_to_other_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An override scoped to one agent must not affect a sibling agent's
+    effective max_tokens in the same tier."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "6000")
+    ctx = _make_context(tmp_path)
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    await run_tier(
+        agents=[get_agent("code-reviewer"), get_agent("silent-failure-hunter")],
+        llm_call=capture_llm,
+        context=ctx,
+        semaphore_size=2,
+    )
+    # LLMRequest doesn't carry the agent name, but code-reviewer's override
+    # (6000) and silent-failure-hunter's untouched roster default are
+    # distinct values, so the multiset of max_tokens across both requests is
+    # enough to confirm the override didn't leak.
+    tokens = sorted(req.max_tokens for req in captured)
+    assert tokens == sorted([6000, get_agent("silent-failure-hunter").max_output_tokens])
+
+
+@pytest.mark.anyio
 async def test_run_tier_populates_system_prefix_from_run_shared_addenda(
     tmp_path: Path,
 ) -> None:
