@@ -2,7 +2,10 @@
 
 Uses ``rg`` (ripgrep) to locate definitions for referenced symbols across the
 repo checkout.  Returns surrounding ±``lookup_lines`` lines per definition,
-with a per-query 3-second timeout and a per-run 50-query cap.
+with a per-query 3-second timeout and a per-run query cap (``max_queries``,
+200 by default in production via ``AI_CONTEXT_MAX_QUERIES`` / config.py's
+``context_max_queries`` -- see ``lookup_definitions``'s own default below for
+when nothing else overrides it).
 
 Results are cached per run so the same symbol looked up by multiple agents
 only triggers one ripgrep call.
@@ -80,12 +83,24 @@ class _LookupCache:
         return self._queries
 
 
-# Module-level cache — reset by tests via _reset_cache().
+# Module-level cache — reset via _reset_cache() by tests, and by
+# tests/canary/consistency_eval.py (issue #806), the one caller outside the
+# pytest suite: production never needs to reset this, since it runs one
+# process per review and the cache dies with the process.
 _cache = _LookupCache()
 
 
 def _reset_cache() -> None:
-    """Reset the per-run lookup cache (used by tests)."""
+    """Reset the per-run lookup cache.
+
+    Called by tests, and by tests/canary/consistency_eval.py's harness
+    before each context-enrichment-arm run (issue #806) -- that harness runs
+    its entire corpus x arms x runs x models loop in one long-lived process,
+    so without this reset the cap saturates on the first ref-heavy diff and
+    silently starves every later diff/arm/run in the same process. Not
+    called in production: one process per review means the cache never
+    outlives the run it was populated for.
+    """
     global _cache
     _cache = _LookupCache()
 
@@ -139,7 +154,7 @@ def lookup_definitions(
     language: str = "",
     *,
     lookup_lines: int = 8,
-    max_queries: int = 50,
+    max_queries: int = 200,
     timeout_s: float = 3.0,
 ) -> list[Definition]:
     """Look up definitions for *refs* via ripgrep.

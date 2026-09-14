@@ -260,3 +260,68 @@ def test_as_finding_like_adapter_bridges_severity_only() -> None:
     f = _f("Critical", 90, "something bad")
     adapted = ce._AsFindingLike(f)
     assert adapted.severity == "Critical"
+
+
+# ---------------------------------------------------------------------------
+# Regression coverage for issue #806's measurement bug (PR #835): both bugs
+# made the context-enrichment arm structurally inert on every corpus diff
+# regardless of toggle state, and neither had a test that would have caught
+# it recurring.
+# ---------------------------------------------------------------------------
+
+_MD_ONLY_DIFF = (
+    "diff --git a/docs/b.md b/docs/b.md\n"
+    "--- a/docs/b.md\n"
+    "+++ b/docs/b.md\n"
+    "@@ -1,1 +1,1 @@\n"
+    "-old\n"
+    "+new\n"
+)
+
+
+def test_build_dispatch_context_threads_changed_files(tmp_path: Path) -> None:
+    """DispatchContext.changed_files must reflect the diff's actual changed
+    files. Previously omitted entirely, which made
+    _detect_primary_language(context.changed_files) always see an empty
+    list, so context-enrichment found zero symbol refs no matter what."""
+    diff_path = tmp_path / "fixture.diff"
+    diff_path.write_text(_MD_ONLY_DIFF)
+
+    context = ce._build_dispatch_context(
+        "claude-sonnet-5", diff_path, "context-enrichment", tmp_path,
+    )
+    assert context.changed_files == ["docs/b.md"]
+
+
+def test_build_dispatch_context_respects_arm_toggle(tmp_path: Path) -> None:
+    """changed_files threads through regardless of arm, but
+    enable_context_enrichment must still follow the arm's own toggle."""
+    diff_path = tmp_path / "fixture.diff"
+    diff_path.write_text(_MD_ONLY_DIFF)
+
+    on = ce._build_dispatch_context("claude-sonnet-5", diff_path, "context-enrichment", tmp_path)
+    off = ce._build_dispatch_context("claude-sonnet-5", diff_path, "baseline", tmp_path)
+    assert on.enable_context_enrichment is True
+    assert off.enable_context_enrichment is False
+    assert off.changed_files == ["docs/b.md"]
+
+
+def test_maybe_reset_symbol_cache_only_for_context_enrichment_arm() -> None:
+    """The module-level ripgrep lookup cache must reset before a
+    context-enrichment-arm run (else a long-lived harness process silently
+    starves every diff/arm/run after the first ref-heavy one), but must not
+    reset for an arm that doesn't use context-enrichment at all."""
+    import ai_pr_review.context.symbols as symbols_mod
+
+    symbols_mod._reset_cache()
+    try:
+        symbols_mod._cache.set("some-key", [])
+        assert symbols_mod._cache.query_count == 1
+
+        ce._maybe_reset_symbol_cache("baseline")
+        assert symbols_mod._cache.query_count == 1  # untouched
+
+        ce._maybe_reset_symbol_cache("context-enrichment")
+        assert symbols_mod._cache.query_count == 0  # reset
+    finally:
+        symbols_mod._reset_cache()
