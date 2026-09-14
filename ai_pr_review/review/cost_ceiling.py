@@ -255,13 +255,18 @@ def log_cost_estimate(estimate: CostEstimate, *, ceiling_usd: float) -> None:
     on every run. One line per run; per-agent detail is packed into the
     message rather than split into separate log records so a single grep
     for ``COST_ESTIMATE`` finds the whole picture.
+
+    Logged at WARNING, not INFO: the shipped default is ``AI_LOG_LEVEL=
+    WARNING`` (config.py), so an INFO-level line here would silently never
+    appear for any consumer running at the default level, contradicting
+    this docstring's own "auditable on every run" claim.
     """
     breakdown = " ".join(
         f"{a.agent}={format_cost(a.estimated_cost_units)}"
         + ("(unpriced)" if a.unknown_pricing else "")
         for a in estimate.per_agent
     )
-    logger.info(
+    logger.warning(
         "COST_ESTIMATE total=%s ceiling=%s agents=%d any_unknown_pricing=%s %s",
         format_cost(estimate.total_cost_units),
         format_cost(int(round(ceiling_usd * 10000))) if ceiling_usd > 0 else "none",

@@ -7,6 +7,7 @@ vars raise ConfigError with a nearest-match suggestion.
 from __future__ import annotations
 
 import difflib
+import math
 import os
 import sys
 
@@ -567,6 +568,19 @@ class ReviewConfig(BaseModel):
     @field_validator("max_cost_usd")
     @classmethod
     def _clamp_max_cost_usd(cls, v: float) -> float:
+        # NaN and +-inf both defeat enforce_cost_ceiling's own <= comparisons
+        # (any comparison against NaN is False; inf's "never exceeded" side
+        # effect is an accident of float semantics, not an intentional
+        # "no ceiling" spelling) -- reject both the same way a negative
+        # value already is, rather than let either reach enforcement.
+        if not math.isfinite(v):
+            print(
+                f"WARNING: AI_MAX_COST_USD={v} is not a finite number; "
+                "clamping to 0 (ceiling disabled). Review will proceed with "
+                "this value.",
+                file=sys.stderr,
+            )
+            return 0.0
         if v < 0:
             print(
                 f"WARNING: AI_MAX_COST_USD={v} is negative; clamping to 0 "

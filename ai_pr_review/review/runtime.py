@@ -25,6 +25,7 @@ from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
+from ai_pr_review.review.cost_ceiling import CostCeilingExceeded
 from ai_pr_review.review.pr_context import build_shared_context_block
 from ai_pr_review.vcs import provider_from_env
 from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
@@ -485,7 +486,6 @@ async def build_review_runtime(
     try:
         from ai_pr_review.pricing import load_pricing
         from ai_pr_review.review.cost_ceiling import (
-            CostCeilingExceeded,
             CostEstimate,
             enforce_cost_ceiling,
             estimate_preflight_agent_cost,

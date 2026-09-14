@@ -764,6 +764,49 @@ def test_max_cost_usd_negative_clamped_to_zero(
     assert "WARNING" in captured.err
 
 
+def test_max_cost_usd_nan_clamped_to_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """NaN defeats enforce_cost_ceiling's own <= comparisons in BOTH
+    directions (any comparison against NaN is False), so a NaN ceiling
+    would neither disable itself nor ever register as "not exceeded" --
+    tripping on every single run regardless of actual cost. Must be
+    rejected here, before it ever reaches enforcement."""
+    cfg = ReviewConfig(max_cost_usd=float("nan"))
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_inf_clamped_to_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """+inf happens to make enforce_cost_ceiling's "not exceeded" check
+    always true (anything <= inf), which looks like harmless "no ceiling"
+    behavior -- but it's an accident of float semantics, not an intentional
+    spelling for that, and -inf would behave very differently (always
+    "exceeded", tripping every run). Reject both explicitly rather than
+    rely on which side of infinity a typo happens to land on."""
+    cfg = ReviewConfig(max_cost_usd=float("inf"))
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
+def test_max_cost_usd_env_nan_string_clamped_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """float("nan") succeeds (no ValueError), so AI_MAX_COST_USD=nan reaches
+    the validator as a real float, not the unparseable-string fallback
+    path -- must be caught by the finite check specifically."""
+    monkeypatch.setenv("AI_MAX_COST_USD", "nan")
+    cfg = ReviewConfig.from_env()
+    assert cfg.max_cost_usd == 0.0
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+
+
 def test_max_cost_usd_unparseable_env_falls_back_to_default(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

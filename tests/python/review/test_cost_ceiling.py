@@ -199,6 +199,28 @@ class TestLogCostEstimate:
         assert "ceiling=none" in caplog.text
         assert "code-reviewer" in caplog.text
 
+    def test_cost_estimate_line_visible_at_default_warning_level(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The shipped AI_LOG_LEVEL default is WARNING (config.py) -- an
+        INFO-level COST_ESTIMATE line would be silently invisible for any
+        consumer running at the default level, contradicting this
+        function's own "auditable on every run" docstring claim."""
+        estimate = estimate_review_cost(
+            agents=[_agent("code-reviewer")],
+            diff_text="",
+            shared_context_text="",
+            language_profile_text="",
+            standard_model="known-model",
+            premium_model="",
+            review_mode="quick",
+            effective_max_output_tokens=1000,
+            pricing_data=_PRICING,
+        )
+        with caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"):
+            log_cost_estimate(estimate, ceiling_usd=0.0)
+        assert "COST_ESTIMATE" in caplog.text
+
     def test_emits_cost_estimate_line_with_ceiling_configured(
         self, caplog: pytest.LogCaptureFixture,
     ) -> None:
