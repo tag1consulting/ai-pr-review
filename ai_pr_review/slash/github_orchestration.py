@@ -1,5 +1,10 @@
-"""Slash-command dismiss orchestration — classification, thread resolution,
-and review dismissal for `/ai-pr-review dismiss` / `false-positive` / `wont-fix`.
+"""GitHub slash-command orchestration — F-ID classification, GraphQL thread
+resolution, and review dismissal backing `/ai-pr-review dismiss` /
+`dismiss-inline` / `false-positive` / `wont-fix` / `fixed`, plus
+`feedback-context` / `resolve-thread` and the PR-wide auto-approve check
+(`_approve_if_pr_fully_resolved`, issue #590). Renamed from `dismiss.py` in
+#833: the module had grown past that name well before this rename, and
+still does -- see #849 for a follow-up on splitting it further.
 
 GitHub-only: GitLab and Bitbucket have no F-ID / id-map system.
 
