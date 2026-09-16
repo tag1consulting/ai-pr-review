@@ -259,9 +259,19 @@ analyzers: ${{ vars.AI_REVIEW_ANALYZERS || '' }}                # Allowlist of a
 exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}  # Denylist (e.g. 'phpstan,phpcs')
 agents: ${{ vars.AI_REVIEW_AGENTS || '' }}                      # Allowlist of review agents
 exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}      # Denylist of review agents
+
+# Review tuning (honored on rescan and review-full)
+max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}  # Skip review above this many diff lines
+max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}            # Max inline comments per run
+ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}  # Strip upstream base-branch merges
+context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}      # tree-sitter symbol-context injection
 ```
 
-The four `analyzers`/`agents` inputs mirror the main action inputs added in v1.6.0 and are now forwarded through `rescan` and `review-full` as well, so a project that excludes `phpstan,phpcs` on the main review will also skip them on manual rescans. Set the corresponding `AI_REVIEW_*` repo variables once and both paths stay in sync. The complete list of inputs is documented in the reusable workflow file (`.github/workflows/slash-commands.yml` in this repository).
+The four `analyzers`/`agents` inputs mirror the main action inputs added in v1.6.0 and are now forwarded through `rescan` and `review-full` as well, so a project that excludes `phpstan,phpcs` on the main review will also skip them on manual rescans. Set the corresponding `AI_REVIEW_*` repo variables once and both paths stay in sync.
+
+The `max-diff-lines`/`max-inline`/`ignore-merge-commits`/`context-enrichment` inputs (issue #863) close a gap where these repo variables were honored by the automatic `pull_request`-triggered review but silently ignored by `rescan` and `review-full`: those two commands always ran with `container-action`'s hardcoded defaults regardless of what the repo variable said. They're now forwarded the same way as the analyzer/agent filters above.
+
+The complete list of inputs is documented in the reusable workflow file (`.github/workflows/slash-commands.yml` in this repository).
 
 ## Architecture: reusable workflow
 

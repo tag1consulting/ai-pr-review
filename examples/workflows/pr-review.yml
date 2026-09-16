@@ -304,6 +304,13 @@ jobs:
       exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}
       agents: ${{ vars.AI_REVIEW_AGENTS || '' }}
       exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}
+      # --- Review tuning (same as the review job above) ---
+      # Forwarded to rescan and review-full so they stay in sync with the
+      # main review (issue #863).
+      max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+      max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+      ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
+      context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}
     secrets:
       # Accept either AI_REVIEW_API_KEY or ANTHROPIC_API_KEY — both work.
       api-key: ${{ secrets.AI_REVIEW_API_KEY || secrets.ANTHROPIC_API_KEY }}

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`max-diff-lines`, `max-inline`, `ignore-merge-commits`, and `context-enrichment` were silently ignored by the `/ai-pr-review rescan` and `review-full` slash commands (issue #863)**. `.github/workflows/slash-commands.yml`'s `workflow_call` never declared these four inputs and never forwarded them to `container-action`, so both slash commands always ran with `container-action`'s hardcoded defaults (`max-diff-lines=5000` in particular) regardless of what a consuming repo's `AI_REVIEW_*` variables said. A repo that raised `AI_REVIEW_MAX_DIFF_LINES` to allow larger diffs on its automatic `pull_request`-triggered review saw no effect on manual rescans. All four are now declared as `workflow_call` inputs (with defaults matching `container-action`'s own, so omitting them changes nothing) and wired into both review steps, the same way `analyzers`/`agents` were fixed by issue #516. Consuming repos using the starter templates (`examples/workflows/pr-review.yml`, `examples/workflows/comment-triggers.yml`) need to add the four `AI_REVIEW_*` variable forwards to their `slash-commands` job call to get the fix; see `docs/slash-commands.md#customizing`. A structural test (`tests/python/test_slash_commands_container_action_parity.py`) now guards against this specific input-forwarding class regressing again.
+
 ## [2.12.0] - 2026-09-14
 
 ### Added
