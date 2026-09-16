@@ -380,6 +380,27 @@ jobs:
       max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
       ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
       context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}
+      model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
+      model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
+      parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
+      max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '32768' }}
+      enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
+      # Deliberately 'false' here, unlike the review job above ('true'): a
+      # non-zero exit on this path fails the workflow run and misfires the
+      # failure-reaction step on a rescan that simply found something,
+      # rather than gating a required check the way it does on the review
+      # job's pull_request trigger. Set AI_REVIEW_FAIL_ON_FINDINGS=true if
+      # you want that gating behavior on rescan/review-full too.
+      fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'false' }}
+      feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
+      token-usage-display: ${{ vars.AI_REVIEW_TOKEN_USAGE_DISPLAY || 'compact' }}
+      token-usage-warn-usd: ${{ vars.AI_REVIEW_TOKEN_USAGE_WARN_USD || '1.00' }}
+      max-cost-usd: ${{ vars.AI_REVIEW_MAX_COST_USD || '0' }}
+      fail-on-cost-ceiling: ${{ vars.AI_REVIEW_FAIL_ON_COST_CEILING || 'false' }}
+      context-max-queries: ${{ vars.AI_REVIEW_CONTEXT_MAX_QUERIES || '200' }}
+      exclude-patterns: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS || '' }}
+      exclude-patterns-mode: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS_MODE || 'append' }}
+      analyzer-diff-scope: ${{ vars.AI_REVIEW_ANALYZER_DIFF_SCOPE || 'cap' }}
     secrets:
       api-key: ${{ secrets.AI_REVIEW_API_KEY }}
       github-token: ${{ secrets.GH_TOKEN }}
