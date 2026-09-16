@@ -376,6 +376,10 @@ jobs:
       exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}
       agents: ${{ vars.AI_REVIEW_AGENTS || '' }}
       exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}
+      max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+      max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+      ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
+      context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}
     secrets:
       api-key: ${{ secrets.AI_REVIEW_API_KEY }}
       github-token: ${{ secrets.GH_TOKEN }}

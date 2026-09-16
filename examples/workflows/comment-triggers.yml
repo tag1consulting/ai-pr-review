@@ -136,6 +136,13 @@ jobs:
       exclude-analyzers: ${{ vars.AI_REVIEW_EXCLUDE_ANALYZERS || '' }}
       agents: ${{ vars.AI_REVIEW_AGENTS || '' }}
       exclude-agents: ${{ vars.AI_REVIEW_EXCLUDE_AGENTS || '' }}
+      # --- Review tuning ---
+      # Forwarded to rescan and review-full so they honor the same repo
+      # variables as the main review job (issue #863).
+      max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}
+      max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}
+      ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
+      context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}
     secrets:
       api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # GH_TOKEN must be a PAT (repo scope) or GitHub App token — not GITHUB_TOKEN.

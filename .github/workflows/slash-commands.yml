@@ -91,6 +91,45 @@ on:
         type: string
         required: false
         default: ''
+      max-diff-lines:
+        description: >
+          Skip review if the diff exceeds this many lines. Omit to inherit
+          container-action's own default (5000). Do not pass an empty
+          string: an empty value is parsed as 0, which disables the limit
+          entirely, not as "use the default".
+        type: string
+        required: false
+        default: '5000'
+      max-inline:
+        description: >
+          Maximum inline review comments per run. Omit to inherit
+          container-action's own default (25). Do not pass an empty string:
+          an unparseable value falls back to the default with a warning
+          rather than behaving like "use the default" silently.
+        type: string
+        required: false
+        default: '25'
+      ignore-merge-commits:
+        description: >
+          When true, strip merge commits that pulled in upstream base-branch
+          changes before computing the diff. Omit to inherit
+          container-action's own default ('true'). Do not pass an empty
+          string: an empty value is interpreted as false, not as the
+          default, silently disabling merge-commit stripping.
+        type: string
+        required: false
+        default: 'true'
+      context-enrichment:
+        description: >
+          When true, extract symbol references from the diff and inject a
+          <symbol-context> block into each agent's prompt. Omit to inherit
+          container-action's own default ('true'; the container image ships
+          tree-sitter-language-pack and ripgrep). Do not pass an empty
+          string: an empty value is interpreted as false, not as the
+          default, silently disabling context enrichment.
+        type: string
+        required: false
+        default: 'true'
       # GitHub context — the caller must forward these from the event payload.
       # workflow_call does not propagate github.event to the callee.
       event-name:
@@ -473,6 +512,10 @@ jobs:
           exclude-analyzers: ${{ inputs.exclude-analyzers }}
           agents: ${{ inputs.agents }}
           exclude-agents: ${{ inputs.exclude-agents }}
+          max-diff-lines: ${{ inputs.max-diff-lines }}
+          max-inline: ${{ inputs.max-inline }}
+          ignore-merge-commits: ${{ inputs.ignore-merge-commits }}
+          context-enrichment: ${{ inputs.context-enrichment }}
 
       - name: Run review (review-full)
         if: steps.cmd.outputs.command == 'review-full'
@@ -496,6 +539,10 @@ jobs:
           exclude-analyzers: ${{ inputs.exclude-analyzers }}
           agents: ${{ inputs.agents }}
           exclude-agents: ${{ inputs.exclude-agents }}
+          max-diff-lines: ${{ inputs.max-diff-lines }}
+          max-inline: ${{ inputs.max-inline }}
+          ignore-merge-commits: ${{ inputs.ignore-merge-commits }}
+          context-enrichment: ${{ inputs.context-enrichment }}
 
       - name: React — done
         if: |
