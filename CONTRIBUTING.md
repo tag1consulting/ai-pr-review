@@ -171,6 +171,7 @@ Before opening a pull request:
 - [ ] `ruff check ai_pr_review/` and `mypy ai_pr_review/` — no new lint or type errors
 - [ ] Update `CLAUDE.md` if you changed interfaces (new env vars, changed function signatures)
 - [ ] If you added an `AI_*` env var, register it in `_KNOWN_AI_VARS` in `ai_pr_review/config.py` and add a `from_env()` field — otherwise the engine raises `ConfigError` at startup
+- [ ] If you added an input to `container-action/action.yml` (or `action.yml`), also forward it to `container-action` from `.github/workflows/slash-commands.yml`'s review-dispatch step, unless it's genuinely GitHub-context/connection plumbing rather than a review-tuning knob. Issues #516 and #863 both shipped an input that worked on the automatic `pull_request`-triggered review but silently had no effect on `/ai-pr-review rescan`/`review-full` because this step was skipped. `tests/python/test_slash_commands_container_action_parity.py` enforces this for every input not explicitly exempted there: add a new input to its exemption list (with a reason) only if it's genuinely not a review-tuning knob
 - [ ] Update `README.md` and `docs/` pages if you changed user-facing behavior
 - [ ] Run `/comprehensive-review --quick` to catch issues before the CI review
 

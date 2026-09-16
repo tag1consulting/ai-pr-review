@@ -130,6 +130,132 @@ on:
         type: string
         required: false
         default: 'true'
+      model-standard:
+        description: >
+          Override the standard-tier model for this run. Omit (empty) to
+          inherit container-action's own per-provider default.
+        type: string
+        required: false
+        default: ''
+      model-premium:
+        description: >
+          Override the premium-tier model for this run. Omit (empty) to
+          inherit container-action's own per-provider default.
+        type: string
+        required: false
+        default: ''
+      parallel:
+        description: >
+          When true, dispatch eligible agents concurrently instead of
+          sequentially. Omit to inherit container-action's own default
+          ('true'). Do not pass an empty string: an empty value is
+          interpreted as false, not as the default.
+        type: string
+        required: false
+        default: 'true'
+      max-tokens-per-agent:
+        description: >
+          Output-token budget per agent call. Omit to inherit
+          container-action's own default (32768). Do not pass an empty
+          string: an empty value is not parsed as "use the default".
+        type: string
+        required: false
+        default: '32768'
+      enable-suggestions:
+        description: >
+          When true, eligible findings carry inline fix suggestions. Omit
+          to inherit container-action's own default ('true'). Do not pass
+          an empty string: an empty value is interpreted as false, not as
+          the default.
+        type: string
+        required: false
+        default: 'true'
+      fail-on-findings:
+        description: >
+          When true, exit non-zero if any finding meets the configured
+          severity threshold. Omit to inherit container-action's own
+          default ('false'). Do not pass an empty string: an empty value
+          is interpreted as false, which happens to match the default here,
+          but should still be set explicitly rather than relied on as a
+          side effect of omission.
+        type: string
+        required: false
+        default: 'false'
+      feedback-loop:
+        description: >
+          When true, load recent feedback-store entries into agent prompts
+          for this run. Omit to inherit container-action's own default
+          ('false'). Distinct from enable-feedback-loop below, which gates
+          the separate feedback-command job (the /ai-pr-review
+          false-positive|wont-fix|feedback|explain|revise commands), not
+          this review dispatch.
+        type: string
+        required: false
+        default: 'false'
+      token-usage-display:
+        description: >
+          Token-usage table rendering mode. Omit to inherit
+          container-action's own default ('compact').
+        type: string
+        required: false
+        default: 'compact'
+      token-usage-warn-usd:
+        description: >
+          Warn in the review body when estimated spend for this run exceeds
+          this USD amount. Omit to inherit container-action's own default
+          (1.00).
+        type: string
+        required: false
+        default: '1.00'
+      max-cost-usd:
+        description: >
+          Abort before any LLM call if the pre-flight cost estimate exceeds
+          this USD amount (0 disables the ceiling). Omit to inherit
+          container-action's own default (0/disabled).
+        type: string
+        required: false
+        default: '0'
+      fail-on-cost-ceiling:
+        description: >
+          When true, exit non-zero if the cost ceiling above is exceeded,
+          instead of the default informational-only skip. Omit to inherit
+          container-action's own default ('false').
+        type: string
+        required: false
+        default: 'false'
+      context-max-queries:
+        description: >
+          Maximum ripgrep symbol-lookup queries across all agents in a run
+          (context enrichment). Omit to inherit container-action's own
+          default (200).
+        type: string
+        required: false
+        default: '200'
+      exclude-patterns:
+        description: >
+          Comma-separated glob patterns to exclude from review regardless
+          of the diff (e.g. vendored/generated paths). Omit (empty) to
+          inherit container-action's own default (no exclusions).
+        type: string
+        required: false
+        default: ''
+      exclude-patterns-mode:
+        description: >
+          How exclude-patterns combines with any repo-level exclusion
+          config: 'append' (default) or 'replace'. Omit to inherit
+          container-action's own default ('append').
+        type: string
+        required: false
+        default: 'append'
+      analyzer-diff-scope:
+        description: >
+          How static-analyzer findings outside the changed-line set are
+          handled: 'cap' (default, severity capped to Low) or another
+          supported mode. Omit to inherit container-action's own default
+          ('cap').
+        type: string
+        required: false
+        default: 'cap'
       # GitHub context — the caller must forward these from the event payload.
       # workflow_call does not propagate github.event to the callee.
       event-name:
@@ -316,8 +442,8 @@ jobs:
       - name: Parse command
         id: cmd
         # This job runs on a bare ubuntu-latest runner (no job-level
-        # `container:` — see the "Run review (rescan)"/"Run review
-        # (review-full)" steps below, which invoke
+        # `container:` — see the "Run review (rescan/review-full)" step
+        # below, which invokes
         # tag1consulting/ai-pr-review/container-action@main, a composite
         # action that shells out to `docker run` itself; that action's docker
         # invocation needs a real Docker daemon reachable from wherever it
@@ -487,8 +613,18 @@ jobs:
             "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
             -f content=rocket
 
-      - name: Run review (rescan)
-        if: steps.cmd.outputs.command == 'rescan'
+      - name: Run review (rescan/review-full)
+        # Issue #863 follow-up: rescan and review-full used to be two
+        # separate steps with byte-for-byte identical `with:` blocks except
+        # for `review-mode` -- exactly the kind of duplication that let both
+        # #516 and #863 forward a new container-action input to one step
+        # while forgetting the other. Merged into one step so there is only
+        # one `with:` block to keep in sync with container-action's inputs;
+        # the two commands now differ only in the `if:` condition (both, vs
+        # a single command before) and the review-mode expression below.
+        if: |
+          steps.cmd.outputs.command == 'rescan' ||
+          steps.cmd.outputs.command == 'review-full'
         uses: tag1consulting/ai-pr-review/container-action@main
         env:
           FORCE_FULL_DIFF: 'true'
@@ -507,7 +643,10 @@ jobs:
           base-ref: ${{ steps.pr.outputs.base }}
           head-ref: ${{ steps.pr.outputs.head }}
           head-sha: ${{ steps.pr.outputs.sha }}
-          review-mode: ${{ inputs.review-mode-default }}
+          # review-full always forces full mode; rescan defers to the
+          # caller's configured default -- the same two values each step
+          # used before this merge.
+          review-mode: ${{ steps.cmd.outputs.command == 'review-full' && 'full' || inputs.review-mode-default }}
           analyzers: ${{ inputs.analyzers }}
           exclude-analyzers: ${{ inputs.exclude-analyzers }}
           agents: ${{ inputs.agents }}
@@ -516,33 +655,21 @@ jobs:
           max-inline: ${{ inputs.max-inline }}
           ignore-merge-commits: ${{ inputs.ignore-merge-commits }}
           context-enrichment: ${{ inputs.context-enrichment }}
-
-      - name: Run review (review-full)
-        if: steps.cmd.outputs.command == 'review-full'
-        uses: tag1consulting/ai-pr-review/container-action@main
-        env:
-          FORCE_FULL_DIFF: 'true'
-        with:
-          image-tag: ${{ inputs.image-tag }}
-          provider: ${{ inputs.provider }}
-          api-key: ${{ secrets.api-key }}
-          base-url: ${{ inputs.base-url }}
-          # actions-token (GITHUB_TOKEN), not github-token (PAT): see rationale
-          # on the rescan step above (#608).
-          github-token: ${{ secrets.actions-token || github.token }}
-          pr-number: ${{ inputs.issue-number }}
-          base-ref: ${{ steps.pr.outputs.base }}
-          head-ref: ${{ steps.pr.outputs.head }}
-          head-sha: ${{ steps.pr.outputs.sha }}
-          review-mode: 'full'
-          analyzers: ${{ inputs.analyzers }}
-          exclude-analyzers: ${{ inputs.exclude-analyzers }}
-          agents: ${{ inputs.agents }}
-          exclude-agents: ${{ inputs.exclude-agents }}
-          max-diff-lines: ${{ inputs.max-diff-lines }}
-          max-inline: ${{ inputs.max-inline }}
-          ignore-merge-commits: ${{ inputs.ignore-merge-commits }}
-          context-enrichment: ${{ inputs.context-enrichment }}
+          model-standard: ${{ inputs.model-standard }}
+          model-premium: ${{ inputs.model-premium }}
+          parallel: ${{ inputs.parallel }}
+          max-tokens-per-agent: ${{ inputs.max-tokens-per-agent }}
+          enable-suggestions: ${{ inputs.enable-suggestions }}
+          fail-on-findings: ${{ inputs.fail-on-findings }}
+          feedback-loop: ${{ inputs.feedback-loop }}
+          token-usage-display: ${{ inputs.token-usage-display }}
+          token-usage-warn-usd: ${{ inputs.token-usage-warn-usd }}
+          max-cost-usd: ${{ inputs.max-cost-usd }}
+          fail-on-cost-ceiling: ${{ inputs.fail-on-cost-ceiling }}
+          context-max-queries: ${{ inputs.context-max-queries }}
+          exclude-patterns: ${{ inputs.exclude-patterns }}
+          exclude-patterns-mode: ${{ inputs.exclude-patterns-mode }}
+          analyzer-diff-scope: ${{ inputs.analyzer-diff-scope }}
 
       - name: React — done
         if: |

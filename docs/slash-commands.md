@@ -265,11 +265,28 @@ max-diff-lines: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || '5000' }}  # Skip review ab
 max-inline: ${{ vars.AI_REVIEW_MAX_INLINE || '25' }}            # Max inline comments per run
 ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}  # Strip upstream base-branch merges
 context-enrichment: ${{ vars.AI_REVIEW_CONTEXT_ENRICHMENT || 'true' }}      # tree-sitter symbol-context injection
+model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}      # Override the standard-tier model
+model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}        # Override the premium-tier model
+parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}              # Dispatch eligible agents concurrently
+max-tokens-per-agent: ${{ vars.AI_REVIEW_MAX_TOKENS_PER_AGENT || '32768' }}  # Output-token budget per agent
+enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}  # Inline fix suggestions
+fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'false' }}     # Non-zero exit on qualifying findings; 'false' here (not the main review job's 'true') since a failed run on this path misfires the failure-reaction step, not a required check
+feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}   # Load learning-loop context into agent prompts
+token-usage-display: ${{ vars.AI_REVIEW_TOKEN_USAGE_DISPLAY || 'compact' }}  # Token-usage table rendering mode
+token-usage-warn-usd: ${{ vars.AI_REVIEW_TOKEN_USAGE_WARN_USD || '1.00' }}   # Warn above this estimated USD spend
+max-cost-usd: ${{ vars.AI_REVIEW_MAX_COST_USD || '0' }}         # Abort before any LLM call above this USD estimate (0 = disabled)
+fail-on-cost-ceiling: ${{ vars.AI_REVIEW_FAIL_ON_COST_CEILING || 'false' }}  # Non-zero exit if the cost ceiling is exceeded
+context-max-queries: ${{ vars.AI_REVIEW_CONTEXT_MAX_QUERIES || '200' }}      # Max ripgrep symbol-lookup queries per run
+exclude-patterns: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS || '' }}  # Comma-separated globs to exclude from review
+exclude-patterns-mode: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS_MODE || 'append' }}  # 'append' or 'replace'
+analyzer-diff-scope: ${{ vars.AI_REVIEW_ANALYZER_DIFF_SCOPE || 'cap' }}      # How out-of-diff analyzer findings are handled
 ```
 
 The four `analyzers`/`agents` inputs mirror the main action inputs added in v1.6.0 and are now forwarded through `rescan` and `review-full` as well, so a project that excludes `phpstan,phpcs` on the main review will also skip them on manual rescans. Set the corresponding `AI_REVIEW_*` repo variables once and both paths stay in sync.
 
-The `max-diff-lines`/`max-inline`/`ignore-merge-commits`/`context-enrichment` inputs (issue #863) close a gap where these repo variables were honored by the automatic `pull_request`-triggered review but silently ignored by `rescan` and `review-full`: those two commands always ran with `container-action`'s hardcoded defaults regardless of what the repo variable said. They're now forwarded the same way as the analyzer/agent filters above.
+The review-tuning inputs above (issues #863 and #865) close a class of bug where a repo variable was honored by the automatic `pull_request`-triggered review but silently ignored by `rescan` and `review-full`: those two commands always ran with `container-action`'s hardcoded defaults regardless of what the repo variable said. `fail-on-findings` is the one exception worth calling out explicitly: it intentionally defaults to `'false'` here even though the main review job defaults it to `'true'`, because a non-zero exit on this comment-triggered path fails the workflow run and misfires the failure reaction, rather than gating a required check the way it does on the `pull_request` trigger.
+
+Not every `container-action` input is forwarded. `tests/python/test_slash_commands_container_action_parity.py` is the source of truth for which ones and why: it fails the build if a `container-action` input is neither forwarded from the review step nor listed in its `_EXEMPT_INPUTS` dict with a documented reason (GitHub-context plumbing already forwarded under another name, genuinely inapplicable to a comment-triggered context, or not yet exposed via any `AI_REVIEW_*` variable on any review path). Read that file rather than trusting a hardcoded count here, since the exempt set can change without this doc being updated.
 
 The complete list of inputs is documented in the reusable workflow file (`.github/workflows/slash-commands.yml` in this repository).
 
