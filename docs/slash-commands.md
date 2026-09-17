@@ -2,6 +2,7 @@
 layout: default
 title: Slash Commands
 nav_order: 4
+render_with_liquid: false
 ---
 
 # Slash commands
