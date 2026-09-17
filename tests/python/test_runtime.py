@@ -943,6 +943,42 @@ class TestPolicyResolution:
         assert "pr-summarizer" in runtime.config.exclude_agents
 
     @pytest.mark.anyio
+    async def test_policy_exclude_lists_reach_config(self, tmp_path: Path) -> None:
+        """A policy's exclude-agents / exclude-analyzers must end up in the
+        runtime config's deny lists. Before this fix resolve_policy()
+        computed both fields and the merge never read them, so a repo's
+        `exclude-analyzers: [phpstan]` silently ran phpstan anyway; only
+        the AI_EXCLUDE_* env vars were honored.
+        """
+        from ai_pr_review.policy import PolicyFile, ResolvedPolicy
+
+        config = _make_config(review_mode="full")
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        fake_policy_file = PolicyFile(version=1, policies={}, routes=(), default="standard")
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.policy.load_policy_file", return_value=fake_policy_file),
+            patch(
+                "ai_pr_review.policy.resolve_policy",
+                return_value=ResolvedPolicy(
+                    name="standard",
+                    review_mode="quick",
+                    exclude_agents=("blind-hunter",),
+                    exclude_analyzers=("phpcs", "phpstan"),
+                ),
+            ),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            runtime = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert "blind-hunter" in runtime.config.exclude_agents
+        assert "blind-hunter" not in {a.name for a in runtime.agents}
+        assert set(runtime.config.exclude_analyzers) == {"phpcs", "phpstan"}
+
+    @pytest.mark.anyio
     async def test_policy_agents_empty_but_not_restricted_means_no_change(
         self, tmp_path: Path
     ) -> None:
@@ -997,6 +1033,14 @@ class TestMergeAllowlist:
 
     def test_empty_unrestricted_policy_allow_means_no_restriction(self) -> None:
         assert _merge_allowlist((), (), (), False, self.NAMES) == ((), ())
+
+    def test_policy_deny_is_unioned_with_config_deny(self) -> None:
+        # A policy.yml exclude-* list must reach the final deny list, and
+        # must not replace an explicit config deny list either.
+        assert _merge_allowlist((), ("a",), (), False, self.NAMES, ("b",)) == ((), ("a", "b"))
+
+    def test_policy_deny_survives_explicit_config_allow(self) -> None:
+        assert _merge_allowlist(("a",), (), (), False, self.NAMES, ("b",)) == (("a",), ("b",))
 
     def test_empty_restricted_policy_allow_unions_with_explicit_deny(self) -> None:
         allow, deny = _merge_allowlist((), ("x",), (), True, self.NAMES)
