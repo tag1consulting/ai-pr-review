@@ -85,6 +85,52 @@ class TestLoadRules:
         assert "global" in ids
         assert "local" in ids
 
+    def test_loads_local_rules_from_neutral_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            local_dir = ws / ".ai-pr-review"
+            local_dir.mkdir(parents=True)
+            (local_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "neutral", "reason": "n", "match": {"file": "vendor/.*"}}])
+            )
+            rules = load_rules(tmpdir, workspace=str(ws))
+        assert [r.id for r in rules] == ["neutral"]
+
+    def test_neutral_path_wins_over_legacy_never_merged(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            neutral_dir = ws / ".ai-pr-review"
+            neutral_dir.mkdir(parents=True)
+            (neutral_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "neutral", "reason": "n", "match": {"file": "a"}}])
+            )
+            legacy_dir = ws / ".github" / "ai-pr-review"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "legacy", "reason": "l", "match": {"file": "b"}}])
+            )
+            rules = load_rules(tmpdir, workspace=str(ws))
+        assert [r.id for r in rules] == ["neutral"]
+        # No migration nudge when the preferred path is the one used.
+        assert "INFO" not in capsys.readouterr().err
+
+    def test_legacy_fallback_logs_info(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            legacy_dir = ws / ".github" / "ai-pr-review"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "legacy", "reason": "l", "match": {"file": "b"}}])
+            )
+            rules = load_rules(tmpdir, workspace=str(ws))
+        assert [r.id for r in rules] == ["legacy"]
+        err = capsys.readouterr().err
+        assert "INFO" in err
+        assert ".github/ai-pr-review/suppressions.json" in err
+        assert ".ai-pr-review/suppressions.json" in err
+
     def test_local_catch_all_rule_rejected(self, capsys: pytest.CaptureFixture[str]) -> None:
         # A local (PR-controlled) rule with an empty/absent match object would
         # suppress every finding. It must be dropped, while a constrained local

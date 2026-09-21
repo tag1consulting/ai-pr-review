@@ -4,7 +4,11 @@ Ports lib/findings.sh apply_suppressions with:
 - Bounded httpx timeouts (connect=5s, read=10s) — closes #187
 - Max 1 retry on transient registry failure
 - Unavailable registry → finding kept with WARNING logged
-- Local suppressions from {workspace}/.github/ai-pr-review/suppressions.json
+- Local suppressions from {workspace}/.ai-pr-review/suppressions.json,
+  falling back to {workspace}/.github/ai-pr-review/suppressions.json when
+  the neutral path is absent (issue #839 follow-up). The two are never
+  merged, first match wins. See ai_pr_review.policy's module docstring
+  for why the neutral path exists
 """
 
 from __future__ import annotations
@@ -23,6 +27,12 @@ from ai_pr_review.findings.models import Finding
 
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 _MAX_RETRIES = 1
+
+# First match wins. The two are never merged. See the module docstring.
+_LOCAL_SUPPRESSIONS_CANDIDATES: tuple[tuple[str, ...], ...] = (
+    (".ai-pr-review", "suppressions.json"),
+    (".github", "ai-pr-review", "suppressions.json"),
+)
 
 
 @dataclass
@@ -50,11 +60,7 @@ def load_rules(
 ) -> list[SuppressionRule]:
     """Load global + optional local suppression rules."""
     global_path = Path(script_dir) / "config" / "suppressions.json"
-    local_path = (
-        Path(workspace) / ".github" / "ai-pr-review" / "suppressions.json"
-        if workspace
-        else None
-    )
+    local_path = _find_local_suppressions_path(workspace) if workspace else None
 
     rules_data: list[dict[str, Any]] = []
     if global_path.is_file():
@@ -63,7 +69,8 @@ def load_rules(
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: Could not load suppressions.json: {exc}", file=sys.stderr)
 
-    if local_path and local_path.is_file():
+    if local_path is not None:
+        rel_path = local_path.relative_to(workspace) if workspace else local_path
         try:
             local_data = json.loads(local_path.read_text())
             if isinstance(local_data, list):
@@ -78,19 +85,38 @@ def load_rules(
                 if dropped:
                     print(
                         f"WARNING: dropped {dropped} local suppression rule(s) with no match "
-                        "constraint (catch-all rules are not allowed in "
-                        ".github/ai-pr-review/suppressions.json).",
+                        f"constraint (catch-all rules are not allowed in {rel_path}).",
                         file=sys.stderr,
                     )
                 rules_data.extend(accepted)
-                print(
-                    "Loaded local suppressions from .github/ai-pr-review/suppressions.json",
-                    file=sys.stderr,
-                )
+                print(f"Loaded local suppressions from {rel_path}", file=sys.stderr)
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: Could not load local suppressions: {exc}", file=sys.stderr)
 
     return [_parse_rule(r) for r in rules_data if isinstance(r, dict)]
+
+
+def _find_local_suppressions_path(workspace: str) -> Path | None:
+    """Return the first existing local suppressions.json, or None.
+
+    Tries ``_LOCAL_SUPPRESSIONS_CANDIDATES`` in order (neutral path first,
+    legacy ``.github/ai-pr-review/`` fallback second). The two are never
+    merged. Logs one INFO line only when the fallback candidate is the one
+    that exists, matching ai_pr_review.policy's equivalent nudge-to-migrate
+    behavior.
+    """
+    for i, parts in enumerate(_LOCAL_SUPPRESSIONS_CANDIDATES):
+        candidate = Path(workspace, *parts)
+        if candidate.is_file():
+            if i > 0:
+                preferred = Path(*_LOCAL_SUPPRESSIONS_CANDIDATES[0])
+                print(
+                    f"INFO: loaded local suppressions from legacy path "
+                    f"{Path(*parts)!s}. The preferred location is {preferred!s}.",
+                    file=sys.stderr,
+                )
+            return candidate
+    return None
 
 
 def _has_match_constraint(raw: dict[str, Any]) -> bool:

@@ -244,7 +244,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
 | `head-sha` | **Yes** | — | Head commit SHA |
-| `policy-source` | No | `base-ref` | Where `.github/ai-pr-review/policy.yml` is read from (`base-ref` or `workspace`). See [Configuration: Action inputs](docs/configuration.md#action-inputs) and [Policies: Security](docs/policy.md) before setting `workspace`. |
+| `policy-source` | No | `base-ref` | Where `.ai-pr-review/policy.yml` (or its `.github/ai-pr-review/policy.yml` fallback) is read from (`base-ref` or `workspace`). See [Configuration: Action inputs](docs/configuration.md#action-inputs) and [Policies: Security](docs/policy.md) before setting `workspace`. |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 | `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). |
@@ -286,7 +286,7 @@ See [docs/configuration.md](docs/configuration.md#opt-in-capabilities) for the f
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs up to 8 agents — 6 always-on finding agents plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger with the `ai-review-full` PR label, `workflow_dispatch` input, `review-mode: full`, or by routing to it via `.github/ai-pr-review/policy.yml` (e.g. full mode for release branches, quick mode elsewhere).
+**Full mode**: Runs up to 8 agents — 6 always-on finding agents plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger with the `ai-review-full` PR label, `workflow_dispatch` input, `review-mode: full`, or by routing to it via `.ai-pr-review/policy.yml` (e.g. full mode for release branches, quick mode elsewhere).
 
 For the full agent roster and trigger patterns, see [docs/agents.md](docs/agents.md#review-modes). For per-branch/per-path routing, see [docs/policy.md](docs/policy.md).
 
@@ -361,7 +361,7 @@ Match fields (all optional, combined with AND logic):
 
 ### Local suppressions
 
-Consuming repos can add their own suppression rules without modifying the action. Create `.github/ai-pr-review/suppressions.json` in your repository using the same schema:
+Consuming repos can add their own suppression rules without modifying the action. Create `.ai-pr-review/suppressions.json` in your repository using the same schema (`.github/ai-pr-review/suppressions.json` still works as a fallback for existing adopters):
 
 ```json
 [

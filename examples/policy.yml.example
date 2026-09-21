@@ -1,12 +1,15 @@
 # AI PR Review — repo-local review policy
 #
-# Copy this file to .github/ai-pr-review/policy.yml in your repo and edit
-# to taste. Full schema and precedence rules: docs/policy.md
+# Copy this file to .ai-pr-review/policy.yml in your repo and edit to
+# taste. (.github/ai-pr-review/policy.yml still works as a fallback for
+# existing adopters -- the two are never merged, first match wins.)
+# Full schema and precedence rules: docs/policy.md
 #
 # ── How this is loaded ────────────────────────────────────────────────────
 #
-# Read via `git show origin/{base-ref}:.github/ai-pr-review/policy.yml` —
-# from the PR's BASE branch, never from the PR's own working tree. A PR
+# Read via `git show origin/{base-ref}:.ai-pr-review/policy.yml` (falling
+# back to .github/ai-pr-review/policy.yml) — from the PR's BASE branch,
+# never from the PR's own working tree. A PR
 # that edits this file has no effect on its own review; the file that
 # governs a PR's review is whatever is committed on the target branch.
 # Merge changes to this file to your default branch to have them apply
