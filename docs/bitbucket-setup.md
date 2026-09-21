@@ -62,7 +62,7 @@ variables** and add:
 | `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key (or swap for your provider) |
 | `AI_PROVIDER` | No | `anthropic` (default). Alternatives: `openai`, `google`, `bedrock-proxy` |
 | `AI_REVIEW_MODE` | No | `quick` (default) or `full` |
-| `AI_REVIEW_IMAGE_TAG` | **No, must not be secured** | Container tag to pull, e.g. `latest`. Required, no default. The starter pipeline's `image.name` field templates this itself via Bitbucket's `${{VAR}}` syntax, which cannot resolve a secured variable at all. Marking this one secured breaks the pipeline. |
+| `AI_REVIEW_IMAGE_TAG` | No | Container tag to pull, e.g. `latest`. Required, no default. The starter pipeline's `image.name` field templates this itself via Bitbucket's `${{VAR}}` syntax, which cannot resolve a secured variable at all, so this one must stay non-secured. |
 
 ### 3. Grant PR scopes
 
