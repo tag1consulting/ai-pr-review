@@ -198,6 +198,10 @@ class TestRunEslintFindings:
 
     def test_cwd_prefix_stripped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import os
+        # strip_workspace_prefix() prefers GITHUB_WORKSPACE when set (#846);
+        # real CI runners always set it, so this cwd-fallback case must
+        # explicitly unset it, not just rely on it being absent locally.
+        monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".eslintrc.json").write_text('{"rules":{}}\n')
         cwd = os.getcwd()

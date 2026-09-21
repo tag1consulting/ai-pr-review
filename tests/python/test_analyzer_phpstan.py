@@ -169,7 +169,11 @@ class TestRunPhpstanFindings:
         assert result == []
         assert "non-JSON" in caplog.text
 
-    def test_cwd_prefix_stripped(self, tmp_path: Path) -> None:
+    def test_cwd_prefix_stripped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # strip_workspace_prefix() prefers GITHUB_WORKSPACE when set (#846);
+        # real CI runners always set it, so this cwd-fallback case must
+        # explicitly unset it, not just rely on it being absent locally.
+        monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
         cwd = os.getcwd()
         payload = json.dumps({
             "totals": {"errors": 1, "file_errors": 1},
