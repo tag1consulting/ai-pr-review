@@ -4,6 +4,9 @@ All HTTP calls are mocked — no network access required.
 """
 
 import json
+import os
+import stat
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -130,6 +133,71 @@ class TestLoadRules:
         assert "INFO" in err
         assert ".github/ai-pr-review/suppressions.json" in err
         assert ".ai-pr-review/suppressions.json" in err
+
+    def test_no_local_suppressions_when_workspace_has_neither_path(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A real, existing workspace directory containing neither
+        candidate file: the loop-exhaustion branch of
+        _find_local_suppressions_path, distinct from test_empty_when_no_files
+        (which omits `workspace` entirely and short-circuits before that
+        function is ever called). The direct analog of
+        test_load_policy_file_neither_path_present_returns_none_silently."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            ws.mkdir()
+            rules = load_rules(tmpdir, workspace=str(ws))
+        assert rules == []
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+    def test_neutral_path_permission_error_stops_search_before_legacy(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A real OSError checking the neutral candidate (e.g. an
+        inaccessible parent directory) must warn and stop -- never silently
+        fall through to a legacy file that would otherwise load cleanly.
+        Path.is_file() would swallow this as a false "not found". The fix
+        uses stat() so the error surfaces instead."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            neutral_dir = ws / ".ai-pr-review"
+            neutral_dir.mkdir(parents=True)
+            (neutral_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "neutral", "reason": "n", "match": {"file": "a"}}])
+            )
+            legacy_dir = ws / ".github" / "ai-pr-review"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "legacy", "reason": "l", "match": {"file": "b"}}])
+            )
+            original_mode = neutral_dir.stat().st_mode
+            os.chmod(neutral_dir, 0)
+            try:
+                rules = load_rules(tmpdir, workspace=str(ws))
+            finally:
+                os.chmod(neutral_dir, original_mode)
+        assert rules == []
+        err = capsys.readouterr().err
+        assert "WARNING" in err
+        assert "INFO" not in err
+
+    def test_find_local_suppressions_path_stat_uses_s_isreg(self) -> None:
+        """A directory named suppressions.json (not a regular file) must
+        not be treated as a match -- stat() alone doesn't distinguish file
+        types, S_ISREG does."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "workspace"
+            neutral_dir = ws / ".ai-pr-review"
+            (neutral_dir / "suppressions.json").mkdir(parents=True)
+            legacy_dir = ws / ".github" / "ai-pr-review"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "suppressions.json").write_text(
+                json.dumps([{"id": "legacy", "reason": "l", "match": {"file": "b"}}])
+            )
+            assert stat.S_ISDIR((neutral_dir / "suppressions.json").stat().st_mode)
+            rules = load_rules(tmpdir, workspace=str(ws))
+        assert [r.id for r in rules] == ["legacy"]
 
     def test_local_catch_all_rule_rejected(self, capsys: pytest.CaptureFixture[str]) -> None:
         # A local (PR-controlled) rule with an empty/absent match object would

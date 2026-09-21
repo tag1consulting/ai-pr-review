@@ -18,13 +18,14 @@ have. ``ai_pr_review.feedback.store`` already used the neutral convention
 for the learning-loop store before this module adopted it.
 
 Security (issue #869): by default the policy file is loaded from the PR's
-*base* ref via ``git show origin/{base_ref}:.github/ai-pr-review/policy.yml``
-— never from the checked-out working tree, which on a PR is
+*base* ref via ``git show origin/{base_ref}:.ai-pr-review/policy.yml``
+(falling back to ``.github/ai-pr-review/policy.yml`` per the Path note
+above) — never from the checked-out working tree, which on a PR is
 attacker-controlled. A malicious PR must not be able to edit its own policy
 file to disable review agents on itself. This is a stricter trust model than
-the pre-existing ``.github/ai-pr-review/suppressions.json`` (loaded from the
-working tree by ``ai_pr_review.findings.suppress``), which is a narrower,
-lower-severity gap tracked separately.
+the pre-existing ``.ai-pr-review/suppressions.json`` / ``.github/ai-pr-review/suppressions.json``
+(loaded from the working tree by ``ai_pr_review.findings.suppress``), which
+is a narrower, lower-severity gap tracked separately.
 
 That base-ref read only closes a real gap when the *workflow itself* is
 base-controlled, i.e. GitHub ``pull_request_target``. Under the far more
@@ -187,18 +188,32 @@ def load_policy_file(
 
 
 def _read_first_existing(
-    candidates: Sequence[str], read_one: Callable[[str], str | None]
+    candidates: Sequence[str], read_one: Callable[[str], tuple[str | None, bool]]
 ) -> tuple[str | None, str | None]:
     """Try each candidate path in order via ``read_one``. First hit wins.
 
+    ``read_one`` returns ``(content, had_real_error)``. A real error (not a
+    clean "not found") stops the search immediately, returning ``(None,
+    None)`` without trying later candidates -- matching this module's
+    pre-existing single-path contract, where a WARNING meant the load
+    failed, full stop. Without this, a real error on the preferred
+    candidate (a git timeout, an unreadable file) could be silently masked
+    by a clean load of the legacy candidate: the WARNING for the real
+    failure would be followed by an INFO line that looks identical to the
+    intended, benign "not yet migrated" case, with no way to tell the two
+    apart from the logs and the wrong (stale) policy silently applied.
+
     Never merges content across candidates. Returns ``(content, path)`` on
-    success, ``(None, None)`` when none of the candidates exist. Logs one
-    INFO line only when the fallback (non-first) candidate was the one that
-    resolved, so a repo still on the legacy path gets a nudge to migrate
-    without every run on the preferred path printing anything.
+    success, ``(None, None)`` when none of the candidates exist (or a real
+    error stopped the search). Logs one INFO line only when the fallback
+    (non-first) candidate was the one that resolved cleanly, so a repo
+    still on the legacy path gets a nudge to migrate without every run on
+    the preferred path printing anything.
     """
     for i, path in enumerate(candidates):
-        content = read_one(path)
+        content, had_error = read_one(path)
+        if had_error:
+            return None, None
         if content is not None:
             if i > 0:
                 print(
@@ -228,7 +243,7 @@ def _read_policy_from_base_ref(workspace: str, base_ref: str) -> tuple[str | Non
     )
 
 
-def _git_show_policy_path(workspace: str, base_ref: str, path: str) -> str | None:
+def _git_show_policy_path(workspace: str, base_ref: str, path: str) -> tuple[str | None, bool]:
     try:
         proc = subprocess.run(
             ["git", "show", f"origin/{base_ref}:{path}"],
@@ -242,24 +257,27 @@ def _git_show_policy_path(workspace: str, base_ref: str, path: str) -> str | Non
             f"WARNING: could not read {path} from origin/{base_ref}: {exc}",
             file=sys.stderr,
         )
-        return None
+        return None, True
     if proc.returncode != 0:
         # git show's fatal message for "the path isn't tracked at that ref"
         # is stable across git versions: "fatal: path '<path>' does not
         # exist in '<ref>'". That's the common, expected case for a repo
         # that hasn't adopted policy.yml (or hasn't adopted this particular
-        # candidate path) and must stay silent. Any other non-zero exit
-        # (bad/unknown ref, unreachable remote, permissions) is a real
-        # misconfiguration masquerading as "no policy adopted" and is worth
-        # a WARNING so it doesn't silently look like normal operation.
+        # candidate path) and must stay silent -- and must let the caller
+        # try the next candidate. Any other non-zero exit (bad/unknown ref,
+        # unreachable remote, permissions) is a real misconfiguration
+        # masquerading as "no policy adopted": worth a WARNING, and it must
+        # stop the search rather than silently falling through to a later
+        # candidate (see _read_first_existing's docstring for why).
         if "does not exist in" not in proc.stderr:
             print(
                 f"WARNING: could not read {path} from origin/{base_ref} "
                 f"(git show exited {proc.returncode}): {proc.stderr.strip()[:500]}",
                 file=sys.stderr,
             )
-        return None
-    return proc.stdout
+            return None, True
+        return None, False
+    return proc.stdout, False
 
 
 def _read_policy_from_workspace(workspace: str) -> tuple[str | None, str | None]:
@@ -277,16 +295,16 @@ def _read_policy_from_workspace(workspace: str) -> tuple[str | None, str | None]
     )
 
 
-def _read_workspace_policy_path(workspace: str, path: str) -> str | None:
+def _read_workspace_policy_path(workspace: str, path: str) -> tuple[str | None, bool]:
     full_path = os.path.join(workspace or ".", path)
     try:
         with open(full_path, encoding="utf-8") as f:
-            return f.read()
+            return f.read(), False
     except FileNotFoundError:
-        return None
+        return None, False
     except OSError as exc:
         print(f"WARNING: could not read {full_path}: {exc}", file=sys.stderr)
-        return None
+        return None, True
 
 
 def match_route(

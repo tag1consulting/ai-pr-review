@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -104,10 +105,28 @@ def _find_local_suppressions_path(workspace: str) -> Path | None:
     merged. Logs one INFO line only when the fallback candidate is the one
     that exists, matching ai_pr_review.policy's equivalent nudge-to-migrate
     behavior.
+
+    Uses ``stat()`` rather than ``Path.is_file()`` deliberately:
+    ``is_file()`` swallows any ``OSError`` (including a permission error on
+    a parent directory) and returns ``False``, indistinguishable from the
+    file genuinely not existing. That would let a real access error on the
+    preferred candidate silently fall through to a stale legacy file with
+    no diagnostic at all -- worse than ai_pr_review.policy's equivalent gap
+    would have been, since ``is_file()`` gives no error text to lose in the
+    first place. A real ``OSError`` here stops the search and warns,
+    matching ai_pr_review.policy's "a real error must not be silently
+    masked by a later candidate's clean load" rule.
     """
     for i, parts in enumerate(_LOCAL_SUPPRESSIONS_CANDIDATES):
         candidate = Path(workspace, *parts)
-        if candidate.is_file():
+        try:
+            is_file = stat.S_ISREG(candidate.stat().st_mode)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            print(f"WARNING: could not check {candidate}: {exc}", file=sys.stderr)
+            return None
+        if is_file:
             if i > 0:
                 preferred = Path(*_LOCAL_SUPPRESSIONS_CANDIDATES[0])
                 print(

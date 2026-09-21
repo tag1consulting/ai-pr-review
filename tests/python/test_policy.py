@@ -13,6 +13,7 @@ from ai_pr_review.policy import (
     PolicyFile,
     RouteRule,
     _parse_policy_file,
+    _read_first_existing,
     load_policy_file,
     match_route,
     policy_satisfies,
@@ -767,3 +768,64 @@ def test_load_policy_file_neither_path_present_returns_none_silently(
     assert load_policy_file(str(git_repo), "main") is None
     assert load_policy_file(str(git_repo), "main", source="workspace") is None
     assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# _read_first_existing: a real error on an earlier candidate must not be
+# silently masked by a later candidate's clean load (issue found in review
+# of the neutral-path PR itself, before merge).
+# ---------------------------------------------------------------------------
+
+
+def test_read_first_existing_real_error_stops_search_before_later_candidates() -> None:
+    """A real error on candidate 0 must return (None, None) outright, never
+    falling through to try candidate 1 -- even though candidate 1 would
+    succeed. Falling through here would print a WARNING (for the real
+    error) immediately followed by an INFO line that looks exactly like
+    the intended, benign "not yet migrated" case, with the wrong (stale)
+    content silently returned."""
+    calls: list[str] = []
+
+    def read_one(path: str) -> tuple[str | None, bool]:
+        calls.append(path)
+        if path == "a":
+            return None, True  # real error
+        return "content-from-b", False  # would succeed if tried
+
+    result = _read_first_existing(("a", "b"), read_one)
+    assert result == (None, None)
+    assert calls == ["a"]  # candidate "b" must never even be attempted
+
+
+def test_read_first_existing_clean_miss_then_success_advances() -> None:
+    """A clean "not found" (had_real_error=False, content=None) on
+    candidate 0 must still advance to candidate 1, unlike a real error."""
+
+    def read_one(path: str) -> tuple[str | None, bool]:
+        if path == "a":
+            return None, False  # clean miss
+        return "content-from-b", False
+
+    result = _read_first_existing(("a", "b"), read_one)
+    assert result == ("content-from-b", "b")
+
+
+def test_load_policy_file_base_ref_real_error_on_neutral_path_does_not_try_legacy(
+    git_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Integration-level check of the same invariant via a genuinely bad
+    base_ref: git show fails for a real reason (invalid ref, not "path
+    does not exist at this ref") on the first candidate attempt, so the
+    search must stop there -- exactly one WARNING, no INFO fallback line,
+    and no legacy-path content returned even if the legacy file exists and
+    would otherwise have loaded cleanly."""
+    _write_policy(git_repo / ".github" / "ai-pr-review", default_name="legacy")
+    _git("add", ".", cwd=git_repo)
+    _git("commit", "-q", "-m", "add legacy policy", cwd=git_repo)
+    _git("push", "-q", "origin", "main", cwd=git_repo)
+
+    result = load_policy_file(str(git_repo), "nonexistent-branch")
+    assert result is None
+    err = capsys.readouterr().err
+    assert err.count("WARNING") == 1
+    assert "INFO" not in err
