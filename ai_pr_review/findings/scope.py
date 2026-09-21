@@ -22,11 +22,14 @@ analyzer findings entirely instead of downgrading them.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 
 from ai_pr_review.diff.linemap import parse_added_lines
 from ai_pr_review.findings.models import Finding
+
+logger = logging.getLogger(__name__)
 
 # Analyzer source prefixes that identify native-tool findings.  LLM-agent
 # findings use agent names (code-reviewer, security-reviewer, etc.) which
@@ -106,6 +109,20 @@ def apply_diff_scope(
         if not _is_analyzer(f) or not f.file or not f.line:
             result.append(f)
             continue
+
+        # An absolute Finding.file can never match parse_added_lines()'s
+        # repo-relative keys, so it silently falls into the out-of-diff
+        # branch below as if the finding were genuinely out of scope — this
+        # is exactly how issue #713's path-normalization bug hid undetected.
+        # Log it so the next instance of this bug class surfaces immediately.
+        if f.file.startswith("/"):
+            logger.warning(
+                "apply_diff_scope: analyzer finding has an absolute file path "
+                "(%r, source=%r) -- diff-scope matching against repo-relative "
+                "paths can never succeed for this finding; check the "
+                "analyzer's path-normalization",
+                f.file, f.source,
+            )
 
         in_diff = (f.file, f.line) in eligible
         if in_diff:
