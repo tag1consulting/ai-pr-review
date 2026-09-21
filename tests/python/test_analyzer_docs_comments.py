@@ -384,6 +384,60 @@ class TestPythonPaths:
         assert findings[0].file == "ai_pr_review/vcs/github.py"
         assert not findings[0].file.startswith("/")
 
+    def test_container_absolute_path_fix_restores_diff_scope_match(self, tmp_path: Path) -> None:
+        """#846 follow-up: the previous version of this test (above) only
+        asserted the string shape of the fix (Finding.file is repo-relative,
+        doesn't start with '/'), not the actual pipeline outcome it exists
+        to restore. This is exactly how issue #713's bug class hid
+        undetected: a passing string-shape test does not prove
+        apply_diff_scope can actually match the finding against the diff.
+        Feeds the same Finding through the real diff-scope pipeline against
+        a diff that touches its exact line, and asserts it stays in-diff
+        (severity untouched, not marked out_of_diff) -- proving the fix
+        restores real diff-scope matching, not just cosmetically repo-relative
+        text.
+        """
+        import os as _os
+
+        from ai_pr_review.findings.scope import apply_diff_scope
+
+        workspace = "/workspace/ai-pr-review"
+        f = tmp_path / "a.py"
+        f.write_text("def foo():\n    pass\n")
+        cf = _make_cf(python=[str(f)])
+        payload = json.dumps([{
+            "code": "D417", "filename": f"{workspace}/ai_pr_review/vcs/github.py",
+            "location": {"row": 5, "column": 5},
+            "message": "Missing argument description in the docstring for `_build_inline_comment_body`: `f`",
+        }])
+        with (
+            patch("ai_pr_review.analyzers.native.docs_comments.shutil.which", return_value="/usr/bin/ruff"),
+            patch("ai_pr_review.analyzers.native.docs_comments.subprocess.run") as mock_run,
+            patch.dict(_os.environ, {"GITHUB_WORKSPACE": workspace}),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            findings = _run_docs_api_check(cf, Path("/dev/null"))
+        assert len(findings) == 1
+
+        diff = (
+            "diff --git a/ai_pr_review/vcs/github.py b/ai_pr_review/vcs/github.py\n"
+            "index abc..def 100644\n"
+            "--- a/ai_pr_review/vcs/github.py\n"
+            "+++ b/ai_pr_review/vcs/github.py\n"
+            "@@ -4,3 +4,4 @@\n"
+            " context line\n"
+            "+added line four\n"
+            "+added line five\n"
+            " context line\n"
+        )
+        scoped = apply_diff_scope(findings, diff)
+        assert len(scoped) == 1
+        assert not scoped[0].out_of_diff, (
+            "an absolute Finding.file would silently fail the diff-scope "
+            "match and get demoted to Low/out_of_diff here -- exactly how "
+            "#713 hid undetected"
+        )
+
     def test_ruff_timeout_returns_none_gracefully(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         import subprocess as sp
         f = tmp_path / "a.py"

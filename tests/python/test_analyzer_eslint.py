@@ -198,11 +198,42 @@ class TestRunEslintFindings:
 
     def test_cwd_prefix_stripped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import os
+        # strip_workspace_prefix() prefers GITHUB_WORKSPACE when set (#846);
+        # real CI runners always set it, so this cwd-fallback case must
+        # explicitly unset it, not just rely on it being absent locally.
+        monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".eslintrc.json").write_text('{"rules":{}}\n')
         cwd = os.getcwd()
         payload = json.dumps([{
             "filePath": f"{cwd}/src/app.ts",
+            "messages": [{"ruleId": "no-unused-vars", "severity": 2, "message": "unused", "line": 1}],
+        }])
+        f = tmp_path / "app.ts"
+        f.write_text("const x = 1;\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.eslint._find_eslint_bin", return_value=["/usr/bin/eslint"]),
+            patch("ai_pr_review.analyzers.native.eslint._supports_no_warn_ignored", return_value=False),
+            patch("ai_pr_review.analyzers.native.eslint.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_eslint(cf, Path("/dev/null"))
+        assert findings[0].file == "src/app.ts"
+
+    def test_github_workspace_prefix_stripped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#846: eslint's own cwd-only stripping leaked an absolute path
+        whenever cwd != GITHUB_WORKSPACE (the container case, where the
+        process's actual cwd can differ from the checkout root). Now
+        consolidated onto _paths.strip_workspace_prefix, which prefers
+        GITHUB_WORKSPACE."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GITHUB_WORKSPACE", "/some/container/workspace")
+        (tmp_path / ".eslintrc.json").write_text('{"rules":{}}\n')
+        payload = json.dumps([{
+            "filePath": "/some/container/workspace/src/app.ts",
             "messages": [{"ruleId": "no-unused-vars", "severity": 2, "message": "unused", "line": 1}],
         }])
         f = tmp_path / "app.ts"
