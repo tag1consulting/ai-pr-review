@@ -1301,6 +1301,201 @@ class TestCostCeilingSkipExitCode:
         assert config.fail_on_cost_ceiling is False
 
 
+class TestCostCeilingSkipTelemetryOutcome:
+    """#848 follow-up: telemetry previously reported outcome="skipped"
+    identically for both the default exit-0 cost-ceiling skip and the
+    AI_FAIL_ON_COST_CEILING exit-2 failure path, making the two
+    indistinguishable to a consumer querying telemetry after the fact."""
+
+    @pytest.mark.anyio
+    async def test_cost_ceiling_failure_gets_distinct_telemetry_outcome(
+        self, tmp_path: Path,
+    ) -> None:
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+        result = MagicMock()
+        result.agent_results = []
+        result.failed_agents = []
+        result.findings = []
+
+        # Mirrors _run_review_async's SkipPlan branch: cost_ceiling_failed
+        # picks the outcome_override passed to _emit_telemetry.
+        await _emit_telemetry(result, config, 0, outcome_override="skipped_cost_ceiling_failed")
+
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        assert event["outcome"] == "skipped_cost_ceiling_failed"
+
+    @pytest.mark.anyio
+    async def test_ordinary_cost_ceiling_skip_keeps_plain_skipped_outcome(
+        self, tmp_path: Path,
+    ) -> None:
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+        result = MagicMock()
+        result.agent_results = []
+        result.failed_agents = []
+        result.findings = []
+
+        await _emit_telemetry(result, config, 0, outcome_override="skipped")
+
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        assert event["outcome"] == "skipped"
+
+    @pytest.mark.anyio
+    async def test_end_to_end_cost_ceiling_failure_exit_2_and_telemetry(
+        self, tmp_path: Path,
+    ) -> None:
+        """Drives the real _run_review_async SkipPlan branch end-to-end
+        (rather than a reimplemented copy of its conditional, per #848's own
+        'tautological CLI exit-code test' follow-up note) -- both the exit
+        code and the telemetry outcome must reflect a cost-ceiling failure."""
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(
+            fail_on_cost_ceiling=True,
+            telemetry_enabled=True,
+            telemetry_sink=f"file://{sink_path}",
+        )
+
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+
+        skip_plan = SkipPlan(
+            reason="Pre-flight cost estimate exceeds ceiling",
+            provider=provider,
+            is_cost_ceiling_skip=True,
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 2
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        assert event["outcome"] == "skipped_cost_ceiling_failed"
+
+    @pytest.mark.anyio
+    async def test_end_to_end_cost_ceiling_skip_default_exit_0_and_telemetry(
+        self, tmp_path: Path,
+    ) -> None:
+        """Same end-to-end path as above, but without AI_FAIL_ON_COST_CEILING
+        -- exit code stays 0 and telemetry reports the plain 'skipped'
+        outcome, not the failure-specific one."""
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(
+            telemetry_enabled=True,
+            telemetry_sink=f"file://{sink_path}",
+        )
+
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+
+        skip_plan = SkipPlan(
+            reason="Pre-flight cost estimate exceeds ceiling",
+            provider=provider,
+            is_cost_ceiling_skip=True,
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 0
+        event = json.loads(sink_path.read_text().splitlines()[0])
+        assert event["outcome"] == "skipped"
+
+
+class TestCostReconciliationLogging:
+    """#848 follow-up: the pre-flight COST_ESTIMATE was never compared
+    against the run's actual spend, so there was no feedback loop for
+    whether the estimate's known bias (full output-token caps assumed, no
+    prompt caching modeled) runs systematically high or low in practice."""
+
+    def test_reconcile_line_logged_when_estimate_present(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        import anyio
+
+        from ai_pr_review.agents.dispatch import AgentResult, TokenUsage
+        from ai_pr_review.vcs.protocol import FindingsResult, SummaryResult, VcsProvider
+
+        diff_file = str(tmp_path / "diff.txt")
+        provider = MagicMock(spec=VcsProvider)
+        provider.get_last_reviewed_sha.return_value = None
+        provider.get_pr_description.return_value = None
+
+        usage = TokenUsage(
+            input=1000, output=500, cache_creation=0, cache_read=0,
+            model="claude-sonnet-4-6",
+        )
+        agent_result = AgentResult(
+            name="code-reviewer", output="", token_log=usage, truncated=False,
+        )
+
+        async def _fake_run_review(**kwargs: object) -> object:
+            result = MagicMock()
+            result.ok = True
+            result.skipped = False
+            result.failed_agents = []
+            result.agent_results = [agent_result]
+            result.judge_input_tokens = 0
+            result.judge_output_tokens = 0
+            result.judge_cache_creation_tokens = 0
+            result.judge_cache_read_tokens = 0
+            result.judge_model = ""
+            result.outcome = MagicMock()
+            result.outcome.event = "APPROVE"
+            result.findings = []
+            result.summary = SummaryResult(comment_id=1, created=True, updated=False)
+            result.findings_post = FindingsResult(
+                review_id=None, inline_posted=0, body_findings=0, event="APPROVE",
+            )
+            return result
+
+        with (
+            patch.dict(os.environ, {"AI_PR_REVIEW_DIFF_FILE": diff_file}),
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.review.runtime.provider_from_env", return_value=provider),
+            patch("ai_pr_review.orchestrate.run_review", new=AsyncMock(side_effect=_fake_run_review)),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch("ai_pr_review.agents.roster.AGENTS", []),
+            patch("ai_pr_review.cli._run_summarizer", return_value=""),
+            caplog.at_level(logging.WARNING, logger="ai_pr_review.cli"),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            exit_code = anyio.run(_run_review_async, _make_config(max_cost_usd=1000.00))
+
+        assert exit_code == 0
+        assert "COST_RECONCILE" in caplog.text
+        assert "estimate=" in caplog.text
+        assert "actual=" in caplog.text
+        assert "delta=" in caplog.text
+
+
 class TestEmitTelemetryThinkingTokens:
     """#592: telemetry's per-agent dict must carry thinking_tokens/stop_reason
     so a consumer can alert on truncation/thinking-exhaustion without a human

@@ -198,6 +198,14 @@ Token counts are accumulated per agent across all LLM calls. For Google Gemini, 
 
 `pricing.compute_totals()` is the single source of truth for aggregate figures (total tokens, total cost, the `any_unknown` flag for unpriced models, agent count, unique model names): `emit_token_table()`'s Total row and `review/reporting.py`'s compact usage line (`build_token_usage_line`) and high-usage warning (`build_high_usage_warning`) all derive from the same call, so the full table and the comment's compact summary can never report different numbers for the same run (#758). `review/reporting.py`'s `_prepare()` is the shared fail-soft setup (token-log assembly + pricing-file load) behind `build_token_table_accordion`, `build_full_token_table` (bare table, no `<details>` wrapper — used for the CI job-log echo), and `compute_token_totals`.
 
+### Pre-flight cost ceiling (`ai_pr_review/review/cost_ceiling.py`, #24)
+
+Before any agent dispatches, `review/runtime.py`'s `build_review_runtime()` estimates the run's total LLM spend and always logs it as a structured `COST_ESTIMATE` line, whether or not a ceiling is configured. `estimate_review_cost()` covers the main `run_tier`-dispatched roster; `estimate_preflight_agent_cost()` covers the two separately-dispatched preflight agents (`pr-summarizer`, `issue-linker`) when they will actually run this review. Input tokens are estimated from character counts (`context.budget.estimate_tokens`'s 4-chars-per-token heuristic), not a real provider tokenizer; output tokens are assumed at each agent's full effective cap, an upper bound rather than a prediction — real spend is usually lower. A model with no pricing entry is fail-soft: excluded from the total with a logged warning, rather than aborting the run.
+
+When `AI_MAX_COST_USD` is set and the estimate exceeds it, `enforce_cost_ceiling()` raises `CostCeilingExceeded`, which `build_review_runtime()` turns into a `SkipPlan(is_cost_ceiling_skip=True)` — the same skip-comment mechanism `review/compute.py`'s max-diff-lines skip uses. Native static analyzers and SARIF ingestion run *before* this check (#848), since they make no billed call and have no bearing on the estimate — a cost-ceiling skip no longer skips them, though actually posting their findings on a skip run is a further follow-up, still tracked at #848.
+
+`ReviewRuntime.pre_flight_cost_estimate_units` carries the estimate's total (in `pricing.format_cost`'s `$0.0001` units) through to `cli.py`, which logs a `COST_RECONCILE` line comparing it against the run's real measured spend (`pricing.compute_totals()`) once the run completes — the estimate-vs-actual feedback loop that previously didn't exist (#848).
+
 ## Prompt caching
 
 ### Anthropic / Bedrock

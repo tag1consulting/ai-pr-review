@@ -596,6 +596,80 @@ class TestBuildReviewRuntimeCostCeiling:
         assert isinstance(result, ReviewRuntime)
         assert "no pricing entry" in caplog.text
 
+    @pytest.mark.anyio
+    async def test_ceiling_exceeded_still_runs_analyzers_first(
+        self, tmp_path: Path,
+    ) -> None:
+        """#848 follow-up: analyzers make no billed call and have no bearing
+        on the cost estimate, so a cost-ceiling skip must not skip them --
+        they should run regardless of the ceiling outcome. Asserts
+        run_analyzers is actually invoked before the SkipPlan is returned,
+        not merely that a skip happens (which the pre-#848 ordering already
+        satisfied without ever running analyzers)."""
+        config = _make_config(max_cost_usd=0.000001)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            patch(
+                "ai_pr_review.analyzers.bridge.run_analyzers", return_value=[],
+            ) as mock_run_analyzers,
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, SkipPlan)
+        assert result.is_cost_ceiling_skip is True
+        mock_run_analyzers.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_ceiling_not_exceeded_stores_pre_flight_estimate(
+        self, tmp_path: Path,
+    ) -> None:
+        """#848: the pre-flight cost estimate's total is carried onto
+        ReviewRuntime so cli.py can log an estimate-vs-actual reconciliation
+        once the run's real spend is known."""
+        config = _make_config(max_cost_usd=1000.00)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, ReviewRuntime)
+        assert result.pre_flight_cost_estimate_units is not None
+        assert result.pre_flight_cost_estimate_units >= 0
+
+    @pytest.mark.anyio
+    async def test_estimation_failure_leaves_pre_flight_estimate_none(
+        self, tmp_path: Path,
+    ) -> None:
+        """The fail-soft exception path (estimate computation itself raised)
+        must not leave a stale or fabricated estimate on the runtime."""
+        config = _make_config()  # max_cost_usd defaults to 0 (disabled)
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            patch(
+                "ai_pr_review.review.cost_ceiling.estimate_review_cost",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, ReviewRuntime)
+        assert result.pre_flight_cost_estimate_units is None
+
 
 class TestSarifRoutedViaExtraFindings:
     """SARIF findings from config.sarif_paths flow through orch_config.extra_findings."""
