@@ -108,17 +108,42 @@ def format_cost(microdollars: int) -> str:
     return f"${whole}.{frac:04d}"
 
 
-def _row_cost(entry: TokenEntry, rates: ModelRates) -> int | None:
-    """Return cost in $0.0001 units, or None if rates are unknown."""
+def token_cost_units(
+    rates: ModelRates,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+) -> int | None:
+    """Return cost in $0.0001 units for the given token counts, or None if
+    *rates* has no pricing entry (both input_rate and output_rate are 0).
+
+    The single source of truth for this arithmetic (#848 item 4) -- both
+    ``_row_cost`` (the token-table row cost) and
+    ``review.cost_ceiling``'s pre-flight estimators call this rather than
+    each re-deriving the same formula, which had drifted into two
+    independently-maintained copies.
+    """
     if rates.input_rate == 0 and rates.output_rate == 0:
         return None
-    cost = (
-        entry.input_tokens * rates.input_rate
-        + entry.output_tokens * rates.output_rate
-        + entry.cache_creation_tokens * rates.cache_write_rate
-        + entry.cache_read_tokens * rates.cache_read_rate
+    return (
+        input_tokens * rates.input_rate
+        + output_tokens * rates.output_rate
+        + cache_creation_tokens * rates.cache_write_rate
+        + cache_read_tokens * rates.cache_read_rate
     ) // 100_000_000
-    return cost
+
+
+def _row_cost(entry: TokenEntry, rates: ModelRates) -> int | None:
+    """Return cost in $0.0001 units, or None if rates are unknown."""
+    return token_cost_units(
+        rates,
+        input_tokens=entry.input_tokens,
+        output_tokens=entry.output_tokens,
+        cache_creation_tokens=entry.cache_creation_tokens,
+        cache_read_tokens=entry.cache_read_tokens,
+    )
 
 
 @dataclass(frozen=True)

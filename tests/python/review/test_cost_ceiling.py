@@ -8,6 +8,7 @@ import pytest
 
 from ai_pr_review.agents.roster import AgentSpec
 from ai_pr_review.review.cost_ceiling import (
+    AgentCostEstimate,
     CostCeilingExceeded,
     CostEstimate,
     enforce_cost_ceiling,
@@ -325,6 +326,60 @@ class TestMergeCostEstimates:
         assert merged.total_cost_units == 0
         assert merged.any_unknown_pricing is False
 
+    def test_accepts_bare_agent_cost_estimate_without_wrapping(self) -> None:
+        """#848 item 8: a caller with a single preflight agent's estimate no
+        longer needs to build a throwaway single-element CostEstimate."""
+        main = estimate_review_cost(
+            agents=[_agent("code-reviewer")],
+            diff_text="",
+            shared_context_text="",
+            language_profile_text="",
+            standard_model="known-model",
+            premium_model="",
+            review_mode="quick",
+            effective_max_output_tokens=1000,
+            pricing_data=_PRICING,
+        )
+        summarizer_cost = estimate_preflight_agent_cost(
+            agent_name="pr-summarizer",
+            model="known-model",
+            diff_text="a" * 1000,
+            output_tokens=4096,
+            pricing_data=_PRICING,
+        )
+        issue_linker_cost = estimate_preflight_agent_cost(
+            agent_name="issue-linker",
+            model="known-model",
+            diff_text="a" * 1000,
+            output_tokens=4096,
+            pricing_data=_PRICING,
+        )
+
+        merged = merge_cost_estimates(main, summarizer_cost, issue_linker_cost)
+
+        assert {a.agent for a in merged.per_agent} == {
+            "code-reviewer", "pr-summarizer", "issue-linker",
+        }
+        assert merged.total_cost_units == (
+            main.total_cost_units
+            + summarizer_cost.estimated_cost_units
+            + issue_linker_cost.estimated_cost_units
+        )
+
+    def test_bare_agent_cost_estimate_alone_becomes_a_single_agent_costestimate(self) -> None:
+        bare = AgentCostEstimate(
+            agent="pr-summarizer",
+            model="known-model",
+            estimated_input_tokens=100,
+            estimated_output_tokens=100,
+            estimated_cost_units=250,
+            unknown_pricing=False,
+        )
+        merged = merge_cost_estimates(bare)
+        assert merged.per_agent == (bare,)
+        assert merged.total_cost_units == 250
+        assert merged.any_unknown_pricing is False
+
 
 class TestEnforceCostCeiling:
     def _estimate_with_total_units(self, units: int) -> object:
@@ -375,3 +430,65 @@ class TestEnforceCostCeiling:
         receives one directly."""
         estimate = self._estimate_with_total_units(1_000_000)
         enforce_cost_ceiling(estimate, ceiling_usd=-5.0)  # must not raise
+
+    def test_unpriced_top_contributor_is_flagged_in_message(self) -> None:
+        """#848 item 4: an unpriced agent showing as a bare "$0.0000" top
+        contributor is indistinguishable from a genuinely free agent."""
+        priced = AgentCostEstimate(
+            agent="priced-agent", model="known-model",
+            estimated_input_tokens=0, estimated_output_tokens=0,
+            estimated_cost_units=15000, unknown_pricing=False,
+        )
+        unpriced = AgentCostEstimate(
+            agent="unpriced-agent", model="mystery-model",
+            estimated_input_tokens=0, estimated_output_tokens=0,
+            estimated_cost_units=0, unknown_pricing=True,
+        )
+        estimate = CostEstimate(
+            per_agent=(priced, unpriced),
+            total_cost_units=priced.estimated_cost_units,
+            any_unknown_pricing=True,
+        )
+        with pytest.raises(CostCeilingExceeded) as exc_info:
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)
+        message = str(exc_info.value)
+        assert "unpriced-agent" in message
+        assert "(unpriced)" in message
+        assert "no pricing entry" in message
+
+    def test_all_priced_agents_show_no_unpriced_note(self) -> None:
+        estimate = self._estimate_with_total_units(20000)
+        with pytest.raises(CostCeilingExceeded) as exc_info:
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)
+        message = str(exc_info.value)
+        assert "(unpriced)" not in message
+        assert "no pricing entry" not in message
+
+    def test_exception_message_is_author_facing_only(self) -> None:
+        """#848 item 7: the posted-to-the-PR-author exception text should
+        carry only levers an author actually has, not repo/workflow-level
+        knobs a PR author typically cannot set."""
+        estimate = self._estimate_with_total_units(20000)
+        with pytest.raises(CostCeilingExceeded) as exc_info:
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)
+        message = str(exc_info.value)
+        assert "AI_MAX_COST_USD" in message
+        assert "split" in message.lower()
+        for operator_only_var in (
+            "AI_REVIEW_MODE", "AI_AGENTS", "AI_EXCLUDE_AGENTS", "AI_MAX_TOKENS_PER_AGENT",
+        ):
+            assert operator_only_var not in message
+
+    def test_operator_remedies_logged_before_raise(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        estimate = self._estimate_with_total_units(20000)
+        with (
+            caplog.at_level(logging.WARNING, logger="ai_pr_review.review.cost_ceiling"),
+            pytest.raises(CostCeilingExceeded),
+        ):
+            enforce_cost_ceiling(estimate, ceiling_usd=1.00)
+        for operator_only_var in (
+            "AI_REVIEW_MODE", "AI_AGENTS", "AI_EXCLUDE_AGENTS", "AI_MAX_TOKENS_PER_AGENT",
+        ):
+            assert operator_only_var in caplog.text

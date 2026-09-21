@@ -4,13 +4,16 @@ from pathlib import Path
 
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.pricing import (
+    ModelRates,
     TokenEntry,
+    _row_cost,
     compute_totals,
     emit_token_table,
     format_cost,
     load_pricing,
     model_pricing,
     parse_token_log_entry,
+    token_cost_units,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,6 +54,67 @@ def test_model_pricing_unknown_returns_zeros() -> None:
     rates = model_pricing("unknown-model-xyz", _SAMPLE_PRICING)
     assert rates.input_rate == 0
     assert rates.output_rate == 0
+
+
+# --- token_cost_units (#848 item 5: single source of truth for the
+# input/output/cache-terms arithmetic, shared by _row_cost and
+# review.cost_ceiling's pre-flight estimators) ---
+
+_RATES = ModelRates(
+    display_name="Test Model",
+    input_rate=100_000_000,   # 1 cost unit per input token
+    output_rate=200_000_000,  # 2 cost units per output token
+    cache_write_rate=50_000_000,   # 0.5 cost units per cache-write token
+    cache_read_rate=10_000_000,    # 0.1 cost units per cache-read token
+)
+_UNKNOWN_RATES = ModelRates(display_name="Unknown", input_rate=0, output_rate=0)
+
+
+def test_token_cost_units_known_rates() -> None:
+    assert token_cost_units(_RATES, input_tokens=100, output_tokens=50) == 100 + 50 * 2
+
+
+def test_token_cost_units_zero_rates_returns_none() -> None:
+    assert token_cost_units(_UNKNOWN_RATES, input_tokens=100, output_tokens=50) is None
+
+
+def test_token_cost_units_applies_cache_terms() -> None:
+    # 100*1 + 50*2 + 40*0.5 + 200*0.1 = 100 + 100 + 20 + 20 = 240
+    cost = token_cost_units(
+        _RATES,
+        input_tokens=100,
+        output_tokens=50,
+        cache_creation_tokens=40,
+        cache_read_tokens=200,
+    )
+    assert cost == 240
+
+
+def test_token_cost_units_cache_terms_default_to_zero() -> None:
+    with_defaults = token_cost_units(_RATES, input_tokens=10, output_tokens=10)
+    explicit_zero = token_cost_units(
+        _RATES, input_tokens=10, output_tokens=10,
+        cache_creation_tokens=0, cache_read_tokens=0,
+    )
+    assert with_defaults == explicit_zero
+
+
+def test_row_cost_delegates_to_token_cost_units() -> None:
+    """Regression guard for the _row_cost -> token_cost_units refactor: the
+    token-table's row cost must stay numerically identical."""
+    entry = TokenEntry(
+        agent="code-reviewer", model="claude-sonnet-4-6",
+        input_tokens=1000, output_tokens=500,
+        cache_creation_tokens=200, cache_read_tokens=300,
+    )
+    rates = model_pricing("claude-sonnet-4-6", _SAMPLE_PRICING)
+    assert _row_cost(entry, rates) == token_cost_units(
+        rates,
+        input_tokens=entry.input_tokens,
+        output_tokens=entry.output_tokens,
+        cache_creation_tokens=entry.cache_creation_tokens,
+        cache_read_tokens=entry.cache_read_tokens,
+    )
 
 
 def test_emit_token_table_no_cache() -> None:

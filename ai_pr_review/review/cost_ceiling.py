@@ -43,6 +43,28 @@ could spend more than this estimate says. Modeling that would require
 guessing a retry rate, which is not knowable pre-flight either; the ceiling
 is a guard against gross overruns from diff size and roster choice, not a
 hard cap on worst-case spend.
+
+Two more omissions worth stating plainly rather than leaving implicit
+(#848 item 1):
+
+  - **Prompt caching is never modeled.** Every input token above is priced
+    at the model's full ``input_rate`` via ``pricing.token_cost_units``;
+    ``ModelRates.cache_write_rate``/``cache_read_rate`` are passed as 0
+    (their default) everywhere in this module. Pre-flight, there is no way
+    to know which prefix the provider will actually cache-hit, so this
+    can't be estimated rather than merely wasn't. Bias: **over**-estimates
+    on cache-heavy runs (e.g. an incremental re-review reusing a large
+    system-prompt cache) -- conservative, and consistent with the
+    ceiling's purpose as an overrun guard rather than an exact forecast.
+  - **The LLM judge pass is excluded entirely.** ``findings/judge.py``'s
+    ``judge_findings()`` is a real, billed call, but it is gated on a
+    non-empty candidate-findings list that doesn't exist until Phase 2.75
+    of the review (``orchestrate.py``), well after this pre-flight
+    estimate runs -- there is nothing to estimate it *from* at this point.
+    Bias: **under**-estimates by one small call, bounded by its own
+    ``max_tokens=4096`` output cap plus an input proportional to the
+    candidate-finding list (not the diff) -- small relative to the full
+    agent roster's cost, but real.
 """
 
 from __future__ import annotations
@@ -53,7 +75,7 @@ from dataclasses import dataclass
 
 from ai_pr_review.agents.roster import AgentSpec
 from ai_pr_review.context.budget import estimate_tokens
-from ai_pr_review.pricing import format_cost, model_pricing
+from ai_pr_review.pricing import format_cost, model_pricing, token_cost_units
 
 logger = logging.getLogger(__name__)
 
@@ -143,10 +165,11 @@ def estimate_review_cost(
         )
 
         rates = model_pricing(model_id, pricing_data)
-        unknown = rates.input_rate == 0 and rates.output_rate == 0
-        cost_units = (
-            input_tokens * rates.input_rate + output_tokens * rates.output_rate
-        ) // 100_000_000
+        raw_cost = token_cost_units(
+            rates, input_tokens=input_tokens, output_tokens=output_tokens
+        )
+        unknown = raw_cost is None
+        cost_units = raw_cost or 0
 
         if unknown:
             any_unknown = True
@@ -209,10 +232,11 @@ def estimate_preflight_agent_cost(
     """
     input_tokens = estimate_tokens(diff_text)
     rates = model_pricing(model, pricing_data)
-    unknown = rates.input_rate == 0 and rates.output_rate == 0
-    cost_units = (
-        input_tokens * rates.input_rate + output_tokens * rates.output_rate
-    ) // 100_000_000
+    raw_cost = token_cost_units(
+        rates, input_tokens=input_tokens, output_tokens=output_tokens
+    )
+    unknown = raw_cost is None
+    cost_units = raw_cost or 0
     if unknown:
         logger.warning(
             "cost estimate: no pricing entry for model %r (agent=%s); "
@@ -231,15 +255,25 @@ def estimate_preflight_agent_cost(
     )
 
 
-def merge_cost_estimates(*parts: CostEstimate) -> CostEstimate:
-    """Combine multiple CostEstimates (e.g. the main roster's plus any
-    separately-computed preflight-agent estimates) into one aggregate.
+def merge_cost_estimates(*parts: CostEstimate | AgentCostEstimate) -> CostEstimate:
+    """Combine multiple CostEstimates and/or single AgentCostEstimates (e.g.
+    the main roster's aggregate plus one or more separately-computed
+    preflight-agent estimates) into one aggregate.
+
+    Accepting a bare ``AgentCostEstimate`` alongside ``CostEstimate`` (#848
+    item 7) means a caller with a single preflight agent's estimate no
+    longer has to wrap it in a throwaway single-element ``CostEstimate``
+    just to pass it in here -- see ``review.runtime``'s callers.
 
     Recomputes total_cost_units/any_unknown_pricing from the merged
     per-agent list rather than summing the parts' own totals, so this stays
     correct regardless of how each part was built.
     """
-    per_agent = tuple(a for part in parts for a in part.per_agent)
+    per_agent = tuple(
+        a
+        for part in parts
+        for a in (part.per_agent if isinstance(part, CostEstimate) else (part,))
+    )
     return CostEstimate(
         per_agent=per_agent,
         total_cost_units=sum(a.estimated_cost_units for a in per_agent),
@@ -285,6 +319,16 @@ def enforce_cost_ceiling(estimate: CostEstimate, *, ceiling_usd: float) -> None:
     convention in this codebase. Equality (estimate == ceiling) does not
     exceed the ceiling and is allowed through, per the issue's acceptance
     criteria.
+
+    The raised exception's text and the ``logger.warning`` emitted just
+    before it are aimed at two different audiences (#848): the exception
+    is what the PR author sees in the posted skip comment, so it names
+    only the two levers an author actually has (splitting the PR, or
+    asking a maintainer to raise ``AI_MAX_COST_USD``). The operator-only
+    knobs (``AI_REVIEW_MODE``, ``AI_AGENTS``/``AI_EXCLUDE_AGENTS``,
+    ``AI_MAX_TOKENS_PER_AGENT``) go in the WARNING log line instead, where
+    someone who can actually change the workflow config will see them --
+    the same place ``COST_ESTIMATE`` already trains operators to look.
     """
     if ceiling_usd <= 0:
         return
@@ -293,13 +337,32 @@ def enforce_cost_ceiling(estimate: CostEstimate, *, ceiling_usd: float) -> None:
 
     top = sorted(estimate.per_agent, key=lambda a: a.estimated_cost_units, reverse=True)[:3]
     contributors = ", ".join(
-        f"{a.agent} ({format_cost(a.estimated_cost_units)})" for a in top
+        f"{a.agent} ({format_cost(a.estimated_cost_units)})"
+        + (" (unpriced)" if a.unknown_pricing else "")
+        for a in top
+    )
+    # An unpriced agent's cost_units is always 0 (#848 item 4), so it will
+    # almost never sort into `top` -- without this explicit callout, an
+    # unpriced agent's real (unknown) contribution is invisible in the
+    # exception text even though it's flagged in the log line.
+    unpriced_note = (
+        " One or more agents in this run have no pricing entry; their real "
+        "cost is not reflected in the total above."
+        if estimate.any_unknown_pricing
+        else ""
+    )
+    logger.warning(
+        "cost ceiling exceeded: estimate=$%.4f ceiling=$%.2f -- operator "
+        "remedies: AI_REVIEW_MODE=quick, AI_AGENTS/AI_EXCLUDE_AGENTS to "
+        "trim the roster, or AI_MAX_TOKENS_PER_AGENT to lower the output "
+        "cap. See COST_ESTIMATE above for the full per-agent breakdown.",
+        estimate.total_cost_usd, ceiling_usd,
     )
     raise CostCeilingExceeded(
         f"Pre-flight cost estimate ${estimate.total_cost_usd:.4f} exceeds the "
         f"configured ceiling ${ceiling_usd:.2f} (AI_MAX_COST_USD / "
-        f"max-cost-usd). Top contributing agents: {contributors}. "
-        "Raise AI_MAX_COST_USD, switch AI_REVIEW_MODE to quick, reduce the "
-        "agent roster via AI_AGENTS/AI_EXCLUDE_AGENTS, or lower "
-        "AI_MAX_TOKENS_PER_AGENT to proceed."
+        f"max-cost-usd). Top contributing agents: {contributors}."
+        f"{unpriced_note} "
+        "Consider splitting this PR into smaller changes, or ask a "
+        "repository maintainer to raise AI_MAX_COST_USD."
     )
