@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -145,15 +145,12 @@ def _run_phpcs(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         logger.warning("[ai-pr-review] WARNING: phpcs produced unexpected output structure; skipping.")
         return []
 
-    pwd_prefix = os.getcwd().rstrip("/") + "/"
     findings: list[Finding] = []
 
     for file_path, file_data in (data.get("files") or {}).items():
         if not isinstance(file_data, dict):
             continue
-        normalized_path = file_path
-        if normalized_path.startswith(pwd_prefix):
-            normalized_path = normalized_path[len(pwd_prefix):]
+        normalized_path = strip_workspace_prefix(file_path)
 
         for msg in file_data.get("messages") or []:
             if not isinstance(msg, dict):

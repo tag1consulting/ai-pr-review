@@ -154,6 +154,39 @@ class TestRunPhpcsFindings:
             findings = _run_phpcs(cf, Path("/dev/null"))
         assert findings[0].file == "src/module.php"
 
+    def test_github_workspace_prefix_stripped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#846: phpcs's own cwd-only stripping leaked an absolute path
+        whenever cwd != GITHUB_WORKSPACE. Now consolidated onto
+        _paths.strip_workspace_prefix, which prefers GITHUB_WORKSPACE."""
+        monkeypatch.setenv("GITHUB_WORKSPACE", "/some/container/workspace")
+        payload = json.dumps({
+            "totals": {"errors": 1, "warnings": 0, "fixable": 0},
+            "files": {
+                "/some/container/workspace/src/module.php": {
+                    "errors": 1, "warnings": 0,
+                    "messages": [{
+                        "message": "uppercase expected", "source": "Generic.PHP.UpperCaseConstant",
+                        "severity": 5, "type": "ERROR", "line": 5, "column": 1, "fixable": False,
+                    }],
+                },
+            },
+        })
+        f = tmp_path / "module.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpcs.shutil.which", return_value="/usr/bin/phpcs"),
+            patch("ai_pr_review.analyzers.native.phpcs.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="PSR12", stderr=""),
+                MagicMock(returncode=1, stdout=payload, stderr=""),
+            ]
+            findings = _run_phpcs(cf, Path("/dev/null"))
+        assert findings[0].file == "src/module.php"
+
     def test_exitcode_2_with_real_output_parses_findings(self, tmp_path: Path) -> None:
         # phpcs 4.x exit code 2 means "non-fixable violations found" (a normal
         # successful run), not a fatal error. PHPCSStandards/PHP_CodeSniffer#184

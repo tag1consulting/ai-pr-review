@@ -192,6 +192,34 @@ class TestRunPhpstanFindings:
             findings = _run_phpstan(cf, Path("/dev/null"))
         assert findings[0].file == "src/MyService.php"
 
+    def test_github_workspace_prefix_stripped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#846: phpstan's own cwd-only stripping leaked an absolute path
+        whenever cwd != GITHUB_WORKSPACE. Now consolidated onto
+        _paths.strip_workspace_prefix, which prefers GITHUB_WORKSPACE."""
+        monkeypatch.setenv("GITHUB_WORKSPACE", "/some/container/workspace")
+        payload = json.dumps({
+            "totals": {"errors": 1, "file_errors": 1},
+            "files": {
+                "/some/container/workspace/src/MyService.php": {
+                    "errors": 1,
+                    "messages": [{"message": "Type error", "line": 10, "ignorable": True}],
+                }
+            },
+            "errors": [],
+        })
+        f = tmp_path / "MyService.php"
+        f.write_text("<?php\n")
+        cf = _make_cf([str(f)])
+        with (
+            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout=payload, stderr="")
+            findings = _run_phpstan(cf, Path("/dev/null"))
+        assert findings[0].file == "src/MyService.php"
+
     def test_exitcode_2_returns_empty_with_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         f = tmp_path / "MyService.php"
         f.write_text("<?php\n")
