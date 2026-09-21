@@ -139,10 +139,10 @@ def test_get_last_reviewed_sha_paginates_via_next() -> None:
 
 
 def test_fetch_comments_is_cached_across_calls() -> None:
-    """_fetch_comments() caches its result per-instance (#822 follow-up): a
-    run that needs the comment listing more than once, such as
-    get_last_reviewed_sha() followed by get_summary_body(), must not
-    paginate over the comments endpoint a second time for the same data."""
+    """_fetch_comments() caches its result per-instance: a run that needs
+    the comment listing more than once, such as get_last_reviewed_sha()
+    followed by get_summary_body(), must not paginate over the comments
+    endpoint a second time for the same data."""
     items = [{"id": 1, "content": {"raw": f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nlatest"}}]
 
     def handler(req: httpx.Request) -> httpx.Response:
