@@ -225,18 +225,26 @@ async def _run_review_async(config: ReviewConfig) -> int:
         click.echo(f"Skipping review: {runtime.reason}", err=True)
         result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config.resolve_models())
         _emit_post_failure_annotation(result)
-        if config.telemetry_enabled:
-            try:
-                resolved_cfg = config.resolve_models()
-            except Exception:
-                resolved_cfg = config
-            await _emit_telemetry(result, resolved_cfg, 0, outcome_override="skipped")
         # #24: a pre-flight cost-ceiling skip always aborts before any LLM
         # call, but only becomes a CI failure (exit 2, mirroring
         # fail_on_findings' own opt-in exit code) when the operator has
         # explicitly opted in via AI_FAIL_ON_COST_CEILING -- otherwise one
         # unusually large PR shouldn't break a required status check.
-        if runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok:
+        cost_ceiling_failed = (
+            runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok
+        )
+        if config.telemetry_enabled:
+            try:
+                resolved_cfg = config.resolve_models()
+            except Exception:
+                resolved_cfg = config
+            # #848 follow-up: previously always "skipped" regardless of exit
+            # code, so a consumer querying telemetry could not distinguish a
+            # cost-ceiling skip that will fail CI (exit 2) from the ordinary
+            # exit-0 skip path -- both reported the identical outcome string.
+            outcome_override = "skipped_cost_ceiling_failed" if cost_ceiling_failed else "skipped"
+            await _emit_telemetry(result, resolved_cfg, 0, outcome_override=outcome_override)
+        if cost_ceiling_failed:
             return 2
         return 0 if result.ok else 1
 
@@ -378,6 +386,36 @@ async def _run_review_async(config: ReviewConfig) -> int:
         token_table_renderer=_token_renderer,
         usage_warning_renderer=_usage_warning_renderer,
     )
+
+    # #848: estimate-vs-actual cost reconciliation. The pre-flight
+    # COST_ESTIMATE (runtime.py) was previously never compared against what
+    # the run actually cost, so there was no way to tell whether the
+    # estimate's known bias (full output-token caps assumed, no prompt
+    # caching modeled) was drifting the estimate systematically high or low
+    # in practice. Logged only when a pre-flight estimate was actually
+    # computed (it can be None on fail-soft estimation failure); actual
+    # totals reuse the same compute_token_totals() the token table itself
+    # renders from, so this can never disagree with what a reader of the
+    # table sees.
+    if runtime.pre_flight_cost_estimate_units is not None:
+        _actual_totals = _compute_token_totals(
+            result.agent_results, runtime.script_dir,
+            effective_max_tokens=runtime.dispatch_context.max_tokens_per_agent,
+            judge_input_tokens=result.judge_input_tokens,
+            judge_output_tokens=result.judge_output_tokens,
+            judge_cache_creation_tokens=result.judge_cache_creation_tokens,
+            judge_cache_read_tokens=result.judge_cache_read_tokens,
+            judge_model=result.judge_model,
+        )
+        if _actual_totals is not None:
+            from ai_pr_review.pricing import format_cost as _format_cost
+
+            logger.warning(
+                "COST_RECONCILE estimate=%s actual=%s delta=%s",
+                _format_cost(runtime.pre_flight_cost_estimate_units),
+                _format_cost(_actual_totals.cost_units),
+                _format_cost(_actual_totals.cost_units - runtime.pre_flight_cost_estimate_units),
+            )
 
     # Full per-agent breakdown, always echoed to the CI job log regardless of
     # provider (#758) -- GitLab and Bitbucket have no GITHUB_STEP_SUMMARY

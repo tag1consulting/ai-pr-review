@@ -84,6 +84,12 @@ class ReviewRuntime:
     # applies to this PR; the CLI's post_check_run step is a no-op then.
     policy_gate_required: str | None
     policy_gate_satisfied: bool
+    # #848: the pre-flight cost estimate's total, in $0.0001 units (same
+    # scale as pricing.TokenTotals.cost_units), so cli.py can log an
+    # estimate-vs-actual reconciliation line once the run's real spend is
+    # known. None when the estimate itself failed (fail-soft) or no model
+    # in the roster had pricing data.
+    pre_flight_cost_estimate_units: int | None = None
 
 
 def _merge_allowlist(
@@ -480,8 +486,77 @@ async def build_review_runtime(
             list(gates),
         )
 
-    # 9b. Pre-flight cost estimate + ceiling (#24), now that the agent roster
-    # is final. Runs before any LLM call in this run, including the
+    # 9b. Run native static analyzers — fail-soft; findings merged via extra_findings.
+    # #848 follow-up: this used to run *after* the cost-ceiling check below
+    # (old step 10), so a cost-ceiling skip never ran analyzers at all --
+    # free, non-LLM signal was lost on every skipped run for no reason, since
+    # analyzers make no billed call and have no bearing on the cost estimate.
+    # Moved ahead of the cost check so analyzers always run regardless of the
+    # ceiling outcome. Actually posting these findings on a cost-ceiling skip
+    # (rather than only computing them) is a further follow-up, still tracked
+    # at #848 -- this PR only fixes the ordering.
+    analyzer_findings: list[_Finding] = []
+    try:
+        from ai_pr_review.analyzers.bridge import (
+            ANALYZER_NAMES,
+            _analyzer_skip_names,
+            _sarif_covered_names,
+            run_analyzers,
+        )
+        _disabled = _analyzer_skip_names(config.analyzers, config.exclude_analyzers)
+        if _disabled >= ANALYZER_NAMES:
+            logger.warning(
+                "analyzers: allow/deny configuration disables all known analyzers; "
+                "no static analysis will run"
+            )
+        analyzer_findings = await run_analyzers(
+            cf,
+            diff_file=str(diff_path),
+            concurrency=config.analyzer_concurrency,
+            sarif_skip=_sarif_covered_names(config.sarif_paths),
+            disabled=_disabled,
+        )
+        if analyzer_findings:
+            logger.info(
+                "analyzers: %d finding(s) from native static analysis",
+                len(analyzer_findings),
+            )
+    except ImportError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
+        )
+
+    # 9c. Load SARIF findings and merge with analyzer findings into extra_findings.
+    sarif_findings: list[_Finding] = []
+    sarif_elapsed_s: float | None = None
+    if config.sarif_paths:
+        sarif_paths = list(config.sarif_paths)
+        try:
+            from ai_pr_review.analyzers.sarif import load_sarif_files
+            sarif_raw, sarif_elapsed_s = load_sarif_files(sarif_paths)
+            sarif_findings = [f for f in sarif_raw if isinstance(f, _Finding)]
+            dropped = len(sarif_raw) - len(sarif_findings)
+            if dropped:
+                logger.warning(
+                    "SARIF: dropped %d non-Finding entries (schema mismatch in %s)",
+                    dropped, sarif_paths,
+                )
+            if sarif_findings:
+                logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
+        except Exception as exc:
+            logger.warning(
+                "SARIF: load failed (fail-soft) for %s: %s",
+                sarif_paths, exc, exc_info=True,
+            )
+
+    extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
+
+    # 9d. Pre-flight cost estimate + ceiling (#24), now that the agent roster
+    # is final and analyzers/SARIF have already run above (#848: analyzers
+    # make no billed call, so they always run regardless of this check's
+    # outcome). Runs before any LLM call in this run, including the
     # pr-summarizer/issue-linker preflight calls cli.py makes next. Always
     # logs the COST_ESTIMATE line. When AI_MAX_COST_USD is exceeded, this
     # returns a SkipPlan -- the same "post a skip comment, dispatch nothing"
@@ -491,6 +566,7 @@ async def build_review_runtime(
     # A failure computing the estimate itself (e.g. a corrupt pricing file)
     # is fail-soft: log a warning and proceed with no ceiling check for this
     # run rather than abort a review over a diagnostic feature.
+    pre_flight_cost_estimate_units: int | None = None
     try:
         from ai_pr_review.pricing import load_pricing
         from ai_pr_review.review.cost_ceiling import (
@@ -560,6 +636,7 @@ async def build_review_runtime(
             cost_estimate = merge_cost_estimates(cost_estimate, *preflight_parts)
 
         log_cost_estimate(cost_estimate, ceiling_usd=config.max_cost_usd)
+        pre_flight_cost_estimate_units = cost_estimate.total_cost_units
         enforce_cost_ceiling(cost_estimate, ceiling_usd=config.max_cost_usd)
     except CostCeilingExceeded as exc:
         return SkipPlan(reason=str(exc), provider=provider, is_cost_ceiling_skip=True)
@@ -569,65 +646,6 @@ async def build_review_runtime(
             "proceeding without a cost ceiling check for this run): %s",
             exc, exc_info=True,
         )
-
-    # 10. Run native static analyzers — fail-soft; findings merged via extra_findings.
-    analyzer_findings: list[_Finding] = []
-    try:
-        from ai_pr_review.analyzers.bridge import (
-            ANALYZER_NAMES,
-            _analyzer_skip_names,
-            _sarif_covered_names,
-            run_analyzers,
-        )
-        _disabled = _analyzer_skip_names(config.analyzers, config.exclude_analyzers)
-        if _disabled >= ANALYZER_NAMES:
-            logger.warning(
-                "analyzers: allow/deny configuration disables all known analyzers; "
-                "no static analysis will run"
-            )
-        analyzer_findings = await run_analyzers(
-            cf,
-            diff_file=str(diff_path),
-            concurrency=config.analyzer_concurrency,
-            sarif_skip=_sarif_covered_names(config.sarif_paths),
-            disabled=_disabled,
-        )
-        if analyzer_findings:
-            logger.info(
-                "analyzers: %d finding(s) from native static analysis",
-                len(analyzer_findings),
-            )
-    except ImportError:
-        raise
-    except Exception as exc:
-        logger.warning(
-            "analyzers: static analyzer run failed (fail-soft): %s", exc, exc_info=True
-        )
-
-    # 11. Load SARIF findings and merge with analyzer findings into extra_findings.
-    sarif_findings: list[_Finding] = []
-    sarif_elapsed_s: float | None = None
-    if config.sarif_paths:
-        sarif_paths = list(config.sarif_paths)
-        try:
-            from ai_pr_review.analyzers.sarif import load_sarif_files
-            sarif_raw, sarif_elapsed_s = load_sarif_files(sarif_paths)
-            sarif_findings = [f for f in sarif_raw if isinstance(f, _Finding)]
-            dropped = len(sarif_raw) - len(sarif_findings)
-            if dropped:
-                logger.warning(
-                    "SARIF: dropped %d non-Finding entries (schema mismatch in %s)",
-                    dropped, sarif_paths,
-                )
-            if sarif_findings:
-                logger.info("SARIF: loaded %d finding(s)", len(sarif_findings))
-        except Exception as exc:
-            logger.warning(
-                "SARIF: load failed (fail-soft) for %s: %s",
-                sarif_paths, exc, exc_info=True,
-            )
-
-    extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
 
     # 12. Load global + local suppression rules (fail-soft — malformed rules file
     # must not abort the review; proceed with no suppressions and log a warning).
@@ -683,4 +701,5 @@ async def build_review_runtime(
         sarif_elapsed_s=sarif_elapsed_s,
         policy_gate_required=policy_gate_required,
         policy_gate_satisfied=policy_gate_satisfied,
+        pre_flight_cost_estimate_units=pre_flight_cost_estimate_units,
     )
