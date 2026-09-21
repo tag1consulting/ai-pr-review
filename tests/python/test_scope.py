@@ -61,6 +61,27 @@ def test_out_of_diff_analyzer_finding_capped_to_low() -> None:
     assert result[0].out_of_diff
 
 
+def test_absolute_file_path_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """An absolute Finding.file can never match parse_added_lines()'s
+    repo-relative keys, so it silently falls into the out-of-diff branch as
+    if genuinely out of scope -- this is exactly how issue #713's
+    path-normalization bug hid undetected. Must be logged, not silent."""
+    f = _phpcs("/home/runner/work/owner/repo/web/quickbooks.inc", 10)
+    with caplog.at_level("WARNING"):
+        result = apply_diff_scope([f], _DIFF)
+    assert len(result) == 1
+    assert result[0].severity == "Low"
+    assert result[0].out_of_diff
+    assert any("absolute file path" in r.message for r in caplog.records)
+
+
+def test_relative_file_path_does_not_log_warning(caplog: pytest.LogCaptureFixture) -> None:
+    f = _phpcs("web/quickbooks.inc", 100)
+    with caplog.at_level("WARNING"):
+        apply_diff_scope([f], _DIFF)
+    assert not any("absolute file path" in r.message for r in caplog.records)
+
+
 def test_out_of_diff_analyzer_finding_dropped() -> None:
     f = _phpcs("web/quickbooks.inc", 100)
     result = apply_diff_scope([f], _DIFF, mode="drop")

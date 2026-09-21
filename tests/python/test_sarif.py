@@ -307,6 +307,48 @@ def test_sanitize_sarif_path_does_not_strip_non_runner_paths() -> None:
     must not be silently truncated."""
     # Plain relative path — unchanged
     assert _sanitize_sarif_path("ai_pr_review/sarif_smoke_test.py") == "ai_pr_review/sarif_smoke_test.py"
+
+
+def test_sanitize_sarif_path_strips_github_workspace_on_self_hosted_runner(
+    monkeypatch,
+) -> None:
+    """A self-hosted runner's workspace root is never /home/runner/work/...,
+    so the hosted-runner regex alone can never strip it (issue #846). When
+    GITHUB_WORKSPACE is set, it must be preferred and stripped correctly."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/opt/actions-runner/_work/ai-pr-review/ai-pr-review")
+    uri = "file:///opt/actions-runner/_work/ai-pr-review/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_github_workspace_takes_precedence_over_regex(
+    monkeypatch,
+) -> None:
+    """When GITHUB_WORKSPACE is set and matches, it's used even for a path
+    that would also match the hosted-runner regex."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/home/runner/work/tag1consulting/ai-pr-review")
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_falls_back_to_regex_when_workspace_unset(
+    monkeypatch,
+) -> None:
+    """No GITHUB_WORKSPACE in the environment -- falls back to the existing
+    hosted-runner-shaped regex."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
+
+
+def test_sanitize_sarif_path_falls_back_to_regex_when_workspace_does_not_match(
+    monkeypatch,
+) -> None:
+    """GITHUB_WORKSPACE is set but doesn't match this particular path -- still
+    falls back to the hosted-runner regex rather than leaving the path
+    unstripped."""
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/some/unrelated/workspace")
+    uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
+    assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
     # file:// with a non-runner absolute path — stripped of scheme/slash only
     assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
 

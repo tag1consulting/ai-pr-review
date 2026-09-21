@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
@@ -48,12 +49,14 @@ def _sanitize_sarif_path(uri: str) -> str:
     and raw relative paths.
 
     Workspace-root stripping: tools like Ruff emit absolute ``file://`` URIs
-    rooted at the GitHub Actions runner workspace
-    (``/home/runner/work/<owner>/<repo>/``).  After scheme stripping this
-    becomes ``home/runner/work/<owner>/<repo>/src/foo.py``, which never matches
-    repo-relative diff paths.  We detect this pattern and strip the leading
-    ``home/runner/work/<two-segment-repo-path>/`` prefix so the result is the
-    bare repo-relative path that the diff uses.
+    rooted at the CI runner's workspace.  After scheme stripping this becomes
+    e.g. ``home/runner/work/<owner>/<repo>/src/foo.py``, which never matches
+    repo-relative diff paths.  We prefer stripping the actual ``GITHUB_WORKSPACE``
+    env var when it's set, since that's correct for any runner (including a
+    self-hosted runner whose workspace root isn't ``/home/runner/work/...`` at
+    all).  When ``GITHUB_WORKSPACE`` is unset or doesn't match, we fall back to
+    the hosted-runner-shaped regex below, which only covers GitHub-hosted
+    runners.
     """
     import re as _re
 
@@ -90,16 +93,24 @@ def _sanitize_sarif_path(uri: str) -> str:
         logger.warning("SARIF: rejecting path with '..' segments: %r", uri)
         return ""
 
-    # Strip GitHub Actions runner workspace prefix so repo-relative paths
-    # produced by tools (Ruff, etc.) match the diff.
+    # Strip the CI workspace prefix so repo-relative paths produced by tools
+    # (Ruff, etc.) match the diff. Prefer the real GITHUB_WORKSPACE (correct
+    # on any runner, hosted or self-hosted); fall back to the hosted-runner-
+    # shaped regex only when GITHUB_WORKSPACE is unset or doesn't match this
+    # path, since a self-hosted runner's workspace root is never
+    # /home/runner/work/<owner>/<repo> and this regex would never match it.
+    stripped = str(pp)
+    workspace = os.environ.get("GITHUB_WORKSPACE", "").removeprefix("/").rstrip("/")
+    if workspace and stripped.startswith(workspace + "/"):
+        return stripped[len(workspace) + 1 :]
+
     # Pattern: home/runner/work/<owner>/<repo>/<rest>
     #      or: runner/work/<owner>/<repo>/<rest>  (some runner configurations)
-    stripped = _re.sub(
+    return _re.sub(
         r"^(?:home/)?runner/work/[^/]+/[^/]+/",
         "",
-        str(pp),
+        stripped,
     )
-    return stripped
 
 
 def _parse_sarif_file(path: str) -> list[Finding]:
