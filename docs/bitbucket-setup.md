@@ -62,6 +62,7 @@ variables** and add:
 | `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key (or swap for your provider) |
 | `AI_PROVIDER` | No | `anthropic` (default). Alternatives: `openai`, `google`, `bedrock-proxy` |
 | `AI_REVIEW_MODE` | No | `quick` (default) or `full` |
+| `AI_REVIEW_IMAGE_TAG` | **No, must not be secured** | Container tag to pull, e.g. `latest`. Required, no default. The starter pipeline's `image.name` field templates this itself via Bitbucket's `${{VAR}}` syntax, which cannot resolve a secured variable at all. Marking this one secured breaks the pipeline. |
 
 ### 3. Grant PR scopes
 
@@ -75,7 +76,9 @@ user must have at least:
 
 Copy [`examples/pipelines/bitbucket-pipelines.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/pipelines/bitbucket-pipelines.yml)
 to the root of your repo as `bitbucket-pipelines.yml`, commit, and push. The
-review fires on every PR open/update.
+review fires on every PR open/update. If you hand-edit the `image:` block,
+keep the `${{AI_REVIEW_IMAGE_TAG}}` template form: Bitbucket's `image.name`
+field requires that syntax and rejects a bare `$AI_REVIEW_IMAGE_TAG`.
 
 ### 5. Enable Pipelines
 

@@ -13,9 +13,14 @@
 #                                    'latest' (stable), 'dev' (pre-release),
 #                                    or a pinned release like '0.11.0'
 #                                    (image tags strip the 'v' prefix).
-#                                    Bitbucket Pipelines does not support
-#                                    bash-style defaults in image.name, so
-#                                    this must be set explicitly.
+#                                    Must be a non-secured variable: Bitbucket
+#                                    templates image.name itself via
+#                                    ${{VAR}} syntax, and secured/runtime
+#                                    variables cannot be used there at all
+#                                    (see the `image:` block below). It must
+#                                    also be set explicitly, since Bitbucket
+#                                    has no way to default it the way GitLab
+#                                    CI's `variables:` block can.
 #
 # Optional repository variables:
 #   AI_PROVIDER             (plain, default: anthropic)
@@ -36,17 +41,24 @@
 
 image:
   # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.
-  # IMPORTANT: Bitbucket Pipelines expands $VAR in image.name but does NOT
-  # support bash-style ${VAR:-default} parameter expansion (image.name is
-  # processed by the Pipelines engine, not bash).  You must set
-  # AI_REVIEW_IMAGE_TAG as a repository variable; recommended values:
+  # IMPORTANT: image.name is templated by the Bitbucket Pipelines engine
+  # itself, not by bash, and it requires the ${{VAR}} template syntax --
+  # a bare $VAR here does not validate ("problem with the format of your
+  # docker image name"), and neither does bash-style ${VAR:-default}
+  # parameter expansion. This is unlike the `script:` lines further down,
+  # which run in bash and do support $VAR / ${VAR:-default} normally.
+  # Only non-secured, non-runtime-defined variables can template into
+  # image.name at all -- a secured variable is silently unavailable here
+  # even though it works fine inside `script:`. You must set
+  # AI_REVIEW_IMAGE_TAG as a non-secured repository variable; recommended
+  # values:
   #   'latest' — stable
   #   'dev'    — dogfood pre-release builds
   #   '0.11.0' (or similar) — pin a specific release.
   #   Note: image tags strip the 'v' prefix from the git tag (publish-image.yml
   #   uses docker/metadata-action's semver pattern), so the git tag v0.11.0
   #   publishes image tags 0.11.0, 0.11, and 0.
-  name: ghcr.io/tag1consulting/ai-pr-review:$AI_REVIEW_IMAGE_TAG
+  name: ghcr.io/tag1consulting/ai-pr-review:${{AI_REVIEW_IMAGE_TAG}}
   # For private pulls (ai-pr-review is currently public — use the public
   # pull below unless/until you host your own mirror). If you fork to a
   # private registry, uncomment and configure:
