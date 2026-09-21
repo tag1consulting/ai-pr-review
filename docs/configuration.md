@@ -150,21 +150,28 @@ budget for every tier-dispatched agent. `AI_MAX_TOKENS_<AGENT>` overrides that
 budget for one named agent, taking precedence over both
 `AI_MAX_TOKENS_PER_AGENT` and the agent's own roster default. The agent name is
 uppercased with `-` replaced by `_` (e.g. `code-reviewer` →
-`AI_MAX_TOKENS_CODE_REVIEWER`). Invalid values (non-integer, or outside
-256–65536) print a warning and fall back to the pre-override value rather than
-failing the run, matching `AI_MAX_TOKENS_PER_AGENT`'s own clamp behavior. See
-[issue #191](https://github.com/tag1consulting/ai-pr-review/issues/191).
+`AI_MAX_TOKENS_CODE_REVIEWER`). A non-integer value prints a warning and falls
+back to the roster/`AI_MAX_TOKENS_PER_AGENT` default; a value outside
+256–65536 is clamped to the nearest bound instead, matching
+`AI_MAX_TOKENS_PER_AGENT`'s own clamp behavior — neither ever fails the run.
+Every set `AI_MAX_TOKENS_<AGENT>` is validated at config-load time regardless
+of whether that agent ends up dispatching this run, so a malformed override
+always warns once. See [issue #191](https://github.com/tag1consulting/ai-pr-review/issues/191)
+and its follow-up, [issue #847](https://github.com/tag1consulting/ai-pr-review/issues/847).
 
 `pr-summarizer` and `issue-linker` are dispatched separately from the other
 seven agents (they compose their own prompts and never go through the
-tier-dispatch path that reads `AI_MAX_TOKENS_PER_AGENT`), and their pre-#191
-budget was a hardcoded `4096` with no override of any kind. `AI_MAX_TOKENS_<AGENT>`
-is therefore the *only* way to change their budget; `AI_MAX_TOKENS_PER_AGENT`
-still has no effect on either.
+tier-dispatch path that reads `AI_MAX_TOKENS_PER_AGENT`), so `AI_MAX_TOKENS_<AGENT>`
+is the *only* way to change their budget; `AI_MAX_TOKENS_PER_AGENT` still has
+no effect on either. Their default is resolved from the agent roster
+(`ai_pr_review/agents/roster.py`), not a separately-hardcoded literal —
+`pr-summarizer`'s pre-#847 preflight dispatch hardcoded `4096` here, which had
+silently drifted from the roster's own `16384` since #191 shipped; fixed by
+#847, so its effective default without an override is now `16384`.
 
 | Variable | Effective default | Notes |
 |----------|--------------------|-------|
-| `AI_MAX_TOKENS_PR_SUMMARIZER` | `4096` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; see above. |
+| `AI_MAX_TOKENS_PR_SUMMARIZER` | `16384` | Dispatched separately from `AI_MAX_TOKENS_PER_AGENT`; see above. |
 | `AI_MAX_TOKENS_CODE_REVIEWER` | `32768` | Tier-dispatched; falls back to `AI_MAX_TOKENS_PER_AGENT` when unset. |
 | `AI_MAX_TOKENS_SILENT_FAILURE_HUNTER` | `32768` | Tier-dispatched. |
 | `AI_MAX_TOKENS_ARCHITECTURE_REVIEWER` | `32768` | Tier-dispatched, full mode only. |

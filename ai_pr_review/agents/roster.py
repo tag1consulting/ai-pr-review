@@ -27,6 +27,16 @@ ConditionalTrigger = Literal[
 
 _VALID_TRIGGERS: frozenset[str] = frozenset(get_args(ConditionalTrigger))
 
+# Shared output-token clamp bounds (issue #847). Previously triplicated as
+# literal `256, 65536` tuples in this module's own AgentSpec validation and
+# in config.py's two separate clamp sites (the global AI_MAX_TOKENS_PER_AGENT
+# validator and resolve_agent_max_tokens' per-agent override parsing).
+# config.py lazily imports these the same way it already lazily imports
+# AGENT_NAMES from this module, to keep the one-way roster -> config
+# dependency direction unchanged.
+MAX_OUTPUT_TOKENS_MIN: int = 256
+MAX_OUTPUT_TOKENS_MAX: int = 65536
+
 
 @dataclass(frozen=True)
 class AgentSpec:
@@ -57,9 +67,10 @@ class AgentSpec:
             raise ValueError("AgentSpec.name must be non-empty")
         if self.tier not in (1, 2):
             raise ValueError(f"AgentSpec.tier must be 1 or 2, got {self.tier!r}")
-        if not (256 <= self.max_output_tokens <= 65536):
+        if not (MAX_OUTPUT_TOKENS_MIN <= self.max_output_tokens <= MAX_OUTPUT_TOKENS_MAX):
             raise ValueError(
-                f"AgentSpec.max_output_tokens must be in [256, 65536], "
+                f"AgentSpec.max_output_tokens must be in "
+                f"[{MAX_OUTPUT_TOKENS_MIN}, {MAX_OUTPUT_TOKENS_MAX}], "
                 f"got {self.max_output_tokens}"
             )
         if self.conditional_trigger is not None and self.conditional_trigger not in _VALID_TRIGGERS:
