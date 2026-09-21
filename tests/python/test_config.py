@@ -602,6 +602,51 @@ def test_resolve_agent_max_tokens_nonexistent_agent_name_is_pure_lookup(
     assert resolve_agent_max_tokens("not-a-real-agent", 32768) == 1234
 
 
+def test_from_env_validates_override_for_excluded_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#847: a malformed AI_MAX_TOKENS_<AGENT> override must warn at
+    from_env() time even for an agent this run never dispatches (excluded
+    via exclude-agents) -- previously it was only ever validated implicitly
+    by whichever dispatch call site first called resolve_agent_max_tokens()
+    for that specific agent, so an override for an excluded agent sat
+    silently unvalidated for the whole run."""
+    monkeypatch.setenv("AI_MAX_TOKENS_CODE_REVIEWER", "not-an-int")
+    monkeypatch.setenv("AI_EXCLUDE_AGENTS", "code-reviewer")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_CODE_REVIEWER" in captured.err
+    assert "not a valid integer" in captured.err
+
+
+def test_from_env_validates_override_uses_roster_default_in_message(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The eager config-load-time validation pass reports the agent's real
+    roster default in its warning, not an arbitrary placeholder."""
+    monkeypatch.setenv("AI_MAX_TOKENS_PR_SUMMARIZER", "99999999")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_PR_SUMMARIZER=99999999" in captured.err
+    assert "clamping to 65536" in captured.err
+
+
+def test_from_env_no_warning_when_no_overrides_set(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A clean environment with no AI_MAX_TOKENS_<AGENT> vars set produces no
+    per-agent max-tokens warnings from the eager validation pass."""
+    for key in list(os.environ.keys()):
+        if key.startswith("AI_MAX_TOKENS_"):
+            monkeypatch.delenv(key, raising=False)
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_MAX_TOKENS_" not in captured.err
+
+
 def test_per_agent_max_tokens_var_not_flagged_unknown(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

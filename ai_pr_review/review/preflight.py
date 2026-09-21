@@ -55,6 +55,7 @@ async def run_summarizer(
     requires that any unexpected error (KeyError, TypeError, etc.) in the prompt
     assembly or parse path skips the summary rather than aborting the whole review.
     """
+    from ai_pr_review.agents.roster import get_agent
     from ai_pr_review.agents.summarizer import (
         build_summarizer_system_prompt,
         build_summarizer_user_message,
@@ -94,15 +95,17 @@ async def run_summarizer(
         user_message = build_summarizer_user_message(manifest_text, commit_log, diff_text)
         # #191: this preflight path composes its own LLMRequest and previously
         # hardcoded max_tokens=4096, bypassing both the roster's per-agent
-        # default and the AI_MAX_TOKENS_PER_AGENT global override entirely.
-        # resolve_agent_max_tokens() only adds a higher-precedence per-agent
-        # override on top; the hardcoded 4096 default is preserved unchanged
-        # when AI_MAX_TOKENS_PR_SUMMARIZER is unset, so existing behavior is
-        # not altered by this change.
-        max_tokens = resolve_agent_max_tokens("pr-summarizer", 4096)
+        # default (16384) and the AI_MAX_TOKENS_PER_AGENT global override
+        # entirely. #847 follow-up: that hardcoded 4096 also diverged from
+        # the roster's own default -- pr-summarizer silently got a 4x-smaller
+        # budget than intended whenever no override was set. Now resolves
+        # the default from the roster itself, so the two can never drift
+        # apart again.
+        roster_default = get_agent("pr-summarizer").max_output_tokens
+        max_tokens = resolve_agent_max_tokens("pr-summarizer", roster_default)
         logger.debug(
             "pr-summarizer: effective max_output_tokens=%d (source=%s)",
-            max_tokens, "per-agent override" if max_tokens != 4096 else "hardcoded default",
+            max_tokens, "per-agent override" if max_tokens != roster_default else "roster default",
         )
         request = LLMRequest(
             model_id=model,
@@ -212,6 +215,7 @@ async def run_issue_linker(
     the open-issue list is injected as plain text so the model can match and cite real
     issue numbers without any tool-calling loop.
     """
+    from ai_pr_review.agents.roster import get_agent
     from ai_pr_review.config import resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
@@ -284,13 +288,15 @@ async def run_issue_linker(
             f"## File Manifest\n\n{manifest_text}\n"
         )
 
-        # #191: same rationale as pr-summarizer above -- adds a per-agent
-        # override on top of the pre-existing hardcoded 4096 default without
-        # changing that default when unset.
-        max_tokens = resolve_agent_max_tokens("issue-linker", 4096)
+        # #191/#847: same rationale as pr-summarizer above -- resolves the
+        # default from the roster itself (4096, unchanged for issue-linker)
+        # rather than a hand-typed literal that could silently drift from
+        # the roster's own value the way pr-summarizer's did.
+        roster_default = get_agent("issue-linker").max_output_tokens
+        max_tokens = resolve_agent_max_tokens("issue-linker", roster_default)
         logger.debug(
             "issue-linker: effective max_output_tokens=%d (source=%s)",
-            max_tokens, "per-agent override" if max_tokens != 4096 else "hardcoded default",
+            max_tokens, "per-agent override" if max_tokens != roster_default else "roster default",
         )
         request = LLMRequest(
             model_id=model,

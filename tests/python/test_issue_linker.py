@@ -173,10 +173,15 @@ class TestRunIssueLinkerUserMessage:
     def test_default_max_tokens_unchanged_at_4096(
         self, prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """#191: with no AI_MAX_TOKENS_ISSUE_LINKER override set, the
-        pre-existing hardcoded 4096 default must be unchanged."""
+        """#191/#847: with no AI_MAX_TOKENS_ISSUE_LINKER override set,
+        resolves the roster's own max_output_tokens for issue-linker (4096,
+        unchanged -- unlike pr-summarizer's, this one never drifted from the
+        roster)."""
+        from ai_pr_review.agents.roster import get_agent
+
         monkeypatch.delenv("AI_MAX_TOKENS_ISSUE_LINKER", raising=False)
         _result, captured = self._run(prompt_dir)
+        assert captured[0].max_tokens == get_agent("issue-linker").max_output_tokens
         assert captured[0].max_tokens == 4096
 
     def test_per_agent_max_tokens_override_applied(

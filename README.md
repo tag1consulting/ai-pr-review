@@ -248,7 +248,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 | `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). |
 | `max-inline` | No | `25` | Maximum inline review comments per run; excess routed to the review body |
-| `max-tokens-per-agent` | No | `32768` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 to 16384 in v1.3.0, raised back for #642. |
+| `max-tokens-per-agent` | No | `32768` | Max output tokens per LLM agent call (clamped to [256, 65536]). Lowered from 32768 to 16384 in v1.3.0, raised back for #642. Overridable per agent via `AI_MAX_TOKENS_<AGENT_NAME>` (e.g. `AI_MAX_TOKENS_CODE_REVIEWER`), higher-precedence than this global value; see [Configuration: Per-agent max-tokens overrides](docs/configuration.md#per-agent-max-tokens-overrides-env-var-only). |
 | `analyzer-concurrency` | No | `4` | Maximum simultaneous native static-analyzer subprocesses. Forced to 1 when `parallel: false`. |
 | `enable-suggestions` | No | `true` | Add "Apply suggestion" buttons to inline review comments (GitHub and GitLab; ignored on Bitbucket). Set to `false` to disable. See [Code suggestions](#code-suggestions) |
 | `engine` | No | `python` | Deprecated no-op. The bash engine was removed; Python is the only engine. Accepted for backward compatibility and ignored. |

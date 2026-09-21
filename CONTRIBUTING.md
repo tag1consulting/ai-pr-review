@@ -126,7 +126,7 @@ Create `prompts/<agent-name>.md`. The prompt must instruct the model to output a
 
 ### 2. Register in the agent roster
 
-Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag.
+Add an `AgentSpec` entry to `ai_pr_review/agents/roster.py` with the agent name, prompt path, tier (1 or 2 — controls parallel dispatch group), `max_output_tokens`, `full_mode_only` flag, `conditional_trigger` (file-pattern or `None`), and `context_enrichment_eligible` flag. `max_output_tokens` is this agent's default output-token budget — anyone can raise or lower it per-run without editing code via `AI_MAX_TOKENS_<AGENT_NAME_UPPER_SNAKE>` (issue #191), so pick a value that reflects the agent's typical output size rather than a defensive maximum. If the agent composes its own `LLMRequest` outside the tier-dispatch path (as `pr-summarizer`/`issue-linker` do), resolve its default from `get_agent("<name>").max_output_tokens` rather than hardcoding a literal — issue #847 was exactly this drift (a hand-typed `4096` silently diverged from the roster's own `16384`).
 
 ### 3. Add conditional gate logic (if needed)
 
