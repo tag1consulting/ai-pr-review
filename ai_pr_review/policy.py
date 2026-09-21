@@ -1,10 +1,21 @@
-"""Repo-local review-policy routing: .github/ai-pr-review/policy.yml.
+"""Repo-local review-policy routing: .ai-pr-review/policy.yml.
 
 Lets a consuming repo route review depth (agent/analyzer selection, review
 mode) by changed-file glob, base-branch glob, or head-branch glob, instead
 of hand-rolling a GitHub Actions expression per repo. See docs/policy.md
 for the schema and the full precedence chain (explicit action inputs and
 slash-command overrides still win over anything resolved here).
+
+Path (issue #839 follow-up): the preferred location is the
+provider-neutral ``.ai-pr-review/policy.yml``. ``.github/ai-pr-review/policy.yml``
+is still read as a fallback when the neutral path is absent, for existing
+GitHub adopters and for repos that have not migrated -- the two are never
+merged, first match wins. The neutral path exists because this is an
+engine-side feature that works identically on GitHub, GitLab, and Bitbucket
+Pipelines (see docs/agents.md), yet the legacy path forces a Bitbucket or
+GitLab repo to create a ``.github/`` directory it otherwise has no reason to
+have. ``ai_pr_review.feedback.store`` already used the neutral convention
+for the learning-loop store before this module adopted it.
 
 Security (issue #869): by default the policy file is loaded from the PR's
 *base* ref via ``git show origin/{base_ref}:.github/ai-pr-review/policy.yml``
@@ -41,14 +52,18 @@ never block a review.
 from __future__ import annotations
 
 import fnmatch
+import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import yaml
 
-_POLICY_PATH = ".github/ai-pr-review/policy.yml"
+_POLICY_PATH = ".ai-pr-review/policy.yml"
+_POLICY_PATH_LEGACY = ".github/ai-pr-review/policy.yml"
+# First match wins. The two are never merged. See the module docstring.
+_POLICY_PATH_CANDIDATES: tuple[str, ...] = (_POLICY_PATH, _POLICY_PATH_LEGACY)
 _BUILTIN_BASES: frozenset[str] = frozenset({"quick", "full"})
 _GIT_TIMEOUT_SECS = 15
 _WHEN_KEYS: frozenset[str] = frozenset({"paths", "base-branch", "head-branch"})
@@ -149,39 +164,74 @@ def load_policy_file(
         source = "base-ref"
 
     if source == "workspace":
-        raw_text = _read_policy_from_workspace(workspace)
+        raw_text, path_used = _read_policy_from_workspace(workspace)
     else:
-        raw_text = _read_policy_from_base_ref(workspace, base_ref)
+        raw_text, path_used = _read_policy_from_base_ref(workspace, base_ref)
     if raw_text is None:
         return None
+    assert path_used is not None  # non-None text always pairs with the path that produced it
 
     try:
         raw = yaml.safe_load(raw_text)
     except yaml.YAMLError as exc:
-        print(f"WARNING: {_POLICY_PATH} is not valid YAML: {exc}", file=sys.stderr)
+        print(f"WARNING: {path_used} is not valid YAML: {exc}", file=sys.stderr)
         return None
     if not isinstance(raw, dict):
-        print(f"WARNING: {_POLICY_PATH} must be a YAML mapping; ignoring", file=sys.stderr)
+        print(f"WARNING: {path_used} must be a YAML mapping; ignoring", file=sys.stderr)
         return None
     try:
         return _parse_policy_file(raw)
     except ValueError as exc:
-        print(f"WARNING: {_POLICY_PATH} is invalid; ignoring: {exc}", file=sys.stderr)
+        print(f"WARNING: {path_used} is invalid; ignoring: {exc}", file=sys.stderr)
         return None
 
 
-def _read_policy_from_base_ref(workspace: str, base_ref: str) -> str | None:
+def _read_first_existing(
+    candidates: Sequence[str], read_one: Callable[[str], str | None]
+) -> tuple[str | None, str | None]:
+    """Try each candidate path in order via ``read_one``. First hit wins.
+
+    Never merges content across candidates. Returns ``(content, path)`` on
+    success, ``(None, None)`` when none of the candidates exist. Logs one
+    INFO line only when the fallback (non-first) candidate was the one that
+    resolved, so a repo still on the legacy path gets a nudge to migrate
+    without every run on the preferred path printing anything.
+    """
+    for i, path in enumerate(candidates):
+        content = read_one(path)
+        if content is not None:
+            if i > 0:
+                print(
+                    f"INFO: loaded policy from legacy path {path!r}. "
+                    f"The preferred location is {candidates[0]!r}.",
+                    file=sys.stderr,
+                )
+            return content, path
+    return None, None
+
+
+def _read_policy_from_base_ref(workspace: str, base_ref: str) -> tuple[str | None, str | None]:
     """Read policy.yml's raw text via ``git show origin/{base_ref}:...``.
 
-    Returns None (silently, or with a WARNING for a real error) exactly as
-    ``load_policy_file`` always has -- this is a pure extraction of its
-    original body, no behavior change.
+    Tries ``_POLICY_PATH_CANDIDATES`` in order (neutral path first, legacy
+    fallback second). The two are never merged. Returns ``(None, None)``
+    (silently, or with a WARNING for a real error) exactly as
+    ``load_policy_file`` always has -- this is a pure extraction of the
+    original single-path body, generalized to try a second path on a clean
+    "not found".
     """
     if not base_ref:
-        return None
+        return None, None
+    return _read_first_existing(
+        _POLICY_PATH_CANDIDATES,
+        lambda path: _git_show_policy_path(workspace, base_ref, path),
+    )
+
+
+def _git_show_policy_path(workspace: str, base_ref: str, path: str) -> str | None:
     try:
         proc = subprocess.run(
-            ["git", "show", f"origin/{base_ref}:{_POLICY_PATH}"],
+            ["git", "show", f"origin/{base_ref}:{path}"],
             cwd=workspace or ".",
             capture_output=True,
             text=True,
@@ -189,7 +239,7 @@ def _read_policy_from_base_ref(workspace: str, base_ref: str) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(
-            f"WARNING: could not read {_POLICY_PATH} from origin/{base_ref}: {exc}",
+            f"WARNING: could not read {path} from origin/{base_ref}: {exc}",
             file=sys.stderr,
         )
         return None
@@ -197,13 +247,14 @@ def _read_policy_from_base_ref(workspace: str, base_ref: str) -> str | None:
         # git show's fatal message for "the path isn't tracked at that ref"
         # is stable across git versions: "fatal: path '<path>' does not
         # exist in '<ref>'". That's the common, expected case for a repo
-        # that hasn't adopted policy.yml and must stay silent. Any other
-        # non-zero exit (bad/unknown ref, unreachable remote, permissions) is
-        # a real misconfiguration masquerading as "no policy adopted" and is
-        # worth a WARNING so it doesn't silently look like normal operation.
+        # that hasn't adopted policy.yml (or hasn't adopted this particular
+        # candidate path) and must stay silent. Any other non-zero exit
+        # (bad/unknown ref, unreachable remote, permissions) is a real
+        # misconfiguration masquerading as "no policy adopted" and is worth
+        # a WARNING so it doesn't silently look like normal operation.
         if "does not exist in" not in proc.stderr:
             print(
-                f"WARNING: could not read {_POLICY_PATH} from origin/{base_ref} "
+                f"WARNING: could not read {path} from origin/{base_ref} "
                 f"(git show exited {proc.returncode}): {proc.stderr.strip()[:500]}",
                 file=sys.stderr,
             )
@@ -211,24 +262,30 @@ def _read_policy_from_base_ref(workspace: str, base_ref: str) -> str | None:
     return proc.stdout
 
 
-def _read_policy_from_workspace(workspace: str) -> str | None:
+def _read_policy_from_workspace(workspace: str) -> tuple[str | None, str | None]:
     """Read policy.yml's raw text directly from the checked-out working tree.
 
-    A missing file is the common, silent case, matching the base-ref path's
-    own "not tracked at that ref" silence. Any other read error (permission
-    denied, not a regular file) is worth a WARNING -- it's a real
-    misconfiguration, not "no policy adopted".
+    Tries ``_POLICY_PATH_CANDIDATES`` in order, same first-match-wins rule
+    as the base-ref reader. A missing file is the common, silent case for
+    each candidate. Any other read error (permission denied, not a regular
+    file) is worth a WARNING -- it's a real misconfiguration, not "no
+    policy adopted".
     """
-    import os
+    return _read_first_existing(
+        _POLICY_PATH_CANDIDATES,
+        lambda path: _read_workspace_policy_path(workspace, path),
+    )
 
-    path = os.path.join(workspace or ".", _POLICY_PATH)
+
+def _read_workspace_policy_path(workspace: str, path: str) -> str | None:
+    full_path = os.path.join(workspace or ".", path)
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(full_path, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return None
     except OSError as exc:
-        print(f"WARNING: could not read {path}: {exc}", file=sys.stderr)
+        print(f"WARNING: could not read {full_path}: {exc}", file=sys.stderr)
         return None
 
 

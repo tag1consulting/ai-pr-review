@@ -38,7 +38,7 @@ The entrypoint is `ai_pr_review.cli:review`. The Click command parses flags, set
    - Returns `SkipPlan` if compute reports no changes.
    - Loads the feedback store (`AI_FEEDBACK_LOOP=1`) into a feedback addendum.
    - Fetches the PR/MR title and description via `provider.get_pr_description()` (fail-soft: a missing or malformed result just omits this) and folds it with the file manifest into the shared `<pr-context>` block (`ai_pr_review/review/pr_context.py:build_shared_context_block`, #813).
-   - Resolves `.github/ai-pr-review/policy.yml` if present (`ai_pr_review/policy.py`) and merges any matched route's agent/analyzer allow-deny lists and review-mode default with the explicit config (explicit input always wins). See [docs/policy.md](policy.md) for the policy-file format; this also determines `policy_gate_required`/`policy_gate_satisfied` for the CLI's merge-gate check-run.
+   - Resolves `.ai-pr-review/policy.yml` (falling back to `.github/ai-pr-review/policy.yml`) if present (`ai_pr_review/policy.py`) and merges any matched route's agent/analyzer allow-deny lists and review-mode default with the explicit config (explicit input always wins). See [docs/policy.md](policy.md) for the policy-file format; this also determines `policy_gate_required`/`policy_gate_satisfied` for the CLI's merge-gate check-run.
    - Detects changed file languages and loads the whole text of every detected language's profile once via `load_language_profiles()`. The concatenated markdown is stored in `DispatchContext.language_profile_text` so each agent dispatch reads from memory rather than disk (#814: every eligible agent gets the whole profile, not a per-agent routed subset — see [Shared run-context assembly](#shared-run-context-assembly) below).
    - Runs native analyzers, loads SARIF findings (via `config.sarif_paths`), loads suppression rules, evaluates gates, and builds the `DispatchContext` and `OrchestrationConfig`. All pre-computed findings are merged into `OrchestrationConfig.extra_findings`.
 2. Runs `pr-summarizer` on first (non-incremental) reviews, then `issue-linker` on first reviews in `full` mode when the VCS provider is GitHub (both fail-soft; see `ai_pr_review/review/preflight.py`).
@@ -180,7 +180,7 @@ An optional `verify` field triggers pre-suppression verification:
 
 If verification confirms the version exists, the suppression stands. If the API returns a non-zero exit, the finding is kept. Private registries (GHCR, GCR, ECR) are not supported.
 
-Consuming repos can add **local suppressions** at `.github/ai-pr-review/suppressions.json`, merged with global rules at runtime.
+Consuming repos can add **local suppressions** at `.ai-pr-review/suppressions.json` (falling back to `.github/ai-pr-review/suppressions.json`), merged with global rules at runtime.
 
 ## LLM judge pass
 

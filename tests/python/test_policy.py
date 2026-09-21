@@ -1,4 +1,5 @@
-"""Tests for ai_pr_review.policy (repo-local .github/ai-pr-review/policy.yml)."""
+"""Tests for ai_pr_review.policy (repo-local .ai-pr-review/policy.yml, with
+a .github/ai-pr-review/policy.yml legacy-path fallback)."""
 
 from __future__ import annotations
 
@@ -663,3 +664,106 @@ def test_example_policy_file_staging_route_requires_deep() -> None:
     assert route.require == "deep"
     assert policy_satisfies(pf, "integration", "deep") is False
     assert policy_satisfies(pf, "deep", "deep") is True
+
+
+# ---------------------------------------------------------------------------
+# Neutral path (.ai-pr-review/policy.yml) with legacy fallback
+# ---------------------------------------------------------------------------
+
+
+def _write_policy(policy_dir: Path, *, default_name: str = "content") -> None:
+    policy_dir.mkdir(parents=True, exist_ok=True)
+    (policy_dir / "policy.yml").write_text(
+        "version: 1\n"
+        "policies:\n"
+        f"  {default_name}:\n"
+        "    agents: []\n"
+        "routes: []\n"
+        f"default: {default_name}\n"
+    )
+
+
+def test_load_policy_file_neutral_path_base_ref(git_repo: Path) -> None:
+    _write_policy(git_repo / ".ai-pr-review", default_name="neutral")
+    _git("add", ".", cwd=git_repo)
+    _git("commit", "-q", "-m", "add neutral policy", cwd=git_repo)
+    _git("push", "-q", "origin", "main", cwd=git_repo)
+
+    result = load_policy_file(str(git_repo), "main")
+    assert result is not None
+    assert result.default == "neutral"
+
+
+def test_load_policy_file_neutral_path_wins_over_legacy_base_ref(
+    git_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both paths present: neutral wins, legacy is never even read, and the
+    two are never merged (only the neutral policy's default is visible)."""
+    _write_policy(git_repo / ".ai-pr-review", default_name="neutral")
+    _write_policy(git_repo / ".github" / "ai-pr-review", default_name="legacy")
+    _git("add", ".", cwd=git_repo)
+    _git("commit", "-q", "-m", "add both", cwd=git_repo)
+    _git("push", "-q", "origin", "main", cwd=git_repo)
+
+    result = load_policy_file(str(git_repo), "main")
+    assert result is not None
+    assert result.default == "neutral"
+    # No migration nudge printed when the preferred path is the one used.
+    assert "INFO" not in capsys.readouterr().err
+
+
+def test_load_policy_file_legacy_fallback_base_ref_logs_info(
+    git_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Neutral path absent, legacy present: legacy still loads (back-compat),
+    and a one-line INFO nudge names both paths."""
+    _write_policy(git_repo / ".github" / "ai-pr-review", default_name="legacy")
+    _git("add", ".", cwd=git_repo)
+    _git("commit", "-q", "-m", "add legacy only", cwd=git_repo)
+    _git("push", "-q", "origin", "main", cwd=git_repo)
+
+    result = load_policy_file(str(git_repo), "main")
+    assert result is not None
+    assert result.default == "legacy"
+    err = capsys.readouterr().err
+    assert "INFO" in err
+    assert ".github/ai-pr-review/policy.yml" in err
+    assert ".ai-pr-review/policy.yml" in err
+
+
+def test_load_policy_file_neutral_path_workspace_source(git_repo: Path) -> None:
+    _write_policy(git_repo / ".ai-pr-review", default_name="neutral")
+    # Deliberately not committed/pushed -- workspace source reads it anyway.
+    result = load_policy_file(str(git_repo), "main", source="workspace")
+    assert result is not None
+    assert result.default == "neutral"
+
+
+def test_load_policy_file_neutral_path_wins_over_legacy_workspace_source(
+    git_repo: Path,
+) -> None:
+    _write_policy(git_repo / ".ai-pr-review", default_name="neutral")
+    _write_policy(git_repo / ".github" / "ai-pr-review", default_name="legacy")
+    result = load_policy_file(str(git_repo), "main", source="workspace")
+    assert result is not None
+    assert result.default == "neutral"
+
+
+def test_load_policy_file_legacy_fallback_workspace_source_logs_info(
+    git_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_policy(git_repo / ".github" / "ai-pr-review", default_name="legacy")
+    result = load_policy_file(str(git_repo), "main", source="workspace")
+    assert result is not None
+    assert result.default == "legacy"
+    err = capsys.readouterr().err
+    assert "INFO" in err
+    assert ".github/ai-pr-review/policy.yml" in err
+
+
+def test_load_policy_file_neither_path_present_returns_none_silently(
+    git_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert load_policy_file(str(git_repo), "main") is None
+    assert load_policy_file(str(git_repo), "main", source="workspace") is None
+    assert capsys.readouterr().err == ""

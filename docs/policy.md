@@ -7,16 +7,16 @@ nav_order: 1
 
 # Policies
 
-`.github/ai-pr-review/policy.yml` lets a repo route review depth (which agents/analyzers run, quick vs. full mode) by changed-file path, base branch, or head branch — without hand-rolling a GitHub Actions expression per repo, and without hard-coding a single global choice for every PR.
+`.ai-pr-review/policy.yml` lets a repo route review depth (which agents/analyzers run, quick vs. full mode) by changed-file path, base branch, or head branch — without hand-rolling a GitHub Actions expression per repo, and without hard-coding a single global choice for every PR.
 
 This solves the common case of mixed PR traffic: a repo that merges content-only changes straight to `main` but collects feature work onto a `staging` branch, tested with a full review once per batch rather than on every push.
 
-A ready-to-copy starting point lives at [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) — copy it to `.github/ai-pr-review/policy.yml` and edit to taste.
+A ready-to-copy starting point lives at [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) — copy it to `.ai-pr-review/policy.yml` and edit to taste. `.github/ai-pr-review/policy.yml` is still read as a fallback when `.ai-pr-review/policy.yml` is absent, for existing adopters (the two are never merged, first match wins). New adopters, and repos on GitLab or Bitbucket that have no reason to have a `.github/` directory at all, should use the neutral path.
 
 ## Example
 
 ```yaml
-# .github/ai-pr-review/policy.yml
+# .ai-pr-review/policy.yml
 version: 1
 
 policies:
@@ -60,7 +60,7 @@ If your existing workflow hardcodes a fallback like `... || 'quick'` at the end 
 
 ## Security: loaded from the base ref, never the PR head — but only when your trigger needs it
 
-By default, the policy file is read via `git show origin/{base-ref}:.github/ai-pr-review/policy.yml` — **never from the checked-out PR branch's working tree**. A PR that edits its own `policy.yml` to weaken its own review (e.g. dropping `security-reviewer`) has no effect; the file that governs a PR's review is whatever is committed on the *target* branch at review time. Merge a policy.yml change to your base branch, and it applies to every subsequent PR review from that point on — including the PR that introduced it, on its *next* run, once that PR's target branch state (not the PR's own branch) has the file.
+By default, the policy file is read via `git show origin/{base-ref}:.ai-pr-review/policy.yml` (falling back to `.github/ai-pr-review/policy.yml` when the neutral path isn't present) — **never from the checked-out PR branch's working tree**. A PR that edits its own `policy.yml` to weaken its own review (e.g. dropping `security-reviewer`) has no effect; the file that governs a PR's review is whatever is committed on the *target* branch at review time. Merge a policy.yml change to your base branch, and it applies to every subsequent PR review from that point on — including the PR that introduced it, on its *next* run, once that PR's target branch state (not the PR's own branch) has the file.
 
 **This only closes a real gap when the workflow itself runs from the base branch, i.e. GitHub `pull_request_target`.** Under the far more common `pull_request` trigger (the default in the shipped [`examples/workflows/pr-review.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/pr-review.yml) template), the workflow *file* already runs from the PR head — a PR can already delete the review job, set `exclude-agents`, or force `review-mode: quick` in its own copy of the workflow, regardless of where `policy.yml` is read from. In that setup, the base-ref read guards a side door while the front door is already PR-controlled; its only practical effect is that a `policy.yml` change takes one extra merge before it applies.
 

@@ -48,7 +48,7 @@ Example — suppress findings only within unmodified upstream lines in a vendore
 
 ## Local suppressions
 
-Consuming repos can add their own suppression rules without modifying the action. Create `.github/ai-pr-review/suppressions.json` in your repository using the same schema:
+Consuming repos can add their own suppression rules without modifying the action. Create `.ai-pr-review/suppressions.json` in your repository using the same schema. `.github/ai-pr-review/suppressions.json` still works as a fallback for existing adopters, but the two are never merged, and the neutral path wins whenever both are present:
 
 ```json
 [
