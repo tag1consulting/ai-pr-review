@@ -307,6 +307,8 @@ def test_sanitize_sarif_path_does_not_strip_non_runner_paths() -> None:
     must not be silently truncated."""
     # Plain relative path — unchanged
     assert _sanitize_sarif_path("ai_pr_review/sarif_smoke_test.py") == "ai_pr_review/sarif_smoke_test.py"
+    # file:// with a non-runner absolute path — stripped of scheme/slash only
+    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
 
 
 def test_sanitize_sarif_path_strips_github_workspace_on_self_hosted_runner(
@@ -349,8 +351,6 @@ def test_sanitize_sarif_path_falls_back_to_regex_when_workspace_does_not_match(
     monkeypatch.setenv("GITHUB_WORKSPACE", "/some/unrelated/workspace")
     uri = "file:///home/runner/work/tag1consulting/ai-pr-review/ai_pr_review/foo.py"
     assert _sanitize_sarif_path(uri) == "ai_pr_review/foo.py"
-    # file:// with a non-runner absolute path — stripped of scheme/slash only
-    assert _sanitize_sarif_path("file:///workspace/src/x.py") == "workspace/src/x.py"
 
 
 def test_finding_with_traversal_uri_drops_file_field() -> None:
