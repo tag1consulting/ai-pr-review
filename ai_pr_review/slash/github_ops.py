@@ -36,23 +36,15 @@ import os as _os
 import re
 import sys as _sys
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 from ai_pr_review.findings.scope import is_analyzer_source
 from ai_pr_review.slash.github_orchestration import (
-    _ANALYZER_SUPPRESSION_HINT,
-    _BOT_LOGIN,
-    _FIXED_NO_APPROVE_NOTE,
-    DismissResult,
     FeedbackContext,
     FindingLocation,
-    _inline_feedback_context,
-    _judge_data_for_finding_id,
-    _not_found_reply,
-    _sha_citation,
-    _thread_by_comment_id,
     bodies_newest_first,
     classify_finding,
     context_from_body_finding_id,
@@ -76,13 +68,248 @@ from ai_pr_review.vcs._thread import (
 from ai_pr_review.vcs._thread import (
     first_comment_review_id as _thread_review_id,
 )
-from ai_pr_review.vcs.marker import extract_inline_meta, upsert_verdicts_marker
+from ai_pr_review.vcs.marker import extract_inline_meta, extract_judge_map, upsert_verdicts_marker
 
 if TYPE_CHECKING:
     from ai_pr_review.slash.parser import SlashCommand
     from ai_pr_review.vcs.github import GitHubProvider
 
 _log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Relocated from github_orchestration.py (issue #854, follow-up to #849): each
+# of these had zero remaining callers in that module after the #849 split --
+# every call site was already here. Pure moves, no behavior change.
+# ---------------------------------------------------------------------------
+
+_BOT_LOGIN: Final[str] = "github-actions[bot]"
+
+# "fixed" reply wording — see SlashCommand.is_feedback_command's docstring for
+# why "fixed" is neither a feedback-store verdict nor auto-approving, unlike
+# dismiss/false-positive/wont-fix.
+_FIXED_NO_APPROVE_NOTE = (
+    " The review will re-run on the new commit, so findings are not "
+    "auto-approved for a `fixed` claim."
+)
+
+# Issue #775: a verdict (dismiss/false-positive/wont-fix) on a static-analyzer
+# finding is scoped to that exact fingerprint (file + line + code) -- it can
+# never stop the same analyzer pattern from recurring in a different file,
+# since analyzer findings never pass through an LLM-agent prompt and the
+# learning-loop store is advisory-only for agents (feedback/inject.py). The
+# only durable suppression mechanism for analyzer findings is a repo-level
+# suppressions.json rule. Appended only when `is_analyzer_source` matches the
+# finding's source -- LLM-agent findings already benefit from the soft
+# suppression the learning-loop's <repo-feedback> injection provides, so this
+# note would be misleading there and is deliberately left off.
+_ANALYZER_SUPPRESSION_HINT = (
+    " This dismissal applies to this exact occurrence only. If this analyzer "
+    "keeps flagging the same pattern in other files, add a rule to "
+    "`.github/ai-pr-review/suppressions.json` (see docs/suppression.md)."
+)
+
+
+@dataclass(frozen=True)
+class DismissResult:
+    """Outcome of a dismiss/false-positive/wont-fix orchestration call."""
+
+    reply: str
+    thread_resolved: bool = False
+    review_dismissed: bool = False
+    pr_approved: bool = False
+    feedback_source: str = ""
+    feedback_file: str = ""
+    feedback_rule_id: str = ""
+    # The F<n> this verdict is for, when known. Threaded into the feedback-
+    # store entry's dedup key (see feedback/store.py's _dedup_key) -- without
+    # it, dismissing two DIFFERENT findings that share command/source/file
+    # within the dedup window would collide on the same key and the second
+    # one would be silently dropped as a false-positive "duplicate". Always
+    # known on the top-level (dismiss_by_finding_id) path, since the caller
+    # supplies finding_id directly; on the inline-reply
+    # (dismiss_inline_reply) path it comes from the `**[F<n>]**` token this
+    # bot embeds in every inline comment it posts (present for effectively
+    # every real finding since F-ids were extended to inline findings), so
+    # this is empty only for a legacy inline comment posted before that.
+    feedback_finding_id: int | None = None
+    # True only for a dismiss/false-positive/wont-fix verdict that actually
+    # took effect (BODY or INLINE) -- never for `fixed` (not a maintainer
+    # verdict on validity) or UNKNOWN (nothing to record). This is the caller's
+    # single signal for whether to persist a feedback-store entry -- see
+    # persist_verdict below. Kept distinct from feedback_source/feedback_file
+    # being non-empty because those are also (ab)used as BODY-vs-INLINE
+    # classification signals elsewhere; this field exists so that
+    # distinction never has to double as "should we write".
+    feedback_eligible: bool = False
+    # Judge-pass state for the feedback-store entry's `extras` (judge-verdict
+    # instrumentation, #841): read back from the inline comment's own
+    # metadata marker (`vcs.marker.extract_inline_meta`) for an INLINE
+    # finding, or from the review body's sibling judge-map marker
+    # (`vcs.marker.extract_judge_map`, via `_judge_data_for_finding_id`) for a
+    # BODY finding -- either way, since this CLI process has no access to the
+    # original in-memory `Finding`. Default (None/False/None) when the
+    # fingerprint can't be resolved, the finding predates this feature, or it
+    # never went through the judge pass at all.
+    feedback_judge_verdict: str | None = None
+    feedback_corroborated: bool = False
+    feedback_confidence: int | None = None
+    # True whenever this call resolved/dismissed/recorded/approved something
+    # real -- drives the done/confused reaction. Explicit rather than derived
+    # from the fields above (issue #769): a successful BODY `fixed` sets none
+    # of feedback_source/feedback_file/thread_resolved/review_dismissed/
+    # pr_approved (there's no thread to resolve for a body-level finding), so
+    # a derived expression reacted "confused" to a command that fully
+    # succeeded.
+    acted: bool = False
+    active_body_ids: tuple[int, ...] = ()
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class InlineFeedbackContext:
+    """Result of `_inline_feedback_context` -- an INLINE finding's
+    feedback-store context, resolved from its own comment body.
+
+    A named dataclass rather than a positional tuple specifically because
+    `corroborated: bool` and `confidence: int | None` sit adjacent to each
+    other: `bool` is a subtype of `int` in Python's type system, so a
+    positional swap between them would type-check cleanly and only surface
+    as bad data in the feedback store. Matches this module's existing
+    convention (`DismissResult`) for exactly this reason.
+    """
+
+    eligible: bool
+    source: str
+    rule_id: str
+    finding_id: int | None
+    judge_verdict: str | None
+    corroborated: bool
+    confidence: int | None
+
+
+def _thread_by_comment_id(
+    threads: Sequence[dict[str, Any]], comment_id: int
+) -> dict[str, Any] | None:
+    """Find the thread containing a comment with the given REST databaseId.
+
+    Mirrors `dismiss-finding`'s bash correlation
+    (`comments.nodes[].databaseId == parent_comment_id`) — a reply-to-a-reply's
+    parent may not be the thread's first comment, so all comments in the
+    thread are checked, not just `_first_comment`.
+    """
+    for t in threads:
+        comments = ((t.get("comments") or {}).get("nodes")) or []
+        if any(c.get("databaseId") == comment_id for c in comments):
+            return t
+    return None
+
+
+def _not_found_reply(actor: str, finding_id: int, had_errors: bool) -> str:
+    """Reply text for 'could not locate F<n>' — distinguishes a genuine miss
+    from a failed lookup (partial/empty data from an errored sub-call), so the
+    reply never asserts "not found" when the truth is "couldn't check"."""
+    if had_errors:
+        return (
+            f"@{actor} could not complete the lookup for **F{finding_id}** "
+            "due to an API error; see errors."
+        )
+    return f"@{actor} could not find finding **F{finding_id}** on this pull request."
+
+
+def _sha_citation(commit_sha: str) -> str:
+    """Render " in <sha>" for the reply, or "" if no SHA was supplied.
+
+    Emitted bare (no backticks/code-span) so GitHub auto-links the SHA to its
+    commit. The SHA is never validated against the repo -- an unknown or
+    mistyped SHA simply renders as plain text; it plays no role in thread
+    resolution or dismissal, both of which are driven by the finding ID or
+    comment ID alone.
+    """
+    return f" in {commit_sha}" if commit_sha else ""
+
+
+def _judge_data_for_finding_id(
+    bodies: Sequence[str], finding_id: int
+) -> tuple[str | None, bool, int | None]:
+    """Recover a BODY-level finding's judge-pass state (judge-verdict
+    instrumentation, #841), or (None, False, None) if unavailable.
+
+    Mirrors `github_orchestration._scan_body_bullets_one`'s reverse-lookup
+    pattern: resolve the fingerprint first, then scan `bodies` (already
+    newest-first) for the first judge-map marker (`vcs.marker.extract_judge_map`)
+    carrying an entry for that fingerprint. Returns the defaults whenever the
+    fingerprint can't be resolved, no body carries a judge-map entry for it
+    (the finding predates this feature, or never went through the judge
+    pass), or the entry fails validation inside `extract_judge_map` itself.
+    """
+    fp = fingerprint_for_finding_id(bodies, finding_id)
+    if fp is None:
+        return None, False, None
+    for body in bodies:
+        entry = extract_judge_map(body).get(fp)
+        if entry is not None:
+            jv = entry.get("jv")
+            conf = entry.get("conf")
+            return (
+                jv if isinstance(jv, str) else None,
+                entry.get("corr") is True,
+                conf if isinstance(conf, int) else None,
+            )
+    return None, False, None
+
+
+def _inline_feedback_context(
+    body: str, *, resolved: bool, command: str
+) -> InlineFeedbackContext:
+    """Compute an `InlineFeedbackContext` for an INLINE finding's
+    feedback-store entry.
+
+    Shared by `dismiss_by_finding_id`'s INLINE branch (top-level comment
+    naming an inline F<n>) and `dismiss_inline_reply` (reply on the inline
+    thread itself) -- both had near-identical logic here before this was
+    extracted. `file` isn't returned: it's a trivial `target_thread.get(
+    "path")` each caller already has in hand and reads directly.
+
+    Eligible whenever the thread actually resolved and the command is a real
+    verdict (never `fixed` -- not a maintainer verdict on validity), even if
+    the header fails to parse a source tag -- `file` alone is still useful
+    context to the caller, matching `context_from_parent_comment`'s same
+    fallback.
+
+    `finding_id` comes from the `**[F<n>]**` token this bot embeds in every
+    inline comment it posts (issue #769's dedup-key fix: without a real id
+    here, two DIFFERENT findings dismissed within the feedback store's dedup
+    window would collide on the same key and the second would be silently
+    dropped -- see `feedback/store.py`'s `_dedup_key`).
+
+    `judge_verdict`/`corroborated`/`confidence` (judge-verdict instrumentation):
+    read from the comment's own metadata marker via
+    `ai_pr_review.vcs.marker.extract_inline_meta`, the same marker
+    `classified`/`finding_id` above are recovered from -- no extra API call.
+    All three fall back to `None`/`False`/`None` when the marker is absent,
+    predates this feature, or the finding never went through the judge pass.
+    """
+    if not (resolved and command != "fixed"):
+        return InlineFeedbackContext(
+            eligible=False, source="", rule_id="", finding_id=None,
+            judge_verdict=None, corroborated=False, confidence=None,
+        )
+    classified = parse_inline_comment_header(body)
+    finding_id_match = _ID_RE.search(body)
+    finding_id = int(finding_id_match.group(1)) if finding_id_match is not None else None
+    meta = extract_inline_meta(body)
+    judge_verdict = meta.judge_verdict if meta is not None else None
+    corroborated = meta.corroborated if meta is not None else False
+    confidence = meta.confidence if meta is not None else None
+    return InlineFeedbackContext(
+        eligible=True,
+        source=classified.source,
+        rule_id=classified.rule_id,
+        finding_id=finding_id,
+        judge_verdict=judge_verdict,
+        corroborated=corroborated,
+        confidence=confidence,
+    )
 
 
 def _record_verdict(
