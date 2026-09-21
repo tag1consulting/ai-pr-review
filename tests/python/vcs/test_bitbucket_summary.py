@@ -156,6 +156,42 @@ def test_fetch_comments_is_cached_across_calls() -> None:
     assert len(get_calls) == 1
 
 
+def test_write_invalidates_comments_cache_for_subsequent_reads() -> None:
+    """A write through `_write_request` (post_summary here) must clear
+    `_comments_cache` so the next read re-fetches instead of returning what
+    the cache held before the write. Without this, get_last_reviewed_sha()
+    called after post_summary() would still report the pre-write state."""
+    state = {"posted": False}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            state["posted"] = True
+            return httpx.Response(201, json={"id": 1})
+        if state["posted"]:
+            items = [
+                {
+                    "id": 1,
+                    "content": {
+                        "raw": f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nlatest"
+                    },
+                }
+            ]
+            return httpx.Response(200, json=_values_resp(items))
+        return httpx.Response(200, json=_values_resp([]))
+
+    prov, rec = _make_provider(handler)
+
+    assert prov.get_last_reviewed_sha() is None
+
+    result = prov.post_summary(f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nlatest", _VALID_SHA)
+    assert result.created is True
+
+    assert prov.get_last_reviewed_sha() == _VALID_SHA
+
+    get_calls = [c for c in rec.calls if c[0] == "GET"]
+    assert len(get_calls) == 2, "second read must re-fetch, not return the stale pre-write cache"
+
+
 def test_get_summary_body_returns_none_when_no_comment() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_values_resp([]))

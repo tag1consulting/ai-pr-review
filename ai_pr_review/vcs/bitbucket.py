@@ -159,12 +159,16 @@ class BitbucketProvider:
         invalidated by every write this class makes to the comments
         endpoint (see _write_request, post_findings, resolve_stale).
 
-        Filters out comments with `deleted: true`, if Bitbucket includes
-        that field on a comment object. Unverified against a live API
-        response: no `deleted` field precedent was found in this repo's
-        existing Bitbucket fixtures, so this keeps a comment unless the
-        field is explicitly `true`, and should be checked against real API
-        output before a later phase relies on it.
+        Does not filter out comments with a `deleted` field. An earlier
+        draft of this method did, on the theory that Bitbucket might mark
+        removed comments that way, but that was unverified against a live
+        API response and no `deleted` field precedent exists in this repo's
+        Bitbucket fixtures. Filtering on unverified field semantics is a
+        real behavior change, not appropriate for a PR whose only intended
+        effect is sharing one paginated fetch across callers. If a later
+        phase needs to exclude deleted comments (e.g. verdict polling),
+        verify the field against real API output first and add the filter
+        there with its own test coverage.
         """
         if self._comments_cache is not None:
             return self._comments_cache
@@ -182,10 +186,7 @@ class BitbucketProvider:
                 )
                 return results
             data = resp.json() or {}
-            for item in data.get("values") or []:
-                if item.get("deleted") is True:
-                    continue
-                results.append(item)
+            results.extend(data.get("values") or [])
             next_url = data.get("next")
             if not isinstance(next_url, str) or not next_url:
                 break
