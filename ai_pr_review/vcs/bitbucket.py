@@ -122,6 +122,14 @@ class BitbucketProvider:
     config: BitbucketConfig
     client: RecordingClient
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
+    # Cache for _fetch_comments(): None means "not fetched yet this run",
+    # not "fetched and empty" (an empty PR has an empty list cached as []).
+    # Invalidated by every write this class makes to the comments endpoint
+    # (see _write_request, post_findings, resolve_stale) so a later call in
+    # the same run never reads stale data back.
+    _comments_cache: list[dict[str, Any]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     # ------------------------------------------------------------------
     # URL helpers
@@ -140,28 +148,44 @@ class BitbucketProvider:
     # ------------------------------------------------------------------
     # Pagination — Bitbucket returns a `next` URL in the body
     # ------------------------------------------------------------------
-    def _list_summary_comments(self) -> list[dict[str, Any]]:
+    def _fetch_comments(self) -> list[dict[str, Any]]:
+        """Fetch every PR comment in one paginated pass, cached per-instance.
+
+        Previously `_list_summary_comments()` ran its own paginated fetch
+        and filtered for the summary marker inline. This is the shared,
+        unfiltered fetch it now sits on top of, so a later verdict-comment
+        polling phase can reuse the same pass instead of paginating over
+        the same endpoint a second time in the same run. The cache is
+        invalidated by every write this class makes to the comments
+        endpoint (see _write_request, post_findings, resolve_stale).
+
+        Filters out comments with `deleted: true`, if Bitbucket includes
+        that field on a comment object. Unverified against a live API
+        response: no `deleted` field precedent was found in this repo's
+        existing Bitbucket fixtures, so this keeps a comment unless the
+        field is explicitly `true`, and should be checked against real API
+        output before a later phase relies on it.
+        """
+        if self._comments_cache is not None:
+            return self._comments_cache
         results: list[dict[str, Any]] = []
         url: str | None = self._comments_url()
         params: dict[str, Any] | None = {
             "pagelen": 100,
             "sort": "-updated_on",
         }
-        # The bash version added a server-side q= filter; we apply it client-side
-        # too (defensive — Bitbucket sometimes ignores q on rich-text fields).
         while url:
             resp = self.client.request("GET", url, params=params)
             if resp.status_code >= 400:
                 self._errors.append(
-                    f"list_summary_comments: HTTP {resp.status_code}: "
-                    f"{resp.text[:200]}"
+                    f"fetch_comments: HTTP {resp.status_code}: {resp.text[:200]}"
                 )
                 return results
             data = resp.json() or {}
             for item in data.get("values") or []:
-                body = ((item.get("content") or {}).get("raw")) or ""
-                if SUMMARY_MARKER_PREFIX in body or SUMMARY_MARKER_HIDDEN_PREFIX in body:
-                    results.append(item)
+                if item.get("deleted") is True:
+                    continue
+                results.append(item)
             next_url = data.get("next")
             if not isinstance(next_url, str) or not next_url:
                 break
@@ -169,7 +193,32 @@ class BitbucketProvider:
             # plumbing still works.
             url = _strip_base_url(next_url, self.config.base_url)
             params = None
+        self._comments_cache = results
         return results
+
+    def _list_summary_comments(self) -> list[dict[str, Any]]:
+        # The bash version added a server-side q= filter; we apply it client-side
+        # too (defensive — Bitbucket sometimes ignores q on rich-text fields).
+        return [
+            item
+            for item in self._fetch_comments()
+            if SUMMARY_MARKER_PREFIX in _comment_body(item)
+            or SUMMARY_MARKER_HIDDEN_PREFIX in _comment_body(item)
+        ]
+
+    def _write_request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Issue a write (POST/PUT/DELETE) against the comments endpoint and
+        invalidate the cached comment listing on success.
+
+        Used in place of `self.client.request` wherever a caller in this
+        file mutates PR comments through the shared upsert helpers in
+        `_upsert.py`, so a later `_fetch_comments()` call in the same run
+        re-fetches instead of returning what is now stale data.
+        """
+        resp = self.client.request(method, url, **kwargs)
+        if resp.status_code < 400:
+            self._comments_cache = None
+        return resp
 
     # ------------------------------------------------------------------
     # get_last_reviewed_sha
@@ -459,6 +508,7 @@ class BitbucketProvider:
                 degraded_to_comment=False,
                 error=err,
             )
+        self._comments_cache = None
         return FindingsResult(
             review_id=keep_id,
             inline_posted=0,
@@ -500,6 +550,7 @@ class BitbucketProvider:
             resp = self.client.request("DELETE", self._comment_url(dup_id))
             if resp.status_code < 400:
                 deleted += 1
+                self._comments_cache = None
             else:
                 errors.append(
                     f"delete dup #{dup_id}: HTTP {resp.status_code}: "
@@ -866,7 +917,7 @@ def _post_summary_impl(
         update_verb="PUT",
         item_url=provider._comment_url,
         create_url=provider._comments_url,
-        request=provider.client.request,
+        request=provider._write_request,
         errors=provider._errors,
         update_label="update summary",
         create_label="create summary",
@@ -911,7 +962,7 @@ def _post_skip_impl(provider: BitbucketProvider, reason: str) -> SummaryResult:
         update_verb="PUT",
         item_url=provider._comment_url,
         create_url=provider._comments_url,
-        request=provider.client.request,
+        request=provider._write_request,
         errors=provider._errors,
         update_label="update skip comment",
         create_label="skip comment",
@@ -926,7 +977,7 @@ def _advance_sha_impl(provider: BitbucketProvider, new_sha: str) -> bool:
         make_payload=lambda body: {"content": {"raw": body}},
         update_verb="PUT",
         item_url=provider._comment_url,
-        request=provider.client.request,
+        request=provider._write_request,
         errors=provider._errors,
         new_sha=new_sha,
         context_hint_prefix="bitbucket_comment",
