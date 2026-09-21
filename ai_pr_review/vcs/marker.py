@@ -433,22 +433,35 @@ def replace_summary_sha(body: str, new_sha: str, context_hint: str = "") -> str:
     return _SUMMARY_MARKER_RE.sub(replacement, body, count=1)
 
 
-# GitHub-only (this mechanism has no GitLab/Bitbucket counterpart yet — see
-# issue #710). Records, per finding fingerprint, which durable verdict a
-# human gave it via a slash command: "dismissed" (dismiss/false-positive/
-# wont-fix — suppress forever) or "fixed" (recur-check: reappearing with the
-# exact same fingerprint is worth re-surfacing, per the PR-comment-clutter
-# design). This can't be read back from GraphQL's `isResolved` state: that
-# flag is set identically by all four commands AND by resolve_stale's
-# routine per-cycle cleanup sweep, so by the next review cycle it no longer
-# distinguishes "resolved because a human said so" from "resolved because a
-# human said this specific thing" from "resolved as part of unrelated
-# housekeeping." Embedded in whichever review is currently canonical,
-# parallel to ID_MAP_MARKER_PREFIX; written by
-# `ai_pr_review.slash.github_ops` at command-handling time via
+# Originally GitHub-only (issue #710). Records, per finding fingerprint,
+# which durable verdict a human gave it via a slash command: "dismissed"
+# (dismiss/false-positive/wont-fix — suppress forever) or "fixed"
+# (recur-check: reappearing with the exact same fingerprint is worth
+# re-surfacing, per the PR-comment-clutter design). This can't be read back
+# from GraphQL's `isResolved` state: that flag is set identically by all
+# four commands AND by resolve_stale's routine per-cycle cleanup sweep, so
+# by the next review cycle it no longer distinguishes "resolved because a
+# human said so" from "resolved because a human said this specific thing"
+# from "resolved as part of unrelated housekeeping." Embedded in whichever
+# review is currently canonical, parallel to ID_MAP_MARKER_PREFIX; written
+# by `ai_pr_review.slash.github_ops` at command-handling time via
 # `GitHubProvider.update_review_body`.
+#
+# Bitbucket-parity note (#839 follow-up): Bitbucket's verdict work reuses
+# this marker in its single summary comment, gaining a hidden variant below
+# for the same reason ID_MAP_MARKER_PREFIX has one -- Bitbucket's renderer
+# shows a raw `<!-- -->` comment as literal text instead of hiding it (#699),
+# and the payload here is raw JSON, which a fingerprint's embedded file path
+# (containing `)`) could prematurely close if wrapped directly in the
+# `[//]: # (...)` reference-link form. The hidden variant base64-encodes the
+# payload for the same reason ID_MAP_MARKER_HIDDEN_PREFIX does. GitLab still
+# has no verdict system of any kind.
 VERDICTS_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-verdicts:"
 _VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
+VERDICTS_MARKER_HIDDEN_PREFIX: Final[str] = "[//]: # (ai-pr-review-verdicts:"
+_VERDICTS_MARKER_HIDDEN_RE = re.compile(
+    r"\[//\]:[ \t]*#[ \t]*\(ai-pr-review-verdicts:([A-Za-z0-9+/=]+)\)"
+)
 # "recurred" is a tombstone, not a third human verdict: written in place of
 # deleting a "fixed" entry when that finding reappears unchanged. Because
 # merge_verdicts (ai_pr_review/vcs/_canonical.py) unions verdicts across
@@ -464,17 +477,32 @@ _VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
 _VALID_VERDICTS: Final[frozenset[str]] = frozenset({"dismissed", "fixed", "recurred"})
 
 
-def build_verdicts_marker(verdicts: dict[str, str]) -> str:
+def build_verdicts_marker(verdicts: dict[str, str], *, hidden: bool = False) -> str:
     """Produce a hidden HTML comment embedding the fingerprint -> verdict map.
 
-    Format: ``<!-- ai-pr-review-verdicts: {"<fingerprint>": "dismissed"|"fixed", ...} -->``
+    Default format: ``<!-- ai-pr-review-verdicts: {"<fingerprint>": "dismissed"|"fixed", ...} -->``
+
+    Pass ``hidden=True`` (Bitbucket) to emit the reference-link-definition
+    form instead, with the JSON payload base64-encoded -- see
+    ``ID_MAP_MARKER_HIDDEN_PREFIX``'s module-level note for why raw JSON
+    isn't safe to embed directly in that form.
     """
     payload = json.dumps(verdicts, separators=(",", ":"), sort_keys=True)
+    if hidden:
+        encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        return f"{VERDICTS_MARKER_HIDDEN_PREFIX}{encoded})"
     return f"{VERDICTS_MARKER_PREFIX} {payload} -->"
 
 
 def extract_verdicts(body: str) -> dict[str, str]:
     """Extract the fingerprint -> verdict map from a review body.
+
+    Checks both marker forms (default HTML-comment, and the Bitbucket-only
+    hidden/base64 form -- see ``build_verdicts_marker``). When both are
+    present, the one appearing last in the body wins -- the same
+    "a forged marker-shaped string earlier in the body cannot appear after
+    the real one" reasoning ``extract_inline_meta`` documents, applied
+    across the union of both forms rather than within a single form.
 
     Returns an empty dict when no marker is present. Logs a warning and
     returns an empty dict when a marker is present but its JSON is
@@ -482,29 +510,45 @@ def extract_verdicts(body: str) -> dict[str, str]:
     are dropped individually (forward-compatible with a future verdict type
     this version doesn't recognize, without discarding the whole map).
     """
-    match = _VERDICTS_MARKER_RE.search(body)
-    if not match:
+    candidates = [(m.start(), m.group(1), False) for m in _VERDICTS_MARKER_RE.finditer(body)]
+    candidates += [
+        (m.start(), m.group(1), True) for m in _VERDICTS_MARKER_HIDDEN_RE.finditer(body)
+    ]
+    if not candidates:
         return {}
+    _, raw, is_hidden = max(candidates, key=lambda c: c[0])
+
+    if is_hidden:
+        try:
+            payload_raw = base64.b64decode(raw, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            _log.warning(
+                "ai-pr-review: hidden verdicts marker present but undecodable: %s", exc,
+            )
+            return {}
+    else:
+        payload_raw = raw
+
     try:
-        data = json.loads(match.group(1))
+        data = json.loads(payload_raw)
     except (json.JSONDecodeError, ValueError) as exc:
         _log.warning(
             "ai-pr-review: verdicts marker present but unparseable: %s — raw: %.200s",
             exc,
-            match.group(1),
+            payload_raw,
         )
         return {}
     if not isinstance(data, dict):
         _log.warning(
             "ai-pr-review: verdicts marker present but not a JSON object (got %s) — raw: %.200s",
             type(data).__name__,
-            match.group(1),
+            payload_raw,
         )
         return {}
     return {str(k): str(v) for k, v in data.items() if str(v) in _VALID_VERDICTS}
 
 
-def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:
+def upsert_verdicts_marker(body: str, verdicts: dict[str, str], *, hidden: bool = False) -> str:
     """Return `body` with its verdicts marker replaced, or appended if the
     body doesn't have one yet, carrying `verdicts`.
 
@@ -512,10 +556,18 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str]) -> str:
     body re-render in `post_findings`), this marker is surgically patched
     into an otherwise-unchanged review body by the slash-command dismiss
     path — so it needs an explicit replace-or-append, not just an append.
+
+    Pass ``hidden=True`` (Bitbucket) to write the reference-link-definition
+    form. Replaces whichever form (default or hidden) is already present in
+    `body`, if either is -- a body should only ever carry one form at a
+    time in practice (a provider always calls this with the same `hidden`
+    value for its own bodies), but checking both keeps this correct even if
+    that ever stops being true.
     """
-    new_marker = build_verdicts_marker(verdicts)
-    if _VERDICTS_MARKER_RE.search(body):
-        return _VERDICTS_MARKER_RE.sub(new_marker, body, count=1)
+    new_marker = build_verdicts_marker(verdicts, hidden=hidden)
+    match = _VERDICTS_MARKER_RE.search(body) or _VERDICTS_MARKER_HIDDEN_RE.search(body)
+    if match:
+        return body[: match.start()] + new_marker + body[match.end() :]
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}{new_marker}"
 
