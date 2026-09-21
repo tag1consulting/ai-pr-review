@@ -561,14 +561,26 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str], *, hidden: bool 
     form. Replaces whichever form (default or hidden) is already present in
     `body`, if either is -- a body should only ever carry one form at a
     time in practice (a provider always calls this with the same `hidden`
-    value for its own bodies), but checking both keeps this correct even if
-    that ever stops being true.
+    value for its own bodies), but if both are somehow present, the one
+    replaced is whichever occurs LAST by position, matching the same rule
+    `extract_verdicts` uses to decide which one is "live". Preferring
+    whichever form is checked first regardless of position (as an
+    `A.search(body) or B.search(body)` chain would) could patch a stale,
+    shadowed marker while `extract_verdicts` keeps reading the untouched
+    one that sorts later -- the write would appear to succeed while the
+    verdicts it wrote are silently orphaned.
     """
     new_marker = build_verdicts_marker(verdicts, hidden=hidden)
-    match = _VERDICTS_MARKER_RE.search(body) or _VERDICTS_MARKER_HIDDEN_RE.search(body)
+    candidates = [
+        m for m in (_VERDICTS_MARKER_RE.search(body), _VERDICTS_MARKER_HIDDEN_RE.search(body))
+        if m is not None
+    ]
+    match = max(candidates, key=lambda m: m.start()) if candidates else None
     if match:
         return body[: match.start()] + new_marker + body[match.end() :]
-    separator = "" if body.endswith("\n") else "\n"
+    separator = (
+        _hidden_marker_separator(body) if hidden else ("" if body.endswith("\n") else "\n")
+    )
     return f"{body}{separator}{new_marker}"
 
 

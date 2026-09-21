@@ -586,7 +586,41 @@ def test_verdicts_marker_hidden_survives_a_path_containing_parens() -> None:
 
 
 def test_extract_verdicts_hidden_corrupt_base64_returns_empty() -> None:
-    assert extract_verdicts("[//]: # (ai-pr-review-verdicts:not-valid-base64!!!)") == {}
+    # "not-valid-base64!!!" contains characters (`-`, `!`) outside the hidden
+    # marker regex's own capture class ([A-Za-z0-9+/=]+), so that string
+    # would never even match the marker pattern -- exercising the "no
+    # candidates found" path, not the base64.b64decode exception handler
+    # this test is named for. "A" alone matches the regex's charset but is
+    # invalid base64 (a data length of 1 is never valid), so it actually
+    # reaches and exercises the except branch.
+    assert extract_verdicts("[//]: # (ai-pr-review-verdicts:A)") == {}
+
+
+def test_extract_verdicts_hidden_valid_base64_invalid_utf8_returns_empty() -> None:
+    # base64 of b"\xff\xfe" decodes successfully as base64 but is not valid
+    # UTF-8 -- exercises the UnicodeDecodeError branch specifically, distinct
+    # from the ValueError (bad base64) branch covered above.
+    assert extract_verdicts("[//]: # (ai-pr-review-verdicts://4=)") == {}
+
+
+def test_build_verdicts_marker_hidden_round_trips_empty_dict() -> None:
+    marker = build_verdicts_marker({}, hidden=True)
+    assert extract_verdicts(marker) == {}
+
+
+def test_extract_verdicts_hidden_ignores_a_coexisting_hidden_id_map_marker() -> None:
+    """Bitbucket's single summary comment carries both a hidden id-map
+    marker and a hidden verdicts marker at once -- the real production
+    shape, per this file's own Bitbucket-parity note. Both share the same
+    `[//]: # (ai-pr-review-<name>:<base64>)` structure. Confirm the literal
+    prefix keeps them from cross-matching each other's payload."""
+    id_map_marker = build_id_map_marker({"F1": 12345}, hidden=True)
+    verdicts_marker = build_verdicts_marker(
+        {"a|b.py|1|abc123def456": "dismissed"}, hidden=True
+    )
+    body = f"some review body\n{id_map_marker}\n{verdicts_marker}"
+    assert extract_verdicts(body) == {"a|b.py|1|abc123def456": "dismissed"}
+    assert extract_id_map(body) == {"F1": 12345}
 
 
 def test_extract_verdicts_later_form_wins_by_position_not_by_form() -> None:
@@ -621,6 +655,21 @@ def test_upsert_verdicts_marker_hidden_appends_when_absent() -> None:
     assert extract_verdicts(result) == {"a|b.py|1|abc123def456": "dismissed"}
 
 
+def test_upsert_verdicts_marker_hidden_appends_with_blank_line_when_no_trailing_newline() -> None:
+    """A `[//]: # (...)` reference-link definition appended after a single
+    newline becomes a CommonMark lazy-continuation line and renders as
+    literal text instead of being hidden (#699) -- it needs a full blank
+    line before it, unlike the HTML-comment form. Must route through
+    `_hidden_marker_separator`, the same helper `append_inline_marker` uses
+    for the same reason, not the plain single-newline-or-empty logic the
+    default form uses."""
+    body = "some review body"
+    result = upsert_verdicts_marker(
+        body, {"a|b.py|1|abc123def456": "dismissed"}, hidden=True
+    )
+    assert result.startswith("some review body\n\n[//]: # (ai-pr-review-verdicts:")
+
+
 def test_upsert_verdicts_marker_hidden_replaces_existing_hidden_marker_in_place() -> None:
     body = "some review body\n" + build_verdicts_marker(
         {"a|b.py|1|abc123def456": "dismissed"}, hidden=True
@@ -648,6 +697,32 @@ def test_upsert_verdicts_marker_hidden_replaces_a_pre_existing_html_form_marker(
     assert updated.count("ai-pr-review-verdicts:") == 1
     assert "<!--" not in updated
     assert extract_verdicts(updated) == {"a|b.py|1|abc123def456": "fixed"}
+
+
+def test_upsert_verdicts_marker_replaces_last_by_position_when_both_forms_present() -> None:
+    """If a body somehow carries both forms, the one replaced must be
+    whichever occurs LAST by position -- matching extract_verdicts' own
+    "last one wins" rule for deciding which marker is live. Replacing
+    whichever form happens to be checked first (an
+    `A.search(body) or B.search(body)` chain) would patch a stale, shadowed
+    marker while extract_verdicts kept reading the untouched one that sorts
+    later, so the write would appear to succeed while the verdicts it wrote
+    are silently orphaned. Here the HTML form sorts first and the hidden
+    form sorts last, so the hidden one must be the one replaced."""
+    body = (
+        "some review body\n"
+        + build_verdicts_marker({"a|b.py|1|abc123def456": "dismissed"})
+        + "\n"
+        + build_verdicts_marker({"c|d.py|2|def456abc123": "fixed"}, hidden=True)
+    )
+    updated = upsert_verdicts_marker(
+        body, {"c|d.py|2|def456abc123": "recurred"}, hidden=True
+    )
+    assert updated.count("ai-pr-review-verdicts:") == 2
+    # The last-by-position marker (originally hidden) now carries the new
+    # payload. The earlier HTML-form marker is untouched.
+    assert extract_verdicts(updated) == {"c|d.py|2|def456abc123": "recurred"}
+    assert '"a|b.py|1|abc123def456":"dismissed"' in updated
 
 
 # ---------------------------------------------------------------------------
