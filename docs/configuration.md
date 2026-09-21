@@ -25,6 +25,7 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `base-ref` | **Yes** | — | Base branch name |
 | `head-ref` | No | `''` | Head branch name (e.g. `feature/foo`). Optional — only used for head-branch route matching in `.github/ai-pr-review/policy.yml` (see [Policies](policy)). |
 | `head-sha` | **Yes** | — | Head commit SHA |
+| `policy-source` | No | `base-ref` | Where `.github/ai-pr-review/policy.yml` is read from: `base-ref` (via `git show`, never the PR head) or `workspace` (the checked-out tree directly). See [Policies: Security](policy#security-loaded-from-the-base-ref-never-the-pr-head--but-only-when-your-trigger-needs-it) before setting `workspace`. |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 | `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). Lower values produce more deterministic output. |

@@ -231,6 +231,14 @@ on:
         type: string
         required: false
         default: '200'
+      policy-source:
+        description: >
+          Where .github/ai-pr-review/policy.yml is read from ('base-ref' or
+          'workspace'). Omit to inherit container-action's own default
+          ('base-ref'). See docs/policy.md before setting 'workspace'.
+        type: string
+        required: false
+        default: 'base-ref'
       exclude-patterns:
         description: >
           Comma-separated glob patterns to exclude from review regardless
@@ -667,6 +675,7 @@ jobs:
           max-cost-usd: ${{ inputs.max-cost-usd }}
           fail-on-cost-ceiling: ${{ inputs.fail-on-cost-ceiling }}
           context-max-queries: ${{ inputs.context-max-queries }}
+          policy-source: ${{ inputs.policy-source }}
           exclude-patterns: ${{ inputs.exclude-patterns }}
           exclude-patterns-mode: ${{ inputs.exclude-patterns-mode }}
           analyzer-diff-scope: ${{ inputs.analyzer-diff-scope }}

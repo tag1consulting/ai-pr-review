@@ -92,6 +92,20 @@ inputs:
     required: false
     default: ''
 
+  policy-source:
+    description: >
+      Where .github/ai-pr-review/policy.yml is read from: 'base-ref'
+      (default) reads via `git show origin/<base-ref>:...`, never the PR
+      head's working tree -- the only choice that adds real protection
+      under a base-controlled workflow trigger (pull_request_target). Under
+      the far more common pull_request trigger, the workflow itself is
+      already head-controlled, so the base-ref read only costs one extra
+      merge before a policy change takes effect; set 'workspace' to read
+      directly from the checked-out tree and skip that delay. Never set
+      'workspace' under pull_request_target -- see docs/policy.md.
+    required: false
+    default: 'base-ref'
+
   max-diff-lines:
     description: 'Skip review if diff exceeds this many lines'
     required: false
@@ -382,6 +396,7 @@ runs:
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_REF: ${{ inputs.head-ref }}
         HEAD_SHA: ${{ inputs.head-sha }}
+        AI_POLICY_SOURCE: ${{ inputs.policy-source }}
         AI_PARALLEL: ${{ inputs.parallel }}
         AI_MAX_INLINE: ${{ inputs.max-inline }}
         AI_TEMPERATURE: ${{ inputs.temperature }}
@@ -512,6 +527,7 @@ runs:
           -e BASE_REF \
           -e HEAD_REF \
           -e HEAD_SHA \
+          -e AI_POLICY_SOURCE \
           -e AI_PARALLEL \
           -e AI_MAX_INLINE \
           -e AI_TEMPERATURE \

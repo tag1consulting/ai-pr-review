@@ -244,6 +244,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 | `pr-number` | No | `''` | PR number (required for `pr` target; unused in standalone) |
 | `base-ref` | **Yes** | — | Base branch name |
 | `head-sha` | **Yes** | — | Head commit SHA |
+| `policy-source` | No | `base-ref` | Where `.github/ai-pr-review/policy.yml` is read from (`base-ref` or `workspace`). See [Configuration: Action inputs](docs/configuration.md#action-inputs) and [Policies: Security](docs/policy.md) before setting `workspace`. |
 | `github-token` | **Yes** | — | GitHub token with `pull-requests: write` |
 | `parallel` | No | `true` | Run agents in parallel (tiered fan-out). Set to `false` to revert to sequential if you hit provider rate limits |
 | `temperature` | No | `0.3` | Sampling temperature for LLM calls (float in [0, 2]). |

@@ -161,6 +161,7 @@ jobs:
       max-cost-usd: ${{ vars.AI_REVIEW_MAX_COST_USD || '0' }}
       fail-on-cost-ceiling: ${{ vars.AI_REVIEW_FAIL_ON_COST_CEILING || 'false' }}
       context-max-queries: ${{ vars.AI_REVIEW_CONTEXT_MAX_QUERIES || '200' }}
+      policy-source: ${{ vars.AI_REVIEW_POLICY_SOURCE || 'base-ref' }}
       exclude-patterns: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS || '' }}
       exclude-patterns-mode: ${{ vars.AI_REVIEW_EXCLUDE_PATTERNS_MODE || 'append' }}
       analyzer-diff-scope: ${{ vars.AI_REVIEW_ANALYZER_DIFF_SCOPE || 'cap' }}

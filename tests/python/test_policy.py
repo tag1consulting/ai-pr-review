@@ -513,6 +513,91 @@ def test_load_policy_file_never_reads_from_pr_head_working_tree(
 
 
 # ---------------------------------------------------------------------------
+# source="workspace" (issue #869) — reads the checked-out tree directly
+# instead of the base ref via git show.
+# ---------------------------------------------------------------------------
+
+
+def test_load_policy_file_defaults_to_base_ref_source(git_repo: Path) -> None:
+    """The default (no source= given) must be identical to source='base-ref'."""
+    policy_dir = git_repo / ".github" / "ai-pr-review"
+    policy_dir.mkdir(parents=True)
+    (policy_dir / "policy.yml").write_text(
+        "version: 1\npolicies:\n  content:\n    agents: []\n"
+        "routes: []\ndefault: content\n"
+    )
+    _git("add", ".", cwd=git_repo)
+    _git("commit", "-q", "-m", "add policy", cwd=git_repo)
+    _git("push", "-q", "origin", "main", cwd=git_repo)
+
+    default_result = load_policy_file(str(git_repo), "main")
+    explicit_result = load_policy_file(str(git_repo), "main", source="base-ref")
+    assert default_result is not None
+    assert explicit_result is not None
+    assert default_result.default == explicit_result.default == "content"
+
+
+def test_load_policy_file_workspace_source_reads_uncommitted_working_tree(
+    git_repo: Path,
+) -> None:
+    """source='workspace' reads the working tree directly -- the opposite of
+    the base-ref default's core guarantee, by design: an operator who opted
+    into 'workspace' wants a policy.yml change to apply without a merge."""
+    policy_dir = git_repo / ".github" / "ai-pr-review"
+    policy_dir.mkdir(parents=True)
+    (policy_dir / "policy.yml").write_text(
+        "policies:\n  none: {agents: []}\nroutes: []\ndefault: none\n"
+    )
+    # Deliberately NOT committed/pushed.
+    result = load_policy_file(str(git_repo), "main", source="workspace")
+    assert result is not None
+    assert result.default == "none"
+
+
+def test_load_policy_file_workspace_source_missing_file_returns_none_silently(
+    git_repo: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = load_policy_file(str(git_repo), "main", source="workspace")
+    assert result is None
+    assert capsys.readouterr().err == ""
+
+
+def test_load_policy_file_workspace_source_ignores_base_ref(git_repo: Path) -> None:
+    """source='workspace' must work even with an empty/nonexistent base_ref,
+    since it never needs one -- unlike source='base-ref', which returns None
+    outright when base_ref is empty."""
+    policy_dir = git_repo / ".github" / "ai-pr-review"
+    policy_dir.mkdir(parents=True)
+    (policy_dir / "policy.yml").write_text(
+        "policies:\n  x: {agents: []}\nroutes: []\ndefault: x\n"
+    )
+    result = load_policy_file(str(git_repo), "", source="workspace")
+    assert result is not None
+    assert result.default == "x"
+
+
+def test_load_policy_file_invalid_source_warns_and_falls_back_to_base_ref(
+    git_repo: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    policy_dir = git_repo / ".github" / "ai-pr-review"
+    policy_dir.mkdir(parents=True)
+    (policy_dir / "policy.yml").write_text(
+        "version: 1\npolicies:\n  content:\n    agents: []\n"
+        "routes: []\ndefault: content\n"
+    )
+    _git("add", ".", cwd=git_repo)
+    _git("commit", "-q", "-m", "add policy", cwd=git_repo)
+    _git("push", "-q", "origin", "main", cwd=git_repo)
+
+    result = load_policy_file(str(git_repo), "main", source="not-a-real-source")
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "not-a-real-source" in err
+    assert result is not None
+    assert result.default == "content"
+
+
+# ---------------------------------------------------------------------------
 # examples/policy.yml.example — the maintainer-facing copy/paste template
 # must stay parseable and resolve routes the way its own comments claim.
 # ---------------------------------------------------------------------------
