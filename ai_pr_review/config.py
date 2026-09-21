@@ -111,6 +111,11 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # two independently-risky features would block rolling either back
         # alone.
         "AI_GITLAB_CROSS_RUN_DEDUP",
+        # --- Code Insights annotations + dedup (Bitbucket only, #839/#873) ---
+        # Read directly by ai_pr_review.vcs.__init__._build_bitbucket_from_env,
+        # not by Config -- registered here only so Config.from_env's unknown-
+        # AI_*-var check doesn't warn about it.
+        "AI_BITBUCKET_CODE_INSIGHTS",
     }
 )
 

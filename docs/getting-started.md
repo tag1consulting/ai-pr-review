@@ -51,7 +51,7 @@ and GitLab. Select the provider via the `VCS_PROVIDER` env var (default: `github
 | Provider | `VCS_PROVIDER` | Summary | Inline | Suggestions | Approval |
 |----------|---------------|---------|--------|-------------|----------|
 | GitHub | `github` (default) | Yes | Yes | Yes | Yes |
-| Bitbucket Cloud | `bitbucket` | Yes (findings inside the summary body) | No | No | No |
+| Bitbucket Cloud | `bitbucket` | Yes | Yes (via Code Insights annotations, not inline comments -- see [Bitbucket setup](bitbucket-setup.md)) | No | No |
 | GitLab | `gitlab` | Yes | Yes | Yes | Yes |
 
 See [Bitbucket setup](bitbucket-setup) for Bitbucket Pipelines setup and

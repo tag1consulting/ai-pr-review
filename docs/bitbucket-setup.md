@@ -9,13 +9,35 @@ nav_order: 4
 
 `ai-pr-review` supports Bitbucket Cloud PRs via the same container image used
 for GitHub Actions. The Bitbucket path posts a single summary comment per PR
-(updated in place on subsequent runs), with all findings rendered as markdown
-bullets inside the comment body. Inline review comments and Code Insights
-annotations are not currently available on the Bitbucket path.
+(updated in place on subsequent runs); findings eligible for an inline anchor
+render as [Code Insights](https://support.atlassian.com/bitbucket-cloud/docs/code-insights/)
+annotations directly on the PR diff, and everything else renders as markdown
+bullets inside the comment body.
+
+Bitbucket Cloud's own API *can* do real inline PR comments, threaded replies,
+and thread resolution. This is not a platform limitation. `ai-pr-review`
+deliberately doesn't use them: Code Insights annotations are natively
+idempotent (re-posting the same finding never duplicates it) and require no
+thread-resolution machinery at all, since annotations aren't repliable. See
+[ADR 0005](adr/0005-bitbucket-code-insights-not-inline-comment-threads) for
+the full reasoning behind that choice.
 
 ## What works
 
 - Summary comment upsert (single comment per PR, updated on each run)
+- Inline findings via Code Insights annotations, rebuilt from scratch every
+  run (`AI_BITBUCKET_CODE_INSIGHTS`, default `true`). Each annotation carries
+  the same `[F<n>]` token as the summary comment's findings, so you can
+  reference it there. If Code Insights isn't available on your workspace's
+  plan (a 403/404 on the report API), every finding falls back to rendering
+  in the summary comment body instead, exactly as it did before this feature
+  existed. Nothing is silently dropped.
+- Cross-run dedup: a finding dismissed via the summary comment's hidden
+  verdicts marker is excluded from the next run's Code Insights report and
+  never reappears (part of the same `AI_BITBUCKET_CODE_INSIGHTS` flag, see
+  [issue #839](https://github.com/tag1consulting/ai-pr-review/issues/839)).
+  Dismissing a finding itself (writing that verdict) has no Bitbucket trigger
+  yet, see [issue #874](https://github.com/tag1consulting/ai-pr-review/issues/874).
 - Incremental-diff SHA watermark (a hidden reference-link marker — Bitbucket's
   renderer shows an HTML comment as literal text instead of hiding it, unlike
   GitHub/GitLab, so Bitbucket uses a different marker form; see [Version
@@ -24,10 +46,28 @@ annotations are not currently available on the Bitbucket path.
   review logic)
 - Provider-auto retry on transient Bitbucket API errors (408/429/500-504)
 
+### Code Insights annotation category mapping
+
+Each finding's category maps to one of Code Insights' three
+`annotation_type` values. The line is drawn at: `VULNERABILITY` = an attacker
+can exploit it, `BUG` = wrong at runtime, `CODE_SMELL` = maintainability.
+`test-gap` is grouped under `BUG` (not `CODE_SMELL`) because Bitbucket
+renders `BUG` more prominently, and a missing test on a security-relevant
+path is not merely cosmetic.
+
+| `annotation_type` | Categories |
+|---|---|
+| `VULNERABILITY` | `authz`, `injection`, `secret`, `dependency-cve` |
+| `BUG` | `edge-case`, `test-gap` |
+| `CODE_SMELL` | `architecture-coupling`, `observability`, `docs`, `lint`, `other` |
+
+Severity maps 1:1: Critical→`CRITICAL`, High→`HIGH`, Medium→`MEDIUM`,
+Low→`LOW`.
+
 ## What does not work on Bitbucket
 
-- Inline review comments (deferred; all findings render inside the summary
-  body)
+- Dismissing/suppressing a finding via a comment command (no Bitbucket
+  trigger yet for verdict polling, see [issue #874](https://github.com/tag1consulting/ai-pr-review/issues/874))
 - APPROVE / REQUEST_CHANGES PR events (Bitbucket has different endpoints
   for approve/request-changes and the feature is optional)
 - Slash-command triggers (Bitbucket Pipelines has no `issue_comment`

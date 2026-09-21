@@ -27,6 +27,7 @@ from urllib.parse import quote
 
 import httpx
 
+from ai_pr_review.diff.linemap import parse_diff_sets
 from ai_pr_review.findings.models import Finding, Severity
 from ai_pr_review.vcs._body import (
     compute_headline,
@@ -35,7 +36,10 @@ from ai_pr_review.vcs._body import (
     severity_icon,
     truncate_body,
 )
+from ai_pr_review.vcs._canonical import classify
+from ai_pr_review.vcs._code_insights import post_code_insights
 from ai_pr_review.vcs._finding_ids import assemble_id_map, fingerprint
+from ai_pr_review.vcs._inline import partition_findings
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs._upsert import advance_sha_marker, upsert_comment
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
@@ -53,6 +57,7 @@ from ai_pr_review.vcs.marker import (
     build_usage_block,
     extract_id_map,
     extract_summary_sha,
+    extract_verdicts,
     has_skip_marker,
 )
 from ai_pr_review.vcs.protocol import (
@@ -93,6 +98,15 @@ class BitbucketConfig:
     email: str
     api_token: str
     base_url: str = "https://api.bitbucket.org/2.0"
+    # Bitbucket parity Phase 3 (#839/#873): render findings via Code Insights
+    # annotations on the PR diff instead of only the flat comment body, and
+    # gate the same flag on the id-map/verdict dedup this needs (they are too
+    # entangled to usefully split -- see the Bitbucket-parity plan's Phase 3
+    # "Decisions taken" section). Defaults True. The kill switch is
+    # AI_BITBUCKET_CODE_INSIGHTS=false, which reproduces pre-Phase-3 behavior
+    # (every finding rendered flat in the comment body, no suppression)
+    # byte-for-byte.
+    code_insights: bool = True
 
 
 def build_client(
@@ -287,6 +301,65 @@ class BitbucketProvider:
             [existing_body] if existing_body else [], list(findings)
         )
 
+        # Bitbucket parity Phase 3 (#839/#873): Code Insights annotations as
+        # the inline display layer, gated by one flag alongside the dedup it
+        # needs (see BitbucketConfig.code_insights' docstring). Disabled,
+        # this reproduces pre-Phase-3 behavior byte-for-byte: every finding
+        # renders flat in the comment body below, no suppression.
+        render_findings = list(findings)
+        headline_findings: Sequence[Finding] = render_findings
+        suppressed_count = 0
+        annotated_count = 0
+        if self.config.code_insights:
+            verdicts = extract_verdicts(existing_body) if existing_body else {}
+            classified = [
+                classify(f, verdicts=verdicts, all_threads=[]) for f in findings
+            ]
+            render_findings = [
+                c.finding for c in classified if c.kind != "suppressed"
+            ]
+            suppressed_count = len(classified) - len(render_findings)
+            # The headline (Overall Risk / Findings count) always reflects
+            # every still-active finding, regardless of which ones actually
+            # land an annotation this cycle -- mirrors github.py's
+            # headline_findings/render_findings split for the same reason:
+            # a finding shown only via Code Insights must not silently drop
+            # out of "Overall Risk".
+            headline_findings = render_findings
+
+            added_lines, _new_files = parse_diff_sets(diff.diff_text)
+            eligible_new = {(lr.file, lr.line) for lr in added_lines}
+            inline_candidates, body_only = partition_findings(
+                render_findings, eligible_new=eligible_new, max_inline=max_inline
+            )
+
+            ci_result = post_code_insights(
+                self.client,
+                workspace=self.config.workspace,
+                repo_slug=self.config.repo_slug,
+                commit=diff.head_sha,
+                findings=inline_candidates,
+                id_map=id_map,
+            )
+            if ci_result.ok:
+                render_findings = body_only
+                annotated_count = ci_result.posted
+            else:
+                # Plan Q5 fallback: Code Insights unavailable on this
+                # workspace's plan (403/404) -- never drop findings, render
+                # every would-be-inline finding in the body instead, exactly
+                # as if it had failed inline eligibility. Logged once per
+                # run, not once per finding.
+                _log.warning(
+                    "bitbucket: Code Insights posting failed for %s/%s PR "
+                    "#%s, falling back to rendering findings in the summary "
+                    "comment body: %s",
+                    self.config.workspace, self.config.repo_slug,
+                    self.config.pr_id, ci_result.error,
+                )
+                self._errors.append(f"post_findings: {ci_result.error}")
+                render_findings = body_only + inline_candidates
+
         # usage_block/usage_warning are deliberately NOT passed into
         # _render_combined_body: findings_block alone can be arbitrarily
         # large (a real e2e run against a heavily-seeded test PR produced 63
@@ -297,7 +370,9 @@ class BitbucketProvider:
         # already is, below.
         body = _render_combined_body(
             existing_body=existing_body,
-            findings=findings,
+            findings=render_findings,
+            headline_findings=headline_findings,
+            annotated_count=annotated_count,
             event=event,
             failed_agents=failed_agents,
             agent_prompt=agent_prompt,
@@ -453,18 +528,20 @@ class BitbucketProvider:
             self._errors.append(err)
             return FindingsResult(
                 review_id=keep_id,
-                inline_posted=0,
-                body_findings=len(findings),
+                inline_posted=annotated_count,
+                body_findings=len(render_findings),
                 event=event,
                 degraded_to_comment=False,
+                suppressed=suppressed_count,
                 error=err,
             )
         return FindingsResult(
             review_id=keep_id,
-            inline_posted=0,
-            body_findings=len(findings),
+            inline_posted=annotated_count,
+            body_findings=len(render_findings),
             event=event,
             degraded_to_comment=False,
+            suppressed=suppressed_count,
         )
 
     # ------------------------------------------------------------------
@@ -587,8 +664,19 @@ def _render_combined_body(
     workspace: str,
     repo_slug: str,
     head_sha: str,
+    headline_findings: Sequence[Finding] | None = None,
+    annotated_count: int = 0,
 ) -> str:
     """Render the combined summary+findings body for Bitbucket.
+
+    ``findings`` is what actually renders as flat bullets below.
+    ``headline_findings`` (defaults to ``findings`` when not given) is what
+    "Overall Risk"/"Findings: N" describe -- when Code Insights annotations
+    (Bitbucket parity Phase 3) carry some findings instead of the body, the
+    two lists diverge: a finding shown only via annotation still counts
+    toward the headline but isn't one of the bullets below.
+    ``annotated_count`` adds a one-line pointer to those findings so the
+    headline count and the (shorter) bullet list don't look inconsistent.
 
     Bitbucket has no <details> rendering, so remediation is rendered as a
     flat sub-bullet (per bash post-review-bitbucket.sh:281), and (unlike
@@ -613,7 +701,10 @@ def _render_combined_body(
     parsed from ``existing_body`` — in either case nothing is flagged new,
     since an all-new list on the very first render would carry no signal.
     """
-    headline = compute_headline(findings, failed_agents)
+    headline = compute_headline(
+        headline_findings if headline_findings is not None else findings,
+        failed_agents,
+    )
     finding_total = headline.count
     risk = headline.risk
 
@@ -659,13 +750,13 @@ def _render_combined_body(
     # the raw `findings` list keeps this gate about whether there is
     # anything to render, not about the (deliberately narrower) headline
     # count.
-    if event == "APPROVE" and not findings:
+    if event == "APPROVE" and not findings and not annotated_count:
         heading = "## AI Review: Approved"
         summary_block = (
             "No findings above the confidence threshold. The changes look good."
         )
         findings_block = ""
-    elif event == "COMMENT" and risk == "Unknown" and not findings:
+    elif event == "COMMENT" and risk == "Unknown" and not findings and not annotated_count:
         heading = "## AI Review: Incomplete"
         joined = ", ".join(failed_agents)
         summary_block = (
@@ -725,6 +816,13 @@ def _render_combined_body(
         )
         findings_block = "### Findings\n" + join_findings(
             _render_bullet(f) for f in sorted_findings
+        )
+
+    if annotated_count:
+        plural = "" if annotated_count == 1 else "s"
+        summary_block += (
+            f"\n\n{annotated_count} additional finding{plural} shown inline "
+            "via Bitbucket Code Insights annotations."
         )
 
     # Preserve the marker line + the walkthrough/summary text from the
