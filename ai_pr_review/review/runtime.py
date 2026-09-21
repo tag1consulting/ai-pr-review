@@ -92,8 +92,14 @@ def _merge_allowlist(
     policy_allow: tuple[str, ...],
     policy_restricted: bool,
     all_names: frozenset[str],
+    policy_deny: tuple[str, ...] = (),
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Merge an explicit config allow/deny pair with a resolved policy's.
+
+    Deny lists are additive: the policy's ``exclude-agents`` /
+    ``exclude-analyzers`` (``policy_deny``) is unioned with the explicit
+    config deny list rather than replaced by it, so a repo variable and a
+    policy.yml entry can each exclude their own names and both take effect.
 
     An empty allow tuple is ambiguous on its own: everywhere else in the
     config surface (CLI flags, env vars) it means "no restriction," but a
@@ -108,7 +114,7 @@ def _merge_allowlist(
     non-empty policy allow list is unambiguous and used as-is regardless of
     ``policy_restricted`` — that flag only disambiguates the empty case.
     """
-    final_deny = config_deny or ()
+    final_deny = tuple(sorted(set(config_deny) | set(policy_deny)))
     if config_allow:
         return config_allow, final_deny
     if policy_allow:
@@ -355,6 +361,7 @@ async def build_review_runtime(
         _resolved_policy.agents if _resolved_policy else (),
         _resolved_policy.agents_restricted if _resolved_policy else False,
         _policy_deny_all_names,
+        _resolved_policy.exclude_agents if _resolved_policy else (),
     )
     _final_analyzers, _final_exclude_analyzers = _merge_allowlist(
         config.analyzers,
@@ -362,6 +369,7 @@ async def build_review_runtime(
         _resolved_policy.analyzers if _resolved_policy else (),
         _resolved_policy.analyzers_restricted if _resolved_policy else False,
         ANALYZER_NAMES,
+        _resolved_policy.exclude_analyzers if _resolved_policy else (),
     )
     config = config.model_copy(
         update={
