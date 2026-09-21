@@ -55,6 +55,35 @@ def test_head_ref_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.head_ref == "feature/foo"
 
 
+def test_policy_source_default_is_base_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#869: the default must stay 'base-ref' -- the existing security
+    guarantee for a repo that never opts in."""
+    monkeypatch.delenv("AI_POLICY_SOURCE", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.policy_source == "base-ref"
+
+
+def test_policy_source_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_POLICY_SOURCE", "workspace")
+    cfg = ReviewConfig.from_env()
+    assert cfg.policy_source == "workspace"
+
+
+def test_policy_source_blank_env_falls_back_to_base_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_POLICY_SOURCE", "")
+    cfg = ReviewConfig.from_env()
+    assert cfg.policy_source == "base-ref"
+
+
+def test_policy_source_invalid_value_raises() -> None:
+    with pytest.raises(ValueError, match="policy_source"):
+        ReviewConfig(policy_source="not-a-real-source")
+
+
+def test_policy_source_bare_constructor_default() -> None:
+    assert ReviewConfig().policy_source == "base-ref"
+
+
 def test_max_inline_default_matches_action_yml() -> None:
     """The bare-constructor default for max_inline must match action.yml's
     documented default ('25'), so a caller that imports ReviewConfig

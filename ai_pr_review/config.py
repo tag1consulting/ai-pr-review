@@ -38,6 +38,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_DISABLE_GATE_EDGE_CASE",
         "AI_DRY_RUN",
         "AI_IGNORE_MERGE_COMMITS",
+        "AI_POLICY_SOURCE",
         "AI_PR_REVIEW_RECORD_DIR",
         # Read directly by cli.py's `compute` subcommand (a `--output` click
         # option with this envvar as its Click default), not by Config --
@@ -427,6 +428,14 @@ class ReviewConfig(BaseModel):
     vcs_provider: str = "github"
     review_target: str = "pr"
     force_full_diff: bool = False
+    # Where .github/ai-pr-review/policy.yml is read from (issue #869):
+    # "base-ref" (default) reads via git show origin/{base_ref}:... , the
+    # only choice that adds real protection under pull_request_target.
+    # "workspace" reads from the checked-out tree directly, for a repo whose
+    # workflow is already head-controlled (plain pull_request) and would
+    # rather skip base-ref's one-extra-merge delay. See ai_pr_review.policy's
+    # module docstring.
+    policy_source: str = "base-ref"
 
     # --- Agent tuning ---
     parallel: bool = True
@@ -584,6 +593,13 @@ class ReviewConfig(BaseModel):
     def _validate_vcs_provider(cls, v: str) -> str:
         if v not in ("github", "bitbucket", "gitlab"):
             raise ValueError(f"vcs_provider must be github/bitbucket/gitlab, got {v!r}")
+        return v
+
+    @field_validator("policy_source")
+    @classmethod
+    def _validate_policy_source(cls, v: str) -> str:
+        if v not in ("base-ref", "workspace"):
+            raise ValueError(f"policy_source must be 'base-ref' or 'workspace', got {v!r}")
         return v
 
     @field_validator("exclude_patterns_mode")
@@ -782,6 +798,7 @@ class ReviewConfig(BaseModel):
             vcs_provider=os.environ.get("VCS_PROVIDER", "github").strip(),
             review_target=review_target,
             force_full_diff=_bool("FORCE_FULL_DIFF"),
+            policy_source=os.environ.get("AI_POLICY_SOURCE", "base-ref").strip() or "base-ref",
             parallel=_bool("AI_PARALLEL", True),
             analyzer_concurrency=max(1, _int("AI_ANALYZER_CONCURRENCY", 4)),
             max_inline=_int("AI_MAX_INLINE", 25),

@@ -799,6 +799,50 @@ class TestPolicyResolution:
         assert runtime.config.review_mode == "quick"
 
     @pytest.mark.anyio
+    async def test_load_policy_file_called_with_configured_source(
+        self, tmp_path: Path,
+    ) -> None:
+        """#869: build_review_runtime must forward config.policy_source to
+        load_policy_file, not silently ignore it and always use the
+        base-ref default."""
+        config = _make_config(review_mode="", policy_source="workspace")
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch(
+                "ai_pr_review.policy.load_policy_file", return_value=None
+            ) as mock_load_policy,
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            await build_review_runtime(config, provider_factory=lambda: provider)
+
+        mock_load_policy.assert_called_once()
+        assert mock_load_policy.call_args.kwargs["source"] == "workspace"
+
+    @pytest.mark.anyio
+    async def test_load_policy_file_defaults_to_base_ref_source(
+        self, tmp_path: Path,
+    ) -> None:
+        config = _make_config(review_mode="")  # policy_source defaults to "base-ref"
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch(
+                "ai_pr_review.policy.load_policy_file", return_value=None
+            ) as mock_load_policy,
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+        ):
+            await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert mock_load_policy.call_args.kwargs["source"] == "base-ref"
+
+    @pytest.mark.anyio
     async def test_unset_mode_defers_to_matched_policy(self, tmp_path: Path) -> None:
         from ai_pr_review.policy import PolicyFile, ResolvedPolicy
 

@@ -332,15 +332,17 @@ async def build_review_runtime(
     _changed_list = cf.all_files
 
     # 6b. Resolve .github/ai-pr-review/policy.yml (fail-soft; loaded from the
-    # base ref, never the PR head's working tree — see ai_pr_review.policy's
-    # module docstring for the trust-model rationale). Only fields the
-    # config left unset (review_mode == "" ; agents/exclude_agents/
-    # analyzers/exclude_analyzers == ()) defer to the resolved policy — an
-    # explicit action input, label, or slash-command override always wins,
-    # so behavior is unchanged for repos not adopting a policy file. Must
-    # run before the DispatchContext below, which captures config.review_mode.
+    # base ref by default, never the PR head's working tree — see
+    # ai_pr_review.policy's module docstring for the trust-model rationale,
+    # and issue #869 for why config.policy_source can opt into reading from
+    # the workspace instead). Only fields the config left unset
+    # (review_mode == "" ; agents/exclude_agents/analyzers/exclude_analyzers
+    # == ()) defer to the resolved policy — an explicit action input, label,
+    # or slash-command override always wins, so behavior is unchanged for
+    # repos not adopting a policy file. Must run before the DispatchContext
+    # below, which captures config.review_mode.
     from ai_pr_review.policy import load_policy_file, match_route, resolve_policy
-    _policy_file = load_policy_file(workspace=".", base_ref=base_ref)
+    _policy_file = load_policy_file(workspace=".", base_ref=base_ref, source=config.policy_source)
     _resolved_policy = None
     _matched_route = None
     _policy_name: str | None = None

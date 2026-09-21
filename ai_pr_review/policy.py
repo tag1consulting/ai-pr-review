@@ -6,14 +6,29 @@ of hand-rolling a GitHub Actions expression per repo. See docs/policy.md
 for the schema and the full precedence chain (explicit action inputs and
 slash-command overrides still win over anything resolved here).
 
-Security: the policy file is loaded from the PR's *base* ref via
-``git show origin/{base_ref}:.github/ai-pr-review/policy.yml`` — never from
-the checked-out working tree, which on a PR is attacker-controlled. A
-malicious PR must not be able to edit its own policy file to disable review
-agents on itself. This is a stricter trust model than the pre-existing
-``.github/ai-pr-review/suppressions.json`` (loaded from the working tree by
-``ai_pr_review.findings.suppress``), which is a narrower, lower-severity
-gap tracked separately.
+Security (issue #869): by default the policy file is loaded from the PR's
+*base* ref via ``git show origin/{base_ref}:.github/ai-pr-review/policy.yml``
+— never from the checked-out working tree, which on a PR is
+attacker-controlled. A malicious PR must not be able to edit its own policy
+file to disable review agents on itself. This is a stricter trust model than
+the pre-existing ``.github/ai-pr-review/suppressions.json`` (loaded from the
+working tree by ``ai_pr_review.findings.suppress``), which is a narrower,
+lower-severity gap tracked separately.
+
+That base-ref read only closes a real gap when the *workflow itself* is
+base-controlled, i.e. GitHub ``pull_request_target``. Under the far more
+common ``pull_request`` event (the default in
+``examples/workflows/pr-review.yml``), the workflow file already runs from
+the PR head — a PR can already delete the review job, set
+``exclude-agents``, or force ``review-mode: quick`` regardless of where
+policy.yml is read from. In that case the base-ref read guards a side door
+while the front door is already PR-controlled; its only effect is that a
+policy change takes one extra merge to apply. ``AI_POLICY_SOURCE`` /
+``policy-source`` (default ``base-ref``) lets a repo whose workflow is
+head-controlled opt into ``workspace`` instead, reading from the checked-out
+tree directly and skipping that extra-merge delay. Setting ``workspace``
+under ``pull_request_target`` reopens the gap this module exists to close —
+see docs/policy.md.
 
 Fail-soft throughout: a missing policy file is the normal, expected case
 for every repo that hasn't opted in and produces no warning. A malformed
@@ -106,12 +121,61 @@ class ResolvedPolicy:
     analyzers_restricted: bool = False
 
 
-def load_policy_file(workspace: str, base_ref: str) -> PolicyFile | None:
-    """Load and parse policy.yml from the base ref. None on absence or error.
+def load_policy_file(
+    workspace: str, base_ref: str, *, source: str = "base-ref"
+) -> PolicyFile | None:
+    """Load and parse policy.yml. None on absence or error.
 
-    A missing file at that ref is the common case (no policy adopted) and
-    is silent. Any parse/validation failure prints one WARNING and returns
+    ``source`` (issue #869): ``"base-ref"`` (default) reads via
+    ``git show origin/{base_ref}:...`` as before — see this module's
+    docstring for the trust-model rationale and when this actually matters.
+    ``"workspace"`` reads directly from the checked-out working tree instead,
+    for a repo whose workflow is already head-controlled (plain
+    ``pull_request``) and would rather skip base-ref's one-extra-merge delay
+    than pay for protection the workflow trigger doesn't provide anyway.
+    Never use ``"workspace"`` under ``pull_request_target`` — that reopens
+    the exact gap the base-ref read exists to close.
+
+    A missing file is the common case (no policy adopted) and is silent in
+    both modes. Any parse/validation failure prints one WARNING and returns
     None so the review proceeds with hardcoded defaults.
+    """
+    if source not in ("base-ref", "workspace"):
+        print(
+            f"WARNING: policy-source={source!r} is not 'base-ref' or 'workspace'; "
+            "falling back to 'base-ref'.",
+            file=sys.stderr,
+        )
+        source = "base-ref"
+
+    if source == "workspace":
+        raw_text = _read_policy_from_workspace(workspace)
+    else:
+        raw_text = _read_policy_from_base_ref(workspace, base_ref)
+    if raw_text is None:
+        return None
+
+    try:
+        raw = yaml.safe_load(raw_text)
+    except yaml.YAMLError as exc:
+        print(f"WARNING: {_POLICY_PATH} is not valid YAML: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(raw, dict):
+        print(f"WARNING: {_POLICY_PATH} must be a YAML mapping; ignoring", file=sys.stderr)
+        return None
+    try:
+        return _parse_policy_file(raw)
+    except ValueError as exc:
+        print(f"WARNING: {_POLICY_PATH} is invalid; ignoring: {exc}", file=sys.stderr)
+        return None
+
+
+def _read_policy_from_base_ref(workspace: str, base_ref: str) -> str | None:
+    """Read policy.yml's raw text via ``git show origin/{base_ref}:...``.
+
+    Returns None (silently, or with a WARNING for a real error) exactly as
+    ``load_policy_file`` always has -- this is a pure extraction of its
+    original body, no behavior change.
     """
     if not base_ref:
         return None
@@ -144,18 +208,27 @@ def load_policy_file(workspace: str, base_ref: str) -> PolicyFile | None:
                 file=sys.stderr,
             )
         return None
+    return proc.stdout
+
+
+def _read_policy_from_workspace(workspace: str) -> str | None:
+    """Read policy.yml's raw text directly from the checked-out working tree.
+
+    A missing file is the common, silent case, matching the base-ref path's
+    own "not tracked at that ref" silence. Any other read error (permission
+    denied, not a regular file) is worth a WARNING -- it's a real
+    misconfiguration, not "no policy adopted".
+    """
+    import os
+
+    path = os.path.join(workspace or ".", _POLICY_PATH)
     try:
-        raw = yaml.safe_load(proc.stdout)
-    except yaml.YAMLError as exc:
-        print(f"WARNING: {_POLICY_PATH} is not valid YAML: {exc}", file=sys.stderr)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
         return None
-    if not isinstance(raw, dict):
-        print(f"WARNING: {_POLICY_PATH} must be a YAML mapping; ignoring", file=sys.stderr)
-        return None
-    try:
-        return _parse_policy_file(raw)
-    except ValueError as exc:
-        print(f"WARNING: {_POLICY_PATH} is invalid; ignoring: {exc}", file=sys.stderr)
+    except OSError as exc:
+        print(f"WARNING: could not read {path}: {exc}", file=sys.stderr)
         return None
 
 
