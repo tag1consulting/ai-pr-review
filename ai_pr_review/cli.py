@@ -462,7 +462,12 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     if not result.ok:
         return 1
-    if rc.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
+    # #858: reads may_approve (the classifier's severity verdict), not
+    # event (what actually got posted), so a configured approval_ceiling
+    # never changes this exit code -- see ReviewOutcome.may_approve's
+    # docstring. Provably equivalent to the old `event in (...)` check for
+    # every outcome reachable with the default ceiling.
+    if rc.fail_on_findings and not result.outcome.may_approve:
         return 2
     return 0
 
@@ -873,6 +878,16 @@ def _build_github_provider_or_exit(command_label: str) -> GitHubProvider:
     "reply that says so honestly rather than the misleading 'feedback loop "
     "disabled' message.",
 )
+@click.option(
+    "--approval-ceiling",
+    envvar="AI_APPROVAL_CEILING",
+    default="approve",
+    help="Caps the strongest review event this bot may post (issue #858), "
+    "same knob and default as the main review command's approval-ceiling "
+    "input. When not 'approve', suppresses the PR-wide auto-approve "
+    "escalation (--approve-allowed) regardless of that flag's own value --"
+    " a real APPROVED review is exactly what a non-default ceiling forbids.",
+)
 def dismiss(
     finding_id: int | None,
     actor: str,
@@ -882,6 +897,7 @@ def dismiss(
     enable_feedback_loop: bool,
     approve_allowed: bool,
     feedback_write_allowed: bool,
+    approval_ceiling: str,
 ) -> None:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed [F<n>]`
     posted as a top-level PR comment.
@@ -930,6 +946,15 @@ def dismiss(
         # A fix claim is not a maintainer verdict on the finding -- never let
         # it trigger the PR-wide auto-approve escalation, no matter what the
         # calling workflow passed.
+        approve_allowed = False
+
+    from ai_pr_review.review.outcome import normalize_approval_ceiling
+
+    if normalize_approval_ceiling(approval_ceiling) != "approve":
+        # #858: a non-default ceiling forbids the bot from ever posting a
+        # real APPROVE -- the PR-wide auto-approve-on-dismiss escalation
+        # does exactly that, so it must not fire regardless of
+        # --approve-allowed's own value.
         approve_allowed = False
 
     provider = _build_github_provider_or_exit("dismiss")
@@ -1064,6 +1089,16 @@ def dismiss(
     "type -- see the `authorize` job / issue #732), unlike this command's "
     "own OWNER/MEMBER/COLLABORATOR admission bar.",
 )
+@click.option(
+    "--approval-ceiling",
+    envvar="AI_APPROVAL_CEILING",
+    default="approve",
+    help="Caps the strongest review event this bot may post (issue #858), "
+    "same knob and default as the main review command's approval-ceiling "
+    "input. When not 'approve', suppresses the PR-wide auto-approve "
+    "escalation (--approve-allowed) regardless of that flag's own value --"
+    " a real APPROVED review is exactly what a non-default ceiling forbids.",
+)
 def dismiss_inline(
     parent_comment_id: int,
     review_id: int | None,
@@ -1074,6 +1109,7 @@ def dismiss_inline(
     approve_allowed: bool,
     enable_feedback_loop: bool,
     feedback_write_allowed: bool,
+    approval_ceiling: str,
 ) -> None:
     """Handle `/ai-pr-review dismiss|false-positive|wont-fix|fixed` posted as
     a reply to an inline review comment (`pull_request_review_comment` event).
@@ -1112,6 +1148,12 @@ def dismiss_inline(
         # A fix claim is not a maintainer verdict on the finding -- never let
         # it trigger the PR-wide auto-approve escalation, no matter what the
         # calling workflow passed.
+        approve_allowed = False
+
+    from ai_pr_review.review.outcome import normalize_approval_ceiling
+
+    if normalize_approval_ceiling(approval_ceiling) != "approve":
+        # #858: see dismiss()'s equivalent block above.
         approve_allowed = False
 
     provider = _build_github_provider_or_exit("dismiss-inline")

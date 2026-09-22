@@ -105,6 +105,8 @@ Findings use shape-distinct icons for accessibility:
 | 🔶 | Medium | APPROVE (informational) |
 | 💬 | Low | APPROVE (informational) |
 
+The "Review action" column above is this bot's default behavior. Set the `approval-ceiling` input if you never want it to post a real APPROVE (or, at the strictest setting, never set any formal review state at all) — a human then makes every merge decision. See [Configuration: Approval ceiling](docs/configuration.md#approval-ceiling).
+
 ## Supported LLM providers
 
 | Provider | `provider` value | Required secret | Default models (standard / premium) |

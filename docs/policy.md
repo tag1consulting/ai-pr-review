@@ -115,6 +115,8 @@ To make this a real merge gate, add branch protection on the target branch requi
 
 [`examples/policy.yml.example`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/policy.yml.example) includes this exact `staging-*` → `integration`, `require: deep` route as a working starting point — copy it and add the branch-protection rule above to turn it on.
 
+**`AI_APPROVAL_CEILING` (issue #858) is deliberately not part of this schema.** It's a workflow-level env var/input, not a `policy.yml` field, and it stays that way on purpose: `policy.yml` fields inherit through `extends` and are selected per-route by path glob, so a per-route ceiling would let a route rule silently restore real approvals for a subset of paths — the exact failure mode a safety knob like this must not have. It's set once, above the reviewed repo's own (base-ref-loaded but still repo-controlled) content. See [Configuration: Approval ceiling](configuration#approval-ceiling).
+
 ## Live example
 
 This repo dogfoods its own feature: [`.github/ai-pr-review/policy.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/.github/ai-pr-review/policy.yml) routes docs-only PRs (`docs/**`, `language-profiles/**`) to the near-zero-cost tier, and gates `release/*` branches on a manually-triggered full review before merge — automatic pushes to a release branch stay at `quick`, and `/ai-pr-review review-full` is required to satisfy the merge gate.

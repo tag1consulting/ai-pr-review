@@ -199,6 +199,16 @@ on:
         type: string
         required: false
         default: 'compact'
+      approval-ceiling:
+        description: >
+          Caps the strongest review event the bot may post (issue #858).
+          Omit to inherit container-action's own default ('approve').
+          Also forwarded to the dismiss/dismiss-inline steps below, since a
+          non-default value must also suppress the PR-wide auto-approve-
+          on-dismiss escalation, not just the rescan/review-full dispatch.
+        type: string
+        required: false
+        default: 'approve'
       token-usage-warn-usd:
         description: >
           Warn in the review body when estimated spend for this run exceeds
@@ -669,6 +679,7 @@ jobs:
           max-tokens-per-agent: ${{ inputs.max-tokens-per-agent }}
           enable-suggestions: ${{ inputs.enable-suggestions }}
           fail-on-findings: ${{ inputs.fail-on-findings }}
+          approval-ceiling: ${{ inputs.approval-ceiling }}
           feedback-loop: ${{ inputs.feedback-loop }}
           token-usage-display: ${{ inputs.token-usage-display }}
           token-usage-warn-usd: ${{ inputs.token-usage-warn-usd }}
@@ -1206,6 +1217,12 @@ jobs:
           # trusts is_collab instead of comment-author-association.
           SLASH_APPROVE_ALLOWED: ${{ needs.authorize.outputs.is_member }}
           SLASH_FEEDBACK_WRITE_ALLOWED: ${{ needs.authorize.outputs.is_member }}
+          # #858: this step runs the CLI directly, not through
+          # container-action, so the input isn't picked up automatically
+          # the way it is for the rescan/review-full dispatch above --
+          # forwarded explicitly so a non-default ceiling also suppresses
+          # this job's own auto-approve escalation.
+          AI_APPROVAL_CEILING: ${{ inputs.approval-ceiling }}
           GITHUB_REPOSITORY: ${{ inputs.repository }}
           # GH_TOKEN (PAT) is reserved by the engine for resolveReviewThread
           # only (#734); GITHUB_TOKEN below is what every other write in

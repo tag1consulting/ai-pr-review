@@ -592,3 +592,54 @@ def test_fixed_body_finding_echoes_bare_sha(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "abc1234def" in result.stdout
     assert "`abc1234def`" not in result.stdout  # bare, not a code span -- must autolink
+
+
+# ---------------------------------------------------------------------------
+# Issue #858: --approval-ceiling suppresses the auto-approve escalation
+# ---------------------------------------------------------------------------
+
+
+def _run_dismiss_capturing_approve_allowed(monkeypatch, ceiling: str) -> bool:
+    """Invoke `dismiss` with --approve-allowed true and a given
+    --approval-ceiling, and return the approve_allowed value the CLI
+    actually passed to dismiss_by_finding_id -- proving the ceiling folds
+    into it before the provider call, not just in a doc comment."""
+    import ai_pr_review.slash.github_ops as github_ops_module
+    from ai_pr_review.slash.github_ops import DismissResult
+
+    captured: dict[str, bool] = {}
+
+    def fake_dismiss_by_finding_id(
+        provider, finding_id, *, actor, command, approve_allowed=False, commit_sha="",
+    ):
+        captured["approve_allowed"] = approve_allowed
+        return DismissResult(reply="handled")
+
+    monkeypatch.setattr(github_ops_module, "dismiss_by_finding_id", fake_dismiss_by_finding_id)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    args = _base_args(3, feedback_loop=False) + [
+        "--approve-allowed", "true", "--approval-ceiling", ceiling,
+    ]
+    result = runner.invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    return captured["approve_allowed"]
+
+
+def test_approval_ceiling_request_changes_forces_approve_allowed_false(monkeypatch) -> None:
+    assert _run_dismiss_capturing_approve_allowed(monkeypatch, "request-changes") is False
+
+
+def test_approval_ceiling_comment_forces_approve_allowed_false(monkeypatch) -> None:
+    assert _run_dismiss_capturing_approve_allowed(monkeypatch, "comment") is False
+
+
+def test_approval_ceiling_approve_leaves_approve_allowed_true(monkeypatch) -> None:
+    """Control: the default ceiling preserves --approve-allowed's own value."""
+    assert _run_dismiss_capturing_approve_allowed(monkeypatch, "approve") is True

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from ai_pr_review.review.outcome import classify_review_outcome
+from ai_pr_review.review.outcome import (
+    ReviewOutcome,
+    cap_review_outcome,
+    classify_review_outcome,
+    normalize_approval_ceiling,
+)
 
 
 @dataclass
@@ -198,3 +203,96 @@ def test_review_outcome_is_frozen() -> None:
     from dataclasses import FrozenInstanceError
     with pytest.raises(FrozenInstanceError):
         outcome.risk = "Critical"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Approval ceiling (#858)
+# ---------------------------------------------------------------------------
+
+_ALL_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
+
+
+def _outcome(event: str) -> ReviewOutcome:
+    return ReviewOutcome(
+        risk="Low", event=event, may_approve=(event == "APPROVE"),  # type: ignore[arg-type]
+        incomplete=False, finding_total=1,
+    )
+
+
+@pytest.mark.parametrize("event", _ALL_EVENTS)
+def test_approve_ceiling_is_identity(event: str) -> None:
+    outcome = _outcome(event)
+    assert cap_review_outcome(outcome, "approve") is outcome
+
+
+def test_request_changes_ceiling_downgrades_approve_to_comment() -> None:
+    capped = cap_review_outcome(_outcome("APPROVE"), "request-changes")
+    assert capped.event == "COMMENT"
+
+
+def test_request_changes_ceiling_preserves_request_changes() -> None:
+    outcome = _outcome("REQUEST_CHANGES")
+    assert cap_review_outcome(outcome, "request-changes") is outcome
+
+
+def test_request_changes_ceiling_preserves_comment() -> None:
+    outcome = _outcome("COMMENT")
+    assert cap_review_outcome(outcome, "request-changes") is outcome
+
+
+def test_comment_ceiling_downgrades_approve_to_comment() -> None:
+    capped = cap_review_outcome(_outcome("APPROVE"), "comment")
+    assert capped.event == "COMMENT"
+
+
+def test_comment_ceiling_downgrades_request_changes_to_comment() -> None:
+    capped = cap_review_outcome(_outcome("REQUEST_CHANGES"), "comment")
+    assert capped.event == "COMMENT"
+
+
+def test_comment_ceiling_preserves_comment() -> None:
+    outcome = _outcome("COMMENT")
+    assert cap_review_outcome(outcome, "comment") is outcome
+
+
+@pytest.mark.parametrize(
+    "event,ceiling",
+    [("APPROVE", "request-changes"), ("APPROVE", "comment"), ("REQUEST_CHANGES", "comment")],
+)
+def test_cap_preserves_risk_may_approve_incomplete_and_total(event: str, ceiling: str) -> None:
+    """Load-bearing for the AI_FAIL_ON_FINDINGS decision (#858): capping
+    must change *event* only. may_approve in particular must reflect the
+    classifier's severity verdict regardless of what actually gets posted,
+    or a ceiling would silently corrupt the fail-on-findings exit code."""
+    original = ReviewOutcome(
+        risk="Critical", event=event, may_approve=False,  # type: ignore[arg-type]
+        incomplete=True, finding_total=3,
+    )
+    capped = cap_review_outcome(original, ceiling)  # type: ignore[arg-type]
+    assert capped.risk == original.risk
+    assert capped.may_approve == original.may_approve
+    assert capped.incomplete == original.incomplete
+    assert capped.finding_total == original.finding_total
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("approve", "approve"),
+        ("APPROVE", "approve"),
+        ("request-changes", "request-changes"),
+        ("REQUEST_CHANGES", "request-changes"),
+        ("request_changes", "request-changes"),
+        ("Request-Changes", "request-changes"),
+        ("comment", "comment"),
+        ("  comment  ".strip(), "comment"),
+    ],
+)
+def test_normalize_approval_ceiling_accepts_known_forms(raw: str, expected: str) -> None:
+    assert normalize_approval_ceiling(raw) == expected
+
+
+@pytest.mark.parametrize("bad", ["", "approved", "block", "REQUESTCHANGES", "none"])
+def test_normalize_approval_ceiling_rejects_unknown_value(bad: str) -> None:
+    with pytest.raises(ValueError, match="Invalid approval ceiling"):
+        normalize_approval_ceiling(bad)

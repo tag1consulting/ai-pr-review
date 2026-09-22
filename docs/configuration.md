@@ -42,6 +42,7 @@ This table documents the root `action.yml` (direct-action) inputs. The container
 | `agents` | No | `''` | Allowlist: comma-separated names of review agents to run. When set, only the listed agents run and `exclude-agents` is ignored. Existing gates (mode, conditional triggers) still apply on top. Empty (default): all eligible agents run. Unknown names are rejected with an error. Requires the Python engine. See [Agents](agents) for valid names. |
 | `exclude-agents` | No | `''` | Denylist: comma-separated names of review agents to skip. Ignored when `agents` is set. Excluding `pr-summarizer` suppresses the PR summary comment entirely. Empty (default): no agents skipped. Unknown names are rejected with an error. Requires the Python engine. |
 | `analyzer-diff-scope` | No | `cap` | How out-of-diff native-analyzer findings are handled. `cap` (default): downgrade to Low severity and collapse into a `<details>` section so they don't trigger `REQUEST_CHANGES`. `drop`: remove them entirely. `off`: pass through unchanged. LLM-agent findings are never affected. Requires the Python engine. |
+| `approval-ceiling` | No | `approve` | Caps the strongest review event this bot may post: `approve` (default, unchanged behavior), `request-changes`, or `comment`. See [Approval ceiling](#approval-ceiling). |
 
 ## Repository variables
 
@@ -250,7 +251,19 @@ These variables enable optional capabilities that are off by default.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_FAIL_ON_FINDINGS` | `false` (engine); shipped example workflow sets `fail-on-findings: true` | When `true`, exit with code 2 if the review outcome is `REQUEST_CHANGES` or `COMMENT` (incomplete or unknown risk). Exit code 1 still signals a posting or config error. Exit code 0 means the bot approved. Use this to block auto-merge or required CI checks until the bot approves. Pair with branch protection requiring the `review` status check. Set the `AI_REVIEW_FAIL_ON_FINDINGS` repo variable to `false` if you don't want the gate. |
+| `AI_FAIL_ON_FINDINGS` | `false` (engine); shipped example workflow sets `fail-on-findings: true` | When `true`, exit with code 2 if the review outcome is `REQUEST_CHANGES` or `COMMENT` (incomplete or unknown risk). Exit code 1 still signals a posting or config error. Exit code 0 means the bot approved. Use this to block auto-merge or required CI checks until the bot approves. Pair with branch protection requiring the `review` status check. Set the `AI_REVIEW_FAIL_ON_FINDINGS` repo variable to `false` if you don't want the gate. **`AI_APPROVAL_CEILING` never changes this exit code** — see below. |
+
+#### Approval ceiling
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_APPROVAL_CEILING` | `approve` | Caps the strongest review event this bot may post. `approve` (default): unchanged behavior. `request-changes`: a clean/Low/Medium outcome posts `COMMENT` instead of `APPROVE`; `Critical`/`High` still post `REQUEST_CHANGES`. `comment`: every outcome posts `COMMENT`, so the bot never sets a formal review state (approve or block) and a human makes every merge decision. Also disables the `/ai-pr-review dismiss` auto-approve-on-dismiss escalation (issue #590) when not `approve`. |
+
+`AI_APPROVAL_CEILING` and `AI_FAIL_ON_FINDINGS` are independent: the exit code always reflects the classifier's severity verdict, never the posted event. A clean PR exits `0` and a Critical/High-finding PR exits `2` regardless of the ceiling — only what actually gets *posted* to the PR changes.
+
+On GitLab and Bitbucket, which never post a real approval state today regardless of this setting, a non-`approve` ceiling only changes the rendered review text.
+
+**Branch protection with a non-`approve` ceiling:** with `request-changes` or `comment` set, this bot never produces an approving review, so branch protection cannot use "require approval from ai-pr-review" as a merge gate. Use `fail-on-findings: true` and make the review job a required status check instead — that exit-code path is unaffected by the ceiling, as noted above. The policy-gate check run (`docs/policy.md`) is a separate mechanism and is unaffected either way.
 
 #### Judge pass
 

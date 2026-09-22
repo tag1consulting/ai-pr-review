@@ -2247,6 +2247,11 @@ class GitHubProvider:
         needs `commit_id` omitted (defaults to the PR's current head on
         GitHub's side) and a short attribution body, mirroring
         `dismiss_review`'s minimal-payload style.
+
+        The `AI_APPROVAL_CEILING` guard (#858) lives caller-side, not here:
+        `cli.py`'s `dismiss`/`dismiss_inline` commands fold a non-`approve`
+        ceiling into `approve_allowed` before this is ever reached, so this
+        method itself carries no ceiling-awareness.
         """
         resp = self.client.request(
             "POST",

@@ -887,6 +887,54 @@ def test_token_usage_warn_usd_default_is_one_dollar() -> None:
     assert cfg.token_usage_warn_usd == 1.00
 
 
+# ---------------------------------------------------------------------------
+# Approval ceiling (#858)
+# ---------------------------------------------------------------------------
+
+
+def test_approval_ceiling_default_is_approve() -> None:
+    cfg = ReviewConfig()
+    assert cfg.approval_ceiling == "approve"
+
+
+def test_approval_ceiling_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_APPROVAL_CEILING", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.approval_ceiling == "approve"
+
+
+def test_approval_ceiling_valid_values_accepted() -> None:
+    assert ReviewConfig(approval_ceiling="approve").approval_ceiling == "approve"
+    assert ReviewConfig(approval_ceiling="request-changes").approval_ceiling == "request-changes"
+    assert ReviewConfig(approval_ceiling="comment").approval_ceiling == "comment"
+
+
+def test_approval_ceiling_normalized_to_lowercase_and_hyphenated() -> None:
+    assert ReviewConfig(approval_ceiling="REQUEST_CHANGES").approval_ceiling == "request-changes"
+    assert ReviewConfig(approval_ceiling="Comment").approval_ceiling == "comment"
+
+
+def test_approval_ceiling_invalid_value_raises() -> None:
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig(approval_ceiling="block")
+    assert "approval ceiling" in str(exc_info.value).lower()
+
+
+def test_approval_ceiling_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_APPROVAL_CEILING", "comment")
+    cfg = ReviewConfig.from_env()
+    assert cfg.approval_ceiling == "comment"
+
+
+def test_approval_ceiling_unknown_var_check_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AI_APPROVAL_CEILING", "request-changes")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_APPROVAL_CEILING" not in captured.err
+
+
 def test_token_usage_warn_usd_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AI_TOKEN_USAGE_WARN_USD", raising=False)
     cfg = ReviewConfig.from_env()

@@ -25,8 +25,10 @@ from ai_pr_review.findings.merge import merge_findings
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.findings.suppress import SuppressionRule, apply_suppressions
 from ai_pr_review.review.outcome import (
+    ApprovalCeiling,
     ReviewMode,
     ReviewOutcome,
+    cap_review_outcome,
     classify_review_outcome,
 )
 from ai_pr_review.vcs.http import RetryExhaustedError
@@ -93,6 +95,11 @@ class OrchestrationConfig:
     """Knobs the orchestrator needs in addition to provider + agents."""
 
     mode: ReviewMode = "full"
+    # #858: caps classify_review_outcome's event to at most what this
+    # permits, applied via cap_review_outcome at both call sites below.
+    # "approve" (the default) is the identity transform -- no behavior
+    # change from before this feature existed.
+    approval_ceiling: ApprovalCeiling = "approve"
     confidence_threshold: int = 75
     max_inline: int = 25
     enable_suggestions: bool = True
@@ -166,8 +173,8 @@ async def run_review(
         skip_result = provider.post_skip_comment(skip_reason)
         return ReviewResult(
             findings=[],
-            outcome=classify_review_outcome(
-                [], [], cfg.mode
+            outcome=cap_review_outcome(
+                classify_review_outcome([], [], cfg.mode), cfg.approval_ceiling
             ),
             failed_agents=[],
             summary=skip_result,
@@ -259,10 +266,13 @@ async def run_review(
     # classify_review_outcome's Protocol declares severity: str; Finding's
     # Literal["Critical", ...] is technically a subtype but Protocol attrs
     # are invariant under mypy. Wrap to satisfy the type checker.
-    outcome = classify_review_outcome(
-        [_AsFindingLike(f) for f in kept],
-        [f.name for f in failures],
-        cfg.mode,
+    outcome = cap_review_outcome(
+        classify_review_outcome(
+            [_AsFindingLike(f) for f in kept],
+            [f.name for f in failures],
+            cfg.mode,
+        ),
+        cfg.approval_ceiling,
     )
 
     # Phase 3.5: render the token-usage block and (separately) its optional

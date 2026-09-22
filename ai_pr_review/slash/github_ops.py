@@ -535,6 +535,16 @@ def _approve_if_pr_fully_resolved(
     (`(False, [])`) — no extra API calls are made for actors who cannot
     trigger this behavior.
 
+    A configured `AI_APPROVAL_CEILING` (#858) is folded into `approve_allowed`
+    by the same discipline, caller-side in `cli.py`'s `dismiss`/
+    `dismiss_inline` commands: a non-`approve` ceiling forces `approve_allowed`
+    to `False` before it ever reaches here, rather than this function reading
+    the config knob itself. This choke point is deliberately upstream of the
+    `dismiss_review` loop below — an in-function check here would fire only
+    after several `CHANGES_REQUESTED` reviews had already been irreversibly
+    dismissed, producing the "dismissed but not approved" inconsistent state
+    this function's error handling elsewhere is designed to avoid.
+
     Race safety: re-fetches `list_bot_reviews()` immediately before deciding,
     the same "verify state right before acting" pattern
     `_dismiss_if_all_resolved` uses via `get_review_state` — a concurrent push
