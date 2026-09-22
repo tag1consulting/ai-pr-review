@@ -9,7 +9,7 @@ nav_order: 4
 
 `ai-pr-review` supports Bitbucket Cloud PRs via the same container image used
 for GitHub Actions. The Bitbucket path posts a single summary comment per PR
-(updated in place on subsequent runs); findings eligible for an inline anchor
+(updated in place on subsequent runs). Findings eligible for an inline anchor
 render as [Code Insights](https://support.atlassian.com/bitbucket-cloud/docs/code-insights/)
 annotations directly on the PR diff, and everything else renders as markdown
 bullets inside the comment body.
@@ -33,11 +33,17 @@ the full reasoning behind that choice.
   in the summary comment body instead, exactly as it did before this feature
   existed. Nothing is silently dropped.
 - Cross-run dedup: a finding dismissed via the summary comment's hidden
-  verdicts marker is excluded from the next run's Code Insights report and
-  never reappears (part of the same `AI_BITBUCKET_CODE_INSIGHTS` flag, see
-  [issue #839](https://github.com/tag1consulting/ai-pr-review/issues/839)).
-  Dismissing a finding itself (writing that verdict) has no Bitbucket trigger
-  yet, see [issue #874](https://github.com/tag1consulting/ai-pr-review/issues/874).
+  verdicts marker is excluded from the next run's Code Insights report as
+  long as it stays at the same file and line (part of the same
+  `AI_BITBUCKET_CODE_INSIGHTS` flag, see [issue
+  #839](https://github.com/tag1consulting/ai-pr-review/issues/839)).
+  Unlike GitHub's fuzzy match (same file, within 3 lines, compatible
+  category), Bitbucket has no comment threads to fuzzy-match against, so
+  suppression here is exact-fingerprint-only. A dismissed finding whose
+  line shifts by even one on a later push is treated as a new finding
+  again. Dismissing a finding itself (writing that verdict) has no
+  Bitbucket trigger yet, see [issue
+  #874](https://github.com/tag1consulting/ai-pr-review/issues/874).
 - Incremental-diff SHA watermark (a hidden reference-link marker — Bitbucket's
   renderer shows an HTML comment as literal text instead of hiding it, unlike
   GitHub/GitLab, so Bitbucket uses a different marker form; see [Version

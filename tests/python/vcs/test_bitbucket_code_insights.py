@@ -220,7 +220,7 @@ def test_demoted_to_body_finding_never_goes_to_annotations() -> None:
     assert result.ok, result.error
     assert result.inline_posted == 0
     assert result.body_findings == 1
-    assert "body" not in captured  # DELETE already cleared prior annotations; nothing to POST
+    assert "body" not in captured  # DELETE already cleared prior annotations. Nothing to POST
 
 
 def test_dismissed_verdict_suppresses_the_annotation() -> None:
@@ -249,7 +249,7 @@ def test_dismissed_verdict_suppresses_the_annotation() -> None:
     assert result.suppressed == 1
     assert result.inline_posted == 0
     assert result.body_findings == 0
-    assert "body" not in captured  # DELETE already cleared prior annotations; nothing to POST
+    assert "body" not in captured  # DELETE already cleared prior annotations. Nothing to POST
 
 
 def test_code_insights_403_falls_back_to_body_rendering() -> None:

@@ -32,13 +32,13 @@ def _bitbucket_row(path: Path) -> dict[str, str]:
     return {k: v.strip() for k, v in match.groupdict().items()}
 
 
-# README.md uses ✅/❌; docs/configuration.md and docs/getting-started.md use
+# README.md uses ✅/❌. docs/configuration.md and docs/getting-started.md use
 # Yes/No -- a pre-existing, deliberate style split between the two doc
 # families, not a drift. README.md also links to docs/bitbucket-setup.md
 # with the "docs/" prefix (it lives at repo root) while the other two link
 # to it as a sibling file (they already live under docs/) -- also not a
 # drift, just a correct relative path from two different locations. Reduce
-# each cell to its leading yes/no verdict for the equality check below; the
+# each cell to its leading yes/no verdict for the equality check below. The
 # explanatory note's *content* (not its exact wording or link path) is
 # checked separately by the second test.
 _YES = {"✅", "yes"}

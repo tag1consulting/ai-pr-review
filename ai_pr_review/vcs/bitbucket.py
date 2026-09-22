@@ -286,6 +286,17 @@ class BitbucketProvider:
         """
         existing = self._list_summary_comments()
         if not existing:
+            # This also means Code Insights annotations never get posted
+            # for this run, even though they don't structurally depend on
+            # the comment beyond the optional [F<n>] token (build_annotation_
+            # payload already tolerates finding_id=None). Deliberate: the
+            # comment is the source of the verdicts marker this same run
+            # reads to decide what to suppress, and per the AC5 ordering the
+            # orchestrator was already required to call post_summary first,
+            # so reaching this branch means something upstream is already
+            # broken. Diff decoration silently continuing while the actual
+            # state layer failed to post would be a worse failure mode than
+            # both failing together.
             err = "post_findings: no summary comment to attach findings to"
             self._errors.append(err)
             return FindingsResult(
@@ -326,6 +337,19 @@ class BitbucketProvider:
                 classified = [
                     classify(f, verdicts=verdicts, all_threads=[]) for f in findings
                 ]
+                # TODO(#874): a "recurred" classification (a "fixed" verdict
+                # whose finding reappeared unchanged) is currently treated
+                # identically to "new" here -- it renders/annotates the same
+                # way, but nothing rewrites its stale "fixed" verdict entry
+                # to the "recurred" tombstone the way github.py's
+                # _apply_classification_side_effects does. Harmless today
+                # since #874 means no Bitbucket verdict can be written at
+                # all yet (this whole branch is only exercised by a
+                # hand-built verdicts marker in tests), but Phase 4 will
+                # need that tombstone rewrite before real "fixed" verdicts
+                # exist to go stale. It's a marker write into a comment body
+                # this code already PUTs, not a classify() change, so it
+                # doesn't touch the isolation constraint above.
                 active_findings = [
                     c.finding for c in classified if c.kind != "suppressed"
                 ]

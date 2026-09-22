@@ -6,7 +6,7 @@ comment threads -- there is no thread state to build or resolve here, only
 a report and its annotations, rebuilt from scratch every run. This module
 owns exactly that: the DELETE -> PUT -> POST report/annotation lifecycle
 and the category -> annotation_type mapping. The single summary comment
-(bitbucket.py) remains the state/verdict layer; this module never posts a
+(bitbucket.py) remains the state/verdict layer. This module never posts a
 comment or reads/writes a verdicts marker itself.
 
 The report PUT is an upsert, but annotations under it accumulate -- a bare
@@ -25,13 +25,16 @@ something folded into Bitbucket-only work.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from ai_pr_review.findings.models import CATEGORIES, Finding, Severity
+from ai_pr_review.findings.models import Finding, Severity
 from ai_pr_review.vcs._finding_ids import fingerprint
 from ai_pr_review.vcs.http import RecordingClient
+
+_log = logging.getLogger(__name__)
 
 REPORT_ID: Final[str] = "ai-pr-review"
 MAX_ANNOTATIONS_PER_BATCH: Final[int] = 100
@@ -39,9 +42,9 @@ _MAX_TITLE_BYTES: Final[int] = 450
 _MAX_SUMMARY_BYTES: Final[int] = 2_000
 
 # Category -> Code Insights annotation_type. VULNERABILITY = an attacker can
-# exploit it; BUG = wrong at runtime (test-gap included: a missing test on a
+# exploit it. BUG = wrong at runtime (test-gap included: a missing test on a
 # security-relevant path is not cosmetic, and Bitbucket renders BUG more
-# prominently than CODE_SMELL); CODE_SMELL = maintainability. Kept as one
+# prominently than CODE_SMELL). CODE_SMELL = maintainability. Kept as one
 # dict with an exhaustiveness test (test_code_insights.py) asserting
 # set(_ANNOTATION_TYPE) == set(CATEGORIES), so a 12th category added to the
 # shared taxonomy is a test failure here, not a silent fall-through.
@@ -58,10 +61,25 @@ _ANNOTATION_TYPE: Final[dict[str, str]] = {
     "lint": "CODE_SMELL",
     "other": "CODE_SMELL",
 }
-assert set(_ANNOTATION_TYPE) == set(CATEGORIES), (
-    "ai_pr_review.vcs._code_insights._ANNOTATION_TYPE has drifted from "
-    "ai_pr_review.findings.models.CATEGORIES -- add the new category here"
-)
+# The exhaustiveness check itself lives only in
+# test_annotation_type_mapping_is_exhaustive_over_categories, not as a
+# module-level assert here: an assert would turn a category added to the
+# shared taxonomy without updating this dict into an ImportError that
+# crashes the entire review run on import, and asserts are stripped
+# entirely under `python -O` anyway, so it can't be relied on as a runtime
+# guard. `_annotation_type_for` below degrades one annotation instead.
+
+
+def _annotation_type_for(category: str) -> str:
+    mapped = _ANNOTATION_TYPE.get(category)
+    if mapped is None:
+        _log.warning(
+            "ai-pr-review: unmapped finding category %r for Code Insights "
+            "annotation_type, defaulting to CODE_SMELL", category,
+        )
+        return "CODE_SMELL"
+    return mapped
+
 
 _ANNOTATION_SEVERITY: Final[dict[Severity, str]] = {
     "Critical": "CRITICAL",
@@ -135,7 +153,7 @@ def build_annotation_payload(
     file/line to anchor to -- an annotation, like an inline PR comment,
     requires a concrete location. Callers are expected to only pass
     findings that already passed inline-eligibility (partition_findings),
-    so this should never actually return None in practice; the guard exists
+    so this should never actually return None in practice. The guard exists
     so a caller that skips that precondition fails safe instead of posting
     a malformed payload.
 
@@ -155,7 +173,7 @@ def build_annotation_payload(
     return {
         "external_id": fingerprint(finding),
         "title": _truncate_utf8(summary, _MAX_TITLE_BYTES),
-        "annotation_type": _ANNOTATION_TYPE[finding.category],
+        "annotation_type": _annotation_type_for(finding.category),
         "severity": _ANNOTATION_SEVERITY[finding.severity],
         "path": finding.file,
         "line": finding.line,
@@ -163,11 +181,25 @@ def build_annotation_payload(
     }
 
 
+_ELLIPSIS: Final[str] = "…"
+_ELLIPSIS_BYTES: Final[int] = len(_ELLIPSIS.encode("utf-8"))
+
+
 def _truncate_utf8(text: str, limit: int) -> str:
+    """Truncate to at most `limit` UTF-8 bytes, appended ellipsis included.
+
+    Reserves the ellipsis's own encoded length (3 bytes for U+2026), not
+    a flat 1 byte -- reserving only 1 would let the result exceed `limit`
+    by up to 2 bytes, which matters if the caller's limit is itself a hard
+    server-side byte cap.
+    """
     encoded = text.encode("utf-8")
     if len(encoded) <= limit:
         return text
-    return encoded[: max(0, limit - 1)].decode("utf-8", errors="ignore") + "…"
+    return (
+        encoded[: max(0, limit - _ELLIPSIS_BYTES)].decode("utf-8", errors="ignore")
+        + _ELLIPSIS
+    )
 
 
 def post_code_insights(
