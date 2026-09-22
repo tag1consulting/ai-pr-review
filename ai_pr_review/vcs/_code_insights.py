@@ -73,10 +73,21 @@ _ANNOTATION_SEVERITY: Final[dict[Severity, str]] = {
 
 @dataclass(frozen=True)
 class CodeInsightsResult:
-    """Outcome of posting one run's Code Insights report + annotations."""
+    """Outcome of posting one run's Code Insights report + annotations.
 
-    posted: int
+    ``posted_findings`` (not just a count) lets a caller recover from a
+    partial batch failure precisely: on error, everything up through the
+    last fully-succeeded batch is already live on Bitbucket and must not
+    also be re-rendered in the summary comment body, or it would show
+    twice. Only the tail this call never got to should fall back.
+    """
+
+    posted_findings: tuple[Finding, ...] = ()
     error: str | None = None
+
+    @property
+    def posted(self) -> int:
+        return len(self.posted_findings)
 
     @property
     def ok(self) -> bool:
@@ -91,15 +102,24 @@ def annotations_url(workspace: str, repo_slug: str, commit: str) -> str:
     return f"{report_url(workspace, repo_slug, commit)}/annotations"
 
 
-def build_report_payload(findings: Sequence[Finding]) -> dict[str, Any]:
-    """The report itself carries only a title/summary/pass-fail -- the
-    per-finding detail lives entirely in its annotations."""
-    has_blocking = any(f.severity in ("Critical", "High") for f in findings)
+def build_report_payload(all_active_findings: Sequence[Finding]) -> dict[str, Any]:
+    """The report itself carries only a title/summary/pass-fail.
+
+    ``all_active_findings`` must be every still-active (non-suppressed)
+    finding this run, not just the subset that gets an annotation -- a
+    Critical/High finding that is out-of-diff or bumped to the body by
+    ``max_inline`` still has to make the report say FAILED. Using only the
+    annotated subset here would let Bitbucket's Reports tab say PASSED in
+    the same run where the summary comment shows a blocking finding and
+    ``event=REQUEST_CHANGES``, which is the one signal Code Insights exists
+    to surface accurately.
+    """
+    has_blocking = any(f.severity in ("Critical", "High") for f in all_active_findings)
     return {
         "title": "AI PR Review",
         "details": (
-            f"{len(findings)} finding(s) from ai-pr-review."
-            if findings
+            f"{len(all_active_findings)} finding(s) from ai-pr-review."
+            if all_active_findings
             else "No findings from ai-pr-review."
         ),
         "report_type": "BUG",
@@ -157,10 +177,16 @@ def post_code_insights(
     repo_slug: str,
     commit: str,
     findings: Sequence[Finding],
+    all_active_findings: Sequence[Finding],
     id_map: dict[str, int],
 ) -> CodeInsightsResult:
     """DELETE the prior report (if any), PUT a fresh one, then bulk-POST its
     annotations, in chunks of at most ``MAX_ANNOTATIONS_PER_BATCH``.
+
+    ``findings`` is the inline-eligible subset to annotate.
+    ``all_active_findings`` is every still-active finding this run (used
+    only for the report's own PASSED/FAILED status and count, see
+    ``build_report_payload``).
 
     Always runs this full cycle, even when ``findings`` is empty -- that is
     exactly how a finding that was fixed or suppressed since the last run
@@ -170,49 +196,61 @@ def post_code_insights(
     DELETE or PUT hits (Code Insights not enabled/visible on this
     workspace's plan). A 404 on the DELETE itself is not an error -- it
     means there was nothing to delete yet (first run, or the previous
-    report already expired/was removed). Callers must treat any error here
-    as "render these findings in the summary comment body instead", never
-    as silent data loss.
+    report already expired/was removed). A failure partway through the
+    annotation POST batches still reports every finding from the
+    fully-succeeded batches in ``posted_findings`` -- those are already
+    live on Bitbucket, and a caller that re-renders every ``findings``
+    entry into the comment body on any error would duplicate them. Callers
+    must treat every finding NOT in ``posted_findings`` as "render this one
+    in the summary comment body instead", never as silent data loss.
     """
     r_url = report_url(workspace, repo_slug, commit)
     del_resp = client.request("DELETE", r_url)
     if del_resp.status_code != 404 and del_resp.status_code >= 400:
         return CodeInsightsResult(
-            posted=0,
             error=(
                 f"code insights DELETE report: HTTP {del_resp.status_code}: "
                 f"{del_resp.text[:200]}"
             ),
         )
 
-    put_resp = client.request("PUT", r_url, json_body=build_report_payload(findings))
+    put_resp = client.request(
+        "PUT", r_url, json_body=build_report_payload(all_active_findings)
+    )
     if put_resp.status_code >= 400:
         return CodeInsightsResult(
-            posted=0,
             error=(
                 f"code insights PUT report: HTTP {put_resp.status_code}: "
                 f"{put_resp.text[:200]}"
             ),
         )
 
-    payloads: list[dict[str, Any]] = []
-    for f in findings:
-        payload = build_annotation_payload(f, finding_id=id_map.get(fingerprint(f)))
-        if payload is not None:
-            payloads.append(payload)
+    # findings and their built payloads stay index-aligned: every entry in
+    # `findings` reaching this call already passed inline eligibility
+    # (partition_findings requires file+line), so build_annotation_payload
+    # never actually returns None here -- but the pairing is kept explicit
+    # rather than assumed, so posted_findings can never drift out of sync
+    # with which payloads were actually sent.
+    pairs = [
+        (f, build_annotation_payload(f, finding_id=id_map.get(fingerprint(f))))
+        for f in findings
+    ]
+    pairs = [(f, payload) for f, payload in pairs if payload is not None]
 
     a_url = annotations_url(workspace, repo_slug, commit)
-    posted = 0
-    for i in range(0, len(payloads), MAX_ANNOTATIONS_PER_BATCH):
-        chunk = payloads[i : i + MAX_ANNOTATIONS_PER_BATCH]
-        resp = client.request("POST", a_url, json_body=chunk)
+    posted: list[Finding] = []
+    for i in range(0, len(pairs), MAX_ANNOTATIONS_PER_BATCH):
+        chunk = pairs[i : i + MAX_ANNOTATIONS_PER_BATCH]
+        resp = client.request(
+            "POST", a_url, json_body=[payload for _f, payload in chunk]
+        )
         if resp.status_code >= 400:
             return CodeInsightsResult(
-                posted=posted,
+                posted_findings=tuple(posted),
                 error=(
                     f"code insights POST annotations: HTTP {resp.status_code}: "
                     f"{resp.text[:200]}"
                 ),
             )
-        posted += len(chunk)
-    return CodeInsightsResult(posted=posted)
+        posted.extend(f for f, _payload in chunk)
+    return CodeInsightsResult(posted_findings=tuple(posted))

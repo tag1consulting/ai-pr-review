@@ -289,3 +289,179 @@ def test_kill_switch_reproduces_pre_phase3_behavior() -> None:
 def test_build_annotation_payload_returns_none_without_file_or_line() -> None:
     no_file = Finding(severity="High", confidence=90, finding="x")
     assert build_annotation_payload(no_file, finding_id=1) is None
+
+
+def test_report_status_reflects_full_active_set_not_just_annotated_subset() -> None:
+    """A Critical/High finding that never gets an annotation (out-of-diff,
+    or bumped to the body by max_inline) must still make the report say
+    FAILED -- a reviewer checking only the Reports tab must not see PASSED
+    while the summary comment blocks the PR."""
+    captured: dict = {}
+
+    def on_put(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"uuid": "{report}"})
+
+    findings = [
+        Finding(severity="Critical", confidence=90, finding="out of diff", file="app.py", line=999),
+        Finding(severity="Low", confidence=70, finding="in diff", file="app.py", line=4),
+    ]
+    existing = _existing_summary()
+    handler = _router(existing=existing, on_report_put=on_put)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        findings, DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    assert captured["body"]["result"] == "FAILED"
+    assert captured["body"]["details"].startswith("2 finding")
+
+
+def test_delete_404_on_first_run_is_not_an_error() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def on_delete(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="report not found")
+
+    finding = Finding(severity="High", confidence=90, finding="sql injection", file="app.py", line=4)
+    existing = _existing_summary()
+    handler = _router(existing=existing, on_report_delete=on_delete, calls=calls)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [finding], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    assert result.inline_posted == 1
+    assert result.body_findings == 0
+    non_get = [c for c in calls if c[0] != "GET"]
+    methods_on_report = [m for m, u in non_get if "/reports/ai-pr-review" in u]
+    assert methods_on_report[:3] == ["DELETE", "PUT", "POST"]
+
+
+def test_report_put_failure_falls_back_to_body_rendering() -> None:
+    def on_put(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal error")
+
+    finding = Finding(severity="High", confidence=90, finding="sql injection", file="app.py", line=4)
+    existing = _existing_summary()
+    handler = _router(existing=existing, on_report_put=on_put)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [finding], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    assert result.inline_posted == 0
+    assert result.body_findings == 1
+    assert any("PUT report" in e for e in prov._errors)
+    assert not any("DELETE report" in e for e in prov._errors)
+
+
+def test_fixed_verdict_that_recurs_still_gets_annotated() -> None:
+    """A finding marked 'fixed' that reappears unchanged classifies as
+    recurred, not suppressed -- it must still render as an annotation, not
+    vanish the way a genuinely dismissed finding does."""
+    finding = Finding(severity="High", confidence=90, finding="regression", file="app.py", line=4)
+    from ai_pr_review.vcs._finding_ids import fingerprint
+
+    fp = fingerprint(finding)
+    body_with_verdict = (
+        f"{SUMMARY_MARKER_PREFIX} sha={_HEAD} -->\n"
+        "## AI Review: Approved\n\nNo findings yet.\n"
+        + build_verdicts_marker({fp: "fixed"})
+    )
+    existing = _existing_summary(body=body_with_verdict)
+    handler = _router(existing=existing)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [finding], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    assert result.suppressed == 0
+    assert result.inline_posted == 1
+    assert result.body_findings == 0
+
+
+def test_multi_batch_annotation_posting_and_partial_failure() -> None:
+    """>MAX_ANNOTATIONS_PER_BATCH findings must post in more than one
+    request, with the total posted count summed across batches, and a
+    failure on a later batch must not lose or duplicate the earlier
+    batch's already-successful findings."""
+    from ai_pr_review.vcs._code_insights import MAX_ANNOTATIONS_PER_BATCH
+
+    count = MAX_ANNOTATIONS_PER_BATCH + 50
+    findings = [
+        Finding(severity="Low", confidence=70, finding=f"nit {i}", file="app.py", line=4)
+        for i in range(count)
+    ]
+    post_calls: list[int] = []
+
+    def on_post(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        post_calls.append(len(body))
+        return httpx.Response(200, json={})
+
+    existing = _existing_summary()
+    handler = _router(existing=existing, on_annotations_post=on_post)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        findings, DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT",
+        max_inline=count,
+    )
+    assert result.ok, result.error
+    assert post_calls == [MAX_ANNOTATIONS_PER_BATCH, 50]
+    assert result.inline_posted == count
+    assert result.body_findings == 0
+
+    # Now make the second batch fail and confirm the first batch's findings
+    # are neither lost nor duplicated: they count toward inline_posted and
+    # are excluded from the body, while the second batch's findings fall
+    # back to the body.
+    batch_num = {"n": 0}
+
+    def on_post_partial_failure(req: httpx.Request) -> httpx.Response:
+        batch_num["n"] += 1
+        if batch_num["n"] == 2:
+            # A non-transient status with body text that avoids the
+            # transient-error phrase scan (RetryPolicy would otherwise
+            # silently retry and mask the failure this test means to
+            # trigger -- see http.py's _is_transient, which treats any 5xx
+            # response whose body contains "rate limit"/"Server Error"/etc
+            # as transient).
+            return httpx.Response(422, text="duplicate external_id")
+        return httpx.Response(200, json={})
+
+    handler2 = _router(existing=existing, on_annotations_post=on_post_partial_failure)
+    prov2 = _make_provider(handler2)
+    result2 = prov2.post_findings(
+        findings, DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT",
+        max_inline=count,
+    )
+    assert result2.ok, result2.error
+    assert result2.inline_posted == MAX_ANNOTATIONS_PER_BATCH
+    assert result2.body_findings == 50
+    assert any("POST annotations" in e for e in prov2._errors)
+
+
+def test_all_findings_annotated_headline_text_and_no_empty_heading() -> None:
+    """When every active finding lands an annotation, the comment body must
+    not print a bare '### Findings' heading with nothing under it, and must
+    say how many findings moved to Code Insights."""
+    finding = Finding(severity="Critical", confidence=90, finding="sql injection", file="app.py", line=4)
+    existing = _existing_summary()
+    handler = _router(existing=existing)
+    prov = _make_provider(handler)
+    captured: dict = {}
+
+    def on_comment_put(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)["content"]["raw"]
+        return httpx.Response(200, json={"id": existing["id"]})
+
+    handler = _router(existing=existing, on_comment_put=on_comment_put)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [finding], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    body = captured["body"]
+    assert "### Findings\n\n" not in body
+    assert "1 additional finding shown inline via Bitbucket Code Insights" in body

@@ -5,8 +5,11 @@ stale cleanup; cleanup runs after a successful post (2.FR-10).
 
 Provider differences from GitHub/GitLab:
 - No separate review entity — summary + findings collapse into a single
-  PR comment. There is no inline anchoring in v0.2.0; future versions may
-  add it.
+  PR comment. Inline-eligible findings anchor to the diff via Bitbucket
+  Code Insights annotations (a display mechanism, not a real inline PR
+  comment) rather than inline comments themselves. See
+  docs/adr/0005-bitbucket-code-insights-not-inline-comment-threads.md for
+  why. Everything else still renders as a flat bullet in the comment.
 - Auth: HTTP Basic with email + API token (httpx.BasicAuth).
 - Pagination via `next` URL in the response body (not Link header, not
   ?page=N counters).
@@ -100,12 +103,13 @@ class BitbucketConfig:
     base_url: str = "https://api.bitbucket.org/2.0"
     # Bitbucket parity Phase 3 (#839/#873): render findings via Code Insights
     # annotations on the PR diff instead of only the flat comment body, and
-    # gate the same flag on the id-map/verdict dedup this needs (they are too
-    # entangled to usefully split -- see the Bitbucket-parity plan's Phase 3
-    # "Decisions taken" section). Defaults True. The kill switch is
-    # AI_BITBUCKET_CODE_INSIGHTS=false, which reproduces pre-Phase-3 behavior
-    # (every finding rendered flat in the comment body, no suppression)
-    # byte-for-byte.
+    # gate the same flag on the id-map/verdict dedup this needs. Deliberately
+    # one flag, not two (unlike AI_GITLAB_CROSS_RUN_DEDUP being separate from
+    # AI_CANONICAL_REUSE) -- see ADR 0005's "second flag" rejected-alternative
+    # section for why that precedent doesn't transfer here. Defaults True.
+    # The kill switch is AI_BITBUCKET_CODE_INSIGHTS=false, which reproduces
+    # pre-Phase-3 behavior (every finding rendered flat in the comment body,
+    # no suppression) byte-for-byte.
     code_insights: bool = True
 
 
@@ -265,14 +269,20 @@ class BitbucketProvider:
         max_inline: int = 25,
         enable_suggestions: bool = True,
     ) -> FindingsResult:
-        """On Bitbucket the findings ride inside the summary comment.
+        """Render the summary comment body, with inline-eligible findings
+        also posted as Bitbucket Code Insights annotations when
+        `self.config.code_insights` is enabled (default).
 
         We render the findings markdown and PUT the existing summary comment
         with the combined body. If no summary comment exists, this is a no-op
         (the orchestrator MUST call post_summary first per the AC5 ordering).
 
-        `max_inline`, `enable_suggestions`, and `agent_prompt` are accepted for
-        protocol compatibility but Bitbucket has no inline anchoring in v0.2.0.
+        `max_inline` caps how many findings get a Code Insights annotation
+        this run, same semantics as GitHub/GitLab's inline-comment cap.
+        `enable_suggestions` and `agent_prompt` are accepted for protocol
+        compatibility but unused here -- Code Insights annotations have no
+        code-suggestion mechanism, and Bitbucket has no per-run agent-prompt
+        rendering surface the way GitHub's inline comments do.
         """
         existing = self._list_summary_comments()
         if not existing:
@@ -311,54 +321,89 @@ class BitbucketProvider:
         suppressed_count = 0
         annotated_count = 0
         if self.config.code_insights:
-            verdicts = extract_verdicts(existing_body) if existing_body else {}
-            classified = [
-                classify(f, verdicts=verdicts, all_threads=[]) for f in findings
-            ]
-            render_findings = [
-                c.finding for c in classified if c.kind != "suppressed"
-            ]
-            suppressed_count = len(classified) - len(render_findings)
-            # The headline (Overall Risk / Findings count) always reflects
-            # every still-active finding, regardless of which ones actually
-            # land an annotation this cycle -- mirrors github.py's
-            # headline_findings/render_findings split for the same reason:
-            # a finding shown only via Code Insights must not silently drop
-            # out of "Overall Risk".
-            headline_findings = render_findings
+            try:
+                verdicts = extract_verdicts(existing_body) if existing_body else {}
+                classified = [
+                    classify(f, verdicts=verdicts, all_threads=[]) for f in findings
+                ]
+                active_findings = [
+                    c.finding for c in classified if c.kind != "suppressed"
+                ]
+                suppressed_count = len(classified) - len(active_findings)
+                # The headline (Overall Risk / Findings count) always
+                # reflects every still-active finding, regardless of which
+                # ones actually land an annotation this cycle -- mirrors
+                # github.py's headline_findings/render_findings split for
+                # the same reason: a finding shown only via Code Insights
+                # must not silently drop out of "Overall Risk".
+                headline_findings = active_findings
 
-            added_lines, _new_files = parse_diff_sets(diff.diff_text)
-            eligible_new = {(lr.file, lr.line) for lr in added_lines}
-            inline_candidates, body_only = partition_findings(
-                render_findings, eligible_new=eligible_new, max_inline=max_inline
-            )
-
-            ci_result = post_code_insights(
-                self.client,
-                workspace=self.config.workspace,
-                repo_slug=self.config.repo_slug,
-                commit=diff.head_sha,
-                findings=inline_candidates,
-                id_map=id_map,
-            )
-            if ci_result.ok:
-                render_findings = body_only
-                annotated_count = ci_result.posted
-            else:
-                # Plan Q5 fallback: Code Insights unavailable on this
-                # workspace's plan (403/404) -- never drop findings, render
-                # every would-be-inline finding in the body instead, exactly
-                # as if it had failed inline eligibility. Logged once per
-                # run, not once per finding.
-                _log.warning(
-                    "bitbucket: Code Insights posting failed for %s/%s PR "
-                    "#%s, falling back to rendering findings in the summary "
-                    "comment body: %s",
-                    self.config.workspace, self.config.repo_slug,
-                    self.config.pr_id, ci_result.error,
+                added_lines, _new_files = parse_diff_sets(diff.diff_text)
+                eligible_new = {(lr.file, lr.line) for lr in added_lines}
+                inline_candidates, body_only = partition_findings(
+                    active_findings, eligible_new=eligible_new, max_inline=max_inline
                 )
-                self._errors.append(f"post_findings: {ci_result.error}")
-                render_findings = body_only + inline_candidates
+
+                ci_result = post_code_insights(
+                    self.client,
+                    workspace=self.config.workspace,
+                    repo_slug=self.config.repo_slug,
+                    commit=diff.head_sha,
+                    findings=inline_candidates,
+                    all_active_findings=active_findings,
+                    id_map=id_map,
+                )
+                annotated_count = ci_result.posted
+                if ci_result.ok:
+                    render_findings = body_only
+                else:
+                    # Plan Q5 fallback: Code Insights unavailable on this
+                    # workspace's plan (403/404), or a batch partway through
+                    # the annotation POST failed. Never drop or duplicate a
+                    # finding: everything in ci_result.posted_findings is
+                    # already live on Bitbucket and must not also render in
+                    # the body. Everything else falls back to the body
+                    # exactly as if it had failed inline eligibility. Logged
+                    # once per run, not once per finding.
+                    _log.warning(
+                        "bitbucket: Code Insights posting failed for %s/%s "
+                        "PR #%s, falling back to rendering findings in the "
+                        "summary comment body: %s",
+                        self.config.workspace, self.config.repo_slug,
+                        self.config.pr_id, ci_result.error,
+                    )
+                    self._errors.append(f"post_findings: {ci_result.error}")
+                    posted_fps = {
+                        fingerprint(f) for f in ci_result.posted_findings
+                    }
+                    unposted = [
+                        f for f in inline_candidates
+                        if fingerprint(f) not in posted_fps
+                    ]
+                    render_findings = body_only + unposted
+            except Exception as exc:  # noqa: BLE001
+                # A bug anywhere in this block (classify/extract_verdicts on
+                # a malformed existing_body, a future change to any of these
+                # shared helpers) must not take down the whole post_findings
+                # call -- the comment PUT below still has to run, or every
+                # finding for this cycle is lost, not just the ones destined
+                # for annotations. Degrade to the code_insights=False
+                # behavior for this run only: every finding renders flat in
+                # the body, no suppression, no annotations. Mirrors the
+                # fail-soft treatment the id_map_marker build already gets
+                # a few lines below.
+                _log.warning(
+                    "bitbucket: Code Insights processing raised unexpectedly "
+                    "for %s/%s PR #%s, falling back to flat body rendering "
+                    "for this cycle: %s",
+                    self.config.workspace, self.config.repo_slug,
+                    self.config.pr_id, exc,
+                )
+                self._errors.append(f"post_findings: Code Insights processing failed: {exc}")
+                render_findings = list(findings)
+                headline_findings = render_findings
+                suppressed_count = 0
+                annotated_count = 0
 
         # usage_block/usage_warning are deliberately NOT passed into
         # _render_combined_body: findings_block alone can be arbitrarily
@@ -817,6 +862,16 @@ def _render_combined_body(
         findings_block = "### Findings\n" + join_findings(
             _render_bullet(f) for f in sorted_findings
         )
+
+    if not sorted_findings and annotated_count:
+        # Every active finding landed an annotation instead of a body
+        # bullet -- a bare "### Findings" heading with nothing under it
+        # would be confusing (and none of the branches above already guard
+        # for this, since they only check the raw `findings`/`finding_total`
+        # emptiness, not this specific "body empty but annotations exist"
+        # case). Drop the heading. The pointer sentence appended below
+        # covers it.
+        findings_block = ""
 
     if annotated_count:
         plural = "" if annotated_count == 1 else "s"

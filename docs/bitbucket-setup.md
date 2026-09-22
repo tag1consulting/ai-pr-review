@@ -64,6 +64,18 @@ path is not merely cosmetic.
 Severity maps 1:1: Critical→`CRITICAL`, High→`HIGH`, Medium→`MEDIUM`,
 Low→`LOW`.
 
+### Concurrency
+
+Each run tears down and rebuilds the Code Insights report from scratch
+(delete, then recreate, then post its annotations). Two runs on the same
+PR overlapping closely enough to interleave their own delete/recreate
+cycles can leave the report in an inconsistent state, the same class of
+risk GitHub/GitLab reviews already have (see [Features → Quiet
+reruns](features#quiet-reruns-github)'s Concurrency note). If your
+pipeline pushes frequently enough for this to matter, configure a
+Bitbucket Pipelines concurrency setting keyed on the PR so only one
+review runs against it at a time.
+
 ## What does not work on Bitbucket
 
 - Dismissing/suppressing a finding via a comment command (no Bitbucket

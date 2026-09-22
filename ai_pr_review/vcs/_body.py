@@ -171,7 +171,20 @@ def format_body_finding(
     source_tag = format_source_tag(finding)
     location = ""
     if finding.file:
-        loc_parts = [finding.file]
+        # finding.file is agent-derived, not confirmed against the diff's
+        # real file set for a body-rendered finding (only the inline-anchor
+        # path checks membership). Neutralize it the same way github.py's
+        # carried-forward-thread rendering already treats a PR-author-
+        # controlled path: strip CR/LF and backticks (sanitize_display_text
+        # only defangs structure-breaking HTML, not Markdown, and a raw
+        # backtick would terminate the code span early), then run it through
+        # sanitize_display_text so a forged `<!-- ai-pr-review-verdicts: ... -->`
+        # (or any other marker-shaped string) can't survive into the
+        # rendered body and be parsed back as real state on a later run
+        # (e.g. Bitbucket's post_findings, which reads verdicts straight out
+        # of its own previously-rendered comment body).
+        safe_file = finding.file.replace("\r", "").replace("\n", " ").replace("`", "'")
+        loc_parts = [sanitize_display_text(safe_file)]
         if finding.line is not None:
             loc_parts.append(str(finding.line))
         location = ":".join(loc_parts)
