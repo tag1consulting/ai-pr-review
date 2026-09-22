@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ai_pr_review.vcs.marker import (
+    ACKS_MARKER_HIDDEN_PREFIX,
     INLINE_MARKER,
     INLINE_MARKER_HIDDEN,
     SKIP_MARKER,
@@ -14,11 +15,13 @@ from ai_pr_review.vcs.marker import (
     InlineMeta,
     append_inline_marker,
     append_skip_marker,
+    build_acks_marker,
     build_id_map_marker,
     build_inline_meta_marker,
     build_judge_map_marker,
     build_summary_marker,
     build_verdicts_marker,
+    extract_acks,
     extract_id_map,
     extract_inline_meta,
     extract_judge_map,
@@ -28,6 +31,7 @@ from ai_pr_review.vcs.marker import (
     has_skip_marker,
     has_summary_marker,
     replace_summary_sha,
+    upsert_acks_marker,
     upsert_verdicts_marker,
 )
 
@@ -723,6 +727,75 @@ def test_upsert_verdicts_marker_replaces_last_by_position_when_both_forms_presen
     # payload. The earlier HTML-form marker is untouched.
     assert extract_verdicts(updated) == {"c|d.py|2|def456abc123": "recurred"}
     assert '"a|b.py|1|abc123def456":"dismissed"' in updated
+
+
+# ---------------------------------------------------------------------------
+# build_acks_marker / extract_acks / upsert_acks_marker (#874, Bitbucket only)
+# ---------------------------------------------------------------------------
+
+
+def test_build_acks_marker_is_hidden_form() -> None:
+    marker = build_acks_marker([1, 2, 3])
+    assert marker.startswith(ACKS_MARKER_HIDDEN_PREFIX)
+    assert "<!--" not in marker
+
+
+def test_extract_acks_round_trips() -> None:
+    marker = build_acks_marker([5, 3, 1, 4])
+    assert extract_acks(marker) == frozenset({1, 3, 4, 5})
+
+
+def test_extract_acks_no_marker_returns_empty() -> None:
+    assert extract_acks("some review body\n") == frozenset()
+
+
+def test_extract_acks_corrupt_base64_returns_empty() -> None:
+    # "A" matches the marker regex's character class but is invalid base64
+    # (a data length of 1 is never valid) -- same reasoning as
+    # test_extract_verdicts_hidden_corrupt_base64_returns_empty above.
+    assert extract_acks("[//]: # (ai-pr-review-acks:A)") == frozenset()
+
+
+def test_extract_acks_valid_json_wrong_shape_returns_empty() -> None:
+    import base64
+    import json
+
+    payload = base64.b64encode(json.dumps({"not": "a list"}).encode()).decode()
+    assert extract_acks(f"[//]: # (ai-pr-review-acks:{payload})") == frozenset()
+
+
+def test_build_acks_marker_caps_at_max_and_keeps_highest_ids() -> None:
+    from ai_pr_review.vcs.marker import _MAX_ACKED_IDS
+
+    ids = list(range(_MAX_ACKED_IDS + 50))
+    marker = build_acks_marker(ids)
+    acked = extract_acks(marker)
+    assert len(acked) == _MAX_ACKED_IDS
+    # Oldest (smallest) ids are the ones dropped -- comment ids are
+    # monotonically increasing, so "oldest" and "smallest" are the same
+    # ordering.
+    assert min(acked) == 50
+    assert max(acked) == _MAX_ACKED_IDS + 49
+
+
+def test_upsert_acks_marker_appends_when_absent() -> None:
+    body = "some review body\n"
+    result = upsert_acks_marker(body, [1, 2])
+    assert result.startswith(body)
+    assert extract_acks(result) == frozenset({1, 2})
+
+
+def test_upsert_acks_marker_replaces_existing_marker_in_place() -> None:
+    body = "some review body\n" + build_acks_marker([1, 2])
+    updated = upsert_acks_marker(body, [1, 2, 3])
+    assert updated.count("ai-pr-review-acks:") == 1
+    assert extract_acks(updated) == frozenset({1, 2, 3})
+
+
+def test_upsert_acks_marker_uses_blank_line_separator_when_no_trailing_newline() -> None:
+    body = "some review body"
+    result = upsert_acks_marker(body, [1])
+    assert result.startswith("some review body\n\n[//]: # (ai-pr-review-acks:")
 
 
 # ---------------------------------------------------------------------------

@@ -111,6 +111,20 @@ class BitbucketConfig:
     # pre-Phase-3 behavior (every finding rendered flat in the comment body,
     # no suppression) byte-for-byte.
     code_insights: bool = True
+    # Bitbucket parity Phase 4 (#874): poll the PR's own top-level comments
+    # for /ai-pr-review dismiss|false-positive|wont-fix|fixed F<n> commands
+    # at review time (Bitbucket Pipelines has no comment-triggered event, so
+    # this run IS the trigger). Defaults False -- unlike code_insights, this
+    # gates a fail-closed authorization decision with real security-adjacent
+    # consequences on a bug (see ai_pr_review.vcs._bitbucket_verdicts'
+    # module docstring), so it stays opt-in through its own soak period
+    # before a later phase defaults it on, mirroring how GitHub/GitLab's own
+    # inline-comment work first shipped default-off.
+    verdicts: bool = False
+    # Minimum Bitbucket repository permission role required to apply a
+    # verdict command: "read", "write", or "admin". Checked via
+    # check_authority() against the commenter's account_id.
+    verdict_min_role: str = "write"
 
 
 def build_client(

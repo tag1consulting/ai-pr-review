@@ -116,6 +116,12 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # not by Config -- registered here only so Config.from_env's unknown-
         # AI_*-var check doesn't warn about it.
         "AI_BITBUCKET_CODE_INSIGHTS",
+        # --- Verdict-command polling (Bitbucket only, #874) ---
+        # Read directly by ai_pr_review.vcs.__init__._build_bitbucket_from_env,
+        # not by Config -- registered here only so Config.from_env's unknown-
+        # AI_*-var check doesn't warn about it.
+        "AI_BITBUCKET_VERDICTS",
+        "AI_BITBUCKET_VERDICT_MIN_ROLE",
     }
 )
 

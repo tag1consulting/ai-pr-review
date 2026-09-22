@@ -272,6 +272,17 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         not in ("false", "0", "no")
     )
 
+    # Bitbucket parity Phase 4 (#874): verdict-command polling, defaults
+    # False -- see BitbucketConfig.verdicts' docstring for why this one
+    # stays opt-in unlike code_insights.
+    verdicts = (
+        os.environ.get("AI_BITBUCKET_VERDICTS", "false").strip().lower()
+        not in ("false", "0", "no")
+    )
+    verdict_min_role = (
+        os.environ.get("AI_BITBUCKET_VERDICT_MIN_ROLE", "write").strip().lower()
+    )
+
     config = BitbucketConfig(
         workspace=workspace,
         repo_slug=repo_slug,
@@ -279,5 +290,7 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         email=email,
         api_token=token,
         code_insights=code_insights,
+        verdicts=verdicts,
+        verdict_min_role=verdict_min_role,
     )
     return BitbucketProvider(config=config, client=build_bitbucket_client(config))
