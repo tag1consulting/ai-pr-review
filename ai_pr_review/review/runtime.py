@@ -572,7 +572,7 @@ async def build_review_runtime(
     try:
         from ai_pr_review.pricing import load_pricing
         from ai_pr_review.review.cost_ceiling import (
-            CostEstimate,
+            AgentCostEstimate,
             enforce_cost_ceiling,
             estimate_preflight_agent_cost,
             estimate_review_cost,
@@ -596,22 +596,17 @@ async def build_review_runtime(
         # Fold in the two separately-dispatched preflight agents when they
         # will actually run this review -- mirrors the exact gating cli.py
         # applies before calling _run_summarizer/_run_issue_linker.
-        preflight_parts: list[CostEstimate] = []
+        preflight_parts: list[AgentCostEstimate] = []
         if not is_incremental and agent_allowed(
             "pr-summarizer", config.agents, config.exclude_agents
         ):
-            summarizer_cost = estimate_preflight_agent_cost(
-                agent_name="pr-summarizer",
-                model=config.model_standard,
-                diff_text=diff_text,
-                output_tokens=4096,
-                pricing_data=pricing_data,
-            )
             preflight_parts.append(
-                CostEstimate(
-                    per_agent=(summarizer_cost,),
-                    total_cost_units=summarizer_cost.estimated_cost_units,
-                    any_unknown_pricing=summarizer_cost.unknown_pricing,
+                estimate_preflight_agent_cost(
+                    agent_name="pr-summarizer",
+                    model=config.model_standard,
+                    diff_text=diff_text,
+                    output_tokens=4096,
+                    pricing_data=pricing_data,
                 )
             )
         if (
@@ -620,18 +615,13 @@ async def build_review_runtime(
             and config.vcs_provider == "github"
             and agent_allowed("issue-linker", config.agents, config.exclude_agents)
         ):
-            issue_linker_cost = estimate_preflight_agent_cost(
-                agent_name="issue-linker",
-                model=config.model_standard,
-                diff_text=diff_text,
-                output_tokens=4096,
-                pricing_data=pricing_data,
-            )
             preflight_parts.append(
-                CostEstimate(
-                    per_agent=(issue_linker_cost,),
-                    total_cost_units=issue_linker_cost.estimated_cost_units,
-                    any_unknown_pricing=issue_linker_cost.unknown_pricing,
+                estimate_preflight_agent_cost(
+                    agent_name="issue-linker",
+                    model=config.model_standard,
+                    diff_text=diff_text,
+                    output_tokens=4096,
+                    pricing_data=pricing_data,
                 )
             )
         if preflight_parts:
