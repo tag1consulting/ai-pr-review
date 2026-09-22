@@ -408,6 +408,19 @@ class BitbucketProvider:
         if self.config.code_insights:
             try:
                 verdicts = extract_verdicts(existing_body) if existing_body else {}
+                # Fingerprints whose verdict this exact cycle just set (as
+                # opposed to one already persisted from a prior run) -- the
+                # recurred-tombstone rewrite below must never touch these.
+                # Without this guard, a "fixed" command applied this same
+                # cycle would immediately classify() as "recurred" (the
+                # finding is still present in `findings`, since the command
+                # doesn't retroactively remove it from the diff) and get
+                # silently flipped back before the human's verdict ever
+                # reaches the comment body -- the poll-at-review-time design
+                # (unlike GitHub/GitLab, where a verdict command and the
+                # next classify() pass are always separate runs) makes this
+                # collision reachable in a single call here.
+                freshly_set_fps: frozenset[str] = frozenset()
 
                 # Bitbucket parity Phase 4 (#874): poll the PR's own
                 # top-level comments for /ai-pr-review verdict commands
@@ -426,6 +439,11 @@ class BitbucketProvider:
                         comments=self._fetch_comments(),
                         existing_body=existing_body,
                         min_role=self.config.verdict_min_role,
+                    )
+                    freshly_set_fps = frozenset(
+                        fp
+                        for fp, v in poll_result.verdicts.items()
+                        if verdicts.get(fp) != v
                     )
                     verdicts = dict(poll_result.verdicts)
                     for poll_error in poll_result.errors:
@@ -468,8 +486,9 @@ class BitbucketProvider:
                 # there is nothing new worth persisting.
                 if self.config.verdicts:
                     for c in classified:
-                        if c.kind == "recurred":
-                            verdicts[fingerprint(c.finding)] = "recurred"
+                        fp = fingerprint(c.finding)
+                        if c.kind == "recurred" and fp not in freshly_set_fps:
+                            verdicts[fp] = "recurred"
                     verdicts_marker_payload = verdicts
 
                 active_findings = [
