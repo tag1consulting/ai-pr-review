@@ -315,6 +315,10 @@ jobs:
           # gating this repo's own required checks on the bot's approval (default: true).
           # Set AI_REVIEW_FAIL_ON_FINDINGS=false to make dogfood runs non-blocking.
           fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'true' }}
+          # vars.AI_REVIEW_APPROVAL_CEILING caps the strongest review event
+          # the bot may post (issue #858). Default 'approve' -- unchanged
+          # behavior for this repo's own dogfooding.
+          approval-ceiling: ${{ vars.AI_REVIEW_APPROVAL_CEILING || 'approve' }}
           # --- Epic 3: capabilities (Python engine only) ---
           # vars.AI_REVIEW_CONTEXT_ENRICHMENT enables tree-sitter symbol-context
           # injection into agent prompts (Capability A). Requires engine=python.
@@ -392,6 +396,7 @@ jobs:
       # job's pull_request trigger. Set AI_REVIEW_FAIL_ON_FINDINGS=true if
       # you want that gating behavior on rescan/review-full too.
       fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'false' }}
+      approval-ceiling: ${{ vars.AI_REVIEW_APPROVAL_CEILING || 'approve' }}
       feedback-loop: ${{ vars.AI_REVIEW_FEEDBACK_LOOP || 'false' }}
       token-usage-display: ${{ vars.AI_REVIEW_TOKEN_USAGE_DISPLAY || 'compact' }}
       token-usage-warn-usd: ${{ vars.AI_REVIEW_TOKEN_USAGE_WARN_USD || '1.00' }}

@@ -254,6 +254,119 @@ def test_happy_path_no_agents_no_findings_posts_in_order(tmp_path: Path) -> None
     anyio.run(_run)
 
 
+# ---------------------------------------------------------------------------
+# Approval ceiling (#858)
+# ---------------------------------------------------------------------------
+
+
+def test_approval_ceiling_default_still_posts_approve(tmp_path: Path) -> None:
+    """No behavior change from before this feature existed."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="## Some summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(approval_ceiling="approve"),
+        )
+        assert result.outcome.event == "APPROVE"
+        assert result.outcome.may_approve is True
+        assert provider.findings_calls[0]["event"] == "APPROVE"
+
+    anyio.run(_run)
+
+
+def test_approval_ceiling_request_changes_downgrades_clean_run_to_comment(
+    tmp_path: Path,
+) -> None:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="## Some summary",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(approval_ceiling="request-changes"),
+        )
+        assert result.outcome.event == "COMMENT"
+        # may_approve reflects the classifier's severity verdict, not what
+        # was actually posted -- load-bearing for AI_FAIL_ON_FINDINGS.
+        assert result.outcome.may_approve is True
+        assert provider.findings_calls[0]["event"] == "COMMENT"
+
+    anyio.run(_run)
+
+
+def test_approval_ceiling_comment_downgrades_critical_run_to_comment(
+    tmp_path: Path,
+) -> None:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+    spec = AgentSpec(
+        name="security-reviewer",
+        prompt_path="prompts/security-reviewer.md",
+        tier=1,
+        conditional_trigger=None,
+        max_output_tokens=4096,
+        full_mode_only=False,
+        context_enrichment_eligible=False,
+    )
+    findings_json = (
+        '{"file": "a.py", "line": 1, "severity": "Critical", '
+        '"category": "security", "title": "t", "description": "d"}'
+    )
+    response_text = f"```json-findings\n[{findings_json}]\n```"
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="",
+            agents=[spec],
+            llm_call=_llm_call_factory({"security-reviewer": response_text}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(approval_ceiling="comment"),
+        )
+        assert result.outcome.event == "COMMENT"
+        assert result.outcome.may_approve is False
+        assert provider.findings_calls[0]["event"] == "COMMENT"
+
+    anyio.run(_run)
+
+
+def test_approval_ceiling_applies_to_skip_path(tmp_path: Path) -> None:
+    """The skip path classifies to APPROVE (no findings, no failures);
+    a ceiling still clamps it, even though it only reaches
+    telemetry/stdout here (post_skip_comment carries no event)."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            skip_reason="no changed files",
+            config=OrchestrationConfig(approval_ceiling="comment"),
+        )
+        assert result.skipped is True
+        assert result.outcome.event == "COMMENT"
+
+    anyio.run(_run)
+
+
 def test_failed_summary_post_skips_findings_and_stale(tmp_path: Path) -> None:
     provider = _FakeProvider(summary_ok=False)
     ctx = _make_dispatch_context(tmp_path)

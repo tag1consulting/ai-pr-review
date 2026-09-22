@@ -662,6 +662,7 @@ async def build_review_runtime(
         )
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
+        approval_ceiling=config.approval_ceiling,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
         max_inline=config.max_inline,
         enable_suggestions=config.enable_suggestions,

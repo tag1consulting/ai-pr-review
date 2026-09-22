@@ -615,6 +615,112 @@ def test_approve_allowed_defaults_false_no_approval(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue #858: --approval-ceiling suppresses the auto-approve escalation
+# ---------------------------------------------------------------------------
+
+
+def _approval_ceiling_suppresses_approve(monkeypatch, ceiling: str) -> None:
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200, json=[{"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}}]
+            )
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            raise AssertionError(
+                f"must not approve when approval-ceiling={ceiling!r} even with "
+                "--approve-allowed true"
+            )
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41)
+        + ["--approve-allowed", "true", "--approval-ceiling", ceiling],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "resolved the thread" in result.stdout
+    assert "approved" not in result.stdout
+
+
+def test_approval_ceiling_request_changes_suppresses_approve_even_with_approve_allowed(
+    monkeypatch,
+) -> None:
+    _approval_ceiling_suppresses_approve(monkeypatch, "request-changes")
+
+
+def test_approval_ceiling_comment_suppresses_approve_even_with_approve_allowed(
+    monkeypatch,
+) -> None:
+    _approval_ceiling_suppresses_approve(monkeypatch, "comment")
+
+
+def test_approval_ceiling_approve_still_allows_approval(monkeypatch) -> None:
+    """Control: the default ceiling value preserves today's approval
+    behavior when --approve-allowed is also true."""
+    our_body = f"[High] leak\n{INLINE_MARKER}"
+    nodes = [_inline_thread("T1", resolved=False, body=our_body, comment_db_id=55, review_db_id=41)]
+    approved: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if req.method == "GET" and url.endswith("/reviews/41"):
+            return httpx.Response(200, json={"id": 41, "state": "CHANGES_REQUESTED"})
+        if req.method == "GET" and "/reviews" in url:
+            return httpx.Response(
+                200, json=[{"id": 41, "state": "CHANGES_REQUESTED", "user": {"login": "github-actions[bot]"}}]
+            )
+        if req.method == "POST" and url.endswith("/graphql"):
+            body = _json.loads(req.content)
+            q = body.get("query", "")
+            if "resolveReviewThread" in q:
+                return httpx.Response(
+                    200, json={"data": {"resolveReviewThread": {"thread": {"id": "T1", "isResolved": True}}}}
+                )
+            return httpx.Response(200, json=_threads_response(nodes))
+        if req.method == "PUT" and "/dismissals" in url:
+            return httpx.Response(200, json={})
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            approved.append(_json.loads(req.content))
+            return httpx.Response(200, json={"id": 999, "state": "APPROVED"})
+        return httpx.Response(404)
+
+    provider, _ = _make_provider(handler)
+    monkeypatch.setattr(vcs_module, "provider_from_env", lambda: provider)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        _base_args(55, review_id=41)
+        + ["--approve-allowed", "true", "--approval-ceiling", "approve"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "approved" in result.stdout
+    assert len(approved) == 1
+
+
+# ---------------------------------------------------------------------------
 # "fixed" command: never auto-approves, echoes the commit SHA bare
 # ---------------------------------------------------------------------------
 

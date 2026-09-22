@@ -83,6 +83,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_JUDGE_PASS",
         # --- Fail-on-findings ---
         "AI_FAIL_ON_FINDINGS",
+        # --- Approval ceiling (#858) ---
+        "AI_APPROVAL_CEILING",
         # --- Token usage display (#758) ---
         "AI_TOKEN_USAGE_DISPLAY",
         "AI_TOKEN_USAGE_WARN_USD",
@@ -499,6 +501,19 @@ class ReviewConfig(BaseModel):
     # auto-merge blocked until the bot approves). Off by default.
     fail_on_findings: bool = False
 
+    # --- Approval ceiling (#858) ---
+    # Caps the strongest review event this bot may post, independent of
+    # fail_on_findings (which reads the classifier's severity verdict, not
+    # what actually gets posted -- see review/outcome.py's ReviewOutcome
+    # .may_approve docstring). "approve" (default) is unchanged behavior.
+    # "request-changes" still allows REQUEST_CHANGES on Critical/High but
+    # downgrades a clean/Low/Medium APPROVE to COMMENT. "comment" downgrades
+    # both, so the bot never sets any formal review state -- a human
+    # approves every merge. Also suppresses the dismiss-command
+    # auto-approve-on-dismiss escalation (issue #590) when not "approve".
+    # Deliberately not policy.yml-overridable: see docs/policy.md.
+    approval_ceiling: str = "approve"
+
     # --- Token usage display (#758) ---
     # How the token-usage/cost information is shown in the posted review
     # comment. The full per-agent breakdown always goes to GITHUB_STEP_SUMMARY
@@ -675,6 +690,16 @@ class ReviewConfig(BaseModel):
             raise ValueError(f"analyzer_diff_scope must be 'cap', 'drop', or 'off', got {v!r}")
         return v
 
+    @field_validator("approval_ceiling")
+    @classmethod
+    def _validate_approval_ceiling(cls, v: str) -> str:
+        from ai_pr_review.review.outcome import normalize_approval_ceiling
+
+        try:
+            return normalize_approval_ceiling(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
     @field_validator("token_usage_display")
     @classmethod
     def _validate_token_usage_display(cls, v: str) -> str:
@@ -849,6 +874,7 @@ class ReviewConfig(BaseModel):
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
             enable_judge_pass=_bool("AI_JUDGE_PASS", True),
             fail_on_findings=_bool("AI_FAIL_ON_FINDINGS"),
+            approval_ceiling=os.environ.get("AI_APPROVAL_CEILING", "approve").strip() or "approve",
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
             max_cost_usd=_float("AI_MAX_COST_USD", 0.0),

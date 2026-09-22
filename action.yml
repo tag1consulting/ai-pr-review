@@ -195,6 +195,23 @@ inputs:
     required: false
     default: 'false'
 
+  approval-ceiling:
+    description: >
+      Caps the strongest review event this bot may post: 'approve' (default, unchanged
+      behavior), 'request-changes' (a clean/Low/Medium outcome posts COMMENT instead of
+      APPROVE; Critical/High still post REQUEST_CHANGES), or 'comment' (every outcome
+      posts COMMENT, so the bot never sets a formal review state). fail-on-findings'
+      exit code is unaffected by this setting -- a clean PR still exits 0, a
+      Critical/High-finding PR still exits 2, regardless of what actually gets posted.
+      A non-'approve' value also disables the /ai-pr-review dismiss auto-approve-on-
+      dismiss escalation. On GitLab/Bitbucket, which never post a real approval state
+      today, this only affects rendered review text. With a non-'approve' value, branch
+      protection cannot require this bot's approval as a merge gate -- use
+      fail-on-findings plus a required status check instead. See
+      docs/configuration.md#approval-ceiling.
+    required: false
+    default: 'approve'
+
   ignore-merge-commits:
     description: >
       When true, strip merge commits that pulled in upstream base-branch changes
@@ -491,6 +508,7 @@ runs:
         AI_ANALYZER_CONCURRENCY: ${{ inputs.analyzer-concurrency }}
         AI_ENABLE_SUGGESTIONS: ${{ inputs.enable-suggestions }}
         AI_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        AI_APPROVAL_CEILING: ${{ inputs.approval-ceiling }}
         AI_IGNORE_MERGE_COMMITS: ${{ inputs.ignore-merge-commits }}
         AI_SARIF_PATHS: ${{ inputs.sarif-paths }}
         AI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}

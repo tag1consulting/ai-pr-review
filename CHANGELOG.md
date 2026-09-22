@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`approval-ceiling` input / `AI_APPROVAL_CEILING` env var (issue #858)**: caps the strongest review event this bot may post. `approve` (default): unchanged behavior. `request-changes`: a clean/Low/Medium outcome posts `COMMENT` instead of `APPROVE`; `Critical`/`High` still post `REQUEST_CHANGES`. `comment`: every outcome posts `COMMENT`, so the bot never sets a formal review state and a human makes every merge decision. `AI_FAIL_ON_FINDINGS`'s exit code is unaffected by this setting — a clean PR still exits 0, a Critical/High-finding PR still exits 2, regardless of the ceiling; use `fail-on-findings` plus a required status check as the merge gate when a non-`approve` ceiling is set, since branch protection can no longer require this bot's own approval. A non-`approve` ceiling also disables the `/ai-pr-review dismiss` auto-approve-on-dismiss escalation (issue #590). On GitLab/Bitbucket, which never post a real approval state today, this only changes rendered review text. Deliberately not `policy.yml`-configurable — see [Configuration: Approval ceiling](docs/configuration.md#approval-ceiling).
+
 ### Fixed
 
 - **`policy.yml`'s `exclude-agents` and `exclude-analyzers` were silently ignored.** `resolve_policy()` carried both fields through the `extends` chain, but `build_review_runtime()`'s merge only read a policy's allow lists (`agents`/`analyzers`) and its restricted flag; the deny list that reached the agents and analyzers came solely from the `AI_EXCLUDE_AGENTS`/`AI_EXCLUDE_ANALYZERS` env vars. A repo whose policy excluded `phpstan` because CI already runs it against a real autoloader kept getting the reviewer's autoloader-less phpstan findings on every PR. The policy's exclude lists are now unioned into the final deny lists, additive with any explicit env-var exclusions. `allow` lists were already honored, so `analyzers: [...]` was an accidental workaround.
