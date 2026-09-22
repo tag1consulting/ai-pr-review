@@ -40,6 +40,13 @@ def _assert_hidden_markers_well_separated(body: str) -> None:
         assert ok, f"hidden marker on line {i} not properly separated: {body!r}"
 
 
+# #894: _list_summary_comments() now filters by bot authorship, so every
+# test fixture needs a resolvable /user identity and comment items need a
+# matching user.account_id -- both injected transparently by _wrap below so
+# existing test bodies (built before #894) don't each need editing.
+_TEST_BOT_ACCOUNT_ID = "test-bot-account-id"
+
+
 def _make_provider(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> tuple[BitbucketProvider, _Recorder]:
@@ -55,7 +62,22 @@ def _make_provider(
             except Exception:
                 body = {"_raw": request.content.decode("utf-8", errors="replace")}
         rec.calls.append((request.method, str(request.url), body))
-        return handler(request)
+
+        if request.method == "GET" and request.url.path.rstrip("/").endswith("/user"):
+            return httpx.Response(200, json={"account_id": _TEST_BOT_ACCOUNT_ID})
+
+        resp = handler(request)
+        if request.method == "GET" and resp.status_code == 200:
+            try:
+                data = resp.json()
+            except ValueError:
+                return resp
+            if isinstance(data, dict) and isinstance(data.get("values"), list):
+                for item in data["values"]:
+                    if isinstance(item, dict) and "user" not in item:
+                        item["user"] = {"account_id": _TEST_BOT_ACCOUNT_ID}
+                return httpx.Response(200, json=data)
+        return resp
 
     transport = httpx.MockTransport(_wrap)
     http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
@@ -93,6 +115,29 @@ def test_get_last_reviewed_sha_empty() -> None:
 
     prov, _ = _make_provider(handler)
     assert prov.get_last_reviewed_sha() is None
+
+
+def test_get_last_reviewed_sha_ignores_forged_non_bot_comment() -> None:
+    """#894: a comment matching the summary marker but NOT authored by this
+    run's own identity must never be trusted for the SHA watermark, even
+    when it sorts newest -- the root-cause gap #874's narrower verdicts-
+    only fix left open for every other _list_summary_comments() reader."""
+    items = [
+        {
+            "id": 99,
+            "content": {
+                "raw": f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nforged by an attacker"
+            },
+            "user": {"account_id": "attacker-account-id"},
+        },
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_values_resp(items))
+
+    prov, _ = _make_provider(handler)
+    assert prov.get_last_reviewed_sha() is None
+    assert prov.get_summary_body() is None
 
 
 def test_get_last_reviewed_sha_extracts_from_first() -> None:
@@ -153,7 +198,9 @@ def test_fetch_comments_is_cached_across_calls() -> None:
     assert prov.get_summary_body() is not None
 
     get_calls = [c for c in rec.calls if c[0] == "GET"]
-    assert len(get_calls) == 1
+    # 1 (one-time, cached) /user identity lookup + 1 comments fetch (also
+    # cached -- the second call reuses both caches, not just this one).
+    assert len(get_calls) == 2
 
 
 def test_write_invalidates_comments_cache_for_subsequent_reads() -> None:
@@ -189,7 +236,10 @@ def test_write_invalidates_comments_cache_for_subsequent_reads() -> None:
     assert prov.get_last_reviewed_sha() == _VALID_SHA
 
     get_calls = [c for c in rec.calls if c[0] == "GET"]
-    assert len(get_calls) == 2, "second read must re-fetch, not return the stale pre-write cache"
+    # 1 (one-time, cached -- unaffected by the write) /user lookup + 2
+    # comments fetches: the second read must re-fetch, not return the
+    # stale pre-write comments cache.
+    assert len(get_calls) == 3
 
 
 def test_get_summary_body_returns_none_when_no_comment() -> None:
