@@ -340,6 +340,16 @@ def test_fingerprint_location_handles_pipe_in_path() -> None:
     assert line == 3
 
 
+def test_fingerprint_location_handles_pipe_in_source() -> None:
+    """#887: a pipe in source (not just file) must also round-trip -- the
+    old fixed-width-peel implementation only handled a pipe in file."""
+    f = _finding("issue", source="weird|source", file="app.py", line=3)
+    fp = fingerprint(f)
+    file_, line = fingerprint_location(fp)
+    assert file_ == "app.py"
+    assert line == 3
+
+
 def test_fingerprint_location_malformed_returns_empty() -> None:
     assert fingerprint_location("not-a-fingerprint") == ("", None)
 

@@ -6,10 +6,12 @@ from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs._body import format_body_finding
 from ai_pr_review.vcs._finding_ids import (
     _ends_body_section,
+    _escape_fingerprint_component,
     _pick_primary_source,
     assemble_id_map,
     fingerprint,
     known_fingerprints,
+    split_fingerprint,
 )
 from ai_pr_review.vcs.marker import (
     USAGE_MARKER,
@@ -73,6 +75,67 @@ def test_fingerprint_none_line() -> None:
     f = _finding("x", line=None)
     fp = fingerprint(f)
     assert fp  # non-empty, doesn't crash
+
+
+# ---------------------------------------------------------------------------
+# fingerprint() delimiter collision (#887)
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_no_collision_when_pipe_moves_across_components() -> None:
+    """The exact collision #887 reports: a literal | in source vs. in file,
+    positioned so the two fingerprints would be byte-identical without
+    escaping."""
+    f1 = _finding("x", source="a|b", file="c", line=1)
+    f2 = _finding("x", source="a", file="b|c", line=1)
+    assert fingerprint(f1) != fingerprint(f2)
+
+
+def test_fingerprint_no_collision_with_escaped_pipe_in_source() -> None:
+    """A source containing a literal backslash-pipe sequence must not be
+    confusable with an escaped delimiter produced by this function itself."""
+    f1 = _finding("x", source="a\\|b", file="c", line=1)
+    f2 = _finding("x", source="a", file="b", line=1)
+    assert fingerprint(f1) != fingerprint(f2)
+
+
+def test_escape_fingerprint_component_identity_for_normal_values() -> None:
+    """No behavior change for the overwhelming majority of real source/file
+    values (no backslash, no pipe) -- the fingerprint format is unchanged,
+    preserving F-ID stability for every already-open PR's existing markers."""
+    assert _escape_fingerprint_component("code-reviewer") == "code-reviewer"
+    assert _escape_fingerprint_component("app/models/user.py") == "app/models/user.py"
+
+
+def test_split_fingerprint_recovers_original_components_with_pipe() -> None:
+    f = _finding("issue text", source="a|b", file="weird|path/app.py", line=3)
+    fp = fingerprint(f)
+    source, file_, line, _hash = split_fingerprint(fp)
+    assert source == "a|b"
+    assert file_ == "weird|path/app.py"
+    assert line == "3"
+
+
+def test_split_fingerprint_recovers_backslash() -> None:
+    f = _finding("issue text", source="a\\b", file="c", line=1)
+    fp = fingerprint(f)
+    source, file_, line, _hash = split_fingerprint(fp)
+    assert source == "a\\b"
+    assert file_ == "c"
+
+
+def test_split_fingerprint_round_trips_arbitrary_values() -> None:
+    """Round-trip property across a small set of adversarial component
+    values -- escape then split must always recover the original."""
+    cases = ["", "plain", "a|b", "a\\b", "a\\|b", "||", "\\\\", "a|b|c\\|d"]
+    for source in cases:
+        for file_ in cases:
+            f = _finding("x", source=source, file=file_, line=5)
+            fp = fingerprint(f)
+            got_source, got_file, got_line, _hash = split_fingerprint(fp)
+            assert got_source == source
+            assert got_file == file_
+            assert got_line == "5"
 
 
 # ---------------------------------------------------------------------------
