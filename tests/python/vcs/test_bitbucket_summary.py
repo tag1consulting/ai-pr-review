@@ -138,6 +138,60 @@ def test_get_last_reviewed_sha_paginates_via_next() -> None:
     assert prov.get_last_reviewed_sha() == _VALID_SHA
 
 
+def test_fetch_comments_is_cached_across_calls() -> None:
+    """_fetch_comments() caches its result per-instance: a run that needs
+    the comment listing more than once, such as get_last_reviewed_sha()
+    followed by get_summary_body(), must not paginate over the comments
+    endpoint a second time for the same data."""
+    items = [{"id": 1, "content": {"raw": f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nlatest"}}]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_values_resp(items))
+
+    prov, rec = _make_provider(handler)
+    assert prov.get_last_reviewed_sha() == _VALID_SHA
+    assert prov.get_summary_body() is not None
+
+    get_calls = [c for c in rec.calls if c[0] == "GET"]
+    assert len(get_calls) == 1
+
+
+def test_write_invalidates_comments_cache_for_subsequent_reads() -> None:
+    """A write through `_write_request` (post_summary here) must clear
+    `_comments_cache` so the next read re-fetches instead of returning what
+    the cache held before the write. Without this, get_last_reviewed_sha()
+    called after post_summary() would still report the pre-write state."""
+    state = {"posted": False}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            state["posted"] = True
+            return httpx.Response(201, json={"id": 1})
+        if state["posted"]:
+            items = [
+                {
+                    "id": 1,
+                    "content": {
+                        "raw": f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nlatest"
+                    },
+                }
+            ]
+            return httpx.Response(200, json=_values_resp(items))
+        return httpx.Response(200, json=_values_resp([]))
+
+    prov, rec = _make_provider(handler)
+
+    assert prov.get_last_reviewed_sha() is None
+
+    result = prov.post_summary(f"{SUMMARY_MARKER_PREFIX} sha={_VALID_SHA} -->\nlatest", _VALID_SHA)
+    assert result.created is True
+
+    assert prov.get_last_reviewed_sha() == _VALID_SHA
+
+    get_calls = [c for c in rec.calls if c[0] == "GET"]
+    assert len(get_calls) == 2, "second read must re-fetch, not return the stale pre-write cache"
+
+
 def test_get_summary_body_returns_none_when_no_comment() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_values_resp([]))
@@ -269,7 +323,108 @@ def test_post_summary_empty_body_refuses() -> None:
     result = prov.post_summary("   \n  ", _VALID_SHA)
     assert not result.ok
     assert result.error == "empty summary body"
-    assert rec.calls == []
+
+
+def test_post_summary_carries_forward_id_map_verdicts_acks() -> None:
+    """Live-verified regression test (2026-09-22, #874 follow-up): before
+    this fix, post_summary composed its new body from scratch and threw
+    away the existing comment's id-map/verdicts/acks hidden markers.
+    Because post_summary always runs before post_findings in the same
+    call chain (AC5 ordering) and post_findings reads post_summary's own
+    write back as its "prior state" baseline, this silently reset F-ID
+    stability AND verdict/ack persistence to empty on every single run --
+    confirmed against a real Bitbucket workspace, not just inferred from
+    reading the code."""
+    from ai_pr_review.vcs.marker import (
+        build_acks_marker,
+        build_id_map_marker,
+        build_verdicts_marker,
+        extract_acks,
+        extract_id_map,
+        extract_verdicts,
+    )
+
+    prior_id_map = {"code-reviewer|app.py|4|abc123": 1, "semgrep|app.py|9|def456": 2}
+    prior_verdicts = {"code-reviewer|app.py|4|abc123": "dismissed"}
+    prior_acks = [111, 222]
+    existing_body = (
+        f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=01d4ead4ee)\nold\n\n"
+        + build_id_map_marker(prior_id_map, hidden=True)
+        + "\n\n"
+        + build_verdicts_marker(prior_verdicts, hidden=True)
+        + "\n\n"
+        + build_acks_marker(prior_acks)
+    )
+    existing = {"id": 55, "content": {"raw": existing_body}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([existing]))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_summary("## brand new summary text", _VALID_SHA)
+    assert result.updated is True
+    put_call = next(c for c in rec.calls if c[0] == "PUT")
+    new_body = put_call[2]["content"]["raw"]
+
+    assert extract_id_map(new_body) == prior_id_map
+    assert extract_verdicts(new_body) == prior_verdicts
+    assert extract_acks(new_body) == frozenset(prior_acks)
+    # The new headline text is still what was asked for -- carrying the
+    # markers forward must not silently drop or corrupt it.
+    assert "## brand new summary text" in new_body
+
+
+def test_post_summary_no_existing_comment_carries_forward_nothing() -> None:
+    # First-ever post on a PR: no prior comment to carry markers forward
+    # from. Must not raise or behave differently from before this fix.
+    prov, rec = _make_provider(lambda _r: httpx.Response(200, json=_values_resp([])))
+    # First GET returns empty (no existing), so upsert_comment POSTs a new one.
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([]))
+        if req.method == "POST":
+            return httpx.Response(200, json={"id": 99})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_summary("## first ever", _VALID_SHA)
+    assert result.created is True
+    assert result.comment_id == 99
+
+
+def test_post_summary_carry_forward_too_large_omits_with_error_not_crash() -> None:
+    from ai_pr_review.vcs.marker import build_id_map_marker, extract_id_map
+
+    # A large enough id-map to blow the byte budget when carried forward
+    # alongside a near-max-size summary body.
+    huge_id_map = {f"code-reviewer|some/very/long/path/file_{i}.py|{i}|{'a' * 40}": i for i in range(2000)}
+    existing_body = (
+        f"{SUMMARY_MARKER_HIDDEN_PREFIX} sha=01d4ead4ee)\nold\n\n"
+        + build_id_map_marker(huge_id_map, hidden=True)
+    )
+    existing = {"id": 55, "content": {"raw": existing_body}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values_resp([existing]))
+        if req.method == "PUT":
+            return httpx.Response(200, json={"id": 55})
+        return httpx.Response(404)
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_summary("x" * 30_000, _VALID_SHA)
+    assert result.updated is True
+    put_call = next(c for c in rec.calls if c[0] == "PUT")
+    new_body = put_call[2]["content"]["raw"]
+    assert len(new_body.encode("utf-8")) <= 32_000
+    # Degrades to omitting the carry-forward, not to a failed/crashed post.
+    assert extract_id_map(new_body) == {}
+    assert any("too large to fit" in e for e in prov._errors)
 
 
 # ---------------------------------------------------------------------------
