@@ -4,13 +4,20 @@ Enforces a total token budget per agent for context-enrichment snippets.
 Truncation order when over budget: same-file → same-package → repo-wide.
 Injects context as a ``<symbol-context>…</symbol-context>`` block.
 
-Token count is estimated as ``len(text) // 4`` (a conservative approximation
-that slightly over-estimates to avoid budget overruns).
+Token count is estimated with a character-count heuristic calibrated for
+English-like source and prose: ``len(text) / 4`` for ASCII-range text, with
+a 10% safety margin on top (a conservative over-estimate, to avoid budget
+overruns). CJK/Hangul/kana text is charged at roughly 1 token per codepoint
+instead (see ``estimate_tokens``'s docstring, #848 item 6) -- the 4-chars-
+per-token ratio badly undercounts that text, since each codepoint there is
+typically its own token or close to it under real BPE tokenizers.
 
 Gated by ``AI_CONTEXT_ENRICHMENT=1`` — callers must check the flag.
 """
 
 from __future__ import annotations
+
+import re
 
 from ai_pr_review.context.symbols import (
     PROXIMITY_DEFAULT,
@@ -18,10 +25,39 @@ from ai_pr_review.context.symbols import (
     Definition,
 )
 
+# Codepoint ranges where a 4-chars-per-token ratio badly undercounts: CJK
+# ideographs (including compatibility/extension blocks and the SIP plane),
+# Hangul (syllables and jamo), Hiragana/Katakana, and halfwidth/fullwidth
+# forms. Matches the same conservative-over-estimate spirit as the base
+# heuristic rather than trying to be tokenizer-exact.
+_CJK_RANGES = (
+    "ᄀ-ᇿ"     # Hangul Jamo
+    "⺀-鿿"     # CJK Radicals through CJK Unified Ideographs
+    "぀-ヿ"     # Hiragana, Katakana (overlaps the range above's gap)
+    "가-힣"     # Hangul Syllables
+    "豈-﫿"     # CJK Compatibility Ideographs
+    "＀-￯"     # Halfwidth and Fullwidth Forms
+    "\U00020000-\U0003ffff"  # CJK Unified Ideographs Extension B-G (SIP)
+)
+_CJK_RE = re.compile(f"[{_CJK_RANGES}]")
+
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate: 4 chars ≈ 1 token, with a 10% safety margin."""
-    return int(len(text) / 4 * 1.1)
+    """Estimate token count: ~4 chars/token for ASCII-range text, ~1
+    token/codepoint for CJK/Hangul/kana text, with a 10% safety margin.
+
+    For text with no CJK codepoints this is bit-identical to the previous
+    ``int(len(text) / 4 * 1.1)`` formula -- ``_CJK_RE.sub`` returns the
+    input unchanged when there's nothing to match, so every existing
+    non-CJK caller and test is unaffected by construction. Splitting the
+    count is a single C-level regex substitution plus a length diff, not a
+    per-character Python loop, since this runs on entire diffs and inside
+    a per-snippet truncation loop where an O(n) Python-level pass would be
+    a real regression risk on large PRs.
+    """
+    non_cjk_len = len(_CJK_RE.sub("", text))
+    cjk_len = len(text) - non_cjk_len
+    return int((non_cjk_len / 4 + cjk_len) * 1.1)
 
 
 # Backward-compatible alias for internal callers that used the private name.
