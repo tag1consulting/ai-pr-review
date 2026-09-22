@@ -16,7 +16,7 @@
     "cache_read_rate": 300000
   },
   {
-    "patterns": ["claude-opus-5-5(?![-.]\\d(?!\\d))", "claude-opus-5\\.5(?![-.]\\d(?!\\d))"],
+    "patterns": ["claude-opus-5-5(?!\\d)(?![-.]\\d(?!\\d))", "claude-opus-5\\.5(?!\\d)(?![-.]\\d(?!\\d))"],
     "display_name": "Opus 5.5",
     "input_rate": 4000000,
     "output_rate": 20000000,
