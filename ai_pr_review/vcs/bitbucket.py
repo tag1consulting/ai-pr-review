@@ -588,6 +588,23 @@ class BitbucketProvider:
                     )
                     verdicts = dict(poll_result.verdicts)
                     for poll_error in poll_result.errors:
+                        # Logged explicitly, not just appended to
+                        # self._errors: orchestrate.py never reads this
+                        # provider's _errors list on a normal review run
+                        # (only slash/github_ops.py's command handlers do,
+                        # and that's GitHub-only), and self._errors only
+                        # ever reaches FindingsResult.error when the final
+                        # comment PUT itself fails -- a verdict-polling
+                        # error (e.g. a malformed permission-lookup
+                        # response) on an otherwise-successful run would
+                        # otherwise be silently absorbed into a passing
+                        # FindingsResult with no log trail at all.
+                        _log.warning(
+                            "bitbucket: verdict polling error for %s/%s PR "
+                            "#%s: %s",
+                            self.config.workspace, self.config.repo_slug,
+                            self.config.pr_id, poll_error,
+                        )
                         self._errors.append(
                             f"post_findings: verdict polling: {poll_error}"
                         )
@@ -614,6 +631,13 @@ class BitbucketProvider:
                         )
                         if reply_resp.status_code >= 400:
                             reply_failed_comment_ids.add(comment_id)
+                            _log.warning(
+                                "bitbucket: verdict ack reply to comment %s "
+                                "failed for %s/%s PR #%s: HTTP %d: %s",
+                                comment_id, self.config.workspace,
+                                self.config.repo_slug, self.config.pr_id,
+                                reply_resp.status_code, reply_resp.text[:200],
+                            )
                             self._errors.append(
                                 "post_findings: verdict ack reply to comment "
                                 f"{comment_id} failed: HTTP "

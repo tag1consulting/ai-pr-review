@@ -41,6 +41,7 @@ there is free.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
@@ -113,6 +114,20 @@ _VERDICT_BY_CANONICAL_COMMAND: Final[dict[str, Verdict]] = {
 
 AuthorityCheck = Literal["authorized", "unauthorized", "degraded"]
 _ROLE_RANK: Final[dict[str, int]] = {"read": 0, "write": 1, "admin": 2}
+
+# Bitbucket account_ids observed live are either a bare UUID-ish hex string
+# or "<numeric>:<uuid>" (e.g. "557058:9aa59bdf-2b71-431a-af18-286802c44d56",
+# confirmed 2026-09-22 against a real workspace). check_authority() below
+# interpolates account_id directly into Bitbucket's `q=` filter mini-language
+# (`user.account_id="<value>"`), which is a different escaping domain than
+# HTTP query-string encoding (httpx already handles that transparently) --
+# a value containing a literal `"` could break out of the quoted filter
+# expression and inject additional filter syntax. account_id itself always
+# comes from Bitbucket's own comment payload (never typed by a commenter),
+# so this is defense in depth rather than a demonstrated live exploit, but
+# validating before interpolation is cheap and removes the question
+# entirely rather than trusting the field's provenance to stay safe.
+_ACCOUNT_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-zA-Z:-]+$")
 
 
 @dataclass(frozen=True)
@@ -199,6 +214,15 @@ def check_authority(
     verify" and "verified and failed" must never collapse into the same
     outcome as "verified and passed".
     """
+    if not _ACCOUNT_ID_RE.match(account_id):
+        _log.warning(
+            "ai-pr-review: account_id %r does not match the expected "
+            "Bitbucket account_id shape; refusing to interpolate it into "
+            "the permissions q= filter",
+            account_id,
+        )
+        return "degraded"
+
     url = f"/workspaces/{workspace}/permissions/repositories/{repo_slug}"
     params = {"q": f'user.account_id="{account_id}"'}
     resp = client.request("GET", url, params=params)

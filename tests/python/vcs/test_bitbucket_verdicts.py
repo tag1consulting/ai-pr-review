@@ -577,3 +577,60 @@ def test_degraded_permission_check_leaves_comment_unacked_for_retry() -> None:
     # command) correctly is.
     from ai_pr_review.vcs.marker import extract_acks
     assert 200 not in extract_acks(put_bodies[-1])
+
+
+def test_check_authority_rejects_malformed_account_id_before_interpolating() -> None:
+    """PR #895 review finding: account_id is interpolated into Bitbucket's
+    q= filter mini-language (user.account_id="<value>"), a different
+    escaping domain than HTTP query-string encoding. A value containing a
+    literal `"` could break out of the quoted filter expression. account_id
+    always comes from Bitbucket's own comment payload rather than commenter
+    free text, so this is defense in depth -- but it must still be refused,
+    not silently sent as-is."""
+    from ai_pr_review.vcs._bitbucket_verdicts import check_authority
+
+    calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and "/permissions/repositories/" in str(req.url):
+            calls.append(str(req.url))
+            return httpx.Response(200, json={"values": [{"permission": "admin"}]})
+        return httpx.Response(404)
+
+    client = RecordingClient(
+        http=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.bitbucket.org/2.0"),
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    result = check_authority(
+        client, workspace="ws", repo_slug="repo",
+        account_id='557058:evil"; DROP everything --', min_role="write",
+    )
+    assert result == "degraded"
+    assert not calls  # the malformed id must never even reach the API call
+
+
+def test_verdict_polling_errors_are_logged_not_only_absorbed_into_success(caplog) -> None:
+    """PR #895 review finding: verdict-polling errors were appended to
+    self._errors but only ever surfaced via FindingsResult.error when the
+    final comment PUT itself failed -- on an otherwise-successful run they
+    were silently absorbed with no log trail at all."""
+    import logging
+
+    existing = _summary_comment(100, _summary_body())
+    # A comment with no account_id at all forces apply_pending_verdicts to
+    # append an error (see _bitbucket_verdicts.py's "has no account_id"
+    # branch) while the overall run still succeeds.
+    cmd = {
+        "id": 200,
+        "content": {"raw": "/ai-pr-review false-positive F1 x"},
+        "user": {"display_name": "alice"},  # no account_id
+    }
+    handler = _build_handler(comments=[existing, cmd], permissions={})
+    prov = _make_provider(handler)
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.vcs.bitbucket"):
+        result = prov.post_findings(
+            [_FINDING], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT"
+        )
+    assert result.ok, result.error
+    assert any("verdict polling error" in r.message for r in caplog.records)
