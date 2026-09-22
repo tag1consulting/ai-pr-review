@@ -3,7 +3,34 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
+
+# Matches "opus-5" or "opus-5-5"/"opus-5.5" as a whole version token -- not a
+# hypothetical future "opus-5-6", "opus-5-9", etc. Used by resolve_temperature()
+# and resolve_effort() below, which previously did a bare `"opus-5" in lower`
+# substring check that also (correctly, but only by luck) matched
+# "claude-opus-5-5". A future claude-opus-5-N would have matched the same way
+# whether or not its actual API behavior warranted it -- this makes the match
+# explicit instead of relying on substring luck (see issue tracking the Opus
+# 5.5 rollout).
+#
+# The trailing lookahead is `(?![-.]\d(?!\d))`, not the simpler `(?![-.\d])`:
+# a plain `(?![-.\d])` also rejects a dated snapshot suffix like
+# "-20260915" (Anthropic's own model-naming convention, and AI_MODEL_STANDARD/
+# AI_MODEL_PREMIUM are free-form env vars a user could set to one), which is a
+# real multi-digit run, not a single sibling-version digit -- that would
+# silently stop stripping temperature and stop capping effort for a
+# dated Opus 5 snapshot, reintroducing the HTTP-400/180s-timeout failures this
+# module exists to prevent. `(?![-.]\d(?!\d))` excludes only a single trailing
+# version digit (matches opus-5-9, rejects it) while still accepting a
+# multi-digit date suffix (opus-5-20260915 matches the opus-5 family).
+_OPUS_5_FAMILY_RE = re.compile(r"opus-5(?:[-.]5)?(?![-.]\d(?!\d))")
+
+
+def _is_opus_5_family(lower_model_id: str) -> bool:
+    """True for claude-opus-5 or claude-opus-5-5/claude-opus-5.5 specifically."""
+    return _OPUS_5_FAMILY_RE.search(lower_model_id) is not None
 
 
 def _clamp_int(env_var: str, default: int, min_val: int, max_val: int) -> int:
@@ -53,6 +80,12 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
         temperature=0.0     -> HTTP 400  "`temperature` is deprecated for this model."
         temperature=1.0     -> HTTP 200  (1.0 is the model's default, so a no-op)
 
+    claude-opus-5-5 is included below on Anthropic's own published model docs
+    (sampling params removed, same as Opus 5/4.8/4.7), NOT yet live-verified
+    against the real Messages API -- that verification is required before
+    claude-opus-5-5 becomes the default (see the model-change verification
+    process in this repo's CLAUDE.md).
+
     Consequences, do not "fix" this by making temperature apply:
       * An explicit temperature is a hard 400 for these models -- including the
         temperature=0.0 the judge pass is coded for (judge.py). Sending it would
@@ -64,7 +97,7 @@ def resolve_temperature(raw: float, model_id: str) -> float | None:
     """
     lower = model_id.lower()
     if (
-        "opus-5" in lower
+        _is_opus_5_family(lower)
         or "opus-4-8" in lower
         or "opus-4.8" in lower
         or "opus-4-7" in lower
@@ -100,9 +133,19 @@ def resolve_effort(model_id: str) -> str | None:
     timeout under real load. With effort="low": 67s wall time, 2,464 thinking
     tokens -- same mitigation as Sonnet 5, verified to actually work rather
     than assumed to carry over.
+
+    claude-opus-5-5 cannot disable thinking at all (per Anthropic's docs,
+    unlike Opus 5 which could disable it below effort "xhigh"), and its
+    default effort is "medium" (one step below Opus 5's default "high") --
+    Anthropic's own release notes describe it as thinking more per turn at a
+    given effort level than Opus 5, so the 180s client timeout in
+    llm/anthropic.py is a real regression candidate here, NOT yet live-verified.
+    Do not treat "low" as confirmed sufficient for claude-opus-5-5 until
+    tests/canary/live_model_canary.py has actually been run against it (see
+    the model-change verification process in this repo's CLAUDE.md).
     """
     lower = model_id.lower()
-    if "sonnet-5" in lower or "opus-5" in lower:
+    if "sonnet-5" in lower or _is_opus_5_family(lower):
         return "low"
     return None
 
