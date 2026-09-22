@@ -255,12 +255,17 @@ async def _run_review_async(config: ReviewConfig) -> int:
     async def _llm_call(req: LLMRequest) -> LLMResponse:
         return await call_llm(req, rc.provider)
 
-    from ai_pr_review.agents.roster import agent_allowed as _agent_allowed
+    from ai_pr_review.review.preflight import should_run_issue_linker, should_run_summarizer
 
     # Run pr-summarizer on first review (fail-soft; skip on incremental runs).
     # Also skip if the consumer has excluded it via the agents denylist or allowlist.
+    # should_run_summarizer (#848) is the single source of this gate, shared
+    # with review/runtime.py's pre-flight cost estimate so the two can never
+    # silently disagree about whether this agent will actually run.
     summary_text = runtime.summary_prefix
-    if not runtime.is_incremental and _agent_allowed("pr-summarizer", rc.agents, rc.exclude_agents):
+    if should_run_summarizer(
+        is_incremental=runtime.is_incremental, agents=rc.agents, exclude_agents=rc.exclude_agents,
+    ):
         summary_text += await _run_summarizer(
             diff_text=runtime.diff.diff_text,
             manifest_text=runtime.manifest_text,
@@ -281,11 +286,12 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # NONE immediately otherwise.
     # Also skip if the consumer has excluded it via the agents denylist or allowlist.
     # Fail-soft: if it returns NONE or errors, summary_text is unchanged.
-    if (
-        not runtime.is_incremental
-        and rc.review_mode == "full"
-        and rc.vcs_provider == "github"
-        and _agent_allowed("issue-linker", rc.agents, rc.exclude_agents)
+    if should_run_issue_linker(
+        is_incremental=runtime.is_incremental,
+        review_mode=rc.review_mode,
+        vcs_provider=rc.vcs_provider,
+        agents=rc.agents,
+        exclude_agents=rc.exclude_agents,
     ):
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,
