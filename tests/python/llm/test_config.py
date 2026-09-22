@@ -37,6 +37,37 @@ def test_resolve_temperature_rejected_for_opus_5() -> None:
     assert resolve_temperature(0.3, "claude-opus-5") is None
 
 
+def test_resolve_temperature_rejected_for_opus_5_5() -> None:
+    """Opus 5.5 removes sampling params per Anthropic's docs, same as Opus 5/4.8/4.7.
+    Not yet live-verified -- see the module docstring note in _config.py."""
+    assert resolve_temperature(0.3, "claude-opus-5-5") is None
+
+
+def test_resolve_temperature_rejected_for_bedrock_opus_5_5() -> None:
+    """Regression lock: a provider-prefixed Opus 5.5 id must also be rejected."""
+    assert resolve_temperature(0.3, "global.anthropic.claude-opus-5-5") is None
+
+
+def test_resolve_temperature_rejected_for_bedrock_opus_5() -> None:
+    """Regression lock: a provider-prefixed Opus 5 id (no further suffix) still matches."""
+    assert resolve_temperature(0.3, "us.anthropic.claude-opus-5") is None
+
+
+def test_resolve_temperature_accepted_for_hypothetical_opus_5_9() -> None:
+    """Explicit-match regression lock: a hypothetical claude-opus-5-9 is NOT
+    silently treated as the known-verified opus-5/opus-5-5 family just because
+    it shares the "opus-5" substring."""
+    assert resolve_temperature(0.3, "claude-opus-5-9") == 0.3
+
+
+def test_resolve_temperature_rejected_for_dated_opus_5_snapshot() -> None:
+    """Regression lock: a dated Opus 5 snapshot id (Anthropic's own model-naming
+    convention, e.g. "-20260915") must still be recognized as opus-5 family --
+    a naive anchor that rejects any digit suffix (not just a single sibling-
+    version digit) would silently stop stripping temperature for it."""
+    assert resolve_temperature(0.3, "claude-opus-5-20260915") is None
+
+
 def test_resolve_temperature_accepted_for_sonnet_4_6() -> None:
     """Regression lock: Sonnet 4.6 still accepts a non-default temperature."""
     assert resolve_temperature(0.3, "claude-sonnet-4-6") == 0.3
@@ -84,3 +115,29 @@ def test_resolve_effort_low_for_opus_5() -> None:
 def test_resolve_effort_omitted_for_sonnet_4_6() -> None:
     """Sonnet 4.6 predates output_config.effort; sending it risks a 400."""
     assert resolve_effort("claude-sonnet-4-6") is None
+
+
+def test_resolve_effort_low_for_opus_5_5() -> None:
+    """claude-opus-5-5 cannot disable thinking at all and defaults to effort
+    "medium" per Anthropic's docs; "low" is a valid, lower setting. NOT yet
+    live-verified against the 180s client timeout -- see the module docstring
+    note in _config.py and the merge gate in this repo's CLAUDE.md."""
+    assert resolve_effort("claude-opus-5-5") == "low"
+
+
+def test_resolve_effort_low_for_bedrock_opus_5_5() -> None:
+    """Regression lock: a provider-prefixed Opus 5.5 id must also get the cap."""
+    assert resolve_effort("global.anthropic.claude-opus-5-5") == "low"
+
+
+def test_resolve_effort_omitted_for_hypothetical_opus_5_9() -> None:
+    """Explicit-match regression lock: a hypothetical claude-opus-5-9 does not
+    inherit the opus-5/opus-5-5 effort cap just because it shares the
+    "opus-5" substring."""
+    assert resolve_effort("claude-opus-5-9") is None
+
+
+def test_resolve_effort_low_for_dated_opus_5_snapshot() -> None:
+    """Regression lock: a dated Opus 5 snapshot id must still get the effort
+    cap -- same reasoning as test_resolve_temperature_rejected_for_dated_opus_5_snapshot."""
+    assert resolve_effort("claude-opus-5-20260915") == "low"
