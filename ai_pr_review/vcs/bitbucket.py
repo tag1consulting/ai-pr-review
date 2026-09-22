@@ -32,6 +32,7 @@ import httpx
 
 from ai_pr_review.diff.linemap import parse_diff_sets
 from ai_pr_review.findings.models import Finding, Severity
+from ai_pr_review.vcs._bitbucket_verdicts import apply_pending_verdicts
 from ai_pr_review.vcs._body import (
     compute_headline,
     format_body_finding,
@@ -55,9 +56,12 @@ from ai_pr_review.vcs.marker import (
     _hidden_marker_separator,
     append_inline_marker,
     append_skip_marker,
+    build_acks_marker,
     build_id_map_marker,
     build_summary_marker,
     build_usage_block,
+    build_verdicts_marker,
+    extract_acks,
     extract_id_map,
     extract_summary_sha,
     extract_verdicts,
@@ -395,25 +399,79 @@ class BitbucketProvider:
         headline_findings: Sequence[Finding] = render_findings
         suppressed_count = 0
         annotated_count = 0
+        # Set only when this run wrote a change to the verdicts/acks state
+        # that needs persisting back into the comment body -- see the
+        # reserve-then-append block below, mirroring id_map_marker's own
+        # "None means nothing to write" contract.
+        verdicts_marker_payload: dict[str, str] | None = None
+        acks_marker_ids: frozenset[int] | None = None
         if self.config.code_insights:
             try:
                 verdicts = extract_verdicts(existing_body) if existing_body else {}
+
+                # Bitbucket parity Phase 4 (#874): poll the PR's own
+                # top-level comments for /ai-pr-review verdict commands
+                # before classifying. Gated separately from code_insights
+                # (self.config.verdicts) -- see BitbucketConfig.verdicts'
+                # docstring for why this stays its own opt-in flag. Only
+                # reachable inside the code_insights block because
+                # classify() just below is the only place a verdict
+                # actually changes anything; polling with code_insights
+                # disabled would collect commands nothing acts on.
+                if self.config.verdicts:
+                    poll_result = apply_pending_verdicts(
+                        self.client,
+                        workspace=self.config.workspace,
+                        repo_slug=self.config.repo_slug,
+                        comments=self._fetch_comments(),
+                        existing_body=existing_body,
+                        min_role=self.config.verdict_min_role,
+                    )
+                    verdicts = dict(poll_result.verdicts)
+                    for poll_error in poll_result.errors:
+                        self._errors.append(
+                            f"post_findings: verdict polling: {poll_error}"
+                        )
+                    for comment_id, reply_text in poll_result.replies:
+                        reply_resp = self._write_request(
+                            "POST",
+                            self._comments_url(),
+                            json_body={
+                                "content": {"raw": reply_text},
+                                "parent": {"id": comment_id},
+                            },
+                        )
+                        if reply_resp.status_code >= 400:
+                            self._errors.append(
+                                "post_findings: verdict ack reply to comment "
+                                f"{comment_id} failed: HTTP "
+                                f"{reply_resp.status_code}: "
+                                f"{reply_resp.text[:200]}"
+                            )
+                    acks_marker_ids = extract_acks(existing_body) | frozenset(
+                        poll_result.newly_acked_ids
+                    )
+
                 classified = [
                     classify(f, verdicts=verdicts, all_threads=[]) for f in findings
                 ]
-                # TODO(#874): a "recurred" classification (a "fixed" verdict
-                # whose finding reappeared unchanged) is currently treated
-                # identically to "new" here -- it renders/annotates the same
-                # way, but nothing rewrites its stale "fixed" verdict entry
-                # to the "recurred" tombstone the way github.py's
-                # _apply_classification_side_effects does. Harmless today
-                # since #874 means no Bitbucket verdict can be written at
-                # all yet (this whole branch is only exercised by a
-                # hand-built verdicts marker in tests), but Phase 4 will
-                # need that tombstone rewrite before real "fixed" verdicts
-                # exist to go stale. It's a marker write into a comment body
-                # this code already PUTs, not a classify() change, so it
-                # doesn't touch the isolation constraint above.
+                # A "recurred" classification (a stale "fixed" verdict whose
+                # finding reappeared unchanged) must overwrite its verdict
+                # entry to the "recurred" tombstone, or classify() keeps
+                # re-deriving "recurred" off the same stale "fixed" entry
+                # forever -- harmless in effect (classify() treats
+                # "recurred" identically to no verdict) but a silent,
+                # permanent drift from what the marker claims. Mirrors
+                # github.py's _apply_classification_side_effects' recurred
+                # handling. Only rewritten when verdicts polling is on:
+                # with it off, `verdicts` was never mutated this run and
+                # there is nothing new worth persisting.
+                if self.config.verdicts:
+                    for c in classified:
+                        if c.kind == "recurred":
+                            verdicts[fingerprint(c.finding)] = "recurred"
+                    verdicts_marker_payload = verdicts
+
                 active_findings = [
                     c.finding for c in classified if c.kind != "suppressed"
                 ]
@@ -492,6 +550,13 @@ class BitbucketProvider:
                 headline_findings = render_findings
                 suppressed_count = 0
                 annotated_count = 0
+                # Discard any verdict-polling side effects from this cycle
+                # too: reply posts already happened (not undoable), but if
+                # classify() itself is what raised, `verdicts`/`classified`
+                # may be partial or absent -- don't persist a payload built
+                # from state this run never finished computing.
+                verdicts_marker_payload = None
+                acks_marker_ids = None
 
         # usage_block/usage_warning are deliberately NOT passed into
         # _render_combined_body: findings_block alone can be arbitrarily
@@ -561,6 +626,80 @@ class BitbucketProvider:
             id_map_marker = ""
             marker_reserve = 0
 
+        # Bitbucket parity Phase 4 (#874): persist this run's verdict/ack
+        # state the same reserve-then-append way as id_map_marker just
+        # above. Unlike id_map_marker, losing this marker isn't merely
+        # cosmetic -- it's the suppression state itself, so dropping it
+        # would let a previously-dismissed finding reappear next cycle.
+        # Still degrades the same way on overflow (drop + warn, never
+        # error) rather than failing the whole post: a truncated review
+        # comment beats no review comment, and the next run's poll will
+        # simply re-apply the same still-present verdict commands.
+        verdicts_marker = ""
+        if verdicts_marker_payload is not None:
+            try:
+                verdicts_marker = build_verdicts_marker(
+                    verdicts_marker_payload, hidden=True
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("bitbucket: failed to build verdicts marker: %s", exc)
+                self._errors.append(
+                    f"post_findings: failed to build verdicts marker: {exc}"
+                )
+        verdicts_marker_bytes = (
+            len(verdicts_marker.encode("utf-8")) if verdicts_marker else 0
+        )
+        verdicts_marker_reserve = verdicts_marker_bytes + 2 if verdicts_marker else 0
+        if (
+            verdicts_marker
+            and marker_reserve + verdicts_marker_reserve
+            > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
+        ):
+            _log.warning(
+                "bitbucket: verdicts marker (%d bytes) too large to fit in "
+                "comment body for %s/%s PR #%s; omitting marker for this "
+                "cycle -- suppression state may not persist",
+                verdicts_marker_bytes,
+                self.config.workspace, self.config.repo_slug, self.config.pr_id,
+            )
+            self._errors.append(
+                f"post_findings: verdicts marker ({verdicts_marker_bytes} bytes) "
+                "too large to fit in comment body; omitting for this cycle"
+            )
+            verdicts_marker = ""
+            verdicts_marker_reserve = 0
+
+        acks_marker = ""
+        if acks_marker_ids is not None:
+            try:
+                acks_marker = build_acks_marker(sorted(acks_marker_ids))
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("bitbucket: failed to build acks marker: %s", exc)
+                self._errors.append(
+                    f"post_findings: failed to build acks marker: {exc}"
+                )
+        acks_marker_bytes = len(acks_marker.encode("utf-8")) if acks_marker else 0
+        acks_marker_reserve = acks_marker_bytes + 2 if acks_marker else 0
+        if (
+            acks_marker
+            and marker_reserve + verdicts_marker_reserve + acks_marker_reserve
+            > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
+        ):
+            _log.warning(
+                "bitbucket: acks marker (%d bytes) too large to fit in "
+                "comment body for %s/%s PR #%s; omitting marker for this "
+                "cycle -- a re-parsed command comment may get a duplicate "
+                "ack reply next run",
+                acks_marker_bytes,
+                self.config.workspace, self.config.repo_slug, self.config.pr_id,
+            )
+            self._errors.append(
+                f"post_findings: acks marker ({acks_marker_bytes} bytes) too "
+                "large to fit in comment body; omitting for this cycle"
+            )
+            acks_marker = ""
+            acks_marker_reserve = 0
+
         # Reserve room for the usage block too, and append it after
         # truncation rather than embedding it in `body` beforehand (#728) --
         # findings_block alone can exceed the entire byte budget (a real
@@ -586,7 +725,11 @@ class BitbucketProvider:
         usage_block_marked = build_usage_block(stripped_payload, hidden=True)
         usage_block_bytes = len(usage_block_marked.encode("utf-8"))
         usage_block_reserve = usage_block_bytes + 2
-        if marker_reserve + usage_block_reserve > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES:
+        if (
+            marker_reserve + verdicts_marker_reserve + acks_marker_reserve
+            + usage_block_reserve
+            > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
+        ):
             _log.warning(
                 "bitbucket: token usage block (%d bytes) too large to fit "
                 "alongside the id-map marker in comment body for %s/%s PR "
@@ -609,7 +752,8 @@ class BitbucketProvider:
         usage_warning_bytes = len(usage_warning.encode("utf-8")) if usage_warning else 0
         usage_warning_reserve = usage_warning_bytes + 2 if usage_warning else 0
         if usage_warning and (
-            marker_reserve + usage_block_reserve + usage_warning_reserve
+            marker_reserve + verdicts_marker_reserve + acks_marker_reserve
+            + usage_block_reserve + usage_warning_reserve
             > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
         ):
             _log.warning(
@@ -623,7 +767,12 @@ class BitbucketProvider:
 
         truncate_limit = max(
             0,
-            _MAX_BITBUCKET_BODY_SIZE - marker_reserve - usage_block_reserve - usage_warning_reserve,
+            _MAX_BITBUCKET_BODY_SIZE
+            - marker_reserve
+            - verdicts_marker_reserve
+            - acks_marker_reserve
+            - usage_block_reserve
+            - usage_warning_reserve,
         )
         body = truncate_body(body, limit=truncate_limit)
         # rstrip+"\n\n" (rather than the bare "\n" _render_combined_body used
@@ -652,6 +801,10 @@ class BitbucketProvider:
             # "\n" after the footer's italic line would risk it rendering as
             # literal text on a stricter renderer than Bitbucket's own.
             body += _hidden_marker_separator(body) + id_map_marker
+        if verdicts_marker:
+            body += _hidden_marker_separator(body) + verdicts_marker
+        if acks_marker:
+            body += _hidden_marker_separator(body) + acks_marker
 
         resp = self.client.request(
             "PUT", self._comment_url(keep_id), json_body={"content": {"raw": body}}
