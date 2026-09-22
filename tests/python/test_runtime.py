@@ -625,6 +625,36 @@ class TestBuildReviewRuntimeCostCeiling:
         mock_run_analyzers.assert_awaited_once()
 
     @pytest.mark.anyio
+    async def test_estimate_tracks_preflight_agent_max_tokens_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#848 item 2: the estimate must move when AI_MAX_TOKENS_PR_SUMMARIZER
+        changes -- proving it now calls preflight_agent_max_tokens rather
+        than the old hardcoded output_tokens=4096, which would have made
+        this override invisible to the estimate."""
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+
+        async def _build(override: str | None) -> int:
+            monkeypatch.delenv("AI_MAX_TOKENS_PR_SUMMARIZER", raising=False)
+            if override is not None:
+                monkeypatch.setenv("AI_MAX_TOKENS_PR_SUMMARIZER", override)
+            config = _make_config(max_cost_usd=1000.00)
+            with (
+                patch("ai_pr_review.diff.compute.compute_diff", return_value=_make_diff_result()),
+                patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+                patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            ):
+                result = await build_review_runtime(config, provider_factory=lambda: provider)
+            assert isinstance(result, ReviewRuntime)
+            assert result.pre_flight_cost_estimate_units is not None
+            return result.pre_flight_cost_estimate_units
+
+        baseline = await _build(None)
+        overridden = await _build("500")
+        assert overridden != baseline
+
+    @pytest.mark.anyio
     async def test_ceiling_not_exceeded_stores_pre_flight_estimate(
         self, tmp_path: Path,
     ) -> None:

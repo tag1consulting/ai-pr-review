@@ -23,6 +23,63 @@ logger = logging.getLogger(__name__)
 _SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"
 
 
+def should_run_summarizer(
+    *,
+    is_incremental: bool,
+    agents: frozenset[str] | tuple[str, ...],
+    exclude_agents: frozenset[str] | tuple[str, ...],
+) -> bool:
+    """Whether pr-summarizer will actually run this review.
+
+    The single source of truth for this gate (#848 item 2): both cli.py's
+    real dispatch and review/runtime.py's pre-flight cost estimate must
+    agree on when this agent runs, or the estimate silently drifts from
+    what actually gets dispatched.
+    """
+    from ai_pr_review.agents.roster import agent_allowed
+
+    return not is_incremental and agent_allowed("pr-summarizer", agents, exclude_agents)
+
+
+def should_run_issue_linker(
+    *,
+    is_incremental: bool,
+    review_mode: str,
+    vcs_provider: str,
+    agents: frozenset[str] | tuple[str, ...],
+    exclude_agents: frozenset[str] | tuple[str, ...],
+) -> bool:
+    """Whether issue-linker will actually run this review. See
+    ``should_run_summarizer``'s docstring for why this exists."""
+    from ai_pr_review.agents.roster import agent_allowed
+
+    return (
+        not is_incremental
+        and review_mode == "full"
+        and vcs_provider == "github"
+        and agent_allowed("issue-linker", agents, exclude_agents)
+    )
+
+
+def preflight_agent_max_tokens(agent_name: str) -> int:
+    """Resolve the effective max_output_tokens for a preflight agent
+    (pr-summarizer, issue-linker), the same way ``run_summarizer``/
+    ``run_issue_linker`` themselves do: the roster's own default as the
+    fallback, with any ``AI_MAX_TOKENS_<AGENT>`` override applied on top.
+
+    Deliberately does **not** fall back to ``ReviewConfig.max_tokens_per_agent``
+    (the global ``AI_MAX_TOKENS_PER_AGENT`` override) -- that asymmetry is
+    real and intentional in ``run_summarizer``/``run_issue_linker`` today,
+    not a bug to paper over here; a caller needing the cost estimate to
+    mirror actual dispatch must reproduce it, not "fix" it.
+    """
+    from ai_pr_review.agents.roster import get_agent
+    from ai_pr_review.config import resolve_agent_max_tokens
+
+    roster_default = get_agent(agent_name).max_output_tokens
+    return resolve_agent_max_tokens(agent_name, roster_default)
+
+
 async def run_summarizer(
     *,
     diff_text: str,
@@ -62,7 +119,6 @@ async def run_summarizer(
         parse_summarizer_output,
         wrap_walkthrough_in_details,
     )
-    from ai_pr_review.config import resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -93,16 +149,13 @@ async def run_summarizer(
                 commit_log = proc.stdout.strip()
 
         user_message = build_summarizer_user_message(manifest_text, commit_log, diff_text)
-        # #191: this preflight path composes its own LLMRequest and previously
-        # hardcoded max_tokens=4096, bypassing both the roster's per-agent
-        # default (16384) and the AI_MAX_TOKENS_PER_AGENT global override
-        # entirely. #847 follow-up: that hardcoded 4096 also diverged from
-        # the roster's own default -- pr-summarizer silently got a 4x-smaller
-        # budget than intended whenever no override was set. Now resolves
-        # the default from the roster itself, so the two can never drift
-        # apart again.
+        # #191/#847/#848: resolves the default from the roster itself (via
+        # preflight_agent_max_tokens, the same helper review/runtime.py's
+        # cost estimate now calls for this agent) rather than a hand-typed
+        # literal or an inline duplicate of this resolution, so estimate
+        # and actual dispatch can never drift apart.
         roster_default = get_agent("pr-summarizer").max_output_tokens
-        max_tokens = resolve_agent_max_tokens("pr-summarizer", roster_default)
+        max_tokens = preflight_agent_max_tokens("pr-summarizer")
         logger.debug(
             "pr-summarizer: effective max_output_tokens=%d (source=%s)",
             max_tokens, "per-agent override" if max_tokens != roster_default else "roster default",
@@ -216,7 +269,6 @@ async def run_issue_linker(
     issue numbers without any tool-calling loop.
     """
     from ai_pr_review.agents.roster import get_agent
-    from ai_pr_review.config import resolve_agent_max_tokens
     from ai_pr_review.llm.base import LLMRequest
 
     try:
@@ -288,12 +340,12 @@ async def run_issue_linker(
             f"## File Manifest\n\n{manifest_text}\n"
         )
 
-        # #191/#847: same rationale as pr-summarizer above -- resolves the
-        # default from the roster itself (4096, unchanged for issue-linker)
-        # rather than a hand-typed literal that could silently drift from
-        # the roster's own value the way pr-summarizer's did.
+        # #191/#847/#848: same rationale as pr-summarizer above -- resolves
+        # via preflight_agent_max_tokens, the same helper review/runtime.py's
+        # cost estimate calls for this agent, so estimate and actual
+        # dispatch can never drift apart.
         roster_default = get_agent("issue-linker").max_output_tokens
-        max_tokens = resolve_agent_max_tokens("issue-linker", roster_default)
+        max_tokens = preflight_agent_max_tokens("issue-linker")
         logger.debug(
             "issue-linker: effective max_output_tokens=%d (source=%s)",
             max_tokens, "per-agent override" if max_tokens != roster_default else "roster default",
