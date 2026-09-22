@@ -166,6 +166,12 @@ class BitbucketProvider:
     _comments_cache: list[dict[str, Any]] | None = field(
         default=None, init=False, repr=False
     )
+    # Cache for _bot_account_id(): _UNRESOLVED means "not attempted yet this
+    # run", None means "attempted and failed" -- both distinct from a real
+    # account_id string, so a transient GET /2.0/user failure isn't retried
+    # once-per-comment for the rest of the run.
+    _bot_account_id_cache: str | None = field(default=None, init=False, repr=False)
+    _bot_account_id_resolved: bool = field(default=False, init=False, repr=False)
 
     # ------------------------------------------------------------------
     # URL helpers
@@ -221,7 +227,20 @@ class BitbucketProvider:
                     f"fetch_comments: HTTP {resp.status_code}: {resp.text[:200]}"
                 )
                 return results
-            data = resp.json() or {}
+            try:
+                data = resp.json() or {}
+            except ValueError as exc:
+                # A malformed-but-2xx body (proxy error page, maintenance
+                # banner) is a real Bitbucket failure mode -- degrade to
+                # what's been paged so far rather than letting an unhandled
+                # json.JSONDecodeError crash the whole review run. Mirrors
+                # check_authority()'s identical guard in
+                # ai_pr_review.vcs._bitbucket_verdicts, which this fetch is
+                # now shared by (see this method's own docstring above).
+                self._errors.append(
+                    f"fetch_comments: non-JSON response body: {exc}"
+                )
+                return results
             results.extend(data.get("values") or [])
             next_url = data.get("next")
             if not isinstance(next_url, str) or not next_url:
@@ -242,6 +261,51 @@ class BitbucketProvider:
             if SUMMARY_MARKER_PREFIX in _comment_body(item)
             or SUMMARY_MARKER_HIDDEN_PREFIX in _comment_body(item)
         ]
+
+    def _bot_account_id(self) -> str | None:
+        """Resolve and cache the account_id this run's credentials
+        authenticate as, via ``GET /2.0/user``.
+
+        Security-critical (#874 follow-up): Bitbucket exposes no
+        server-side "is this comment mine" filter and comments carry no
+        privileged/verified-author flag, so the only way to know a given
+        comment was actually posted by this bot -- rather than by any PR
+        commenter who happened to include the right marker text in their
+        own comment -- is to compare `comment["user"]["account_id"]`
+        against the identity these credentials actually resolve to.
+        Without this check, `_list_summary_comments()`'s marker-substring
+        filter (see its own comment) can be satisfied by ANY commenter, and
+        `post_findings` would then trust whatever hidden verdicts marker
+        that forged comment carries -- silently suppressing findings (a
+        secret-scanner match, per #874's own motivating case) with no
+        authorization check at all, defeating `check_authority()` entirely
+        by skipping it. Resolved once per provider instance (one review
+        run) and cached; returns `None` (not raised) on any failure, and
+        callers must treat `None` as "cannot verify -- do not trust",
+        mirroring `check_authority()`'s own fail-closed contract.
+        """
+        if self._bot_account_id_resolved:
+            return self._bot_account_id_cache
+        self._bot_account_id_resolved = True
+        resp = self.client.request("GET", "/user")
+        if resp.status_code >= 400:
+            self._errors.append(
+                f"_bot_account_id: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return None
+        try:
+            data = resp.json() or {}
+        except ValueError as exc:
+            self._errors.append(f"_bot_account_id: non-JSON response: {exc}")
+            return None
+        account_id = data.get("account_id")
+        if not isinstance(account_id, str) or not account_id:
+            self._errors.append(
+                "_bot_account_id: response had no usable account_id field"
+            )
+            return None
+        self._bot_account_id_cache = account_id
+        return account_id
 
     def _write_request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Issue a write (POST/PUT/DELETE) against the comments endpoint and
@@ -390,6 +454,63 @@ class BitbucketProvider:
             [existing_body] if existing_body else [], list(findings)
         )
 
+        # Security-critical (#874 follow-up, external security review):
+        # `_list_summary_comments()` selects `keep` by marker-substring
+        # match only -- ANY PR commenter can post a comment starting with
+        # the summary marker text (visible verbatim in every real bot
+        # comment) plus a forged hidden verdicts marker, and if it sorts
+        # newest it becomes `keep` here. Without this check, the block
+        # below would trust that forged marker exactly as if it were the
+        # bot's own, silently suppressing findings with `check_authority()`
+        # never even consulted -- a full bypass of Phase 4's authorization
+        # model. Comments carry no privileged/verified-author flag, so the
+        # only real signal is comparing the comment's own `user.account_id`
+        # against what these credentials actually resolve to via
+        # `_bot_account_id()`. Scoped to `self.config.verdicts` (rather
+        # than the broader `keep` selection used for SHA-watermark/id-map,
+        # which predate this feature and are pre-existing, lower-severity
+        # trust gaps of their own, tracked separately) because this is
+        # specifically the mechanism that turns a forged marker into an
+        # unauthorized, undetectable suppression of a real finding.
+        keep_is_bot_authored = True
+        if self.config.verdicts:
+            keep_account_id = (keep.get("user") or {}).get("account_id")
+            bot_account_id = self._bot_account_id()
+            keep_is_bot_authored = (
+                bot_account_id is not None and keep_account_id == bot_account_id
+            )
+            if not keep_is_bot_authored:
+                _log.warning(
+                    "bitbucket: the summary comment selected for %s/%s PR "
+                    "#%s was not authored by this run's own Bitbucket "
+                    "identity (account_id could not be verified as a "
+                    "match); treating its verdicts marker as untrusted "
+                    "this cycle rather than risk suppressing a finding "
+                    "based on a comment anyone could have posted",
+                    self.config.workspace, self.config.repo_slug, self.config.pr_id,
+                )
+                self._errors.append(
+                    "post_findings: summary comment authorship could not be "
+                    "verified; ignoring its verdicts marker this cycle"
+                )
+
+        # Snapshot of whatever verdicts were already durably persisted
+        # before this call, independent of anything the code_insights/
+        # verdicts-polling block below does or fails to do. Computed
+        # unconditionally (even with code_insights/verdicts off) so the
+        # marker-build stage further down always has a known-good fallback
+        # to preserve rather than silently dropping suppression state on an
+        # overflow or a mid-cycle exception -- see the verdicts_marker
+        # overflow handling below for why this matters. Gated by
+        # `keep_is_bot_authored` (see above) whenever verdicts polling is
+        # on, so a forged marker is never trusted as a baseline to begin
+        # with.
+        old_verdicts_snapshot: dict[str, str] = (
+            extract_verdicts(existing_body)
+            if existing_body and keep_is_bot_authored
+            else {}
+        )
+
         # Bitbucket parity Phase 3 (#839/#873): Code Insights annotations as
         # the inline display layer, gated by one flag alongside the dedup it
         # needs (see BitbucketConfig.code_insights' docstring). Disabled,
@@ -405,9 +526,14 @@ class BitbucketProvider:
         # "None means nothing to write" contract.
         verdicts_marker_payload: dict[str, str] | None = None
         acks_marker_ids: frozenset[int] | None = None
+        # Set True the moment any ack reply is actually POSTed this call --
+        # initialized outside the try block since the except handler below
+        # needs to know this even if the exception happened before the
+        # verdict-polling code ran far enough to set it itself.
+        replies_sent_this_cycle = False
         if self.config.code_insights:
             try:
-                verdicts = extract_verdicts(existing_body) if existing_body else {}
+                verdicts = dict(old_verdicts_snapshot)
                 # Fingerprints whose verdict this exact cycle just set (as
                 # opposed to one already persisted from a prior run) -- the
                 # recurred-tombstone rewrite below must never touch these.
@@ -437,7 +563,22 @@ class BitbucketProvider:
                         workspace=self.config.workspace,
                         repo_slug=self.config.repo_slug,
                         comments=self._fetch_comments(),
-                        existing_body=existing_body,
+                        # apply_pending_verdicts independently re-derives
+                        # its own baseline verdicts, acks, AND F<n> ->
+                        # fingerprint resolution from this string -- if
+                        # `keep` couldn't be verified as bot-authored (see
+                        # keep_is_bot_authored above), passing the real
+                        # existing_body through would let a forged comment
+                        # remap an authorized user's legitimate `F<n>`
+                        # command onto an attacker-chosen fingerprint, not
+                        # just forge a baseline verdict. Passing "" instead
+                        # makes every F<n> resolve to "not found" this
+                        # cycle (safe: replies with "was not found in the
+                        # current review") rather than trusting anything
+                        # derived from an unverifiable comment.
+                        existing_body=(
+                            existing_body if keep_is_bot_authored else ""
+                        ),
                         min_role=self.config.verdict_min_role,
                     )
                     freshly_set_fps = frozenset(
@@ -450,7 +591,19 @@ class BitbucketProvider:
                         self._errors.append(
                             f"post_findings: verdict polling: {poll_error}"
                         )
+                    # A comment whose ack-reply POST fails must NOT be
+                    # recorded as acked: apply_pending_verdicts already
+                    # applied its verdict into `verdicts` above (that part
+                    # is durable once the body PUTs below), but the human
+                    # never received their reply. Leaving the id off the
+                    # acks marker means the same command comment is
+                    # re-parsed next run -- re-applying an already-applied
+                    # verdict is a no-op, but it gives the reply another
+                    # chance to actually land, instead of being silently
+                    # and permanently dropped.
+                    reply_failed_comment_ids: set[int] = set()
                     for comment_id, reply_text in poll_result.replies:
+                        replies_sent_this_cycle = True
                         reply_resp = self._write_request(
                             "POST",
                             self._comments_url(),
@@ -460,6 +613,7 @@ class BitbucketProvider:
                             },
                         )
                         if reply_resp.status_code >= 400:
+                            reply_failed_comment_ids.add(comment_id)
                             self._errors.append(
                                 "post_findings: verdict ack reply to comment "
                                 f"{comment_id} failed: HTTP "
@@ -467,7 +621,9 @@ class BitbucketProvider:
                                 f"{reply_resp.text[:200]}"
                             )
                     acks_marker_ids = extract_acks(existing_body) | frozenset(
-                        poll_result.newly_acked_ids
+                        cid
+                        for cid in poll_result.newly_acked_ids
+                        if cid not in reply_failed_comment_ids
                     )
 
                 classified = [
@@ -570,12 +726,42 @@ class BitbucketProvider:
                 suppressed_count = 0
                 annotated_count = 0
                 # Discard any verdict-polling side effects from this cycle
-                # too: reply posts already happened (not undoable), but if
-                # classify() itself is what raised, `verdicts`/`classified`
-                # may be partial or absent -- don't persist a payload built
-                # from state this run never finished computing.
+                # too: if classify() itself is what raised, `verdicts`/
+                # `classified` may be partial or absent -- don't persist a
+                # payload built from state this run never finished
+                # computing.
                 verdicts_marker_payload = None
                 acks_marker_ids = None
+                if replies_sent_this_cycle:
+                    # This is worse than an ordinary degrade: at least one
+                    # human already received an ack reply claiming their
+                    # verdict command succeeded (not undoable -- Bitbucket
+                    # has no reply-delete call in this provider), but the
+                    # verdict/acks state that reply promised is being
+                    # discarded right here. The command comment is not
+                    # marked acked, so it WILL be re-parsed and re-applied
+                    # next run (harmless -- verdict application is
+                    # idempotent), but that also means a second, possibly
+                    # redundant-looking reply will be posted then. Flagged
+                    # at ERROR (not the surrounding WARNING) since this is
+                    # the one failure mode in this block that has already
+                    # made an externally-visible, incorrect claim.
+                    _log.error(
+                        "bitbucket: at least one verdict ack reply was "
+                        "already posted for %s/%s PR #%s before Code "
+                        "Insights processing failed -- the promised verdict "
+                        "state was NOT persisted this cycle and will be "
+                        "reprocessed (with a duplicate-looking reply) next "
+                        "run: %s",
+                        self.config.workspace, self.config.repo_slug,
+                        self.config.pr_id, exc,
+                    )
+                    self._errors.append(
+                        "post_findings: verdict ack reply already sent this "
+                        "cycle, but Code Insights processing failed "
+                        "afterward -- verdict/acks state was not persisted "
+                        f"and will be reprocessed next run: {exc}"
+                    )
 
         # usage_block/usage_warning are deliberately NOT passed into
         # _render_combined_body: findings_block alone can be arbitrarily
@@ -648,45 +834,132 @@ class BitbucketProvider:
         # Bitbucket parity Phase 4 (#874): persist this run's verdict/ack
         # state the same reserve-then-append way as id_map_marker just
         # above. Unlike id_map_marker, losing this marker isn't merely
-        # cosmetic -- it's the suppression state itself, so dropping it
-        # would let a previously-dismissed finding reappear next cycle.
-        # Still degrades the same way on overflow (drop + warn, never
-        # error) rather than failing the whole post: a truncated review
-        # comment beats no review comment, and the next run's poll will
-        # simply re-apply the same still-present verdict commands.
-        verdicts_marker = ""
+        # cosmetic -- it IS the suppression state, so dropping it would let
+        # every previously-dismissed finding on the PR reappear at once,
+        # not just whatever changed this cycle. That is categorically worse
+        # than the graceful "F-ID stability may degrade" the id_map_marker
+        # accepts above, so this never just drops to "" on overflow the way
+        # that one does: it first falls back to re-persisting exactly what
+        # was ALREADY durably on the PR (`old_verdicts_snapshot`, captured
+        # before this call touched anything), which -- having fit in a
+        # previous cycle's body -- is very unlikely to overflow now unless
+        # the budget shrank a lot this cycle. Only if even that still
+        # doesn't fit does the marker actually get dropped, logged at
+        # ERROR rather than WARNING since that is a genuine loss of
+        # suppression state, not a degrade.
+        #
+        # Picking a payload to try, in priority order:
+        #   1. This cycle's full merged payload (old + newly-applied
+        #      commands + recurred tombstones), if this cycle produced one.
+        #   2. The old snapshot alone (+ any tombstone corrections to keys
+        #      it already has -- those don't grow the payload), if verdicts
+        #      polling is on but this cycle didn't produce #1 (most likely:
+        #      an exception partway through Code Insights processing).
+        #   3. Nothing.
         if verdicts_marker_payload is not None:
+            _verdicts_payload_to_try: dict[str, str] | None = verdicts_marker_payload
+        elif self.config.verdicts and old_verdicts_snapshot:
+            _verdicts_payload_to_try = dict(old_verdicts_snapshot)
+        else:
+            _verdicts_payload_to_try = None
+
+        def _build_verdicts_marker_or_none(
+            payload: dict[str, str],
+        ) -> tuple[str, int, int]:
             try:
-                verdicts_marker = build_verdicts_marker(
-                    verdicts_marker_payload, hidden=True
-                )
+                marker_text = build_verdicts_marker(payload, hidden=True)
             except Exception as exc:  # noqa: BLE001
                 _log.warning("bitbucket: failed to build verdicts marker: %s", exc)
                 self._errors.append(
                     f"post_findings: failed to build verdicts marker: {exc}"
                 )
-        verdicts_marker_bytes = (
-            len(verdicts_marker.encode("utf-8")) if verdicts_marker else 0
-        )
-        verdicts_marker_reserve = verdicts_marker_bytes + 2 if verdicts_marker else 0
+                return "", 0, 0
+            marker_bytes_ = len(marker_text.encode("utf-8"))
+            return marker_text, marker_bytes_, marker_bytes_ + 2
+
+        verdicts_marker = ""
+        verdicts_marker_bytes = 0
+        verdicts_marker_reserve = 0
+        if _verdicts_payload_to_try is not None:
+            verdicts_marker, verdicts_marker_bytes, verdicts_marker_reserve = (
+                _build_verdicts_marker_or_none(_verdicts_payload_to_try)
+            )
+
         if (
             verdicts_marker
             and marker_reserve + verdicts_marker_reserve
             > _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
         ):
-            _log.warning(
-                "bitbucket: verdicts marker (%d bytes) too large to fit in "
-                "comment body for %s/%s PR #%s; omitting marker for this "
-                "cycle -- suppression state may not persist",
-                verdicts_marker_bytes,
-                self.config.workspace, self.config.repo_slug, self.config.pr_id,
+            is_already_fallback = _verdicts_payload_to_try is old_verdicts_snapshot
+            fallback_payload: dict[str, str] | None = None
+            if not is_already_fallback and old_verdicts_snapshot:
+                fallback_payload = dict(old_verdicts_snapshot)
+                # Tombstone corrections only ever overwrite a key that's
+                # already in old_verdicts_snapshot (classify()'s "recurred"
+                # requires a pre-existing "fixed" verdict) -- carrying them
+                # into the fallback can't grow its size.
+                if verdicts_marker_payload is not None:
+                    for fp, v in verdicts_marker_payload.items():
+                        if v == "recurred" and fp in fallback_payload:
+                            fallback_payload[fp] = "recurred"
+
+            fallback_marker, fallback_bytes, fallback_reserve = (
+                _build_verdicts_marker_or_none(fallback_payload)
+                if fallback_payload is not None
+                else ("", 0, 0)
             )
-            self._errors.append(
-                f"post_findings: verdicts marker ({verdicts_marker_bytes} bytes) "
-                "too large to fit in comment body; omitting for this cycle"
-            )
-            verdicts_marker = ""
-            verdicts_marker_reserve = 0
+            if fallback_marker and marker_reserve + fallback_reserve <= (
+                _MAX_BITBUCKET_BODY_SIZE - _MIN_BODY_BYTES
+            ):
+                _log.warning(
+                    "bitbucket: this cycle's verdicts payload (%d bytes) too "
+                    "large to fit in comment body for %s/%s PR #%s; falling "
+                    "back to re-persisting the %d previously-persisted "
+                    "verdicts unchanged. Any verdict commands applied THIS "
+                    "cycle were not saved and were left un-acked so they are "
+                    "reprocessed next run.",
+                    verdicts_marker_bytes,
+                    self.config.workspace, self.config.repo_slug,
+                    self.config.pr_id, len(old_verdicts_snapshot),
+                )
+                self._errors.append(
+                    "post_findings: verdicts marker too large "
+                    f"({verdicts_marker_bytes} bytes); fell back to the "
+                    f"{len(old_verdicts_snapshot)} previously-persisted "
+                    "verdicts, dropping this cycle's new commands until "
+                    "the body has room again"
+                )
+                verdicts_marker = fallback_marker
+                verdicts_marker_bytes = fallback_bytes
+                verdicts_marker_reserve = fallback_reserve
+                # New commands from this cycle weren't persisted -- leave
+                # their comments unacked too, so they're retried next run
+                # instead of silently forgotten (mirrors the reply-POST-
+                # failure handling above).
+                acks_marker_ids = (
+                    extract_acks(existing_body) if existing_body else frozenset()
+                )
+            else:
+                _log.error(
+                    "bitbucket: verdicts marker still too large (%d bytes) "
+                    "even falling back to only the %d previously-persisted "
+                    "verdicts for %s/%s PR #%s -- dropping the verdicts "
+                    "marker entirely this cycle. ALL suppression state will "
+                    "be lost until the comment body has room again.",
+                    verdicts_marker_bytes, len(old_verdicts_snapshot),
+                    self.config.workspace, self.config.repo_slug, self.config.pr_id,
+                )
+                self._errors.append(
+                    "post_findings: verdicts marker too large even with only "
+                    f"previously-persisted verdicts ({len(old_verdicts_snapshot)} "
+                    "entries); dropping the marker entirely this cycle -- all "
+                    "suppression state will be lost"
+                )
+                verdicts_marker = ""
+                verdicts_marker_reserve = 0
+                acks_marker_ids = (
+                    extract_acks(existing_body) if existing_body else frozenset()
+                )
 
         acks_marker = ""
         if acks_marker_ids is not None:

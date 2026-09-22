@@ -45,7 +45,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
-from ai_pr_review.slash.parser import ParseError, SlashCommand, parse_commands
+from ai_pr_review.slash.parser import (
+    ParseError,
+    SlashCommand,
+    parse_commands,
+)
+from ai_pr_review.slash.parser import (
+    _sanitize_reason as _sanitize_free_text,
+)
 from ai_pr_review.vcs._finding_ids import fingerprint_for_finding_id
 from ai_pr_review.vcs.http import RecordingClient
 from ai_pr_review.vcs.marker import (
@@ -72,12 +79,29 @@ _MAX_COMMENTS_SCANNED: Final[int] = 200
 # A comment carrying any marker we write ourselves is never a candidate
 # command comment to parse, regardless of what literal text it also
 # contains.
+# Stamped onto every ack reply this module posts (see apply_pending_verdicts'
+# return-value construction below), and included in _OWN_MARKERS so a reply
+# is never itself mistaken for a candidate command comment on a later run.
+# Without this, a reply carries no ownership signal at all (the POST body is
+# just {"content": {"raw": reply_text}}) -- the only thing stopping it from
+# being re-parsed is that parse_commands requires "/ai-pr-review" at the
+# start of a line, and the unsanitized commenter display_name interpolated
+# into "@{actor} ..." (see _comment_actor's sanitization below) could in
+# principle carry a newline that puts attacker-controlled text at
+# line-start. If that text then read as a verdict command, _comment_account_id
+# on the bot's OWN reply would resolve to the bot's own (write/admin) account
+# -- laundering full verdict authority from an unprivileged comment into an
+# apparently bot-authorized one. The marker closes this off unconditionally,
+# independent of whether the newline theory is exploitable in practice.
+_REPLY_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-verdict-reply)"
+
 _OWN_MARKERS: Final[tuple[str, ...]] = (
     SUMMARY_MARKER_PREFIX,
     SUMMARY_MARKER_HIDDEN_PREFIX,
     SKIP_MARKER,
     SKIP_MARKER_HIDDEN,
     ACKS_MARKER_HIDDEN_PREFIX,
+    _REPLY_MARKER_HIDDEN,
 )
 
 Verdict = Literal["dismissed", "fixed"]
@@ -112,8 +136,21 @@ class VerdictPollResult:
 
 
 def _comment_actor(item: dict[str, Any]) -> str:
+    """The commenter's display name/nickname, sanitized before it's
+    interpolated into a reply the BOT authors.
+
+    `display_name`/`nickname` are fully user-controlled. Reusing
+    `parser._sanitize_reason` (control chars stripped, newlines collapsed
+    to spaces, length-capped, HTML-escaped) closes off both the direct
+    risk (arbitrary markdown/mention text published under the bot's
+    identity) and the newline-into-line-start risk `_REPLY_MARKER_HIDDEN`
+    is the primary defense against -- this is defense in depth, not a
+    substitute for that marker.
+    """
     user = item.get("user") or {}
-    return str(user.get("display_name") or user.get("nickname") or "there")
+    raw = str(user.get("display_name") or user.get("nickname") or "there")
+    sanitized = _sanitize_free_text(raw)
+    return sanitized or "there"
 
 
 def _comment_account_id(item: dict[str, Any]) -> str | None:
@@ -145,6 +182,22 @@ def check_authority(
     rejection reply differently (issue #874's explicit requirement: a
     silent rejection is indistinguishable from the bot ignoring the
     command).
+
+    The `q=user.account_id="..."` filter is a server-side hint, not a
+    trust boundary: this repo's own `bitbucket.py` documents that
+    Bitbucket "sometimes ignores q on rich-text fields", and
+    `user.account_id` is not among the fields Bitbucket's own docs list as
+    filterable on this endpoint. If the filter is silently ignored, an
+    unverified `values[0]` could belong to an arbitrary member of the
+    repository's permission roster -- plausibly an admin -- which would
+    grant "authorized" to any commenter regardless of their actual role.
+    Every row is therefore re-verified client-side against `account_id`
+    (and `repository.uuid`/`slug`, when present) before its `permission`
+    is trusted; a response whose rows carry no `user` field at all to
+    verify against is treated as "degraded", not "authorized" -- the same
+    fail-closed posture as an outright HTTP or JSON failure, since "cannot
+    verify" and "verified and failed" must never collapse into the same
+    outcome as "verified and passed".
     """
     url = f"/workspaces/{workspace}/permissions/repositories/{repo_slug}"
     params = {"q": f'user.account_id="{account_id}"'}
@@ -166,9 +219,43 @@ def check_authority(
     values = data.get("values")
     if not isinstance(values, list) or not values:
         return "unauthorized"
-    role = str((values[0] or {}).get("permission") or "").lower()
+
+    saw_any_user_field = False
+    matched_role: str | None = None
+    for row in values:
+        if not isinstance(row, dict):
+            continue
+        row_user = row.get("user")
+        if not isinstance(row_user, dict) or "account_id" not in row_user:
+            continue
+        saw_any_user_field = True
+        if row_user.get("account_id") != account_id:
+            continue
+        row_repo = row.get("repository")
+        if isinstance(row_repo, dict) and "slug" in row_repo and row_repo.get("slug") != repo_slug:
+            continue
+        matched_role = str(row.get("permission") or "").lower()
+        break
+
+    if matched_role is None:
+        if not saw_any_user_field:
+            # The response has no `user` field on any row -- either the q
+            # filter really did return a filtered-to-one-row response
+            # (Bitbucket's REST 2.0 often omits echoing filter fields back)
+            # or something unexpected about the response shape. Either
+            # way, this can't be verified as belonging to `account_id`, so
+            # it must not be trusted as if it did.
+            _log.warning(
+                "ai-pr-review: permission lookup for account %s returned "
+                "rows with no verifiable user.account_id; cannot confirm "
+                "the q filter was honored",
+                account_id,
+            )
+            return "degraded"
+        return "unauthorized"
+
     min_rank = _ROLE_RANK.get(min_role, _ROLE_RANK["write"])
-    role_rank = _ROLE_RANK.get(role, -1)
+    role_rank = _ROLE_RANK.get(matched_role, -1)
     return "authorized" if role_rank >= min_rank else "unauthorized"
 
 
@@ -269,6 +356,18 @@ def apply_pending_verdicts(
         actor = _comment_actor(item)
         account_id = _comment_account_id(item)
         comment_had_a_command = False
+        # True only for a "degraded" check_authority() outcome -- a
+        # transient permission-lookup failure that a LATER run's lookup
+        # could plausibly resolve differently, unlike every other
+        # rejection reason here (malformed command, missing F<n>, unknown
+        # F<n>, or a comment with no account_id at all -- Bitbucket
+        # comments don't gain a user field on a later fetch), which are
+        # all durable properties of the comment itself that retrying gains
+        # nothing from. Keeping the comment un-acked when this fires means
+        # the next run's lookup gets a fresh chance instead of the
+        # rejection becoming permanent on what may have been a one-off API
+        # blip.
+        comment_had_retryable_failure = False
 
         for result in parsed:
             if isinstance(result, ParseError):
@@ -316,6 +415,8 @@ def apply_pending_verdicts(
                 )
                 authority_cache[account_id] = check
             if check != "authorized":
+                if check == "degraded":
+                    comment_had_retryable_failure = True
                 replies.append((comment_id, _reply_for_authority(actor, check)))
                 continue
 
@@ -323,12 +424,16 @@ def apply_pending_verdicts(
             verdicts[fp] = verdict
             replies.append((comment_id, _reply_for_verdict(actor, command, verdict)))
 
-        if comment_had_a_command:
+        if comment_had_a_command and not comment_had_retryable_failure:
             newly_acked.append(comment_id)
 
+    marked_replies = tuple(
+        (comment_id, f"{text}\n\n{_REPLY_MARKER_HIDDEN}")
+        for comment_id, text in replies
+    )
     return VerdictPollResult(
         verdicts=verdicts,
         newly_acked_ids=tuple(newly_acked),
-        replies=tuple(replies),
+        replies=marked_replies,
         errors=tuple(errors),
     )
