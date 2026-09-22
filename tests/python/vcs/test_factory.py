@@ -458,3 +458,90 @@ def test_bitbucket_workspace_and_repo_slug_whitespace_stripped(
     assert isinstance(prov, BitbucketProvider)
     assert prov.config.workspace == "ws"
     assert prov.config.repo_slug == "repo"
+
+
+def _bitbucket_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", "x@y")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "tok")
+    monkeypatch.setenv("BITBUCKET_WORKSPACE", "ws")
+    monkeypatch.setenv("BITBUCKET_REPO_SLUG", "repo")
+    monkeypatch.setenv("PR_NUMBER", "42")
+
+
+def test_bitbucket_verdicts_defaults_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    _bitbucket_env(monkeypatch)
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.verdicts is False
+
+
+@pytest.mark.parametrize("value", ["true", "True", "1", "yes", "on"])
+def test_bitbucket_verdicts_allow_list_enables(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    _bitbucket_env(monkeypatch)
+    monkeypatch.setenv("AI_BITBUCKET_VERDICTS", value)
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.verdicts is True
+
+
+@pytest.mark.parametrize("value", ["", "false", "0", "no", "off", "disabled", "garbage"])
+def test_bitbucket_verdicts_unrecognized_or_empty_value_stays_disabled(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    # A security-gated, default-off flag must never be silently enabled by
+    # an unset/empty/typo'd value -- see AI_BITBUCKET_VERDICTS' allow-list
+    # parse in vcs/__init__.py for why this is an allow-list, not the
+    # deny-list pattern AI_BITBUCKET_CODE_INSIGHTS/AI_GITLAB_CROSS_RUN_DEDUP
+    # use (those default ON, so the asymmetry doesn't apply to them).
+    _bitbucket_env(monkeypatch)
+    monkeypatch.setenv("AI_BITBUCKET_VERDICTS", value)
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.verdicts is False
+
+
+def test_bitbucket_verdict_min_role_defaults_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    _bitbucket_env(monkeypatch)
+    monkeypatch.setenv("AI_BITBUCKET_VERDICTS", "true")
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.verdict_min_role == "write"
+
+
+@pytest.mark.parametrize("role", ["read", "write", "admin"])
+def test_bitbucket_verdict_min_role_accepts_known_roles(
+    monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    _bitbucket_env(monkeypatch)
+    monkeypatch.setenv("AI_BITBUCKET_VERDICTS", "true")
+    monkeypatch.setenv("AI_BITBUCKET_VERDICT_MIN_ROLE", role)
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.verdict_min_role == role
+
+
+def test_bitbucket_verdict_min_role_invalid_value_raises_when_verdicts_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bitbucket_env(monkeypatch)
+    monkeypatch.setenv("AI_BITBUCKET_VERDICTS", "true")
+    monkeypatch.setenv("AI_BITBUCKET_VERDICT_MIN_ROLE", "administrator")
+    with pytest.raises(ProviderConfigError, match="AI_BITBUCKET_VERDICT_MIN_ROLE"):
+        provider_from_env()
+
+
+def test_bitbucket_verdict_min_role_invalid_value_ignored_when_verdicts_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The validation only matters once the gate it protects is actually
+    # live -- an unrelated typo in a variable nobody is using yet must not
+    # break every Bitbucket review run.
+    _bitbucket_env(monkeypatch)
+    monkeypatch.setenv("AI_BITBUCKET_VERDICT_MIN_ROLE", "administrator")
+    prov = provider_from_env()
+    assert isinstance(prov, BitbucketProvider)
+    assert prov.config.verdicts is False

@@ -272,6 +272,38 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         not in ("false", "0", "no")
     )
 
+    # Bitbucket parity Phase 4 (#874): verdict-command polling, defaults
+    # False -- see BitbucketConfig.verdicts' docstring for why this one
+    # stays opt-in unlike code_insights. Deliberately an ALLOW-list (only
+    # "true"/"1"/"yes"/"on" turn it on), unlike code_insights' deny-list
+    # parse above: this flag gates a fail-closed authorization decision,
+    # so an unset/empty/typo'd value (a Pipelines variable that's declared
+    # but never given a value, or a repo variable cleared rather than
+    # deleted -- both come through as "") must resolve to OFF, not
+    # silently enable a security-relevant feature that was never
+    # deliberately turned on. code_insights' deny-list parse doesn't have
+    # this hazard because it defaults on already, so an empty value not
+    # matching "false" just leaves it at its existing default.
+    verdicts_raw = os.environ.get("AI_BITBUCKET_VERDICTS", "").strip().lower()
+    verdicts = verdicts_raw in ("true", "1", "yes", "on")
+    if verdicts_raw and not verdicts and verdicts_raw not in ("false", "0", "no", "off"):
+        logger.warning(
+            "AI_BITBUCKET_VERDICTS=%r is not a recognized value; treating "
+            "as disabled (expected true/1/yes/on or false/0/no/off)",
+            verdicts_raw,
+        )
+
+    verdict_min_role = (
+        os.environ.get("AI_BITBUCKET_VERDICT_MIN_ROLE", "write").strip().lower()
+    )
+    if verdicts and verdict_min_role not in ("read", "write", "admin"):
+        raise ProviderConfigError(
+            "AI_BITBUCKET_VERDICT_MIN_ROLE must be one of read/write/admin "
+            f"(got {verdict_min_role!r}) -- this gates a fail-closed "
+            "authorization check, so an unrecognized value is refused "
+            "rather than silently falling back to a weaker role"
+        )
+
     config = BitbucketConfig(
         workspace=workspace,
         repo_slug=repo_slug,
@@ -279,5 +311,7 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         email=email,
         api_token=token,
         code_insights=code_insights,
+        verdicts=verdicts,
+        verdict_min_role=verdict_min_role,
     )
     return BitbucketProvider(config=config, client=build_bitbucket_client(config))
