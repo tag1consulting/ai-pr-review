@@ -263,11 +263,21 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         workspace, repo_slug = repo_env.split("/", 1)
     pr_id = _require_int_env("PR_NUMBER")
 
+    # Bitbucket parity Phase 3 (#839/#873): Code Insights annotation posting
+    # + its id-map/verdict dedup, gated by one flag since they're too
+    # entangled to split (see BitbucketConfig.code_insights' docstring).
+    # Mirrors AI_GITLAB_CROSS_RUN_DEDUP's parse pattern.
+    code_insights = (
+        os.environ.get("AI_BITBUCKET_CODE_INSIGHTS", "true").strip().lower()
+        not in ("false", "0", "no")
+    )
+
     config = BitbucketConfig(
         workspace=workspace,
         repo_slug=repo_slug,
         pr_id=pr_id,
         email=email,
         api_token=token,
+        code_insights=code_insights,
     )
     return BitbucketProvider(config=config, client=build_bitbucket_client(config))

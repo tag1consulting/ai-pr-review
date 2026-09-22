@@ -77,8 +77,16 @@ class FindingsResult:
     # system). GitLab populates `inline_updated`/`replies_posted` (#710: its
     # fuzzy-match dedup only ever reaches `update`/`escalate`, never
     # `suppressed`/`reused_review`, since it has no verdict system or
-    # canonical-review concept). Bitbucket implements none of this yet
-    # (tracked as the remaining #710 parity gap) and always reports 0/False.
+    # canonical-review concept). Bitbucket (#839/#873) populates
+    # `inline_posted` (Code Insights annotations actually posted this run)
+    # and `suppressed` (a "dismissed"-verdict match, since it has no
+    # threads for classify() to fuzzy-match against either -- only
+    # new/recurred/suppressed are ever reachable there). `inline_updated`
+    # and `replies_posted` always stay 0/False: there is no comment thread
+    # to PATCH in place or reply on, since annotations are rebuilt from
+    # scratch every run and aren't repliable. `reused_review` always stays
+    # False: there is no separate review object to reuse, only the single
+    # summary comment `post_summary` already upserts.
     # inline_updated: comments/notes PATCHed in place for an update/escalate
     # classification. suppressed: findings matching a durable "dismissed"
     # verdict, never reposted. replies_posted: escalation/recurrence

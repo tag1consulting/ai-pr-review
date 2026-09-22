@@ -40,7 +40,12 @@ def _make_provider(
     )
     return BitbucketProvider(
         config=BitbucketConfig(
-            workspace="ws", repo_slug="repo", pr_id=7, email="x@y", api_token="t"
+            workspace="ws", repo_slug="repo", pr_id=7, email="x@y", api_token="t",
+            # This file predates Bitbucket parity Phase 3 (#839/#873) and
+            # tests the flat comment-body rendering path -- Code Insights
+            # posting/dedup gets its own dedicated
+            # test_bitbucket_code_insights.py with code_insights=True.
+            code_insights=False,
         ),
         client=client,
     )
