@@ -1547,6 +1547,70 @@ def _post_summary_impl(
     truncated = truncate_body(summary_body, limit=_MAX_BITBUCKET_BODY_SIZE)
     body = f"{marker}\n{truncated}\n\n{_FOOTER}"
 
+    # Carry forward the id-map/verdicts/acks hidden markers from whatever
+    # summary comment already exists (live-verified 2026-09-22, #874
+    # follow-up): post_summary always runs before post_findings (AC5
+    # ordering), and post_findings reads THIS write's result back as its
+    # own "prior state" baseline (existing_body). Without this, every
+    # post_summary call silently reset that baseline to empty -- F-IDs got
+    # freshly renumbered on EVERY run (assemble_id_map always saw an empty
+    # prior_id_map), and any verdict/ack state a prior run's post_findings
+    # had persisted was invisible to apply_pending_verdicts, so an
+    # already-acked command comment was reprocessed and re-replied-to on
+    # every subsequent run, forever. This predates #874 -- the id-map
+    # marker mechanism has silently never provided real F-ID stability on
+    # Bitbucket -- but had no visible consequence until #874 gave Bitbucket
+    # its first feature that actually depends on cross-run persistence.
+    #
+    # This write only needs to preserve the prior markers long enough for
+    # post_findings (later in the same call chain, same run) to read and
+    # re-derive its own authoritative versions from them -- it is never the
+    # last word on their contents.
+    existing_list = provider._list_summary_comments()
+    if existing_list:
+        prior_body = _comment_body(existing_list[0])
+        carry_forward = ""
+        prior_id_map = extract_id_map(prior_body)
+        if prior_id_map:
+            carry_forward += _hidden_marker_separator(
+                body + carry_forward
+            ) + build_id_map_marker(prior_id_map, hidden=True)
+        prior_verdicts = extract_verdicts(prior_body)
+        if prior_verdicts:
+            carry_forward += _hidden_marker_separator(
+                body + carry_forward
+            ) + build_verdicts_marker(prior_verdicts, hidden=True)
+        prior_acks = extract_acks(prior_body)
+        if prior_acks:
+            carry_forward += _hidden_marker_separator(
+                body + carry_forward
+            ) + build_acks_marker(sorted(prior_acks))
+        if carry_forward:
+            if len((body + carry_forward).encode("utf-8")) <= _MAX_BITBUCKET_BODY_SIZE:
+                body += carry_forward
+            else:
+                # This is an intermediate write, not the final one -- degrade
+                # by omitting the carry-forward rather than failing the PUT
+                # outright. post_findings (immediately following, same run)
+                # will still re-derive and re-append its own id-map/verdicts
+                # correctly from THIS run's own findings; only cross-run
+                # continuity for this one cycle is what's lost (a verdict or
+                # ack not re-derivable from a still-present, still-unacked
+                # command comment).
+                _log.warning(
+                    "bitbucket: carried-forward id-map/verdicts/acks markers "
+                    "(%d bytes) would push the summary comment past the byte "
+                    "budget for %s/%s PR #%s; omitting them from this "
+                    "intermediate write",
+                    len(carry_forward.encode("utf-8")),
+                    provider.config.workspace, provider.config.repo_slug,
+                    provider.config.pr_id,
+                )
+                provider._errors.append(
+                    "post_summary: carried-forward id-map/verdicts/acks "
+                    "markers too large to fit; omitted for this cycle"
+                )
+
     return upsert_comment(
         list_existing=provider._list_summary_comments,
         item_id=lambda item: int(item["id"]),
