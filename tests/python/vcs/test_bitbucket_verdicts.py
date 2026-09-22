@@ -137,7 +137,9 @@ def _build_handler(
                         {
                             "permission": perm,
                             "user": {"account_id": account_id},
-                            "repository": {"slug": "repo"},
+                            # Live-verified field name (2026-09-22): Bitbucket
+                            # returns full_name here, never "slug".
+                            "repository": {"full_name": "ws/repo"},
                         }
                     ]
                 },

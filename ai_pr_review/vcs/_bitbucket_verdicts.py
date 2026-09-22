@@ -192,7 +192,7 @@ def check_authority(
     repository's permission roster -- plausibly an admin -- which would
     grant "authorized" to any commenter regardless of their actual role.
     Every row is therefore re-verified client-side against `account_id`
-    (and `repository.uuid`/`slug`, when present) before its `permission`
+    (and `repository.full_name`, when present) before its `permission`
     is trusted; a response whose rows carry no `user` field at all to
     verify against is treated as "degraded", not "authorized" -- the same
     fail-closed posture as an outright HTTP or JSON failure, since "cannot
@@ -231,8 +231,23 @@ def check_authority(
         saw_any_user_field = True
         if row_user.get("account_id") != account_id:
             continue
+        # Live-verified (2026-09-22 against a real Bitbucket Cloud
+        # workspace): the `repository` object on this endpoint carries
+        # `name`/`full_name`, never `slug` -- the field this code
+        # originally checked for. That made the repo cross-check
+        # permanently inert (the `"slug" in row_repo` guard was always
+        # False), not a live vulnerability, since the endpoint URL itself
+        # already scopes every row to `repo_slug`'s repository -- but dead
+        # code checking a nonexistent field is worth fixing to actually do
+        # what it claims. `full_name` (`workspace/repo_slug`) is the
+        # unambiguous identifier; `name` alone could collide with a
+        # same-named repo in a different workspace.
         row_repo = row.get("repository")
-        if isinstance(row_repo, dict) and "slug" in row_repo and row_repo.get("slug") != repo_slug:
+        if (
+            isinstance(row_repo, dict)
+            and "full_name" in row_repo
+            and row_repo.get("full_name") != f"{workspace}/{repo_slug}"
+        ):
             continue
         matched_role = str(row.get("permission") or "").lower()
         break
