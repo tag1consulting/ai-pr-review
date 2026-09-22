@@ -46,7 +46,7 @@ The action uses the Python engine in `ai_pr_review/`.
 
 | Provider | Standard model | Premium model |
 |----------|---------------|---------------|
-| `anthropic` | `claude-sonnet-5` | `claude-opus-5` |
+| `anthropic` | `claude-sonnet-5` | `claude-opus-5-5` |
 | `openai` | `gpt-5.4-mini` | `gpt-5.4` |
 | `openai-compatible` | (user-specified) | same as standard |
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` |

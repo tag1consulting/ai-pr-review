@@ -441,12 +441,13 @@ def test_standalone_depth_unset_does_not_warn(
     assert "STANDALONE_DEPTH" not in stderr
 
 
-def test_anthropic_premium_default_is_opus_5(monkeypatch: pytest.MonkeyPatch) -> None:
-    """resolve_models() should fill the Anthropic premium slot with claude-opus-5."""
+def test_anthropic_premium_default_is_opus_5_5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_models() should fill the Anthropic premium slot with claude-opus-5-5.
+    Set AI_MODEL_PREMIUM=claude-opus-5 to revert to the prior default."""
     monkeypatch.delenv("AI_MODEL_PREMIUM", raising=False)
     monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
     cfg = ReviewConfig(provider="anthropic").resolve_models()
-    assert cfg.model_premium == "claude-opus-5"
+    assert cfg.model_premium == "claude-opus-5-5"
 
 
 def test_anthropic_standard_default_is_sonnet_5(monkeypatch: pytest.MonkeyPatch) -> None:

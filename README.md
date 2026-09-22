@@ -111,7 +111,7 @@ The "Review action" column above is this bot's default behavior. Set the `approv
 
 | Provider | `provider` value | Required secret | Default models (standard / premium) |
 |----------|-----------------|-----------------|--------------------------------------|
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` / `claude-opus-5` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` / `claude-opus-5-5` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.4-mini` / `gpt-5.4` |
 | OpenAI-compatible | `openai-compatible` | `OPENAI_API_KEY` + `base-url` | Set via `model-standard` / `model-premium` inputs |
 | Google | `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` / `gemini-2.5-pro` |
