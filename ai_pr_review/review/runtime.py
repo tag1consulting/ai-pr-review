@@ -572,12 +572,17 @@ async def build_review_runtime(
     try:
         from ai_pr_review.pricing import load_pricing
         from ai_pr_review.review.cost_ceiling import (
-            CostEstimate,
+            AgentCostEstimate,
             enforce_cost_ceiling,
             estimate_preflight_agent_cost,
             estimate_review_cost,
             log_cost_estimate,
             merge_cost_estimates,
+        )
+        from ai_pr_review.review.preflight import (
+            preflight_agent_max_tokens,
+            should_run_issue_linker,
+            should_run_summarizer,
         )
 
         pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
@@ -594,44 +599,41 @@ async def build_review_runtime(
         )
 
         # Fold in the two separately-dispatched preflight agents when they
-        # will actually run this review -- mirrors the exact gating cli.py
-        # applies before calling _run_summarizer/_run_issue_linker.
-        preflight_parts: list[CostEstimate] = []
-        if not is_incremental and agent_allowed(
-            "pr-summarizer", config.agents, config.exclude_agents
+        # will actually run this review. should_run_summarizer/
+        # should_run_issue_linker and preflight_agent_max_tokens (#848) are
+        # the same predicates and cap-resolution cli.py's real dispatch
+        # uses (via review/preflight.py's run_summarizer/run_issue_linker),
+        # so this estimate can no longer silently drift from what actually
+        # runs and what it's actually capped at.
+        preflight_parts: list[AgentCostEstimate] = []
+        if should_run_summarizer(
+            is_incremental=is_incremental,
+            agents=config.agents,
+            exclude_agents=config.exclude_agents,
         ):
-            summarizer_cost = estimate_preflight_agent_cost(
-                agent_name="pr-summarizer",
-                model=config.model_standard,
-                diff_text=diff_text,
-                output_tokens=4096,
-                pricing_data=pricing_data,
-            )
             preflight_parts.append(
-                CostEstimate(
-                    per_agent=(summarizer_cost,),
-                    total_cost_units=summarizer_cost.estimated_cost_units,
-                    any_unknown_pricing=summarizer_cost.unknown_pricing,
+                estimate_preflight_agent_cost(
+                    agent_name="pr-summarizer",
+                    model=config.model_standard,
+                    diff_text=diff_text,
+                    output_tokens=preflight_agent_max_tokens("pr-summarizer"),
+                    pricing_data=pricing_data,
                 )
             )
-        if (
-            not is_incremental
-            and config.review_mode == "full"
-            and config.vcs_provider == "github"
-            and agent_allowed("issue-linker", config.agents, config.exclude_agents)
+        if should_run_issue_linker(
+            is_incremental=is_incremental,
+            review_mode=config.review_mode,
+            vcs_provider=config.vcs_provider,
+            agents=config.agents,
+            exclude_agents=config.exclude_agents,
         ):
-            issue_linker_cost = estimate_preflight_agent_cost(
-                agent_name="issue-linker",
-                model=config.model_standard,
-                diff_text=diff_text,
-                output_tokens=4096,
-                pricing_data=pricing_data,
-            )
             preflight_parts.append(
-                CostEstimate(
-                    per_agent=(issue_linker_cost,),
-                    total_cost_units=issue_linker_cost.estimated_cost_units,
-                    any_unknown_pricing=issue_linker_cost.unknown_pricing,
+                estimate_preflight_agent_cost(
+                    agent_name="issue-linker",
+                    model=config.model_standard,
+                    diff_text=diff_text,
+                    output_tokens=preflight_agent_max_tokens("issue-linker"),
+                    pricing_data=pricing_data,
                 )
             )
         if preflight_parts:
@@ -672,6 +674,7 @@ async def build_review_runtime(
         )
     orch_config = OrchestrationConfig(
         mode=config.review_mode,  # type: ignore[arg-type]
+        approval_ceiling=config.approval_ceiling,  # type: ignore[arg-type]
         confidence_threshold=config.confidence_threshold,
         max_inline=config.max_inline,
         enable_suggestions=config.enable_suggestions,

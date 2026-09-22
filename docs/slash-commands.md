@@ -163,6 +163,8 @@ This is gated to commenters with `OWNER` or `MEMBER` repository association — 
 
 The check re-verifies review state immediately before dismissing/approving, so a finding introduced by a concurrent push between the triggering comment and the bot's action will abort the approve.
 
+A non-`approve` [`AI_APPROVAL_CEILING`](configuration#approval-ceiling) (issue #858) suppresses this entire escalation, regardless of the commenter's trust level — a real `APPROVED` review is exactly what a configured ceiling forbids. Ordinary per-review dismissal (thread resolution, stale-review cleanup) still happens normally; only this extra approve step is skipped.
+
 ### `/ai-pr-review fixed [F<n>] [sha] [reason]` {#fixed-command}
 
 Marks a finding as fixed — the opposite claim from `dismiss`/`false-positive`/`wont-fix`: the finding was **correct** and has been addressed in code, not that it was wrong or intentional. Use this instead of `dismiss` when you've actually fixed the issue; `dismiss` would misrepresent the outcome, and `false-positive`/`wont-fix` would additionally teach the learning loop to stop flagging a pattern that was genuinely a bug.

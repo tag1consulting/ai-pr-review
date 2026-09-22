@@ -4,13 +4,16 @@ from pathlib import Path
 
 from ai_pr_review.config import ReviewConfig
 from ai_pr_review.pricing import (
+    ModelRates,
     TokenEntry,
+    _row_cost,
     compute_totals,
     emit_token_table,
     format_cost,
     load_pricing,
     model_pricing,
     parse_token_log_entry,
+    token_cost_units,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,6 +54,67 @@ def test_model_pricing_unknown_returns_zeros() -> None:
     rates = model_pricing("unknown-model-xyz", _SAMPLE_PRICING)
     assert rates.input_rate == 0
     assert rates.output_rate == 0
+
+
+# --- token_cost_units (#848 item 5: single source of truth for the
+# input/output/cache-terms arithmetic, shared by _row_cost and
+# review.cost_ceiling's pre-flight estimators) ---
+
+_RATES = ModelRates(
+    display_name="Test Model",
+    input_rate=100_000_000,   # 1 cost unit per input token
+    output_rate=200_000_000,  # 2 cost units per output token
+    cache_write_rate=50_000_000,   # 0.5 cost units per cache-write token
+    cache_read_rate=10_000_000,    # 0.1 cost units per cache-read token
+)
+_UNKNOWN_RATES = ModelRates(display_name="Unknown", input_rate=0, output_rate=0)
+
+
+def test_token_cost_units_known_rates() -> None:
+    assert token_cost_units(_RATES, input_tokens=100, output_tokens=50) == 100 + 50 * 2
+
+
+def test_token_cost_units_zero_rates_returns_none() -> None:
+    assert token_cost_units(_UNKNOWN_RATES, input_tokens=100, output_tokens=50) is None
+
+
+def test_token_cost_units_applies_cache_terms() -> None:
+    # 100*1 + 50*2 + 40*0.5 + 200*0.1 = 100 + 100 + 20 + 20 = 240
+    cost = token_cost_units(
+        _RATES,
+        input_tokens=100,
+        output_tokens=50,
+        cache_creation_tokens=40,
+        cache_read_tokens=200,
+    )
+    assert cost == 240
+
+
+def test_token_cost_units_cache_terms_default_to_zero() -> None:
+    with_defaults = token_cost_units(_RATES, input_tokens=10, output_tokens=10)
+    explicit_zero = token_cost_units(
+        _RATES, input_tokens=10, output_tokens=10,
+        cache_creation_tokens=0, cache_read_tokens=0,
+    )
+    assert with_defaults == explicit_zero
+
+
+def test_row_cost_delegates_to_token_cost_units() -> None:
+    """Regression guard for the _row_cost -> token_cost_units refactor: the
+    token-table's row cost must stay numerically identical."""
+    entry = TokenEntry(
+        agent="code-reviewer", model="claude-sonnet-4-6",
+        input_tokens=1000, output_tokens=500,
+        cache_creation_tokens=200, cache_read_tokens=300,
+    )
+    rates = model_pricing("claude-sonnet-4-6", _SAMPLE_PRICING)
+    assert _row_cost(entry, rates) == token_cost_units(
+        rates,
+        input_tokens=entry.input_tokens,
+        output_tokens=entry.output_tokens,
+        cache_creation_tokens=entry.cache_creation_tokens,
+        cache_read_tokens=entry.cache_read_tokens,
+    )
 
 
 def test_emit_token_table_no_cache() -> None:
@@ -386,6 +450,56 @@ def test_bedrock_proxy_standard_default_has_pricing_entry() -> None:
         f"{cfg.model_standard!r}; the token-cost table would show 'n/a'."
     )
     assert rates.output_rate > 0
+
+
+def test_opus_5_5_priced_separately_from_opus_5() -> None:
+    """Regression lock: claude-opus-5-5 must NOT fall through to the "claude-opus-5"
+    pattern (a bare substring/prefix match would price it at Opus 5's higher rate --
+    $5/$25 instead of the real $4/$20 -- silently overstating every Opus 5.5 review's
+    cost by 25%)."""
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    opus_5_5 = model_pricing("claude-opus-5-5", pricing_data)
+    opus_5 = model_pricing("claude-opus-5", pricing_data)
+    assert opus_5_5.display_name == "Opus 5.5"
+    assert opus_5_5.input_rate == 4000000
+    assert opus_5_5.output_rate == 20000000
+    assert opus_5.display_name == "Opus 5"
+    assert opus_5.input_rate == 5000000
+    assert opus_5.output_rate == 25000000
+
+
+def test_opus_5_5_priced_separately_with_provider_prefix() -> None:
+    """Regression lock: the anchored Opus 5 pattern must not eat a provider-prefixed
+    Opus 5.5 id either."""
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    rates = model_pricing("global.anthropic.claude-opus-5-5", pricing_data)
+    assert rates.display_name == "Opus 5.5"
+    assert rates.input_rate == 4000000
+
+
+def test_opus_5_5_anchor_does_not_match_hypothetical_sibling() -> None:
+    """Regression lock (review-caught): the new Opus 5.5 patterns must themselves
+    be anchored -- an unanchored "claude-opus-5-5" would also match a hypothetical
+    future "claude-opus-5-50"-style id and mis-price it as Opus 5.5, the exact
+    failure mode this PR fixes for the Opus 5 row, just left open one row down.
+    It falls through to the Opus 5 row instead (the same multi-digit-suffix
+    tolerance that keeps a dated Opus 5 snapshot priced -- see the next test),
+    which is the important thing: NOT Opus 5.5's lower rate."""
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    rates = model_pricing("claude-opus-5-50", pricing_data)
+    assert rates.display_name != "Opus 5.5"
+
+
+def test_opus_5_dated_snapshot_still_priced_as_opus_5() -> None:
+    """Regression lock (review-caught): the Opus 5 anchor excludes only a single
+    trailing version digit (e.g. "-9"), not a dated-snapshot-style multi-digit
+    suffix ("-20260915", Anthropic's own model-naming convention) -- a stricter
+    anchor would silently drop pricing entirely for anyone pinning a dated Opus 5
+    snapshot via AI_MODEL_STANDARD/AI_MODEL_PREMIUM."""
+    pricing_data = load_pricing(str(_REAL_PRICING_FILE))
+    rates = model_pricing("claude-opus-5-20260915", pricing_data)
+    assert rates.display_name == "Opus 5"
+    assert rates.input_rate == 5000000
 
 
 def test_emit_token_table_sarif_inf_omitted() -> None:

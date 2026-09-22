@@ -441,12 +441,13 @@ def test_standalone_depth_unset_does_not_warn(
     assert "STANDALONE_DEPTH" not in stderr
 
 
-def test_anthropic_premium_default_is_opus_5(monkeypatch: pytest.MonkeyPatch) -> None:
-    """resolve_models() should fill the Anthropic premium slot with claude-opus-5."""
+def test_anthropic_premium_default_is_opus_5_5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_models() should fill the Anthropic premium slot with claude-opus-5-5.
+    Set AI_MODEL_PREMIUM=claude-opus-5 to revert to the prior default."""
     monkeypatch.delenv("AI_MODEL_PREMIUM", raising=False)
     monkeypatch.delenv("AI_MODEL_STANDARD", raising=False)
     cfg = ReviewConfig(provider="anthropic").resolve_models()
-    assert cfg.model_premium == "claude-opus-5"
+    assert cfg.model_premium == "claude-opus-5-5"
 
 
 def test_anthropic_standard_default_is_sonnet_5(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -885,6 +886,54 @@ def test_token_usage_display_invalid_value_raises() -> None:
 def test_token_usage_warn_usd_default_is_one_dollar() -> None:
     cfg = ReviewConfig()
     assert cfg.token_usage_warn_usd == 1.00
+
+
+# ---------------------------------------------------------------------------
+# Approval ceiling (#858)
+# ---------------------------------------------------------------------------
+
+
+def test_approval_ceiling_default_is_approve() -> None:
+    cfg = ReviewConfig()
+    assert cfg.approval_ceiling == "approve"
+
+
+def test_approval_ceiling_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_APPROVAL_CEILING", raising=False)
+    cfg = ReviewConfig.from_env()
+    assert cfg.approval_ceiling == "approve"
+
+
+def test_approval_ceiling_valid_values_accepted() -> None:
+    assert ReviewConfig(approval_ceiling="approve").approval_ceiling == "approve"
+    assert ReviewConfig(approval_ceiling="request-changes").approval_ceiling == "request-changes"
+    assert ReviewConfig(approval_ceiling="comment").approval_ceiling == "comment"
+
+
+def test_approval_ceiling_normalized_to_lowercase_and_hyphenated() -> None:
+    assert ReviewConfig(approval_ceiling="REQUEST_CHANGES").approval_ceiling == "request-changes"
+    assert ReviewConfig(approval_ceiling="Comment").approval_ceiling == "comment"
+
+
+def test_approval_ceiling_invalid_value_raises() -> None:
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        ReviewConfig(approval_ceiling="block")
+    assert "approval ceiling" in str(exc_info.value).lower()
+
+
+def test_approval_ceiling_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_APPROVAL_CEILING", "comment")
+    cfg = ReviewConfig.from_env()
+    assert cfg.approval_ceiling == "comment"
+
+
+def test_approval_ceiling_unknown_var_check_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AI_APPROVAL_CEILING", "request-changes")
+    ReviewConfig.from_env()
+    captured = capsys.readouterr()
+    assert "AI_APPROVAL_CEILING" not in captured.err
 
 
 def test_token_usage_warn_usd_env_default(monkeypatch: pytest.MonkeyPatch) -> None:

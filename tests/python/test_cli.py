@@ -1217,19 +1217,29 @@ class TestFailOnFindings:
     from the editable-install path resolution.
     """
 
-    def _exit_code(self, event: str, fail_on_findings: bool, ok: bool = True) -> int:
-        """Compute the exit code the CLI would produce for a given outcome."""
+    def _exit_code(
+        self, event: str, fail_on_findings: bool, ok: bool = True, may_approve: bool | None = None,
+    ) -> int:
+        """Compute the exit code the CLI would produce for a given outcome.
+
+        may_approve defaults to the identity relationship with event that
+        holds under the default approval_ceiling ("approve"): True iff
+        event == "APPROVE". Pass it explicitly to model a ceiling-clamped
+        outcome, where event and may_approve can diverge (#858).
+        """
         config = _make_config(fail_on_findings=fail_on_findings)
 
         result = MagicMock()
         result.ok = ok
         result.outcome = MagicMock()
         result.outcome.event = event
+        result.outcome.may_approve = (event == "APPROVE") if may_approve is None else may_approve
 
-        # Mirror the exact logic from cli._run_review_async lines 271-275.
+        # Mirror the exact logic from cli._run_review_async's post-dispatch
+        # exit-code decision (#858: reads may_approve, not event).
         if not result.ok:
             return 1
-        if config.fail_on_findings and result.outcome.event in ("REQUEST_CHANGES", "COMMENT"):
+        if config.fail_on_findings and not result.outcome.may_approve:
             return 2
         return 0
 
@@ -1254,6 +1264,21 @@ class TestFailOnFindings:
     def test_fail_on_findings_default_is_false(self) -> None:
         config = _make_config()
         assert config.fail_on_findings is False
+
+    def test_ceiling_clamped_clean_run_still_exits_0(self) -> None:
+        """#858: a clean PR under a non-default approval_ceiling posts
+        COMMENT (not APPROVE) but must still exit 0 -- may_approve reflects
+        the classifier's real severity verdict, not the clamped event."""
+        assert self._exit_code(
+            "COMMENT", fail_on_findings=True, may_approve=True,
+        ) == 0
+
+    def test_ceiling_clamped_critical_run_still_exits_2(self) -> None:
+        """A Critical-finding PR under approval_ceiling=comment posts
+        COMMENT instead of REQUEST_CHANGES, but must still exit 2."""
+        assert self._exit_code(
+            "COMMENT", fail_on_findings=True, may_approve=False,
+        ) == 2
 
 
 class TestCostCeilingSkipExitCode:
