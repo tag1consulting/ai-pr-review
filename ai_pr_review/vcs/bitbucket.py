@@ -37,6 +37,7 @@ from ai_pr_review.vcs._body import (
     compute_headline,
     format_body_finding,
     join_findings,
+    sanitize_display_text,
     severity_icon,
     truncate_body,
 )
@@ -868,17 +869,25 @@ class BitbucketProvider:
         # Picking a payload to try, in priority order:
         #   1. This cycle's full merged payload (old + newly-applied
         #      commands + recurred tombstones), if this cycle produced one.
-        #   2. The old snapshot alone (+ any tombstone corrections to keys
-        #      it already has -- those don't grow the payload), if verdicts
-        #      polling is on but this cycle didn't produce #1 (most likely:
-        #      an exception partway through Code Insights processing).
-        #   3. Nothing.
-        if verdicts_marker_payload is not None:
-            _verdicts_payload_to_try: dict[str, str] | None = verdicts_marker_payload
-        elif self.config.verdicts and old_verdicts_snapshot:
-            _verdicts_payload_to_try = dict(old_verdicts_snapshot)
-        else:
-            _verdicts_payload_to_try = None
+        #   2. The old snapshot (possibly empty), otherwise.
+        #
+        # #886 hardening: always try to write a marker, even an empty one,
+        # regardless of `self.config.verdicts` -- extract_verdicts() trusts
+        # whichever marker-shaped string appears LAST in the body, so a
+        # summary comment with no real marker at all (the old `verdicts=False`
+        # behavior) leaves any forged marker-shaped text elsewhere in the
+        # rendered summary/findings as the last match by default. A trailing
+        # `{}` (or the unchanged snapshot) marker guarantees the last match is
+        # always ours. This is a body write, not a suppression-state change:
+        # `verdicts=False` still means findings are never classified against
+        # verdicts (see `classify(f, verdicts=verdicts, ...)` above), and
+        # `old_verdicts_snapshot` is durable state already on the PR either
+        # way, not something this write newly grants meaning to.
+        _verdicts_payload_to_try: dict[str, str] = (
+            verdicts_marker_payload
+            if verdicts_marker_payload is not None
+            else dict(old_verdicts_snapshot)
+        )
 
         def _build_verdicts_marker_or_none(
             payload: dict[str, str],
@@ -894,13 +903,12 @@ class BitbucketProvider:
             marker_bytes_ = len(marker_text.encode("utf-8"))
             return marker_text, marker_bytes_, marker_bytes_ + 2
 
-        verdicts_marker = ""
-        verdicts_marker_bytes = 0
-        verdicts_marker_reserve = 0
-        if _verdicts_payload_to_try is not None:
-            verdicts_marker, verdicts_marker_bytes, verdicts_marker_reserve = (
-                _build_verdicts_marker_or_none(_verdicts_payload_to_try)
-            )
+        # Always non-empty now (#886 hardening; see the comment above), so
+        # this always builds a marker -- unlike id_map_marker, `{}` is a
+        # real, intentional payload here, not "nothing to write".
+        verdicts_marker, verdicts_marker_bytes, verdicts_marker_reserve = (
+            _build_verdicts_marker_or_none(_verdicts_payload_to_try)
+        )
 
         if (
             verdicts_marker
@@ -1503,6 +1511,17 @@ def _extract_walkthrough(existing_body: str) -> str:
     output (no "## AI Review" heading has ever been rendered yet) -- the
     whole thing, footer-stripped, IS the walkthrough.
 
+    #886 hardening: the returned text is re-sanitized with
+    `sanitize_display_text` before being handed back, even though
+    `post_summary` already sanitizes pr-summarizer output before it's first
+    posted. Two reasons this still matters here: (1) a comment posted before
+    that sanitization existed carries forward unsanitized, potentially
+    forged, marker-shaped text indefinitely, since this is the only place
+    that text gets re-embedded into a new body; (2) on an incremental run,
+    `post_summary` is a no-op (the pr-summarizer is skipped entirely), so
+    this carried-forward walkthrough is the *only* copy of that text this
+    cycle touches at all.
+
     On every later cycle, `existing_body` is whatever `_render_combined_body`
     rendered last time, which always carries a "## AI Review*" heading. If
     that render also had a non-empty walkthrough, it lives under its own
@@ -1530,7 +1549,7 @@ def _extract_walkthrough(existing_body: str) -> str:
         # the very first line reliably indicates a prior post_findings
         # render, since that heading is always what `_render_combined_body`
         # writes immediately after the marker line.
-        return rest.strip()
+        return sanitize_display_text(rest.strip())
 
     if "\n### Summary\n" not in rest:
         # A prior render exists but its walkthrough was empty -- propagate
@@ -1544,7 +1563,7 @@ def _extract_walkthrough(existing_body: str) -> str:
     )
     if cut != -1:
         rest = rest[:cut]
-    return rest.strip()
+    return sanitize_display_text(rest.strip())
 
 
 # ---------------------------------------------------------------------------

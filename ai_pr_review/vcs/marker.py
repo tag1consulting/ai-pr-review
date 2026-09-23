@@ -59,6 +59,19 @@ GITLAB_BODY_FINDINGS_MARKER: Final[str] = "<!-- ai-pr-review-gitlab-body-finding
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 
+# Single source of truth for the hidden reference-link marker's opener (#886
+# hardening). Every hidden-form regex below (`_ID_MAP_MARKER_HIDDEN_RE`,
+# `_VERDICTS_MARKER_HIDDEN_RE`, `_ACKS_MARKER_HIDDEN_RE`, and the hidden half
+# of `_SUMMARY_MARKER_RE`) tolerates optional spaces/tabs around the `#`
+# (`[ \t]*`), matching what a Markdown renderer actually accepts as a link
+# reference definition. `_body.py`'s `sanitize_display_text` used to defang
+# only the single literal spelling `"[//]: # ("`, so a spacing variant like
+# `"[//]:#("` survived sanitization and still parsed as a real marker --
+# building the sanitizer's defang from this same pattern, rather than a
+# separately maintained literal string, is what keeps the two from drifting
+# apart again.
+HIDDEN_MARKER_OPENER_RE: Final[re.Pattern[str]] = re.compile(r"\[//\]:[ \t]*#[ \t]*\(")
+
 # Matches a summary marker with optional sha= field, in either delimiter
 # style, e.g.:
 #   <!-- ai-pr-review-summary -->
@@ -71,7 +84,8 @@ _SHA_PATTERN = re.compile(r"\A[0-9a-f]{7,40}\Z")
 # [ \t] (not \s) keeps a match from spanning multiple lines.
 _SUMMARY_MARKER_RE = re.compile(
     r"<!--[ \t]*ai-pr-review-summary(?:[ \t]+sha=(?P<sha>[0-9a-f]+))?[ \t]*-->"
-    r"|\[//\]:[ \t]*#[ \t]*\(ai-pr-review-summary(?:[ \t]+sha=(?P<sha2>[0-9a-f]+))?[ \t]*\)"
+    r"|" + HIDDEN_MARKER_OPENER_RE.pattern
+    + r"ai-pr-review-summary(?:[ \t]+sha=(?P<sha2>[0-9a-f]+))?[ \t]*\)"
 )
 
 
@@ -147,7 +161,7 @@ _ID_MAP_MARKER_RE = re.compile(
 # corrupting the marker and leaking JSON fragments into the visible comment.
 ID_MAP_MARKER_HIDDEN_PREFIX: Final[str] = "[//]: # (ai-pr-review-id-map:"
 _ID_MAP_MARKER_HIDDEN_RE = re.compile(
-    r"\[//\]:[ \t]*#[ \t]*\(ai-pr-review-id-map:([A-Za-z0-9+/=]+)\)"
+    HIDDEN_MARKER_OPENER_RE.pattern + r"ai-pr-review-id-map:([A-Za-z0-9+/=]+)\)"
 )
 
 
@@ -460,7 +474,7 @@ VERDICTS_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-verdicts:"
 _VERDICTS_MARKER_RE = re.compile(r"<!-- ai-pr-review-verdicts: (\{[^}]*\}) -->")
 VERDICTS_MARKER_HIDDEN_PREFIX: Final[str] = "[//]: # (ai-pr-review-verdicts:"
 _VERDICTS_MARKER_HIDDEN_RE = re.compile(
-    r"\[//\]:[ \t]*#[ \t]*\(ai-pr-review-verdicts:([A-Za-z0-9+/=]+)\)"
+    HIDDEN_MARKER_OPENER_RE.pattern + r"ai-pr-review-verdicts:([A-Za-z0-9+/=]+)\)"
 )
 # "recurred" is a tombstone, not a third human verdict: written in place of
 # deleting a "fixed" entry when that finding reappears unchanged. Because
@@ -569,10 +583,25 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str], *, hidden: bool 
     shadowed marker while `extract_verdicts` keeps reading the untouched
     one that sorts later -- the write would appear to succeed while the
     verdicts it wrote are silently orphaned.
+
+    #886 hardening: within a single form, this must also prefer the LAST
+    occurrence, not the first. ``.search()`` only ever returns the first
+    match, so a forged marker-shaped string earlier in the body (from
+    unsanitized LLM-derived text) used to get patched here while
+    ``extract_verdicts`` kept reading the real, untouched marker further
+    down -- the write silently updated the wrong (attacker's) string and the
+    caller's new verdicts were lost. ``finditer`` + taking the last match per
+    form closes that gap.
     """
     new_marker = build_verdicts_marker(verdicts, hidden=hidden)
+
+    def _last_match(rx: re.Pattern[str]) -> re.Match[str] | None:
+        matches = list(rx.finditer(body))
+        return matches[-1] if matches else None
+
     candidates = [
-        m for m in (_VERDICTS_MARKER_RE.search(body), _VERDICTS_MARKER_HIDDEN_RE.search(body))
+        m
+        for m in (_last_match(_VERDICTS_MARKER_RE), _last_match(_VERDICTS_MARKER_HIDDEN_RE))
         if m is not None
     ]
     match = max(candidates, key=lambda m: m.start()) if candidates else None
@@ -597,7 +626,7 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str], *, hidden: bool 
 # mechanism and no need to poll top-level comments for commands at all.
 ACKS_MARKER_HIDDEN_PREFIX: Final[str] = "[//]: # (ai-pr-review-acks:"
 _ACKS_MARKER_HIDDEN_RE = re.compile(
-    r"\[//\]:[ \t]*#[ \t]*\(ai-pr-review-acks:([A-Za-z0-9+/=]+)\)"
+    HIDDEN_MARKER_OPENER_RE.pattern + r"ai-pr-review-acks:([A-Za-z0-9+/=]+)\)"
 )
 # Same bounded-growth pattern as _MAX_PRIOR_FINGERPRINTS: cap the set rather
 # than let it grow forever. Bitbucket comment ids are assigned monotonically
