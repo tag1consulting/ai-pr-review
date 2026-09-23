@@ -31,12 +31,35 @@ _DIFF = """diff --git a/app.py b/app.py
 """
 
 
+# #894: _list_summary_comments() now filters by bot authorship, so every
+# test fixture needs a resolvable /user identity and comment items need a
+# matching user.account_id -- both injected transparently by _wrap below so
+# existing test bodies (built before #894) don't each need editing.
+_TEST_BOT_ACCOUNT_ID = "test-bot-account-id"
+
+
 def _make_provider(
     handler: Callable[[httpx.Request], httpx.Response],
     *,
     code_insights: bool = True,
 ) -> BitbucketProvider:
-    transport = httpx.MockTransport(handler)
+    def _wrap(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.rstrip("/").endswith("/user"):
+            return httpx.Response(200, json={"account_id": _TEST_BOT_ACCOUNT_ID})
+        resp = handler(request)
+        if request.method == "GET" and resp.status_code == 200:
+            try:
+                data = resp.json()
+            except ValueError:
+                return resp
+            if isinstance(data, dict) and isinstance(data.get("values"), list):
+                for item in data["values"]:
+                    if isinstance(item, dict) and "user" not in item:
+                        item["user"] = {"account_id": _TEST_BOT_ACCOUNT_ID}
+                return httpx.Response(200, json=data)
+        return resp
+
+    transport = httpx.MockTransport(_wrap)
     http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
     client = RecordingClient(
         http=http,

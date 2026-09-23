@@ -253,13 +253,45 @@ class BitbucketProvider:
         return results
 
     def _list_summary_comments(self) -> list[dict[str, Any]]:
-        # The bash version added a server-side q= filter; we apply it client-side
-        # too (defensive — Bitbucket sometimes ignores q on rich-text fields).
+        """Return this bot's own summary comments, newest first.
+
+        Security-critical (#894, the root-cause follow-up to #874's
+        narrower verdicts-only fix): Bitbucket exposes no server-side "is
+        this comment mine" filter and comments carry no privileged/
+        verified-author flag, so a marker-substring match alone (the bash
+        version's original behavior, kept client-side here defensively --
+        Bitbucket sometimes ignores its own `q=` filter on rich-text
+        fields) can be satisfied by ANY PR commenter, not just this bot.
+        Every caller of this method -- SHA-watermark (`get_last_reviewed_
+        sha`), `get_summary_body`, `post_findings`'s id-map/verdicts-marker
+        read, and `resolve_stale`'s duplicate cleanup -- trusts whatever
+        this returns as "the bot's own prior state", so filtering here once
+        closes the gap for all of them at the root instead of each having
+        its own (previously: only `post_findings`, and only for its
+        verdicts read) independent check.
+
+        Fails closed: when `_bot_account_id()` can't resolve this run's own
+        identity (a transient `GET /2.0/user` error), returns `[]` rather
+        than falling back to the unverified marker-substring match -- a
+        forged comment must never be trusted as this bot's own state. The
+        accepted cost of failing closed is a possible duplicate summary
+        comment on that one run (the same "worst case" #874's narrower
+        version already accepted for the verdicts marker specifically);
+        the alternative (fail open) would silently reopen the exact
+        forgery class this function exists to close, just scoped to
+        whichever run happened to hit the transient lookup failure.
+        """
+        bot_account_id = self._bot_account_id()
+        if bot_account_id is None:
+            return []
         return [
             item
             for item in self._fetch_comments()
-            if SUMMARY_MARKER_PREFIX in _comment_body(item)
-            or SUMMARY_MARKER_HIDDEN_PREFIX in _comment_body(item)
+            if (
+                SUMMARY_MARKER_PREFIX in _comment_body(item)
+                or SUMMARY_MARKER_HIDDEN_PREFIX in _comment_body(item)
+            )
+            and (item.get("user") or {}).get("account_id") == bot_account_id
         ]
 
     def _bot_account_id(self) -> str | None:
@@ -454,45 +486,16 @@ class BitbucketProvider:
             [existing_body] if existing_body else [], list(findings)
         )
 
-        # Security-critical (#874 follow-up, external security review):
-        # `_list_summary_comments()` selects `keep` by marker-substring
-        # match only -- ANY PR commenter can post a comment starting with
-        # the summary marker text (visible verbatim in every real bot
-        # comment) plus a forged hidden verdicts marker, and if it sorts
-        # newest it becomes `keep` here. Without this check, the block
-        # below would trust that forged marker exactly as if it were the
-        # bot's own, silently suppressing findings with `check_authority()`
-        # never even consulted -- a full bypass of Phase 4's authorization
-        # model. Comments carry no privileged/verified-author flag, so the
-        # only real signal is comparing the comment's own `user.account_id`
-        # against what these credentials actually resolve to via
-        # `_bot_account_id()`. Scoped to `self.config.verdicts` (rather
-        # than the broader `keep` selection used for SHA-watermark/id-map,
-        # which predate this feature and are pre-existing, lower-severity
-        # trust gaps of their own, tracked separately) because this is
-        # specifically the mechanism that turns a forged marker into an
-        # unauthorized, undetectable suppression of a real finding.
-        keep_is_bot_authored = True
-        if self.config.verdicts:
-            keep_account_id = (keep.get("user") or {}).get("account_id")
-            bot_account_id = self._bot_account_id()
-            keep_is_bot_authored = (
-                bot_account_id is not None and keep_account_id == bot_account_id
-            )
-            if not keep_is_bot_authored:
-                _log.warning(
-                    "bitbucket: the summary comment selected for %s/%s PR "
-                    "#%s was not authored by this run's own Bitbucket "
-                    "identity (account_id could not be verified as a "
-                    "match); treating its verdicts marker as untrusted "
-                    "this cycle rather than risk suppressing a finding "
-                    "based on a comment anyone could have posted",
-                    self.config.workspace, self.config.repo_slug, self.config.pr_id,
-                )
-                self._errors.append(
-                    "post_findings: summary comment authorship could not be "
-                    "verified; ignoring its verdicts marker this cycle"
-                )
+        # #894 (root-cause follow-up to #874's narrower fix): `keep` is now
+        # guaranteed bot-authored by `_list_summary_comments()` itself (or
+        # `existing` above would already be empty), so no separate
+        # authorship check is needed here -- previously this block
+        # independently re-verified authorship, scoped only to the
+        # verdicts marker and only when `self.config.verdicts` was on,
+        # leaving the SHA-watermark/id-map reads below (and every other
+        # caller of `_list_summary_comments()`) with the same gap. See
+        # `_list_summary_comments()`'s own docstring for the fail-closed
+        # contract this now relies on uniformly.
 
         # Snapshot of whatever verdicts were already durably persisted
         # before this call, independent of anything the code_insights/
@@ -501,14 +504,9 @@ class BitbucketProvider:
         # marker-build stage further down always has a known-good fallback
         # to preserve rather than silently dropping suppression state on an
         # overflow or a mid-cycle exception -- see the verdicts_marker
-        # overflow handling below for why this matters. Gated by
-        # `keep_is_bot_authored` (see above) whenever verdicts polling is
-        # on, so a forged marker is never trusted as a baseline to begin
-        # with.
+        # overflow handling below for why this matters.
         old_verdicts_snapshot: dict[str, str] = (
-            extract_verdicts(existing_body)
-            if existing_body and keep_is_bot_authored
-            else {}
+            extract_verdicts(existing_body) if existing_body else {}
         )
 
         # Bitbucket parity Phase 3 (#839/#873): Code Insights annotations as
@@ -565,20 +563,15 @@ class BitbucketProvider:
                         comments=self._fetch_comments(),
                         # apply_pending_verdicts independently re-derives
                         # its own baseline verdicts, acks, AND F<n> ->
-                        # fingerprint resolution from this string -- if
-                        # `keep` couldn't be verified as bot-authored (see
-                        # keep_is_bot_authored above), passing the real
-                        # existing_body through would let a forged comment
-                        # remap an authorized user's legitimate `F<n>`
-                        # command onto an attacker-chosen fingerprint, not
-                        # just forge a baseline verdict. Passing "" instead
-                        # makes every F<n> resolve to "not found" this
-                        # cycle (safe: replies with "was not found in the
-                        # current review") rather than trusting anything
-                        # derived from an unverifiable comment.
-                        existing_body=(
-                            existing_body if keep_is_bot_authored else ""
-                        ),
+                        # fingerprint resolution from this string.
+                        # existing_body is safe to pass through unguarded
+                        # here (#894): `keep` (and therefore existing_body)
+                        # is now guaranteed bot-authored by
+                        # `_list_summary_comments()` itself, or `existing`
+                        # above would already be empty and this whole
+                        # function would have returned before reaching
+                        # here.
+                        existing_body=existing_body,
                         min_role=self.config.verdict_min_role,
                     )
                     freshly_set_fps = frozenset(

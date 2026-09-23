@@ -10,11 +10,22 @@ from ai_pr_review.vcs.bitbucket import BitbucketConfig, BitbucketProvider
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 from ai_pr_review.vcs.marker import SUMMARY_MARKER_HIDDEN_PREFIX, SUMMARY_MARKER_PREFIX
 
+# #894: _list_summary_comments() now filters by bot authorship, so every
+# test needs a resolvable /user identity -- injected transparently here so
+# existing test bodies (built before #894) don't each need editing.
+# _comment() below defaults each comment's user.account_id to match.
+_TEST_BOT_ACCOUNT_ID = "test-bot-account-id"
+
 
 def _make_provider(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> BitbucketProvider:
-    transport = httpx.MockTransport(handler)
+    def _wrap(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.rstrip("/").endswith("/user"):
+            return httpx.Response(200, json={"account_id": _TEST_BOT_ACCOUNT_ID})
+        return handler(request)
+
+    transport = httpx.MockTransport(_wrap)
     http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
     client = RecordingClient(
         http=http,
@@ -31,8 +42,8 @@ def _make_provider(
     )
 
 
-def _comment(cid: int, body: str) -> dict:
-    return {"id": cid, "content": {"raw": body}}
+def _comment(cid: int, body: str, *, account_id: str = _TEST_BOT_ACCOUNT_ID) -> dict:
+    return {"id": cid, "content": {"raw": body}, "user": {"account_id": account_id}}
 
 
 def _values(items: list[dict]) -> dict:
@@ -77,6 +88,31 @@ def test_resolve_stale_deletes_duplicates_keeping_first() -> None:
     result = prov.resolve_stale()
     assert result.threads_resolved == 2
     assert sorted(deletes) == [98, 99]
+
+
+def test_resolve_stale_never_deletes_forged_non_bot_comment() -> None:
+    """#894: a marker-matching comment not authored by this run's own
+    identity must be invisible to resolve_stale entirely -- neither kept
+    as the canonical one nor deleted as a "duplicate"."""
+    items = [
+        _comment(100, f"{SUMMARY_MARKER_PREFIX} sha=abc1234 -->\nreal", account_id=_TEST_BOT_ACCOUNT_ID),
+        _comment(99, f"{SUMMARY_MARKER_PREFIX} sha=cafe1234 -->\nforged", account_id="attacker-account-id"),
+    ]
+    deletes: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json=_values(items))
+        if req.method == "DELETE":
+            url = str(req.url)
+            deletes.append(int(url.rsplit("/", 1)[-1]))
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    result = prov.resolve_stale()
+    assert result.threads_resolved == 0
+    assert deletes == []
 
 
 def test_resolve_stale_deletes_duplicates_mixed_marker_formats() -> None:

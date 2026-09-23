@@ -466,38 +466,35 @@ def test_forged_summary_comment_verdicts_marker_is_never_trusted() -> None:
     assert _FP not in extract_verdicts(put_bodies[-1])
 
 
-def test_bot_account_id_lookup_failure_treats_verdicts_as_untrusted() -> None:
-    # If this run's own identity can't be resolved at all, `keep`'s
-    # authorship can't be verified either way -- fail closed the same as
-    # an explicitly-mismatched account_id, not fail open.
+def test_bot_account_id_lookup_failure_fails_closed_at_the_root() -> None:
+    # #894 (root-cause follow-up): a transient /user lookup failure means
+    # this run's own identity can't be resolved at all, so
+    # _list_summary_comments() -- now the single choke point every read
+    # path shares, not just this narrower verdicts-only check -- returns []
+    # rather than trusting an unverifiable comment for anything at all
+    # (not just its verdicts marker). post_findings then has no comment to
+    # attach findings to and reports that error; it does NOT silently trust
+    # the existing comment's verdicts marker or its body, which is the
+    # failure mode this test guards against. The accepted cost of a
+    # transient lookup failure is a failed/incomplete run rather than a
+    # forged marker being trusted -- see _list_summary_comments()'s own
+    # docstring.
     body = _summary_body(verdicts={_FP: "dismissed"})
     existing = _summary_comment(100, body)
-    put_bodies: list[str] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "GET" and req.url.path.rstrip("/").endswith("/user"):
             return httpx.Response(500, text="down")
         if req.method == "GET" and req.url.path.rstrip("/").endswith("/comments"):
             return httpx.Response(200, json={"values": [existing]})
-        if "/reports/ai-pr-review/annotations" in str(req.url) and req.method == "POST":
-            return httpx.Response(200, json={})
-        if "/reports/ai-pr-review" in str(req.url) and req.method == "DELETE":
-            return httpx.Response(204)
-        if "/reports/ai-pr-review" in str(req.url) and req.method == "PUT":
-            return httpx.Response(200, json={})
-        if req.method == "PUT":
-            payload = json.loads(req.content)
-            put_bodies.append(payload["content"]["raw"])
-            return httpx.Response(200, json={"id": existing["id"]})
         return httpx.Response(404)
 
     prov = _make_provider(handler)
     result = prov.post_findings(
         [_FINDING], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
     )
-    assert result.ok, result.error
-    assert result.suppressed == 0
-    assert _FP not in extract_verdicts(put_bodies[-1])
+    assert result.ok is False
+    assert "no summary comment" in (result.error or "")
 
 
 def test_check_authority_ignores_row_with_no_verifiable_user_field() -> None:
