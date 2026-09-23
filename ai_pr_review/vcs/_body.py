@@ -120,15 +120,31 @@ _DEFANG_SEQUENCES: Final[tuple[tuple[str, str], ...]] = (
     ("</summary", "<​/summary"),
     ("<!--", "<​!--"),
     ("-->", "--​>"),
+    # #886: the same HTML-comment breakout risk applies to this repo's own
+    # metadata markers (id-map/verdicts/usage/etc, marker.py), not just
+    # structural HTML. `<!--`/`-->` above already covers the default marker
+    # form; `[//]: # (` is the Bitbucket-only hidden reference-link form
+    # (marker.py's `*_HIDDEN_PREFIX` constants), which `extract_verdicts`/
+    # `extract_id_map` check on every provider regardless of which one
+    # actually wrote the comment. Left undefanged, LLM-derived text carried
+    # into a posted comment verbatim (pr-summarizer's own narrative output,
+    # not run through this function anywhere before #886) could contain a
+    # syntactically valid forged marker in either form.
+    ("[//]: # (", "[//]: # ​("),
 )
 
 
 def sanitize_display_text(text: str) -> str:
-    """Neutralize structure-breaking HTML in LLM-derived display text.
+    """Neutralize structure-breaking HTML (and this repo's own comment-marker
+    syntax) in LLM-derived display text.
 
     Applied to ``finding`` and ``remediation`` strings (which can be steered by
     prompt injection in PR content) before they are interpolated into a posted
-    comment body. Case-insensitive on the tag sequences.
+    comment body, and (#886) to the full pr-summarizer/issue-linker output
+    before it becomes part of a posted summary comment -- both are read back
+    verbatim on the next run by ``marker.py``'s ``extract_*`` functions, so
+    any text this function doesn't cover is a potential forgery channel for
+    those markers. Case-insensitive on the tag sequences.
     """
     if not text:
         return text
