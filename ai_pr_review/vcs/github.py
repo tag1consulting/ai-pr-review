@@ -942,7 +942,7 @@ class GitHubProvider:
         """
         if not threads:
             return ""
-        from ai_pr_review.vcs._body import sanitize_display_text, severity_icon
+        from ai_pr_review.vcs._body import sanitize_bullet_text, severity_icon
 
         order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
         ranked = sorted(threads, key=lambda t: order.get(t.severity or "Low", 4))
@@ -960,11 +960,12 @@ class GitHubProvider:
             # terminate the code span early and let the rest of the path
             # render as live Markdown (arbitrary link text/URL) under the
             # bot's own trusted identity. Neutralize both before the path
-            # ever reaches the code span.
-            safe_path = (
-                t.path.replace("\r", "").replace("\n", " ").replace("`", "'")
-            )
-            location = sanitize_display_text(safe_path)
+            # ever reaches the code span. Uses sanitize_bullet_text (issue
+            # #914) rather than a bare \r/\n strip, since str.splitlines()
+            # recognizes several other line-break codepoints a forged path
+            # could use to inject a standalone line.
+            safe_path = t.path.replace("`", "'")
+            location = sanitize_bullet_text(safe_path)
             if t.line is not None:
                 location = f"{location}:{t.line}"
             link = _discussion_link(
@@ -2614,17 +2615,17 @@ def _build_inline_comment_body(
         classification to reincarnate from once a thread is still open and
         being matched against).
     """
-    from ai_pr_review.vcs._body import format_source_tag, sanitize_display_text, severity_icon
+    from ai_pr_review.vcs._body import format_source_tag, sanitize_bullet_text, severity_icon
     from ai_pr_review.vcs._finding_ids import fingerprint
     from ai_pr_review.vcs.marker import build_inline_meta_marker
 
     icon = severity_icon(f.severity)
     tag = format_source_tag(f)
     id_token = f" **[F{finding_id}]**" if finding_id is not None else ""
-    header = f"{icon} **[{f.severity}]**{id_token} {tag} {sanitize_display_text(f.finding)}".strip()
+    header = f"{icon} **[{f.severity}]**{id_token} {tag} {sanitize_bullet_text(f.finding)}".strip()
     parts = [header]
     if f.remediation:
-        parts.append(f"\n**Remediation:** {sanitize_display_text(f.remediation)}")
+        parts.append(f"\n**Remediation:** {sanitize_bullet_text(f.remediation)}")
     if f.suggested_code and "```" not in f.suggested_code:
         fence = "suggestion" if include_suggestion_fence else ""
         parts.append(f"\n```{fence}\n{f.suggested_code}\n```")

@@ -477,10 +477,13 @@ def test_extract_id_map_hidden_corrupt_base64_returns_empty() -> None:
     assert extract_id_map("[//]: # (ai-pr-review-id-map:not-valid-base64!!!)") == {}
 
 
-def test_extract_id_map_prefers_html_comment_over_hidden_form() -> None:
+def test_extract_id_map_last_by_position_wins_across_both_forms() -> None:
     """If a body somehow carries both forms (shouldn't happen in practice,
-    since a given provider always emits exactly one), the plain HTML-comment
-    form takes priority -- matching the order the two regexes are tried."""
+    since a given provider always emits exactly one), the one appearing
+    LAST in the body wins -- matching extract_verdicts' own cross-form
+    last-match rule (issue #913). A forged marker planted earlier in the
+    body (e.g. via an unsanitized `source`/`sources` field) must not be
+    able to win over a real one that renders later."""
     html_map = {"x|y.py|1|aaaaaaaaaaaa": 1}
     hidden_map = {"x|y.py|1|bbbbbbbbbbbb": 2}
     body = (
@@ -488,7 +491,7 @@ def test_extract_id_map_prefers_html_comment_over_hidden_form() -> None:
         + "\n"
         + build_id_map_marker(hidden_map, hidden=True)
     )
-    assert extract_id_map(body) == html_map
+    assert extract_id_map(body) == hidden_map
 
 
 # ---------------------------------------------------------------------------
@@ -821,6 +824,31 @@ def test_upsert_acks_marker_uses_blank_line_separator_when_no_trailing_newline()
     body = "some review body"
     result = upsert_acks_marker(body, [1])
     assert result.startswith("some review body\n\n[//]: # (ai-pr-review-acks:")
+
+
+def test_extract_acks_prefers_last_match_when_two_markers_present() -> None:
+    """issue #913: same #886-style hardening as extract_verdicts -- a
+    forged acks marker earlier in the body (from unsanitized LLM-derived
+    text in a finding's source/sources field) must not win over the real,
+    later one."""
+    body = build_acks_marker([999]) + "\ntext\n" + build_acks_marker([1, 2])
+    assert extract_acks(body) == frozenset({1, 2})
+
+
+def test_upsert_acks_marker_replaces_last_match_of_the_same_form() -> None:
+    """issue #913: mirrors test_upsert_verdicts_marker_replaces_last_match_
+    of_the_same_form -- when a body carries TWO acks markers (e.g. a forged
+    one earlier, followed by the real one), upsert must patch the LAST one.
+    Before this fix, upsert used `.search()` (first match only), so it
+    silently rewrote the forged earlier marker while the caller's new acks
+    were orphaned behind the still-untouched real one, which extract_acks
+    kept reading."""
+    body = build_acks_marker([999]) + "\ntext\n" + build_acks_marker([1, 2])
+    updated = upsert_acks_marker(body, [1, 2, 3])
+    assert extract_acks(updated) == frozenset({1, 2, 3})
+    # The forged earlier marker is untouched, not merged into the result.
+    assert extract_acks(build_acks_marker([999])) == frozenset({999})
+    assert updated.count("ai-pr-review-acks:") == 2
 
 
 # ---------------------------------------------------------------------------
