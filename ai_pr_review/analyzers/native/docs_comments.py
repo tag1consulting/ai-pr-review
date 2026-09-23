@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.context.treesitter import _attr_or_call
@@ -325,7 +326,14 @@ def _parse_file(path: Path, grammar: str) -> tuple[object, bytes] | None:
         )
         return None
     try:
-        parser = get_parser(grammar)
+        # #896 follow-up: see context/treesitter.py's identical get_parser()
+        # call for why this is annotated Any rather than the real Parser
+        # type -- a static type: ignore tied to one specific parse()
+        # overload/error code is itself version-specific against
+        # tree-sitter-language-pack's unpinned upper bound, and silently
+        # flips between "real error" and "unused ignore" as whichever
+        # version gets resolved changes.
+        parser: Any = get_parser(grammar)
     except Exception as exc:
         logger.warning("[ai-pr-review] WARNING: could not load tree-sitter grammar %r: %s", grammar, exc)
         return None
@@ -343,7 +351,7 @@ def _parse_file(path: Path, grammar: str) -> tuple[object, bytes] | None:
         tree = parser.parse(src_bytes)
     except (TypeError, AttributeError):
         try:
-            tree = parser.parse(src)  # type: ignore[call-overload]
+            tree = parser.parse(src)
         except Exception as exc:
             logger.warning("[ai-pr-review] WARNING: tree-sitter parse error for %s: %s", path, exc)
             return None

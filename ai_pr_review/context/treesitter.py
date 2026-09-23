@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,19 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
         return []
 
     try:
-        parser = get_parser(grammar_name)
+        # #896 follow-up: annotated Any, not the real Parser type. tree-sitter-
+        # language-pack has no upper version pin (>=0.7.0), and get_parser()'s
+        # return type's parse() signature has genuinely changed across
+        # releases -- see the bytes/str fallback below. A static type: ignore
+        # tied to one specific overload/error code is itself version-specific
+        # and silently flips between "real error" and "unused ignore" as
+        # whichever tree-sitter-language-pack version happens to be resolved
+        # changes (confirmed: a fresh CI install using a newer release than a
+        # stale local dev venv produced the exact opposite mypy diagnosis on
+        # this call). Any sidesteps that entirely -- correct by construction
+        # for every version, not just whichever one happened to be installed
+        # when someone last ran mypy.
+        parser: Any = get_parser(grammar_name)
     except Exception as exc:
         logger.warning("[ai-pr-review] WARNING: tree-sitter: could not load grammar %r: %s", grammar_name, exc)
         return []
@@ -181,7 +194,7 @@ def extract_symbol_refs(diff_hunk: str, language: str) -> list[SymbolRef]:
             type(primary_exc).__name__, primary_exc,
         )
         try:
-            tree = parser.parse(src)  # type: ignore[call-overload]
+            tree = parser.parse(src)
         except Exception as exc:
             logger.warning(
                 "[ai-pr-review] WARNING: tree-sitter: parse error for language %r: %s", language, exc,
