@@ -105,9 +105,21 @@ def _parse_and_validate(
     for item in data:
         if not isinstance(item, dict):
             continue
-        # Stamp source if absent
-        if not item.get("source"):
-            item["source"] = agent_name
+        # Stamp source unconditionally (issue #913): an agent-supplied
+        # "source" or "sources" is untrusted LLM output. format_source_tag()
+        # renders both raw (no sanitize_display_text), and extract_id_map/
+        # extract_acks/extract_judge_map read whichever marker-shaped string
+        # appears last in the body -- so a prompt-injected "source" (or
+        # "sources", which format_source_tag prefers) containing a forged
+        # marker can override the real id-map/acks/judge-map, letting a
+        # maintainer's dismiss/wont-fix F<n> command suppress an
+        # attacker-chosen finding instead of the one actually shown. The
+        # #886 fix hardened this for the *verdicts* marker only; this closes
+        # the same channel at its one entry point (this is the only place
+        # untrusted LLM-agent JSON becomes a Finding -- analyzer/SARIF
+        # findings never pass through here).
+        item["source"] = agent_name
+        item.pop("sources", None)
         try:
             f = Finding.model_validate(item)
             # Drop self-refuting findings whose own narrative concludes the
@@ -137,6 +149,17 @@ def _parse_and_validate(
             # defends against, for demoted_to_body's twin field.
             if f.demoted_to_body:
                 f = f.model_copy(update={"demoted_to_body": False})
+            # Strip corroborated/judge_verdict: both are set internally
+            # (provenance.py's _collapse_cluster and judge._apply_verdicts,
+            # respectively), not by agents. An injected "corroborated": true
+            # would otherwise grant the confidence boost real corroboration
+            # earns; an injected "judge_verdict" would fake having already
+            # passed judge review. Same class of injected-internal-state
+            # bug as out_of_diff/demoted_to_body above.
+            if f.corroborated:
+                f = f.model_copy(update={"corroborated": False})
+            if f.judge_verdict is not None:
+                f = f.model_copy(update={"judge_verdict": None})
             results.append(f)
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
