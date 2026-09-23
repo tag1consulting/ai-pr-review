@@ -32,7 +32,13 @@
 #   AI_CONTEXT_ENRICHMENT  (plain, default: false; tree-sitter symbol context)
 #   AI_SARIF_PATHS         (plain, default: ''; comma-separated SARIF 2.1.0
 #                           file paths to merge as findings)
+#   AI_BITBUCKET_VERDICTS  (plain, default: false; poll PR comments for
+#                           /ai-pr-review dismiss|false-positive|wont-fix|fixed
+#                           F<n> commands at the start of the next run —
+#                           see docs/configuration.md)
 # Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only — no-op on Bitbucket.
+# Note: AI_BITBUCKET_CODE_INSIGHTS (inline diff annotations) defaults to true
+# and needs no explicit repository variable unless you want it off.
 #
 # `clone.depth: full` is required: this step's own `git fetch` below needs the
 # base branch history available locally, and the default shallow Pipelines

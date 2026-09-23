@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.13.0
+
+**Bitbucket reaches finding-lifecycle parity with GitHub/GitLab, and three security findings surfaced during that work are fixed.** Bitbucket now dedups findings across runs, renders them inline as Code Insights annotations, and (opt-in) polls PR comments for `/ai-pr-review dismiss|false-positive|wont-fix|fixed` commands at the start of the next run — the closest a comment-triggerless CI can get to GitHub/GitLab's immediate slash-command handling (issues #839, #873, #874). The same body of work's security-review passes surfaced a verdicts-marker forgery path via unsanitized LLM narrative output (#886), a fingerprint delimiter collision (#887), and a Bitbucket comment-authorship gap (#894) — all fixed. Also new: `approval-ceiling`, letting a repo require a human to make every merge decision instead of the bot (issue #858).
+
+See [Version History → v2.13.0](version-history/v2.13.0) for details.
+
 ## What's new in v2.12.0
 
 **Review agents now see the PR's own title and description, not just the diff, and GitLab findings update in place instead of only being deduplicated.** A PR's stated intent ("this refactor deliberately changes X, not a regression") was previously invisible to every finding agent — a `<pr-context>` block now closes that gap for all except the deliberately diff-only `blind-hunter` (issue #813). On GitLab, a re-detected finding whose content changed now gets its existing discussion note updated in place, with a reply on severity escalation, closing the last gap between GitLab's cross-run dedup and GitHub's canonical-review reuse (issue #710). Three further capabilities land alongside these: per-agent output-token budget overrides (issue #191), a pre-flight LLM cost estimate with a configurable abort ceiling (issue #24), and judge-pass verdict/corroboration state now persisted to the feedback-learning store for future analysis (issue #841).
@@ -79,12 +85,6 @@ See [Version History → v2.12.0](version-history/v2.12.0) for details.
 **GitLab stops silently dropping findings it can't anchor to an inline diff line, and two smaller correctness fixes land.** Out-of-diff findings (or ones bumped over the `max_inline` cap) were computed but never rendered anywhere on GitLab — GitHub and Bitbucket both already surface these — and are now appended as a bullet list in the MR's summary note (issue #711). `REVIEW_TARGET`'s case-sensitivity could silently skip the standalone-mode deprecation warning and merge-commit-filter behavior for mixed-case input like `REVIEW_TARGET=Standalone` (issue #629), now normalized once at the config boundary. A Semgrep false positive on the phpstan analyzer's `subprocess.run` call (issue #789) is fixed with the project's deterministic `suppressions.json` mechanism, after an inline `# nosemgrep` comment tried first turned out to be unreliable across multi-file Semgrep scans in CI.
 
 See [Version History → v2.11.0](version-history/v2.11.0) for details.
-
-## What's new in v2.10.0
-
-**A chain of bugs surfaced while investigating why one PR stayed blocked despite an apparently-correct false-positive dismissal — the biggest was a dropped-verdict bug that could silently discard a `dismiss`/`false-positive`/`wont-fix`/`fixed` verdict in the common case, not an edge case (issue #771).** The PR's actual root cause turned out to be different: a human resolving a bot-owned thread via GitHub's native "Resolve conversation" button, with no verdict command, reappeared on a later rescan as an apparently-brand-new duplicate comment with no explanation (issue #779) — now explained instead of silently reposted. A batch of adjacent slash-command UX fixes lands alongside these: malformed commands now signal clearly instead of failing silently (issue #772), `feedback`'s reply no longer reads as confirmation when it isn't (issue #773), and a corroborated finding's source attribution, a duplicate-reply bug, and two headline-count contradictions are also fixed.
-
-See [Version History → v2.10.0](version-history/v2.10.0) for details.
 
 ## Learn more
 

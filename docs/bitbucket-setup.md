@@ -41,9 +41,18 @@ the full reasoning behind that choice.
   category), Bitbucket has no comment threads to fuzzy-match against, so
   suppression here is exact-fingerprint-only. A dismissed finding whose
   line shifts by even one on a later push is treated as a new finding
-  again. Dismissing a finding itself (writing that verdict) has no
-  Bitbucket trigger yet, see [issue
-  #874](https://github.com/tag1consulting/ai-pr-review/issues/874).
+  again.
+- Verdict commands (`/ai-pr-review dismiss|false-positive|wont-fix|fixed
+  F<n>`), applied by polling: Bitbucket Pipelines has no comment-triggered
+  event, so a command posted as a fresh top-level PR comment is picked up
+  and applied the *next* time the review pipeline runs (PR create/push),
+  not immediately — there is no inline-reply form on Bitbucket, only the
+  body-level `F<n>` form. Opt-in via `AI_BITBUCKET_VERDICTS=true` (default
+  `false`); the commenter's PR permission must meet
+  `AI_BITBUCKET_VERDICT_MIN_ROLE` (`read`/`write`/`admin`, default
+  `write`), checked fail-closed — a permission-lookup error rejects the
+  command rather than accepting it (issue
+  [#874](https://github.com/tag1consulting/ai-pr-review/issues/874)).
 - Incremental-diff SHA watermark (a hidden reference-link marker — Bitbucket's
   renderer shows an HTML comment as literal text instead of hiding it, unlike
   GitHub/GitLab, so Bitbucket uses a different marker form; see [Version
@@ -84,12 +93,13 @@ review runs against it at a time.
 
 ## What does not work on Bitbucket
 
-- Dismissing/suppressing a finding via a comment command (no Bitbucket
-  trigger yet for verdict polling, see [issue #874](https://github.com/tag1consulting/ai-pr-review/issues/874))
 - APPROVE / REQUEST_CHANGES PR events (Bitbucket has different endpoints
   for approve/request-changes and the feature is optional)
-- Slash-command triggers (Bitbucket Pipelines has no `issue_comment`
-  equivalent; the review always runs on PR create/push)
+- Slash commands that trigger a fresh review (`rescan`, `review-full`) or
+  reply immediately (Bitbucket Pipelines has no `issue_comment` equivalent;
+  the review always runs on PR create/push). Verdict commands
+  (`dismiss`/`false-positive`/`wont-fix`/`fixed`) are the exception — see
+  verdict-command polling above.
 - The large-diff "skip" comment (the review still exits cleanly and logs
   a warning, but no comment is posted)
 - Collapsed/expandable sections (the PR-summary Walkthrough, and the
