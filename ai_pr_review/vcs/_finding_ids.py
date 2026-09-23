@@ -18,7 +18,11 @@ Fingerprint
 The fingerprint is the tuple ``(source, file, line, sha256(finding_text)[:12])``
 joined with ``|``.  Only the first 12 hex digits of the text hash are used
 (collision probability negligible for the volumes involved).  The fingerprint
-is stable against trivial reformatting of the finding text.
+is stable against trivial reformatting of the finding text. ``source``/``file``
+are backslash-escaped before joining (#887) so a literal ``|`` in either
+component -- agent-supplied and potentially attacker-influenceable -- can't
+be mistaken for the join delimiter and collide two distinct findings onto
+the same fingerprint string.
 
 ID-map assembly
 ---------------
@@ -190,18 +194,77 @@ def _ends_body_section(stripped_line: str) -> bool:
     )
 
 
+def _escape_fingerprint_component(s: str) -> str:
+    """Escape ``\\`` and ``|`` in one fingerprint component before joining
+    (#887): ``source``/``file`` are agent-supplied strings that may
+    legitimately (or via prompt injection) contain a literal ``|``, and the
+    join below used to have no escaping at all. Two distinct findings could
+    then produce an identical fingerprint string -- e.g. ``source="a|b",
+    file="c"`` vs. ``source="a", file="b|c"`` -- silently colliding in every
+    place a fingerprint is used as a dict key (the id-map/verdicts JSON
+    markers) or a cross-system upsert key (Bitbucket's Code Insights
+    ``external_id``), where a collision means one finding's state silently
+    overwrites another's.
+
+    Backslash-escaping ``|`` (rather than switching delimiters, changing the
+    join order, or hashing the whole fingerprint) is deliberately the
+    smallest change that closes the collision: for the overwhelming majority
+    of real ``source``/``file`` values, which contain neither ``\\`` nor
+    ``|``, this function is the identity and the fingerprint format --
+    already relied on as a stable, already-persisted JSON-dict key across
+    every open PR's existing bot comments -- doesn't change at all. Only the
+    rare value that actually contains one of these two characters (an
+    attacker-crafted one, or an unusual file path) produces a different
+    fingerprint than before, which is exactly the fix: those are the only
+    inputs that could previously collide.
+    """
+    return s.replace("\\", "\\\\").replace("|", "\\|")
+
+
 def fingerprint(f: Finding) -> str:
     """Return a stable fingerprint for a body-level finding.
 
     The fingerprint encodes ``source|file|line|text_hash`` so that the same
     logical finding produces the same string across review runs, enabling
-    ID stability.
+    ID stability. ``source``/``file`` are escaped first (see
+    ``_escape_fingerprint_component``) so a literal ``|`` inside either
+    can't be mistaken for the join delimiter.
     """
-    source = (f.source or "").strip()
-    file_ = (f.file or "").strip()
+    source = _escape_fingerprint_component((f.source or "").strip())
+    file_ = _escape_fingerprint_component((f.file or "").strip())
     line = str(f.line) if f.line is not None else ""
     text_hash = hashlib.sha256((f.finding or "").encode()).hexdigest()[:12]
     return f"{source}|{file_}|{line}|{text_hash}"
+
+
+def split_fingerprint(fp: str) -> list[str]:
+    """Split a ``fingerprint()`` string back into its four components,
+    honoring the backslash-escaping ``_escape_fingerprint_component`` applies
+    to ``source``/``file`` (#887) -- the inverse operation, not a naive
+    ``fp.split("|")``, which would incorrectly treat an escaped ``\\|``
+    inside either component as a fourth delimiter.
+
+    Always returns exactly 4 elements for any string actually produced by
+    ``fingerprint()``. Callers that need a specific component (e.g.
+    ``_canonical.fingerprint_location``'s ``file``/``line`` recovery) index
+    into the result rather than each re-implementing this walk.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for ch in fp:
+        if escaped:
+            current.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == "|":
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
 
 
 def known_fingerprints(prior_bodies: Sequence[str]) -> frozenset[str]:

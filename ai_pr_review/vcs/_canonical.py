@@ -60,6 +60,7 @@ from ai_pr_review.vcs._finding_ids import (
     fingerprint,
     fingerprint_for_finding_id,
     safe_review_id,
+    split_fingerprint,
 )
 from ai_pr_review.vcs._stale import is_owned_by_us
 from ai_pr_review.vcs.marker import extract_id_map, extract_inline_meta, extract_verdicts
@@ -246,18 +247,19 @@ def merge_verdicts(reviews: Sequence[Mapping[str, Any]]) -> dict[str, str]:
 
 
 def fingerprint_location(fp: str) -> tuple[str, int | None]:
-    """Recover `(file, line)` from a `fingerprint()` string.
+    r"""Recover `(file, line)` from a `fingerprint()` string.
 
     Fingerprint shape is `source|file|line|hash`
-    (`ai_pr_review.vcs._finding_ids.fingerprint`). `file` may itself contain
-    `|`, so this peels the known-fixed-width outer fields (`source|` from
-    the front, `|line|hash` from the back) rather than a naive `split("|")`.
+    (`ai_pr_review.vcs._finding_ids.fingerprint`). `source`/`file` are
+    backslash-escaped before joining (#887), so this uses `split_fingerprint`
+    (the escape-aware inverse) rather than a naive `split("|")`, which would
+    incorrectly treat an escaped `\|` inside either component as a real
+    delimiter.
     """
-    try:
-        _source, rest = fp.split("|", 1)
-        file_part, line_part, _hash = rest.rsplit("|", 2)
-    except ValueError:
+    parts = split_fingerprint(fp)
+    if len(parts) != 4:
         return "", None
+    _source, file_part, line_part, _hash = parts
     line = int(line_part) if line_part.isdigit() else None
     return file_part, line
 
