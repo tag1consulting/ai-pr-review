@@ -625,6 +625,66 @@ class TestBuildReviewRuntimeCostCeiling:
         mock_run_analyzers.assert_awaited_once()
 
     @pytest.mark.anyio
+    async def test_ceiling_exceeded_skip_plan_carries_findings_and_diff(
+        self, tmp_path: Path,
+    ) -> None:
+        """#896: the SkipPlan returned on a cost-ceiling skip must carry the
+        analyzer findings computed just above (#848 already made them run
+        regardless of the ceiling outcome; this is the follow-up that lets
+        orchestrate.py actually post them instead of discarding them), plus
+        enough of the run's state (diff, suppression rules, diff-scope mode,
+        incremental flag) for the skip branch to suppress/scope them the same
+        way a normal run does."""
+        config = _make_config(max_cost_usd=0.000001, analyzer_diff_scope="drop")
+        provider = _make_fake_provider()
+        diff_file = tmp_path / "diff.txt"
+        diff_result = _make_diff_result()
+        finding = Finding(
+            severity="Low", confidence=80, finding="some analyzer finding", source="phpcs",
+        )
+
+        with (
+            patch("ai_pr_review.diff.compute.compute_diff", return_value=diff_result),
+            patch("ai_pr_review.agents.gates.evaluate_gates", return_value={}),
+            patch.dict("os.environ", {"AI_PR_REVIEW_DIFF_FILE": str(diff_file)}, clear=False),
+            patch(
+                "ai_pr_review.analyzers.bridge.run_analyzers", return_value=[finding],
+            ),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, SkipPlan)
+        assert result.is_cost_ceiling_skip is True
+        assert result.extra_findings == (finding,)
+        assert result.diff_text == diff_result.diff_text
+        assert result.analyzer_diff_scope == "drop"
+        assert isinstance(result.suppression_rules, tuple)
+
+    @pytest.mark.anyio
+    async def test_compute_phase_skip_plan_has_no_findings_or_diff(
+        self, tmp_path: Path,
+    ) -> None:
+        """The no-changes/diff-too-large compute-phase skip (a different,
+        older SkipPlan construction site than the cost-ceiling one above)
+        must keep its pre-#896 empty defaults -- it fires before analyzers
+        or suppression rules exist to carry, and before there is a real
+        diff to post findings against."""
+        config = _make_config()
+        provider = _make_fake_provider()
+
+        with patch(
+            "ai_pr_review.diff.compute.compute_diff",
+            return_value=_make_diff_result(changed_files=[]),
+        ):
+            result = await build_review_runtime(config, provider_factory=lambda: provider)
+
+        assert isinstance(result, SkipPlan)
+        assert result.is_cost_ceiling_skip is False
+        assert result.extra_findings == ()
+        assert result.diff_text == ""
+        assert result.suppression_rules == ()
+
+    @pytest.mark.anyio
     async def test_estimate_tracks_preflight_agent_max_tokens_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:

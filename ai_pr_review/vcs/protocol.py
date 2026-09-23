@@ -213,6 +213,17 @@ class VcsProvider(Protocol):
         """
         ...
 
-    def post_skip_comment(self, reason: str) -> SummaryResult:
-        """Post a no-op PR comment on skip paths (marker-bearing)."""
+    def post_skip_comment(
+        self, reason: str, *, findings: Sequence[Finding] = ()
+    ) -> SummaryResult:
+        """Post a no-op PR comment on skip paths (marker-bearing).
+
+        ``findings`` (#896) are analyzer/SARIF findings computed before a
+        cost-ceiling skip — already suppressed and diff-scoped by the
+        caller, same as a normal run's kept findings. When non-empty,
+        rendered as a body-level list inside this same comment. No F-IDs
+        are assigned to them (this bypasses ``post_findings`` entirely, so
+        there is no id-map/canonical-review machinery here), and slash
+        commands cannot target them.
+        """
         ...

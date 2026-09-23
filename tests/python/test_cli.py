@@ -1285,8 +1285,19 @@ class TestCostCeilingSkipExitCode:
     """#24: exit code 2 only when AI_FAIL_ON_COST_CEILING=true and the skip
     was specifically a cost-ceiling one.
 
-    Mirrors TestFailOnFindings above: exercises the exit-code decision logic
-    directly rather than driving _run_review_async end-to-end.
+    A reimplemented copy of (one half of) cli._run_review_async's exit-code
+    decision, not a drive of the real code -- flagged in #896 as
+    tautological (it only proves the copy is internally consistent, not
+    that the real function does the same thing) and superseded by real
+    end-to-end coverage: TestCostCeilingSkipTelemetryOutcome's two
+    ..._end_to_end_... tests and TestCostCeilingSkipFindingsEndToEnd above
+    cover the cost-ceiling-only cases end to end, including
+    ``fail_on_findings_failed`` (introduced by #896 and deliberately NOT
+    added to the mirror below, since a mirror that grows every time the
+    real function does just restates the drift risk this docstring warns
+    about). Kept only for `test_fail_on_cost_ceiling_default_is_false`,
+    a genuine config-default assertion unrelated to the reimplemented
+    conditional.
     """
 
     def _exit_code(
@@ -1300,7 +1311,9 @@ class TestCostCeilingSkipExitCode:
         result = MagicMock()
         result.ok = ok
 
-        # Mirror the exact logic from cli._run_review_async's SkipPlan branch.
+        # Mirror of only the cost-ceiling half of cli._run_review_async's
+        # SkipPlan branch -- see the class docstring for why fail_on_findings
+        # isn't reflected here too.
         if runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok:
             return 2
         return 0 if result.ok else 1
@@ -1449,6 +1462,184 @@ class TestCostCeilingSkipTelemetryOutcome:
         assert exit_code == 0
         event = json.loads(sink_path.read_text().splitlines()[0])
         assert event["outcome"] == "skipped"
+
+
+class TestCostCeilingSkipFindingsEndToEnd:
+    """#896: a cost-ceiling skip can carry real analyzer/SARIF findings.
+    Drives the real `_run_review_async` SkipPlan branch end-to-end, per
+    #848's own "tautological CLI exit-code test" follow-up note."""
+
+    @pytest.mark.anyio
+    async def test_fail_on_findings_exits_2_on_a_skip_with_a_critical_finding(
+        self, tmp_path: Path,
+    ) -> None:
+        from ai_pr_review.findings.models import Finding
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        config = _make_config(fail_on_findings=True)
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+        critical = Finding(
+            severity="Critical", confidence=95, finding="hardcoded secret",
+            source="trufflehog", file="app.py", line=4,
+        )
+        skip_plan = SkipPlan(
+            reason="Pre-flight cost estimate exceeds ceiling",
+            provider=provider,
+            is_cost_ceiling_skip=True,
+            extra_findings=(critical,),
+            diff_text=(
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n+++ b/app.py\n"
+                "@@ -1,3 +1,4 @@\n context\n context\n context\n+secret = 'x'\n"
+            ),
+            head_sha="abc1234567",
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 2
+        posted_findings = provider.post_skip_comment.call_args.kwargs["findings"]
+        assert [f.finding for f in posted_findings] == ["hardcoded secret"]
+        assert posted_findings[0].severity == "Critical"
+
+    @pytest.mark.anyio
+    async def test_fail_on_findings_exits_0_on_a_clean_skip(
+        self, tmp_path: Path,
+    ) -> None:
+        """A cost-ceiling skip with no findings (or only findings that
+        don't cross the may_approve threshold) must not trip
+        AI_FAIL_ON_FINDINGS -- it's an independent gate from
+        AI_FAIL_ON_COST_CEILING, and a clean skip should stay exit 0."""
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        config = _make_config(fail_on_findings=True)
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+        skip_plan = SkipPlan(
+            reason="Pre-flight cost estimate exceeds ceiling",
+            provider=provider,
+            is_cost_ceiling_skip=True,
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 0
+
+    @pytest.mark.anyio
+    async def test_non_cost_ceiling_skip_ignores_fail_on_cost_ceiling_end_to_end(
+        self, tmp_path: Path,
+    ) -> None:
+        """Real end-to-end counterpart to the reimplemented-conditional unit
+        test of the same name in TestCostCeilingSkipExitCode above: a
+        compute-phase skip (no changes / diff too large --
+        is_cost_ceiling_skip=False) must stay exit 0 even with
+        AI_FAIL_ON_COST_CEILING=true -- that flag only ever applies to a
+        cost-ceiling skip specifically."""
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        config = _make_config(fail_on_cost_ceiling=True)
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+        skip_plan = SkipPlan(
+            reason="no changed files",
+            provider=provider,
+            is_cost_ceiling_skip=False,
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 0
+
+    @pytest.mark.anyio
+    async def test_dry_run_on_skip_path_never_posts(self, tmp_path: Path) -> None:
+        """#896: AI_DRY_RUN was previously ignored on the skip path -- a
+        dry-run invocation still posted a real skip comment. Must now
+        suppress posting the same way the non-skip dry-run path already
+        does."""
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import VcsProvider
+
+        config = _make_config(dry_run=True, fail_on_cost_ceiling=True)
+        provider = MagicMock(spec=VcsProvider)
+        skip_plan = SkipPlan(
+            reason="Pre-flight cost estimate exceeds ceiling",
+            provider=provider,
+            is_cost_ceiling_skip=True,
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 0
+        provider.post_skip_comment.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_approval_ceiling_applied_on_skip_path(self, tmp_path: Path) -> None:
+        """#858's approval_ceiling must clamp the skip path's own outcome
+        classification the same way it does the non-skip path's."""
+        from ai_pr_review.findings.models import Finding
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        config = _make_config(approval_ceiling="comment")
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+        critical = Finding(
+            severity="Critical", confidence=95, finding="hardcoded secret",
+            source="trufflehog", file="app.py", line=4,
+        )
+        skip_plan = SkipPlan(
+            reason="Pre-flight cost estimate exceeds ceiling",
+            provider=provider,
+            is_cost_ceiling_skip=True,
+            extra_findings=(critical,),
+            diff_text="--- a/app.py\n+++ b/app.py\n",
+            head_sha="abc1234567",
+        )
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+            exit_code = await _run_review_async(config)
+
+        # approval_ceiling="comment" never posts a formal REQUEST_CHANGES
+        # event, but doesn't affect AI_FAIL_ON_FINDINGS (config default here
+        # is False) -- confirms the skip path reaches real outcome
+        # classification rather than a hardcoded APPROVE.
+        assert exit_code == 0
 
 
 class TestCostReconciliationLogging:

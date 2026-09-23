@@ -37,6 +37,7 @@ class _FakeProvider:
     findings_calls: list[dict[str, Any]] = field(default_factory=list)
     stale_calls: int = 0
     skip_calls: list[str] = field(default_factory=list)
+    skip_findings_calls: list[list[Finding]] = field(default_factory=list)
     last_call_order: list[str] = field(default_factory=list)
 
     def get_last_reviewed_sha(self) -> str | None:
@@ -109,9 +110,12 @@ class _FakeProvider:
         self.last_watermark_sha = new_sha
         return self.advance_sha_watermark_retval
 
-    def post_skip_comment(self, reason: str) -> SummaryResult:
+    def post_skip_comment(
+        self, reason: str, *, findings: Sequence[Finding] = ()
+    ) -> SummaryResult:
         self.last_call_order.append("post_skip_comment")
         self.skip_calls.append(reason)
+        self.skip_findings_calls.append(list(findings))
         return SummaryResult(comment_id=1, created=True, updated=False)
 
 
@@ -363,6 +367,98 @@ def test_approval_ceiling_applies_to_skip_path(tmp_path: Path) -> None:
         )
         assert result.skipped is True
         assert result.outcome.event == "COMMENT"
+
+    anyio.run(_run)
+
+
+def test_skip_path_with_extra_findings_posts_them_with_no_llm_call(
+    tmp_path: Path,
+) -> None:
+    """#896: a cost-ceiling skip carrying analyzer/SARIF findings must
+    suppress + diff-scope them the same way a normal run does, post them via
+    post_skip_comment (never post_findings/post_summary/advance_sha_watermark/
+    resolve_stale), and never invoke the LLM -- a spy call counter, not just
+    a raising stub, since the judge pass swallows exceptions
+    (findings/judge.py fails soft), so a raise-based invariant proof would
+    silently pass even if the judge pass were accidentally reachable here."""
+    from ai_pr_review.findings.suppress import SuppressionRule
+
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+    kept_finding = Finding(
+        severity="Low", confidence=80, finding="keep me", source="phpcs",
+        file="app.py", line=1,
+    )
+    suppressed_finding = Finding(
+        severity="Low", confidence=80, finding="suppress me", source="phpcs",
+        file="vendor/lib.py", line=1,
+    )
+    llm_calls: list[LLMRequest] = []
+
+    async def _spy_llm_call(req: LLMRequest) -> LLMResponse:
+        llm_calls.append(req)
+        raise AssertionError("LLM must never be called on the skip path")
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_spy_llm_call,
+            dispatch_context=ctx,
+            provider=provider,
+            skip_reason="AI_MAX_COST_USD exceeded",
+            config=OrchestrationConfig(
+                extra_findings=(kept_finding, suppressed_finding),
+                suppression_rules=(
+                    SuppressionRule(id="r1", reason="vendor", match_file=r"vendor/"),
+                ),
+                # enable_judge_pass defaults to True; deliberately NOT setting
+                # judge_model/judge_prompt_path here proves the skip path
+                # doesn't even reach the judge-pass gate check, since a real
+                # run with those unset just skips the judge silently rather
+                # than never attempting it -- the spy call count is the real
+                # proof, this is a belt-and-suspenders setup.
+            ),
+        )
+
+        assert llm_calls == []
+        assert result.skipped is True
+        assert result.findings == [kept_finding]
+        assert provider.skip_findings_calls == [[kept_finding]]
+        assert provider.summary_calls == []
+        assert provider.findings_calls == []
+        assert provider.stale_calls == 0
+        assert provider.last_watermark_sha == ""
+
+    anyio.run(_run)
+
+
+def test_skip_path_extra_findings_diff_scoped(tmp_path: Path) -> None:
+    """#896: an out-of-diff analyzer finding carried on a cost-ceiling skip
+    is diff-scoped the same way a normal run's are -- capped to Low (the
+    default "cap" mode) rather than posted at its original severity."""
+    ood_finding = Finding(
+        severity="Critical", confidence=90, finding="pre-existing issue",
+        source="semgrep", file="app.py", line=999, out_of_diff=True,
+    )
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="--- a/app.py\n+++ b/app.py\n", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            skip_reason="AI_MAX_COST_USD exceeded",
+            config=OrchestrationConfig(extra_findings=(ood_finding,)),
+        )
+        assert result.skipped is True
+        assert len(result.findings) == 1
+        assert result.findings[0].severity == "Low"
 
     anyio.run(_run)
 

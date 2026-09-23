@@ -279,7 +279,10 @@ inputs:
       always logged as a COST_ESTIMATE line regardless of whether a ceiling is
       set. This is an approximation, not a precise invoice preview -- real
       input tokenization and actual output length are not known in advance.
-      Set to '0' (default) to disable the ceiling.
+      Native static analyzers and SARIF findings still run before this check
+      (no billed call) and their findings are posted inside the same skip
+      comment rather than discarded -- see fail-on-findings, which still
+      applies to them. Set to '0' (default) to disable the ceiling.
     required: false
     default: '0'
 
@@ -290,7 +293,10 @@ inputs:
       still aborts the run before any LLM call and posts a skip comment
       explaining why, but exits 0 -- so one unusually large PR doesn't break
       a required status check by itself. Has no effect when max-cost-usd is
-      unset/'0'.
+      unset/'0'. Independent of fail-on-findings: a clean cost-ceiling skip
+      stays exit 0 under this flag alone, and fail-on-findings can
+      independently exit 2 on a skip whose surviving analyzer/SARIF findings
+      block approval even when this flag is unset.
     required: false
     default: 'false'
 
