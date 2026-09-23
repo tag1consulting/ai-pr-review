@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 import anyio
 
+from ai_pr_review.vcs._body import sanitize_display_text
+
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
@@ -169,12 +171,19 @@ async def run_summarizer(
         )
         response: LLMResponse = await llm_call(request)
         logger.debug("pr-summarizer: raw response length=%d chars", len(response.text))
-        parsed = parse_summarizer_output(response.text)
+        # #886: the full response is carried forward verbatim into every
+        # subsequent review's summary comment, which marker.py's extract_*
+        # functions (id-map, verdicts, summary SHA) later re-read on the
+        # next run -- sanitize before parsing/returning so LLM-derived text
+        # (steerable via prompt injection in the diff/PR description) can't
+        # contain a syntactically valid forged marker. parse_summarizer_output
+        # runs on the sanitized text too; its Type:/Effort:/table parsing
+        # doesn't rely on any of the defanged sequences.
+        text = sanitize_display_text(response.text)
+        parsed = parse_summarizer_output(text)
         if collapse_walkthrough:
-            return wrap_walkthrough_in_details(
-                response.text, file_count=len(parsed.walkthrough)
-            )
-        return response.text
+            return wrap_walkthrough_in_details(text, file_count=len(parsed.walkthrough))
+        return text
     except Exception as exc:
         logger.warning(
             "pr-summarizer: failed (review will continue without summary): %s: %s",
@@ -362,7 +371,9 @@ async def run_issue_linker(
         if text == "NONE" or not text:
             logger.debug("issue-linker: returned NONE or empty; skipping")
             return ""
-        return text
+        # #886: same rationale as run_summarizer above -- this output is
+        # also carried forward verbatim into the posted summary comment.
+        return sanitize_display_text(text)
     except Exception as exc:
         logger.warning(
             "issue-linker: failed (review will continue without issue links): %s: %s",
