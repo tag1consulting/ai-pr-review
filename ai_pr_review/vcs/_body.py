@@ -121,6 +121,32 @@ _DEFANG_SEQUENCES: Final[tuple[tuple[str, str], ...]] = (
     ("</summary", "<​/summary"),
     ("<!--", "<​!--"),
     ("-->", "--​>"),
+    # issue #914: the bot's own bullet-rendering syntax -- **[F<n>]** (the
+    # finding-ID token) and *(at `file:line`)* (the location suffix) -- is
+    # otherwise unsanitized in finding/remediation text. A prompt-injected
+    # finding could embed a forged bullet using this exact syntax, which the
+    # id-recovery scanners in vcs/_finding_ids.py and
+    # slash/github_orchestration.py (both first-match, per-line) would parse
+    # as a second, real finding -- shadowing or redirecting a maintainer's
+    # dismiss/false-positive/wont-fix F<n> command. `__[F`/`__(at ` (the
+    # double-underscore bold variant GitHub Flavored Markdown renders
+    # identically to `**`) are defanged too so a human reviewer can't be
+    # visually misled either, even though the bot's own regex parser
+    # (_ID_RE, requiring literal `**`) was never fooled by that variant.
+    ("**[F", "**​[F"),
+    ("__[F", "__​[F"),
+    ("*(at `", "*(​at `"),
+    ("__(at `", "__​(at `"),
+)
+
+# Needles matched case-insensitively rather than via a plain str.replace.
+# _ID_RE (vcs/_finding_ids.py) matches **[F<n>]** with re.IGNORECASE, so a
+# prompt-injected "**[f2]**" (lowercase) would survive a case-sensitive
+# defang untouched and still parse as a real F-ID token (issue #914 found
+# during this fix's own review pass -- the bot only ever emits uppercase F,
+# but the parser's leniency means the defang has to match it).
+_CASE_INSENSITIVE_NEEDLES: Final[frozenset[str]] = frozenset(
+    {"<details", "</details", "<summary", "</summary", "**[F", "__[F"}
 )
 
 
@@ -139,8 +165,8 @@ def sanitize_display_text(text: str) -> str:
     if not text:
         return text
     for needle, replacement in _DEFANG_SEQUENCES:
-        if needle.startswith("<") and needle != "<!--":
-            # Case-insensitive replace for HTML tags (e.g. <DETAILS>, <Details>).
+        if needle in _CASE_INSENSITIVE_NEEDLES:
+            # Case-insensitive replace (e.g. <DETAILS>, <Details>, **[f2]**).
             pattern = re.compile(re.escape(needle), re.IGNORECASE)
             text = pattern.sub(replacement, text)
         else:
@@ -164,6 +190,34 @@ def sanitize_display_text(text: str) -> str:
         lambda m: m.group(0)[:-1] + "​" + m.group(0)[-1], text
     )
     return text
+
+
+_LINE_BREAK_RE: Final[re.Pattern[str]] = re.compile(
+    "[\r\n\v\f\x1c\x1d\x1e\x85  ]"
+)
+
+
+def sanitize_bullet_text(text: str) -> str:
+    """Sanitize `finding`/`remediation` text for a single-line bullet render
+    (issue #914).
+
+    Collapses every line-break character `str.splitlines()` recognizes to a
+    space, then applies `sanitize_display_text`'s HTML/marker defang. A
+    forged embedded newline would otherwise let untrusted text render as an
+    independent line -- the bullet-scanners in `vcs/_finding_ids.py` and
+    `slash/github_orchestration.py` both iterate `body.splitlines()`, so a
+    prompt-injected `\n- **[F2]** ...` (or a fake `###`/`</details>`
+    section-boundary line) would be parsed as real structure. `str`'s own
+    line-break set is wider than `\r`/`\n` (it also includes `\v`, `\f`, and
+    several Unicode separators), so all of them are collapsed, not just the
+    two ASCII ones.
+
+    Deliberately a separate function from `sanitize_display_text` rather
+    than a parameter on it: that function is also called elsewhere on
+    genuinely multi-line trusted text (`agents/summarizer.py`,
+    `review/preflight.py`) and must keep working on real newlines there.
+    """
+    return sanitize_display_text(_LINE_BREAK_RE.sub(" ", text))
 
 
 def format_source_tag(finding: Finding) -> str:
@@ -211,13 +265,18 @@ def format_body_finding(
         # controlled path: strip CR/LF and backticks (sanitize_display_text
         # only defangs structure-breaking HTML, not Markdown, and a raw
         # backtick would terminate the code span early), then run it through
-        # sanitize_display_text so a forged `<!-- ai-pr-review-verdicts: ... -->`
-        # (or any other marker-shaped string) can't survive into the
-        # rendered body and be parsed back as real state on a later run
-        # (e.g. Bitbucket's post_findings, which reads verdicts straight out
-        # of its own previously-rendered comment body).
-        safe_file = finding.file.replace("\r", "").replace("\n", " ").replace("`", "'")
-        loc_parts = [sanitize_display_text(safe_file)]
+        # sanitize_bullet_text so a forged `<!-- ai-pr-review-verdicts: ... -->`
+        # (or any other marker-shaped string, or a bullet-forgery attempt --
+        # issue #914) can't survive into the rendered body and be parsed
+        # back as real state on a later run (e.g. Bitbucket's post_findings,
+        # which reads verdicts straight out of its own previously-rendered
+        # comment body). Uses sanitize_bullet_text rather than a hand-rolled
+        # \r/\n strip (issue #914 follow-up): str.splitlines() recognizes
+        # several other line-break codepoints (\v, \f, U+2028, ...) that a
+        # bare .replace("\r", "").replace("\n", " ") left open as a way to
+        # inject a standalone forged line via `finding.file`.
+        safe_file = finding.file.replace("`", "'")
+        loc_parts = [sanitize_bullet_text(safe_file)]
         if finding.line is not None:
             loc_parts.append(str(finding.line))
         location = ":".join(loc_parts)
@@ -226,12 +285,12 @@ def format_body_finding(
         header_parts.append(f"**[F{finding_id}]**")
     if source_tag:
         header_parts.append(source_tag)
-    header_parts.append(sanitize_display_text(finding.finding))
+    header_parts.append(sanitize_bullet_text(finding.finding))
     out = "- " + " ".join(header_parts)
     if location:
         out += f" *(at `{location}`{location_note})*"
     if finding.remediation:
-        out += f"\n  - **Remediation:** {sanitize_display_text(finding.remediation)}"
+        out += f"\n  - **Remediation:** {sanitize_bullet_text(finding.remediation)}"
     if include_suggestion and finding.suggested_code:
         fence_body = finding.suggested_code.replace("```", "``​`")
         out += f"\n  ```\n  {fence_body}\n  ```"

@@ -79,9 +79,14 @@ def safe_review_id(review: Mapping[str, Any]) -> int:
         pass
     return 0
 
-# Matches a body-finding ID token, e.g. **[F3]** (case-insensitive for
-# robustness, though we always emit upper-case F).
-_ID_RE = re.compile(r"\*\*\[F(\d+)\]\*\*", re.IGNORECASE)
+# Matches a body-finding ID token, e.g. **[F3]**. Case-sensitive (issue
+# #914): this used to be re.IGNORECASE "for robustness", but the bot only
+# ever emits uppercase F, and that leniency let a prompt-injected lowercase
+# "**[f2]**" in untrusted finding/remediation text bypass the case-sensitive
+# defang in vcs/_body.py's sanitize_bullet_text and still parse as a real
+# F-ID token. The defang is now also case-insensitive as defense in depth,
+# but this parser should not accept a form the renderer never produces.
+_ID_RE = re.compile(r"\*\*\[F(\d+)\]\*\*")
 
 # Matches the source tag, e.g. [code-reviewer] or [code-reviewer, security-reviewer]
 _SOURCE_RE = re.compile(r"\[([^\]]+)\]")
