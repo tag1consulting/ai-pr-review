@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.vcs.marker import HIDDEN_MARKER_OPENER_RE
 
 # GitHub's body size limit (bytes). GitLab/Bitbucket have similar but slightly
 # different limits — each provider can override.
@@ -120,17 +121,6 @@ _DEFANG_SEQUENCES: Final[tuple[tuple[str, str], ...]] = (
     ("</summary", "<​/summary"),
     ("<!--", "<​!--"),
     ("-->", "--​>"),
-    # #886: the same HTML-comment breakout risk applies to this repo's own
-    # metadata markers (id-map/verdicts/usage/etc, marker.py), not just
-    # structural HTML. `<!--`/`-->` above already covers the default marker
-    # form; `[//]: # (` is the Bitbucket-only hidden reference-link form
-    # (marker.py's `*_HIDDEN_PREFIX` constants), which `extract_verdicts`/
-    # `extract_id_map` check on every provider regardless of which one
-    # actually wrote the comment. Left undefanged, LLM-derived text carried
-    # into a posted comment verbatim (pr-summarizer's own narrative output,
-    # not run through this function anywhere before #886) could contain a
-    # syntactically valid forged marker in either form.
-    ("[//]: # (", "[//]: # ​("),
 )
 
 
@@ -155,6 +145,24 @@ def sanitize_display_text(text: str) -> str:
             text = pattern.sub(replacement, text)
         else:
             text = text.replace(needle, replacement)
+    # #886: the same HTML-comment breakout risk applies to this repo's own
+    # metadata markers (id-map/verdicts/usage/etc, marker.py), not just
+    # structural HTML. `<!--`/`-->` above already covers the default marker
+    # form; `[//]: # (` is the hidden reference-link form (marker.py's
+    # `*_HIDDEN_PREFIX` constants), which `extract_verdicts`/`extract_id_map`
+    # check on every provider regardless of which one actually wrote the
+    # comment. This used to defang only the single literal spelling
+    # `"[//]: # ("`, but every hidden-form regex in marker.py tolerates
+    # optional spaces/tabs around the `#` (it's a real Markdown link
+    # reference definition, and renderers accept that whitespace) -- a
+    # variant like `"[//]:#("` survived the literal-string defang and still
+    # parsed as a real marker. Matching `HIDDEN_MARKER_OPENER_RE` -- the same
+    # pattern every hidden-form extractor builds from -- instead of a
+    # separately maintained literal string is what keeps this in sync with
+    # whatever those extractors actually accept.
+    text = HIDDEN_MARKER_OPENER_RE.sub(
+        lambda m: m.group(0)[:-1] + "​" + m.group(0)[-1], text
+    )
     return text
 
 

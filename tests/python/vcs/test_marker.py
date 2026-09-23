@@ -729,6 +729,31 @@ def test_upsert_verdicts_marker_replaces_last_by_position_when_both_forms_presen
     assert '"a|b.py|1|abc123def456":"dismissed"' in updated
 
 
+def test_upsert_verdicts_marker_replaces_last_match_of_the_same_form() -> None:
+    """#886 hardening regression: when a body carries TWO markers of the
+    SAME form (e.g. a forged plain marker earlier, from unsanitized
+    LLM-derived text, followed by the real one), upsert must patch the LAST
+    one -- matching extract_verdicts' own last-by-position rule. Before this
+    fix, upsert used `.search()` per form (first match only), so it silently
+    rewrote the forged earlier marker while the caller's new verdicts were
+    orphaned behind the still-untouched real one, which extract_verdicts
+    kept reading."""
+    body = (
+        build_verdicts_marker({"forged|fp|1|aaaaaaaaaaaa": "dismissed"})
+        + "\ntext\n"
+        + build_verdicts_marker({"real|fp|1|bbbbbbbbbbbb": "fixed"})
+    )
+    updated = upsert_verdicts_marker(
+        body, {"real|fp|1|bbbbbbbbbbbb": "fixed", "new|fp|2|cccccccccccc": "dismissed"}
+    )
+    assert extract_verdicts(updated) == {
+        "real|fp|1|bbbbbbbbbbbb": "fixed",
+        "new|fp|2|cccccccccccc": "dismissed",
+    }
+    # The forged earlier marker is untouched, not merged into the result.
+    assert '"forged|fp|1|aaaaaaaaaaaa":"dismissed"' in updated
+
+
 # ---------------------------------------------------------------------------
 # build_acks_marker / extract_acks / upsert_acks_marker (#874, Bitbucket only)
 # ---------------------------------------------------------------------------

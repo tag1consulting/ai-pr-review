@@ -10,7 +10,7 @@ import httpx
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider, _blob_link
 from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
-from ai_pr_review.vcs.marker import INLINE_MARKER, extract_judge_map
+from ai_pr_review.vcs.marker import INLINE_MARKER, extract_judge_map, extract_verdicts
 from ai_pr_review.vcs.protocol import DiffContext
 
 
@@ -127,6 +127,40 @@ def test_post_findings_out_of_diff_goes_to_details_section() -> None:
         f"headline count must reflect in-diff findings only; got: {body[:400]!r}"
     )
     assert "**Findings:** 2" not in body, "ood finding must not inflate the headline count"
+
+
+def test_post_findings_with_no_verdicts_still_ends_with_a_real_marker() -> None:
+    """#886 hardening: a review with no dismiss/fixed verdicts recorded must
+    still end with a real (empty) verdicts marker, not omit the marker
+    entirely. extract_verdicts() trusts whichever marker-shaped string
+    appears LAST in the body -- a body with no real marker at all would let
+    a forged marker-shaped string anywhere earlier in the rendered
+    findings/summary text win as "the last match" by default. A trailing
+    `{}` marker forecloses that regardless of what precedes it."""
+    finding = Finding(
+        severity="Low", confidence=80, finding="some finding", source="phpcs"
+    )
+    diff = DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA)
+
+    bodies: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        if req.method == "POST" and "/reviews" in str(req.url):
+            body = json.loads(req.content) if req.content else {}
+            bodies.append(body.get("body", ""))
+            return httpx.Response(201, json={"id": 1, "state": "COMMENTED"})
+        return httpx.Response(404)
+
+    prov, _ = _make_provider(handler)
+    result = prov.post_findings([finding], diff, event="COMMENT")
+    assert result.ok
+
+    assert bodies, "no review body posted"
+    body = bodies[0]
+    assert "ai-pr-review-verdicts:" in body
+    assert extract_verdicts(body) == {}
 
 
 def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:
