@@ -297,3 +297,19 @@ def build_agent_prompt(findings: Sequence[Finding]) -> str:
 def join_findings(items: Iterable[str]) -> str:
     """Join body-finding bullets with a blank line between them."""
     return "\n".join(items)
+
+
+def render_skip_findings_section(findings: Sequence[Finding]) -> str:
+    """Render analyzer/SARIF findings computed before a cost-ceiling skip
+    (#896) as a body-level section for ``post_skip_comment``.
+
+    Returns ``""`` when ``findings`` is empty, so a caller can unconditionally
+    append the result without an ``if findings:`` guard. No ``finding_id`` is
+    assigned (this bypasses ``post_findings``'s id-map/canonical-review
+    machinery entirely — these findings have no F-ID, and no slash command
+    can target them individually).
+    """
+    if not findings:
+        return ""
+    bullets = [format_body_finding(f) for f in findings]
+    return "\n\n### Static analysis findings (LLM review skipped)\n" + join_findings(bullets)
