@@ -1629,12 +1629,17 @@ class GitHubProvider:
             except Exception as exc:  # noqa: BLE001
                 _log.warning("github: failed to build judge-map marker: %s", exc)
 
+        # Always emit a real verdicts marker, even an empty one (#886
+        # hardening) -- extract_verdicts() trusts whichever marker-shaped
+        # string appears LAST in the body, so a body with no real marker at
+        # all lets a forged one anywhere in the rendered findings/summary
+        # text win by default. A trailing `{}` marker guarantees the last
+        # match is always ours.
         verdicts_marker = ""
-        if verdicts:
-            try:
-                verdicts_marker = build_verdicts_marker(verdicts)
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("github: failed to build verdicts marker: %s", exc)
+        try:
+            verdicts_marker = build_verdicts_marker(verdicts)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("github: failed to build verdicts marker: %s", exc)
 
         _MIN_BODY_BYTES = 4096
         inline_reserve = len(INLINE_MARKER.encode("utf-8")) + 1

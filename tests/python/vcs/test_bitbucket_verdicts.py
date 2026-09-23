@@ -437,6 +437,31 @@ def test_verdicts_disabled_never_polls_or_applies_commands() -> None:
     assert _FP not in extract_verdicts(put_bodies[-1])
 
 
+def test_verdicts_disabled_still_emits_a_real_trailing_marker() -> None:
+    """#886 hardening: even with verdicts=False (and no prior snapshot to
+    carry forward), post_findings must still write a real verdicts marker
+    -- an empty one is fine -- rather than omitting it entirely.
+    extract_verdicts() trusts whichever marker-shaped string appears LAST
+    in the body, so a comment with no real marker at all lets a forged
+    marker-shaped string anywhere in the rendered summary/findings text win
+    by default. This is a body-write change only: suppression state is
+    unaffected, since verdicts=False still means findings are never
+    classified against a verdicts map (see the sibling
+    test_verdicts_disabled_never_polls_or_applies_commands)."""
+    existing = _summary_comment(100, _summary_body())
+    put_bodies: list[str] = []
+    handler = _build_handler(
+        comments=[existing], permissions={}, replies=[], put_bodies=put_bodies,
+    )
+    prov = _make_provider(handler, verdicts=False)
+    result = prov.post_findings(
+        [_FINDING], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    assert "ai-pr-review-verdicts:" in put_bodies[-1]
+    assert extract_verdicts(put_bodies[-1]) == {}
+
+
 def test_forged_summary_comment_verdicts_marker_is_never_trusted() -> None:
     """A non-bot commenter posts a comment starting with the summary
     marker text (visible verbatim in the real bot comment's own
