@@ -32,6 +32,8 @@ from ai_pr_review.vcs.protocol import DiffContext, VcsProvider
 
 if TYPE_CHECKING:
     from ai_pr_review.agents.roster import AgentSpec
+    from ai_pr_review.findings.models import Finding
+    from ai_pr_review.findings.suppress import SuppressionRule
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,21 @@ class SkipPlan:
     check rather than the diff-too-large/no-changes compute-phase skips.
     cli.py uses this to decide whether AI_FAIL_ON_COST_CEILING should turn
     the otherwise-0 exit code into 2."""
+    # #896: the remaining fields are populated only on a cost-ceiling skip
+    # (never on the compute-phase no-changes/diff-too-large skips, which
+    # have no diff, no analyzers run, and nothing to post) so orchestrate.py
+    # can suppress/scope and post the analyzer/SARIF findings that #848
+    # already made run *before* this check, instead of discarding them.
+    # Defaults keep every other SkipPlan construction site (including every
+    # existing test) unaffected.
+    extra_findings: tuple[Finding, ...] = ()
+    """Analyzer/SARIF findings computed before the ceiling check (#848)."""
+    diff_text: str = ""
+    head_sha: str = ""
+    suppression_rules: tuple[SuppressionRule, ...] = ()
+    analyzer_diff_scope: str = "cap"
+    """Mirrors ``OrchestrationConfig.analyzer_diff_scope`` ("cap"/"drop"/"off")."""
+    is_incremental: bool = False
 
 
 @dataclass(frozen=True)
@@ -555,7 +572,24 @@ async def build_review_runtime(
 
     extra_findings = tuple(analyzer_findings) + tuple(sarif_findings)
 
-    # 9d. Pre-flight cost estimate + ceiling (#24), now that the agent roster
+    # 9d. Load global + local suppression rules (fail-soft — malformed rules
+    # file must not abort the review; proceed with no suppressions and log a
+    # warning). Moved ahead of the cost-ceiling check below (#896, mirroring
+    # #848's earlier reordering of the analyzer/SARIF run above it) so a
+    # cost-ceiling skip can suppress its analyzer/SARIF findings the same way
+    # a normal run does, rather than posting them unfiltered.
+    from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
+    try:
+        suppression_rules = tuple(
+            _load_suppression_rules(str(script_dir), workspace=".")
+        )
+    except Exception as exc:
+        logger.warning(
+            "suppressions: could not load rules (proceeding without): %s", exc, exc_info=True
+        )
+        suppression_rules = ()
+
+    # 9e. Pre-flight cost estimate + ceiling (#24), now that the agent roster
     # is final and analyzers/SARIF have already run above (#848: analyzers
     # make no billed call, so they always run regardless of this check's
     # outcome). Runs before any LLM call in this run, including the
@@ -643,26 +677,27 @@ async def build_review_runtime(
         pre_flight_cost_estimate_units = cost_estimate.total_cost_units
         enforce_cost_ceiling(cost_estimate, ceiling_usd=config.max_cost_usd)
     except CostCeilingExceeded as exc:
-        return SkipPlan(reason=str(exc), provider=provider, is_cost_ceiling_skip=True)
+        # #896: carry the analyzer/SARIF findings (already suppression-rule-
+        # filtered above), the diff, and enough config that orchestrate.py's
+        # skip branch can diff-scope and post them, instead of discarding
+        # everything this run already computed for free.
+        return SkipPlan(
+            reason=str(exc),
+            provider=provider,
+            is_cost_ceiling_skip=True,
+            extra_findings=extra_findings,
+            diff_text=diff_text,
+            head_sha=head_sha,
+            suppression_rules=suppression_rules,
+            analyzer_diff_scope=config.analyzer_diff_scope,
+            is_incremental=is_incremental,
+        )
     except Exception as exc:
         logger.warning(
             "cost estimate: pre-flight estimation failed (fail-soft; "
             "proceeding without a cost ceiling check for this run): %s",
             exc, exc_info=True,
         )
-
-    # 12. Load global + local suppression rules (fail-soft — malformed rules file
-    # must not abort the review; proceed with no suppressions and log a warning).
-    from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
-    try:
-        suppression_rules = tuple(
-            _load_suppression_rules(str(script_dir), workspace=".")
-        )
-    except Exception as exc:
-        logger.warning(
-            "suppressions: could not load rules (proceeding without): %s", exc, exc_info=True
-        )
-        suppression_rules = ()
 
     # 13. Build orchestrator config.
     _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"

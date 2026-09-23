@@ -170,12 +170,53 @@ async def run_review(
         _reset_cache()
 
     if skip_reason:
-        skip_result = provider.post_skip_comment(skip_reason)
-        return ReviewResult(
-            findings=[],
-            outcome=cap_review_outcome(
-                classify_review_outcome([], [], cfg.mode), cfg.approval_ceiling
+        # #896: a cost-ceiling skip can carry analyzer/SARIF findings
+        # computed before the skip (#848 already made them run regardless
+        # of the ceiling outcome). Run the same pure suppress/diff-scope
+        # pipeline a normal run uses (Phase 2/2.5 below), but deliberately
+        # skip agent dispatch, the judge pass, and post_findings/
+        # advance_sha_watermark/resolve_stale entirely -- everything here
+        # goes into the one skip comment instead. This keeps the blast
+        # radius of a skip small: no watermark advance (so nothing this run
+        # never actually reviewed with an LLM gets marked as reviewed), no
+        # stale-thread resolution, no formal APPROVE/REQUEST_CHANGES event,
+        # and no dependency on a prior summary comment existing (Bitbucket's
+        # post_findings requires one; post_skip_comment does not).
+        kept = list(cfg.extra_findings)
+        if kept:
+            kept = merge_findings(kept, confidence_threshold=cfg.confidence_threshold)
+            kept, _ = apply_suppressions(kept, list(cfg.suppression_rules))
+            if cfg.analyzer_diff_scope != "off":
+                from ai_pr_review.findings.scope import (
+                    apply_diff_scope,
+                    rollup_repeated_findings,
+                )
+                try:
+                    kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
+                except Exception as exc:
+                    logger.warning(
+                        "skip path: apply_diff_scope failed (head_sha=%s); "
+                        "proceeding with unscoped findings: %s",
+                        diff.head_sha, exc, exc_info=True,
+                    )
+                try:
+                    kept = rollup_repeated_findings(kept)
+                except Exception as exc:
+                    logger.warning(
+                        "skip path: rollup_repeated_findings failed "
+                        "(head_sha=%s); proceeding without rollup: %s",
+                        diff.head_sha, exc, exc_info=True,
+                    )
+        outcome = cap_review_outcome(
+            classify_review_outcome(
+                [_AsFindingLike(f) for f in kept], [], cfg.mode
             ),
+            cfg.approval_ceiling,
+        )
+        skip_result = provider.post_skip_comment(skip_reason, findings=kept)
+        return ReviewResult(
+            findings=kept,
+            outcome=outcome,
             failed_agents=[],
             summary=skip_result,
             findings_post=None,

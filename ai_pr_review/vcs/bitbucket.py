@@ -37,6 +37,7 @@ from ai_pr_review.vcs._body import (
     compute_headline,
     format_body_finding,
     join_findings,
+    render_skip_findings_section,
     sanitize_display_text,
     severity_icon,
     truncate_body,
@@ -412,8 +413,10 @@ class BitbucketProvider:
     def post_summary(self, summary_body: str, head_sha: str) -> SummaryResult:
         return _post_summary_impl(self, summary_body, head_sha)
 
-    def post_skip_comment(self, reason: str) -> SummaryResult:
-        return _post_skip_impl(self, reason)
+    def post_skip_comment(
+        self, reason: str, *, findings: Sequence[Finding] = ()
+    ) -> SummaryResult:
+        return _post_skip_impl(self, reason, findings=findings)
 
     def advance_sha_watermark(self, new_sha: str) -> bool:
         return _advance_sha_impl(self, new_sha)
@@ -1686,9 +1689,14 @@ def _list_skip_comments_bb(provider: BitbucketProvider) -> list[dict[str, Any]]:
     return results
 
 
-def _post_skip_impl(provider: BitbucketProvider, reason: str) -> SummaryResult:
+def _post_skip_impl(
+    provider: BitbucketProvider, reason: str, *, findings: Sequence[Finding] = ()
+) -> SummaryResult:
+    raw = f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
+    raw += render_skip_findings_section(findings)
+    raw = truncate_body(raw, limit=_MAX_BITBUCKET_BODY_SIZE)
     raw = append_skip_marker(
-        f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}",
+        raw,
         inline_marker=INLINE_MARKER_HIDDEN,
         skip_marker=SKIP_MARKER_HIDDEN,
     )

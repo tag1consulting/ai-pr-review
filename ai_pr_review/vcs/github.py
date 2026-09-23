@@ -565,10 +565,15 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     # post_skip_comment — upsert skip comment (mirrors post_summary)
     # ------------------------------------------------------------------
-    def post_skip_comment(self, reason: str) -> SummaryResult:
-        body = append_skip_marker(
-            f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
-        )
+    def post_skip_comment(
+        self, reason: str, *, findings: Sequence[Finding] = ()
+    ) -> SummaryResult:
+        from ai_pr_review.vcs._body import render_skip_findings_section
+
+        body = f"**AI Review skipped.** {reason.strip() or 'No changes to review.'}"
+        body += render_skip_findings_section(findings)
+        body = truncate_body(body, limit=GITHUB_MAX_BODY_SIZE)
+        body = append_skip_marker(body)
         return upsert_comment(
             list_existing=self._list_skip_comments,
             item_id=lambda item: int(item["id"]),

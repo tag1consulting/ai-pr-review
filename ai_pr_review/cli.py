@@ -53,9 +53,8 @@ from ai_pr_review.vcs import ProviderConfigError
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
-    from ai_pr_review.review.runtime import ReviewRuntime
+    from ai_pr_review.review.runtime import ReviewRuntime, SkipPlan
     from ai_pr_review.vcs import GitHubProvider
-    from ai_pr_review.vcs.protocol import VcsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +222,30 @@ async def _run_review_async(config: ReviewConfig) -> int:
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
-        result = await _orchestrate_skip(runtime.provider, runtime.reason, config=config.resolve_models())
+        try:
+            resolved_cfg = config.resolve_models()
+        except Exception:
+            resolved_cfg = config
+
+        # Honour AI_DRY_RUN on the skip path too (#896) -- previously ignored
+        # here, so a dry-run invocation still posted a real skip comment
+        # (with real findings, once #896 landed) despite the whole point of
+        # dry-run being "assemble but don't post."
+        if resolved_cfg.dry_run:
+            click.echo("[dry-run] skip path — VCS posting suppressed", err=True)
+            click.echo(f"[dry-run] skip reason: {runtime.reason}")
+            click.echo(f"[dry-run] extra findings: {len(runtime.extra_findings)}")
+            if resolved_cfg.telemetry_enabled:
+                try:
+                    await _emit_telemetry(
+                        None, resolved_cfg, outcome_override="dry_run",
+                        is_incremental=runtime.is_incremental,
+                    )
+                except Exception as _tel_exc:
+                    logger.warning("[ai-pr-review] dry-run telemetry failed: %s", _tel_exc)
+            return 0
+
+        result = await _orchestrate_skip(runtime, config=resolved_cfg)
         _emit_post_failure_annotation(result)
         # #24: a pre-flight cost-ceiling skip always aborts before any LLM
         # call, but only becomes a CI failure (exit 2, mirroring
@@ -231,20 +253,28 @@ async def _run_review_async(config: ReviewConfig) -> int:
         # explicitly opted in via AI_FAIL_ON_COST_CEILING -- otherwise one
         # unusually large PR shouldn't break a required status check.
         cost_ceiling_failed = (
-            runtime.is_cost_ceiling_skip and config.fail_on_cost_ceiling and result.ok
+            runtime.is_cost_ceiling_skip and resolved_cfg.fail_on_cost_ceiling and result.ok
         )
+        # #896: a skip can now carry real findings (analyzer/SARIF, computed
+        # before the ceiling check). AI_FAIL_ON_FINDINGS applies to them the
+        # same way it does on a normal run -- reads the classifier's
+        # may_approve verdict, same as the non-skip path below, not the
+        # posted event (which a configured approval_ceiling can already
+        # change independently).
+        fail_on_findings_failed = resolved_cfg.fail_on_findings and not result.outcome.may_approve
         if config.telemetry_enabled:
-            try:
-                resolved_cfg = config.resolve_models()
-            except Exception:
-                resolved_cfg = config
             # #848 follow-up: previously always "skipped" regardless of exit
             # code, so a consumer querying telemetry could not distinguish a
             # cost-ceiling skip that will fail CI (exit 2) from the ordinary
             # exit-0 skip path -- both reported the identical outcome string.
-            outcome_override = "skipped_cost_ceiling_failed" if cost_ceiling_failed else "skipped"
+            if cost_ceiling_failed:
+                outcome_override = "skipped_cost_ceiling_failed"
+            elif fail_on_findings_failed:
+                outcome_override = "skipped_fail_on_findings_failed"
+            else:
+                outcome_override = "skipped"
             await _emit_telemetry(result, resolved_cfg, 0, outcome_override=outcome_override)
-        if cost_ceiling_failed:
+        if cost_ceiling_failed or fail_on_findings_failed:
             return 2
         return 0 if result.ok else 1
 
@@ -558,15 +588,24 @@ async def _emit_telemetry(
 
 
 async def _orchestrate_skip(
-    provider: VcsProvider, reason: str, *, config: ReviewConfig
+    plan: SkipPlan, *, config: ReviewConfig
 ) -> ReviewResult:
-    """Convenience wrapper to call run_review() with only a skip path."""
+    """Convenience wrapper to call run_review() with only a skip path.
+
+    #896: `plan` carries whatever `build_review_runtime` computed before the
+    skip fired -- on a plain compute-phase skip (no changes / diff too
+    large) that's nothing (empty defaults), but on a cost-ceiling skip it's
+    the analyzer/SARIF findings, the real diff, and the suppression rules,
+    all already in scope there. Building the OrchestrationConfig from those
+    fields is what lets orchestrate.py's skip branch suppress/scope and post
+    them instead of discarding them.
+    """
     from ai_pr_review.agents.dispatch import DispatchContext
-    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.orchestrate import OrchestrationConfig, run_review
     from ai_pr_review.vcs.protocol import DiffContext
 
     diff_path = Path("/tmp/ai-review-skip-diff.txt")
-    diff_path.write_text("", encoding="utf-8")
+    diff_path.write_text(plan.diff_text, encoding="utf-8")
     ctx = DispatchContext(
         script_dir=Path("."),
         mode=config.review_mode,
@@ -580,13 +619,22 @@ async def _orchestrate_skip(
         raise RuntimeError("LLM call should not be invoked on skip path")
 
     return await run_review(
-        diff=DiffContext(diff_text="", head_sha="0000000"),
+        diff=DiffContext(diff_text=plan.diff_text, head_sha=plan.head_sha or "0000000"),
         summary_text="",
         agents=[],
         llm_call=_no_llm,  # type: ignore[arg-type]
         dispatch_context=ctx,
-        provider=provider,
-        skip_reason=reason,
+        provider=plan.provider,
+        config=OrchestrationConfig(
+            mode=config.review_mode,  # type: ignore[arg-type]
+            approval_ceiling=config.approval_ceiling,  # type: ignore[arg-type]
+            suppression_rules=plan.suppression_rules,
+            extra_findings=plan.extra_findings,
+            analyzer_diff_scope=plan.analyzer_diff_scope,
+            # The judge pass makes its own LLM call; never reachable here.
+            enable_judge_pass=False,
+        ),
+        skip_reason=plan.reason,
     )
 
 
