@@ -42,17 +42,9 @@ the full reasoning behind that choice.
   suppression here is exact-fingerprint-only. A dismissed finding whose
   line shifts by even one on a later push is treated as a new finding
   again.
-- Verdict commands (`/ai-pr-review dismiss|false-positive|wont-fix|fixed
-  F<n>`), applied by polling: Bitbucket Pipelines has no comment-triggered
-  event, so a command posted as a fresh top-level PR comment is picked up
-  and applied the *next* time the review pipeline runs (PR create/push),
-  not immediately — there is no inline-reply form on Bitbucket, only the
-  body-level `F<n>` form. Opt-in via `AI_BITBUCKET_VERDICTS=true` (default
-  `false`); the commenter's PR permission must meet
-  `AI_BITBUCKET_VERDICT_MIN_ROLE` (`read`/`write`/`admin`, default
-  `write`), checked fail-closed — a permission-lookup error rejects the
-  command rather than accepting it (issue
-  [#874](https://github.com/tag1consulting/ai-pr-review/issues/874)).
+- Dismissing/suppressing a finding via a comment command
+  (`AI_BITBUCKET_VERDICTS`, default `false` — see [Dismissing
+  findings](#dismissing-findings) below)
 - Incremental-diff SHA watermark (a hidden reference-link marker — Bitbucket's
   renderer shows an HTML comment as literal text instead of hiding it, unlike
   GitHub/GitLab, so Bitbucket uses a different marker form; see [Version
@@ -91,15 +83,63 @@ pipeline pushes frequently enough for this to matter, configure a
 Bitbucket Pipelines concurrency setting keyed on the PR so only one
 review runs against it at a time.
 
+## Dismissing findings
+
+Enable with `AI_BITBUCKET_VERDICTS=true` (default `false`) and optionally
+`AI_BITBUCKET_VERDICT_MIN_ROLE` (`read`, `write`, or `admin`; default
+`write`).
+
+**Bitbucket Pipelines has no `issue_comment`-equivalent trigger** (see
+"What does not work" below), so unlike GitHub's instant webhook-driven
+response, a verdict command does not take effect until **the next review
+run** — the review run itself is what polls the PR's comments for pending
+commands. If you want it applied immediately, re-run the pipeline manually
+from **Pipelines → \[run\] → Rerun** in the Bitbucket UI rather than
+waiting for the next push.
+
+**Syntax:** always a **top-level PR comment** referencing a finding's
+`F<n>` token from the summary comment — there is no inline-comment-reply
+form the way GitHub has, because Bitbucket findings anchor to the diff via
+Code Insights annotations, which aren't repliable:
+
+```
+/ai-pr-review false-positive F3 not exploitable, input is sanitized upstream
+/ai-pr-review wont-fix F7 accepted risk for this release
+/ai-pr-review fixed F12 a1b2c3d
+```
+
+`dismiss` is accepted as an alias for `false-positive`. Multiple commands
+in one comment (one per line) are all applied, same as GitHub/GitLab.
+
+**Authorization is fail-closed**: the commenter's Bitbucket repository
+permission is checked against `AI_BITBUCKET_VERDICT_MIN_ROLE` before a
+command is applied; a permission-lookup failure rejects the command
+rather than accepting it. The bot replies to every processed command —
+applied, rejected for insufficient access, or rejected because the
+permission check itself couldn't be completed (distinguished in the
+reply text so you know whether to fix your access or just retry) — so a
+command is never silently ignored.
+
+**Not yet supported:** writing to the cross-repo learning-loop store
+(the `<repo-feedback>` context injected into future prompts) — see
+[Learning loop → Provider support](learning-loop#provider-support). A
+verdict still suppresses the finding on this PR via the hidden verdicts
+marker; it just doesn't teach future reviews on other PRs the way a
+GitHub dismiss does.
+
 ## What does not work on Bitbucket
 
+- Writing to the cross-repo learning-loop store from a verdict command
+  (see [Dismissing findings](#dismissing-findings) above)
 - APPROVE / REQUEST_CHANGES PR events (Bitbucket has different endpoints
   for approve/request-changes and the feature is optional)
-- Slash commands that trigger a fresh review (`rescan`, `review-full`) or
-  reply immediately (Bitbucket Pipelines has no `issue_comment` equivalent;
-  the review always runs on PR create/push). Verdict commands
-  (`dismiss`/`false-positive`/`wont-fix`/`fixed`) are the exception — see
-  verdict-command polling above.
+- Slash commands other than dismiss/false-positive/wont-fix/fixed
+  (`explain`, `revise`, `feedback`, `rescan`, `review-full`, `skip`):
+  Bitbucket Pipelines has no `issue_comment` equivalent, so these have no
+  trigger at all. Only the verdict commands work, and only because the
+  review run itself polls for them (see [Dismissing
+  findings](#dismissing-findings) above) rather than reacting to the
+  comment as it's posted.
 - The large-diff "skip" comment (the review still exits cleanly and logs
   a warning, but no comment is posted)
 - Collapsed/expandable sections (the PR-summary Walkthrough, and the
@@ -131,6 +171,8 @@ variables** and add:
 | `AI_PROVIDER` | No | `anthropic` (default). Alternatives: `openai`, `google`, `bedrock-proxy` |
 | `AI_REVIEW_MODE` | No | `quick` (default) or `full` |
 | `AI_REVIEW_IMAGE_TAG` | No | Container tag to pull, e.g. `latest`. Required, no default. The starter pipeline's `image.name` field templates this itself via Bitbucket's `${{VAR}}` syntax, which cannot resolve a secured variable at all, so this one must stay non-secured. |
+| `AI_BITBUCKET_VERDICTS` | No | `false` (default). Set to `true` to enable dismiss/false-positive/wont-fix/fixed comment commands — see [Dismissing findings](#dismissing-findings). |
+| `AI_BITBUCKET_VERDICT_MIN_ROLE` | No | `write` (default). Minimum Bitbucket repository permission (`read`, `write`, or `admin`) required to apply a verdict command. Only meaningful when `AI_BITBUCKET_VERDICTS=true`. |
 
 ### 3. Grant PR scopes
 

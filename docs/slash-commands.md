@@ -7,11 +7,18 @@ render_with_liquid: false
 
 # Slash commands
 
-> **GitHub-only.** Slash commands rely on GitHub Actions' `issue_comment`
-> and `pull_request_review_comment` event triggers, which have no native
-> equivalent in Bitbucket Pipelines or GitLab CI. For GitLab workarounds
-> (manual pipeline triggers, CI variables), see
-> [GitLab setup — slash command alternatives](gitlab-setup#slash-command-alternatives).
+> **This page describes GitHub's real-time model.** Slash commands as
+> described below rely on GitHub Actions' `issue_comment` and
+> `pull_request_review_comment` event triggers, which have no native
+> equivalent in Bitbucket Pipelines or GitLab CI, so a command takes
+> effect immediately after being posted only on GitHub. For GitLab
+> workarounds (manual pipeline triggers, CI variables), see [GitLab setup
+> — slash command alternatives](gitlab-setup#slash-command-alternatives).
+> Bitbucket has a real, working subset of this — `dismiss`/
+> `false-positive`/`wont-fix`/`fixed` only, top-level comments only, no
+> inline-reply form, and applied on the *next* review run rather than
+> immediately — see [Bitbucket setup — Dismissing
+> findings](bitbucket-setup#dismissing-findings).
 
 AI PR Review supports commands posted as PR comments. The workflow listens on both `issue_comment` (top-level PR comments) and `pull_request_review_comment` (replies on inline review threads) events.
 
