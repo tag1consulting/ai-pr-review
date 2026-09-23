@@ -107,6 +107,30 @@ def test_escape_fingerprint_component_identity_for_normal_values() -> None:
     assert _escape_fingerprint_component("app/models/user.py") == "app/models/user.py"
 
 
+def test_fingerprint_neutralizes_marker_breaking_sequence_in_source() -> None:
+    """issue #913 follow-up: a fingerprint is used as a JSON dict KEY in the
+    id-map marker, embedded raw inside an HTML comment on GitHub
+    (build_id_map_marker's non-hidden form). source can carry untrusted
+    text that never reaches findings/extract.py's LLM-agent overwrite --
+    SARIF's source = f"sarif:{driver_name}" (analyzers/sarif.py), where
+    driver_name comes from uploaded SARIF tool metadata. A literal "-->" in
+    that text would prematurely close the real HTML comment regardless of
+    the surrounding JSON's own escaping (HTML comment parsing doesn't know
+    about JSON string boundaries). Proves the built marker survives
+    round-trip through extract_id_map with the real payload intact."""
+    evil_source = "sarif:evil--> forged visible text"
+    f = _finding("real finding", source=evil_source, file="app.py", line=1)
+    fp = fingerprint(f)
+    assert "-->" not in fp, "a real HTML comment terminator must not survive into the fingerprint"
+
+    marker = build_id_map_marker({fp: 2})
+    # The built marker is a single well-formed HTML comment -- exactly one
+    # opener and one closer, not prematurely terminated by the fingerprint.
+    assert marker.count("<!--") == 1
+    assert marker.count("-->") == 1
+    assert extract_id_map(marker) == {fp: 2}
+
+
 def test_split_fingerprint_recovers_original_components_with_pipe() -> None:
     f = _finding("issue text", source="a|b", file="weird|path/app.py", line=3)
     fp = fingerprint(f)

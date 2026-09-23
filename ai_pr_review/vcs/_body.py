@@ -167,11 +167,20 @@ def sanitize_display_text(text: str) -> str:
 
 
 def format_source_tag(finding: Finding) -> str:
-    """Render `[agent1, agent2]` tag from a finding's sources or source field."""
+    """Render `[agent1, agent2]` tag from a finding's sources or source field.
+
+    Sanitized (issue #913): `source`/`sources` can carry untrusted text --
+    findings/extract.py now overwrites LLM-agent-supplied values, but this
+    is the single render-time choke point for every ingestion path,
+    including ones extract.py never sees (e.g. SARIF's `source = f"sarif:
+    {driver_name}"`, where `driver_name` comes from uploaded SARIF tool
+    metadata). Sanitizing here means a future ingestion path can't
+    reintroduce this bug class by skipping extract.py's stamp.
+    """
     if finding.sources:
-        return f"[{', '.join(finding.sources)}]"
+        return f"[{', '.join(sanitize_display_text(s) for s in finding.sources)}]"
     if finding.source:
-        return f"[{finding.source}]"
+        return f"[{sanitize_display_text(finding.source)}]"
     return ""
 
 

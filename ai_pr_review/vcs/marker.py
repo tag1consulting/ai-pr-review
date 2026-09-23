@@ -186,38 +186,54 @@ def build_id_map_marker(id_map: dict[str, int], *, hidden: bool = False) -> str:
     return f"<!-- ai-pr-review-id-map: {payload} -->"
 
 
+def _last_match_across_forms(
+    body: str, *patterns: re.Pattern[str]
+) -> re.Match[str] | None:
+    """Return the match with the highest body position across all given
+    patterns, or None if none match.
+
+    The single source of "the last marker-shaped string in the body wins",
+    used by every marker's extractor (and, for verdicts, its upsert) so this
+    rule can't drift per-marker the way it did before #886/#913 -- a forged
+    marker-shaped string earlier in the body (from unsanitized LLM-derived
+    text) must never be preferred over a real one that renders later.
+    """
+    candidates = [m for p in patterns for m in p.finditer(body)]
+    return max(candidates, key=lambda m: m.start()) if candidates else None
+
+
 def extract_id_map(body: str) -> dict[str, int]:
     """Extract the finding ID map from a review body.
 
     Checks both marker forms (default HTML-comment, and the Bitbucket-only
-    hidden/base64 form — see ``build_id_map_marker``). Returns an empty dict
-    when no marker is present. Logs a warning and returns an empty dict when
-    a marker is present but its payload is unparseable, so callers can
+    hidden/base64 form — see ``build_id_map_marker``). When both are
+    present, the one appearing last in the body wins (issue #913 — mirrors
+    ``extract_verdicts``' own cross-form last-match rule; a forged marker
+    embedded via an unsanitized ``source``/``sources`` field must not be
+    able to win over a real, later marker). Returns an empty dict when no
+    marker is present. Logs a warning and returns an empty dict when a
+    marker is present but its payload is unparseable, so callers can
     distinguish "no marker" from "corrupt marker" via the log.
 
     Accepts both integer and whole-number float JSON values (e.g. ``1.0``)
     to tolerate serializer rounding.
     """
-    payload_raw: str | None = None
-    match = _ID_MAP_MARKER_RE.search(body)
-    if match:
-        payload_raw = match.group(1)
-    else:
-        hidden_match = _ID_MAP_MARKER_HIDDEN_RE.search(body)
-        if hidden_match:
-            try:
-                payload_raw = base64.b64decode(
-                    hidden_match.group(1), validate=True
-                ).decode("utf-8")
-            except (ValueError, UnicodeDecodeError) as exc:
-                _log.warning(
-                    "ai-pr-review: hidden id-map marker present but "
-                    "undecodable: %s", exc,
-                )
-                return {}
-
-    if payload_raw is None:
+    match = _last_match_across_forms(body, _ID_MAP_MARKER_RE, _ID_MAP_MARKER_HIDDEN_RE)
+    if match is None:
         return {}
+    is_hidden = match.re is _ID_MAP_MARKER_HIDDEN_RE
+    if is_hidden:
+        try:
+            payload_raw = base64.b64decode(match.group(1), validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            _log.warning(
+                "ai-pr-review: hidden id-map marker present but "
+                "undecodable: %s", exc,
+            )
+            return {}
+    else:
+        payload_raw = match.group(1)
+
     try:
         data = json.loads(payload_raw)
         if isinstance(data, dict):
@@ -238,6 +254,14 @@ def extract_id_map(body: str) -> dict[str, int]:
 
 
 JUDGE_MAP_MARKER_PREFIX: Final[str] = "<!-- ai-pr-review-judge-map:"
+# Deliberately (\{.*\}), not (\{[^}]*\}) like the id-map/verdicts markers:
+# unlike those (flat dicts), a judge-map payload is a dict of dicts (e.g.
+# {"fp": {"jv": "keep", "conf": 50}}), so a non-nesting-aware char class
+# would truncate at the first inner "}" and drop the rest of the payload.
+# This does mean two judge-map markers on one line could still collapse
+# into a single greedy match -- accepted, since this marker is GitHub-only,
+# machine-written (never user/slash-command-facing), and fixing it properly
+# needs a balanced-brace matcher, not a regex tweak (issue #913 follow-up).
 _JUDGE_MAP_MARKER_RE = re.compile(r"<!-- ai-pr-review-judge-map: (\{.*\}) -->")
 
 
@@ -277,8 +301,12 @@ def extract_judge_map(body: str) -> dict[str, dict[str, object]]:
     with no recoverable verdict is the same as it never having been
     recorded), `corr` is coerced to a strict bool via `is True`, and `conf`
     must be a real (non-bool) int in [0, 100] or it drops to `None`.
+
+    When multiple judge-map markers are present, the one appearing last in
+    the body wins (issue #913 — same last-match rule as `extract_verdicts`/
+    `extract_id_map`).
     """
-    match = _JUDGE_MAP_MARKER_RE.search(body)
+    match = _last_match_across_forms(body, _JUDGE_MAP_MARKER_RE)
     if not match:
         return {}
     try:
@@ -524,24 +552,21 @@ def extract_verdicts(body: str) -> dict[str, str]:
     are dropped individually (forward-compatible with a future verdict type
     this version doesn't recognize, without discarding the whole map).
     """
-    candidates = [(m.start(), m.group(1), False) for m in _VERDICTS_MARKER_RE.finditer(body)]
-    candidates += [
-        (m.start(), m.group(1), True) for m in _VERDICTS_MARKER_HIDDEN_RE.finditer(body)
-    ]
-    if not candidates:
+    match = _last_match_across_forms(body, _VERDICTS_MARKER_RE, _VERDICTS_MARKER_HIDDEN_RE)
+    if match is None:
         return {}
-    _, raw, is_hidden = max(candidates, key=lambda c: c[0])
+    is_hidden = match.re is _VERDICTS_MARKER_HIDDEN_RE
 
     if is_hidden:
         try:
-            payload_raw = base64.b64decode(raw, validate=True).decode("utf-8")
+            payload_raw = base64.b64decode(match.group(1), validate=True).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
             _log.warning(
                 "ai-pr-review: hidden verdicts marker present but undecodable: %s", exc,
             )
             return {}
     else:
-        payload_raw = raw
+        payload_raw = match.group(1)
 
     try:
         data = json.loads(payload_raw)
@@ -594,17 +619,7 @@ def upsert_verdicts_marker(body: str, verdicts: dict[str, str], *, hidden: bool 
     form closes that gap.
     """
     new_marker = build_verdicts_marker(verdicts, hidden=hidden)
-
-    def _last_match(rx: re.Pattern[str]) -> re.Match[str] | None:
-        matches = list(rx.finditer(body))
-        return matches[-1] if matches else None
-
-    candidates = [
-        m
-        for m in (_last_match(_VERDICTS_MARKER_RE), _last_match(_VERDICTS_MARKER_HIDDEN_RE))
-        if m is not None
-    ]
-    match = max(candidates, key=lambda m: m.start()) if candidates else None
+    match = _last_match_across_forms(body, _VERDICTS_MARKER_RE, _VERDICTS_MARKER_HIDDEN_RE)
     if match:
         return body[: match.start()] + new_marker + body[match.end() :]
     separator = (
@@ -650,8 +665,10 @@ def extract_acks(body: str) -> frozenset[int]:
     """Extract the set of already-acknowledged comment ids from a review
     body. Returns an empty set when no marker is present, or when it's
     present but corrupt (logged as a warning, same fail-soft contract as
-    extract_verdicts/extract_id_map)."""
-    match = _ACKS_MARKER_HIDDEN_RE.search(body)
+    extract_verdicts/extract_id_map). When multiple acks markers are
+    present, the one appearing last in the body wins (issue #913 — same
+    last-match rule as extract_verdicts/extract_id_map)."""
+    match = _last_match_across_forms(body, _ACKS_MARKER_HIDDEN_RE)
     if not match:
         return frozenset()
     try:
@@ -673,9 +690,12 @@ def upsert_acks_marker(body: str, ids: Sequence[int]) -> str:
     """Return `body` with its acks marker replaced, or appended if absent,
     carrying `ids`. Mirrors upsert_verdicts_marker(hidden=True)'s
     replace-or-append shape, minus the dual-form handling this marker
-    never needs (always hidden, see module comment above)."""
+    never needs (always hidden, see module comment above). Patches the LAST
+    matching marker, not the first (issue #913 — same #886-style hardening
+    upsert_verdicts_marker already has, applied here for the same reason: a
+    forged acks marker earlier in the body must not absorb a real write)."""
     new_marker = build_acks_marker(ids)
-    match = _ACKS_MARKER_HIDDEN_RE.search(body)
+    match = _last_match_across_forms(body, _ACKS_MARKER_HIDDEN_RE)
     if match:
         return body[: match.start()] + new_marker + body[match.end() :]
     separator = _hidden_marker_separator(body)

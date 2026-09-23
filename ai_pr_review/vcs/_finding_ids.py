@@ -55,6 +55,7 @@ from typing import Any, Final
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.findings.scope import is_analyzer_source
+from ai_pr_review.vcs._body import sanitize_display_text
 
 _log = logging.getLogger(__name__)
 
@@ -217,8 +218,23 @@ def _escape_fingerprint_component(s: str) -> str:
     attacker-crafted one, or an unusual file path) produces a different
     fingerprint than before, which is exactly the fix: those are the only
     inputs that could previously collide.
+
+    Also runs `s` through `sanitize_display_text` (issue #913, follow-up to
+    the source/sources rendering fix): a fingerprint is used as a JSON dict
+    KEY in the id-map marker, embedded raw inside an HTML comment
+    (`build_id_map_marker`'s non-hidden GitHub form). `source` can carry
+    untrusted text that never reaches `findings/extract.py`'s LLM-agent
+    overwrite -- SARIF's `source = f"sarif:{driver_name}"`
+    (`analyzers/sarif.py`), where `driver_name` comes from uploaded SARIF
+    tool metadata. A `-->` in that text would prematurely close the HTML
+    comment regardless of the surrounding JSON's own escaping (HTML
+    comment parsing doesn't know about JSON string boundaries), and a
+    `[//]: # (` sequence would open a forgeable hidden-form marker on
+    Bitbucket. This is the fingerprint/marker-embedding equivalent of
+    `format_source_tag`'s render-time sanitization -- same untrusted input,
+    a different embedding path.
     """
-    return s.replace("\\", "\\\\").replace("|", "\\|")
+    return sanitize_display_text(s).replace("\\", "\\\\").replace("|", "\\|")
 
 
 def fingerprint(f: Finding) -> str:
