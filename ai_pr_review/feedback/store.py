@@ -21,6 +21,7 @@ import datetime
 import logging
 import os
 import random
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -343,9 +344,17 @@ class GitBranchStore:
             # Emit a GitHub Actions ::warning:: annotation only when running
             # inside GitHub Actions to avoid polluting local/test output --
             # same gating convention as vcs/github.py's prior-reviews-fetch
-            # warning.
+            # warning. Must go to stderr, not stdout (the default `print`
+            # target): cli.py's `dismiss`/`dismiss-inline` commands print
+            # their actual PR reply text to stdout via `click.echo(...)`
+            # *after* this append() call returns, and the calling workflow
+            # step captures that stdout verbatim as the comment body to post.
+            # A stray stdout write here landed ahead of the real reply and
+            # was posted to the PR as a literal `::warning::...` line glued
+            # onto the front of the reply -- confirmed live on PR #911,
+            # comment https://github.com/tag1consulting/ai-pr-review/pull/911#issuecomment-5802793637.
             if os.environ.get("GITHUB_ACTIONS") == "true":
-                print(f"::warning::{message}", flush=True)
+                print(f"::warning::{message}", file=sys.stderr, flush=True)
             logger.warning(message)
             return
 

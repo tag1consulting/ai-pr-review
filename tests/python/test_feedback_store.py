@@ -379,6 +379,52 @@ def test_dedup_skips_append_within_window(monkeypatch: pytest.MonkeyPatch, caplo
     assert any("skipped a duplicate append" in r.message for r in caplog.records)
 
 
+def test_dedup_annotation_goes_to_stderr_not_stdout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression for a live stdout leak (confirmed on PR #911, comment
+    https://github.com/tag1consulting/ai-pr-review/pull/911#issuecomment-5802793637):
+    cli.py's dismiss/dismiss-inline commands print their actual PR reply text
+    to stdout via click.echo(...) *after* this append() call returns, and the
+    calling workflow step captures that stdout verbatim as the comment body.
+    The `::warning::` annotation for a skipped duplicate append used a bare
+    `print(...)` (defaulting to stdout) instead of `file=sys.stderr` like
+    every other `::warning::` emission site in this codebase, so it landed
+    ahead of the real reply and got posted to the PR glued onto its front."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    existing = FeedbackEntry(
+        ts="2026-09-09T22:53:26Z",
+        command="wont-fix",
+        reason="original reason",
+        source="sarif:Semgrep OSS",
+        file="ai_pr_review/analyzers/native/phpstan.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    client = _FakeAppendClient(existing.to_json() + "\n")
+    store = GitBranchStore(repo="o/r", branch="ai-pr-review-bot", token="t", client=client)  # type: ignore[arg-type]
+
+    duplicate = FeedbackEntry(
+        ts="2026-09-09T22:54:04Z",
+        command="wont-fix",
+        reason="different reason text from the other writer",
+        source="sarif:Semgrep OSS",
+        file="ai_pr_review/analyzers/native/phpstan.py",
+        rule_id="sarif:Semgrep OSS",
+        extras={"finding_id": 2},
+    )
+    result = store.append(duplicate)
+    captured = capsys.readouterr()
+
+    assert result is True
+    assert captured.out == "", (
+        f"::warning:: annotation leaked to stdout, where a caller capturing "
+        f"this process's output as the PR reply text would post it verbatim: {captured.out!r}"
+    )
+    assert "::warning::" in captured.err
+    assert "skipped a duplicate append" in captured.err
+
+
 def test_dedup_does_not_fire_outside_window(monkeypatch: pytest.MonkeyPatch) -> None:
     existing = FeedbackEntry(
         ts="2026-08-01T00:00:00Z",
