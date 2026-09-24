@@ -202,6 +202,24 @@ _DEPRECATED_NOOP_ENV_VARS: dict[str, str] = {
 }
 
 
+def _int_env(key: str, default: int) -> int:
+    """Parse an integer env var, warning to stderr and falling back to `default` on a bad value.
+
+    Module-level (not a `from_env`-local closure) so other config-parsing call
+    sites (e.g. `slash/github_ops.py`'s `_DismissConfig`, issue #906) can reuse
+    the same parsing and warning behavior instead of re-deriving it.
+    """
+    raw = os.environ.get(key, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"WARNING: {key}={raw!r} is not a valid integer; using default {default}. Review will proceed with this default.",
+            file=sys.stderr,
+        )
+        return default
+
+
 def _check_deprecated_noop_env_vars() -> None:
     """Warn (not raise) for any set-but-inert non-'AI_'-prefixed env var."""
     for key, reason in _DEPRECATED_NOOP_ENV_VARS.items():
@@ -803,16 +821,7 @@ class ReviewConfig(BaseModel):
                 "yes",
             )
 
-        def _int(key: str, default: int) -> int:
-            raw = os.environ.get(key, str(default))
-            try:
-                return int(raw)
-            except ValueError:
-                print(
-                    f"WARNING: {key}={raw!r} is not a valid integer; using default {default}. Review will proceed with this default.",
-                    file=sys.stderr,
-                )
-                return default
+        _int = _int_env
 
         def _float(key: str, default: float) -> float:
             raw = os.environ.get(key, str(default))
