@@ -95,9 +95,11 @@ class CodeInsightsResult:
 
     ``posted_findings`` (not just a count) lets a caller recover from a
     partial batch failure precisely: on error, everything up through the
-    last fully-succeeded batch is already live on Bitbucket and must not
-    also be re-rendered in the summary comment body, or it would show
-    twice. Only the tail this call never got to should fall back.
+    last fully-succeeded batch is already live on Bitbucket as an
+    annotation. Every active finding still renders in the summary comment
+    body too (issue #919) -- ``posted_findings`` tells the caller which
+    ones should render a *shortened* bullet (no remediation, since that
+    detail already lives on the diff) rather than which ones to omit.
     """
 
     posted_findings: tuple[Finding, ...] = ()
@@ -231,10 +233,10 @@ def post_code_insights(
     report already expired/was removed). A failure partway through the
     annotation POST batches still reports every finding from the
     fully-succeeded batches in ``posted_findings`` -- those are already
-    live on Bitbucket, and a caller that re-renders every ``findings``
-    entry into the comment body on any error would duplicate them. Callers
-    must treat every finding NOT in ``posted_findings`` as "render this one
-    in the summary comment body instead", never as silent data loss.
+    live on Bitbucket as an annotation, so a caller renders them with a
+    shortened bullet (issue #919) rather than a full one. Every finding NOT
+    in ``posted_findings`` still renders too, just with its full bullet
+    (remediation included) -- never as silent data loss.
     """
     r_url = report_url(workspace, repo_slug, commit)
     del_resp = client.request("DELETE", r_url)

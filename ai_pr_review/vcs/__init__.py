@@ -304,6 +304,17 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
             "rather than silently falling back to a weaker role"
         )
 
+    # Bitbucket parity (#918): actually set PR reviewer state, gated by its
+    # own kill switch -- see BitbucketConfig.review_state's docstring.
+    # Deny-list parse (defaults on) mirrors code_insights' pattern, not
+    # verdicts' allow-list one: this isn't a fail-closed authorization
+    # check, so an empty/unset value just leaves the GitHub-parity default
+    # in place rather than needing to resolve to OFF.
+    review_state = (
+        os.environ.get("AI_BITBUCKET_REVIEW_STATE", "true").strip().lower()
+        not in ("false", "0", "no")
+    )
+
     config = BitbucketConfig(
         workspace=workspace,
         repo_slug=repo_slug,
@@ -313,5 +324,6 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         code_insights=code_insights,
         verdicts=verdicts,
         verdict_min_role=verdict_min_role,
+        review_state=review_state,
     )
     return BitbucketProvider(config=config, client=build_bitbucket_client(config))
