@@ -164,6 +164,29 @@ def test_post_failure_is_fail_soft_and_logged() -> None:
     assert any("_set_review_state POST" in e for e in prov._errors)
 
 
+def test_post_calls_carry_a_json_body() -> None:
+    """Live-verified against the real Bitbucket API (2026-09-24): a POST to
+    /approve or /request-changes with this client's default
+    Content-Type: application/json header but an EMPTY body gets a bare-text
+    400 Bad Request, not a JSON error. Sending an explicit `{}` body fixes it
+    -- the endpoints ignore body content entirely, but the Content-Type
+    header has to agree with something actually being there."""
+    bodies: list[bytes] = []
+
+    def capture(req: httpx.Request) -> httpx.Response:
+        bodies.append(req.content)
+        return httpx.Response(200, json={})
+
+    calls: list[tuple[str, str]] = []
+    prov = _make_provider(calls, on_approve=capture, on_request_changes=capture)
+    finding = Finding(severity="Critical", confidence=90, finding="sql injection", file="app.py", line=4)
+    result = prov.post_findings(
+        [finding], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
+    )
+    assert result.ok, result.error
+    assert bodies == [b"{}"]
+
+
 def test_kill_switch_makes_no_review_state_call() -> None:
     calls: list[tuple[str, str]] = []
     prov = _make_provider(calls, review_state=False)
