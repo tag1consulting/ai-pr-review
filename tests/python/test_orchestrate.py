@@ -64,6 +64,7 @@ class _FakeProvider:
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
+        summary_comment_id: int | None = None,
     ) -> FindingsResult:
         self.last_call_order.append("post_findings")
         self.findings_calls.append(

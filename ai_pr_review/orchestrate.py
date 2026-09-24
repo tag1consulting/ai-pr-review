@@ -392,6 +392,7 @@ async def run_review(
                 usage_warning=usage_warning,
                 max_inline=cfg.max_inline,
                 enable_suggestions=cfg.enable_suggestions,
+                summary_comment_id=summary_result.comment_id,
             )
         except RetryExhaustedError as exc:
             err = f"post_findings retry exhausted: {exc}"

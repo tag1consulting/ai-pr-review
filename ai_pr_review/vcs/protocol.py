@@ -181,6 +181,7 @@ class VcsProvider(Protocol):
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
+        summary_comment_id: int | None = None,
     ) -> FindingsResult:
         """Post findings as a PR review with inline comments where possible.
 
@@ -193,6 +194,14 @@ class VcsProvider(Protocol):
         never combined into ``usage_block`` itself (a warning embedded
         inside a collapsed ``<details>`` block would be invisible, and
         concatenating it would break Bitbucket's accordion-stripping regex).
+        ``summary_comment_id`` (#930) is the id the same run's own
+        ``post_summary`` call already resolved for the summary comment it
+        just created or updated, threaded through by ``orchestrate.py`` so a
+        provider whose summary-comment lookup is a list-and-filter query
+        (Bitbucket) can fall back to a direct id-based fetch when that list
+        hasn't caught up yet with a comment this exact run just created.
+        Optional and unused by providers (GitHub, GitLab) whose own
+        creation path doesn't exhibit that lag.
         """
         ...
 
