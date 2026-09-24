@@ -227,6 +227,19 @@ async def _run_review_async(config: ReviewConfig) -> int:
         except Exception:
             resolved_cfg = config
 
+        # review_mode=="" is a valid sentinel on ReviewConfig meaning "not
+        # explicitly set" (see config.py's _validate_review_mode docstring):
+        # normally resolved to policy.yml's route or "quick" inside
+        # build_review_runtime before a ReviewRuntime is returned. A SkipPlan
+        # short-circuits before that resolution ever runs (issue #927), so
+        # resolved_cfg.review_mode can still be "" here. No agents dispatch
+        # on the skip path either way, so a plain "quick" default (skipping
+        # policy.yml route matching, which needs a diff to route on -- one a
+        # skip never has) is enough to satisfy classify_review_outcome's
+        # mode validation without changing anything the skip path does.
+        if not resolved_cfg.review_mode:
+            resolved_cfg = resolved_cfg.model_copy(update={"review_mode": "quick"})
+
         # Honour AI_DRY_RUN on the skip path too (#896) -- previously ignored
         # here, so a dry-run invocation still posted a real skip comment
         # (with real findings, once #896 landed) despite the whole point of
