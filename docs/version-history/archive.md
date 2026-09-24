@@ -8,7 +8,11 @@ render_with_liquid: false
 
 # Older releases
 
-v2.5.0 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.6.0 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.6.0
+
+**Four new static analyzers check documentation instead of code, and none of them can trigger `REQUEST_CHANGES` on their own** (`docs-api-check`, `docs-missing-check`, `docs-ref-check`, `docs-drift-check`; all token-free, diff-gated where relevant). Also fixed: `golangci-lint` produced zero findings on every Go PR (a v2 flag rename), `phpcs` silently dropped findings on a mixed fixable/non-fixable exit code (phpcs 4.x's bitmask redesign), and a `mypy --strict` gap in tree-sitter's bytes/str parser-return handling, exposed once CI started installing the `[context]` extra.
 
 ## v2.5.0
 

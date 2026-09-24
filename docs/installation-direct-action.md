@@ -84,6 +84,7 @@ jobs:
           enable-suggestions: ${{ vars.AI_REVIEW_ENABLE_SUGGESTIONS || 'true' }}
           parallel: ${{ vars.AI_REVIEW_PARALLEL || 'true' }}
           ignore-merge-commits: ${{ vars.AI_REVIEW_IGNORE_MERGE_COMMITS || 'true' }}
+          fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'true' }}
 
   # Always attempt to remove the ai-review-rescan label after the review,
   # even if the review job was cancelled by the concurrency rule on a new push.
@@ -132,8 +133,9 @@ In the **consuming** repository's settings:
 | `AI_REVIEW_ENABLE_SUGGESTIONS` | `true` | Enable "Apply suggestion" buttons on inline comments |
 | `AI_REVIEW_PARALLEL` | `true` | Parallel tiered fan-out; set `false` if you hit provider rate limits |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | `true` | Strip upstream base-branch merges from the diff before review |
+| `AI_REVIEW_FAIL_ON_FINDINGS` | `true` | Exit code 2 when Critical/High findings block approval, failing the workflow step. **Note**: `action.yml`'s own `fail-on-findings` input defaults to `'false'` — the workflow example above sets it explicitly to `true` to match the container-action starter templates' fail-closed default. Omitting it from a hand-rolled workflow leaves CI green even on a REQUEST_CHANGES outcome. Set to `false` to always exit 0. |
 
-See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
+This table lists the inputs most consuming repos need. `action.yml` has many more (SARIF ingestion, analyzer/agent allowlist-denylist, context enrichment, cost ceiling, judge pass, token-usage display, `approval-ceiling`, and others) — see [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 
 ## Runtime dependencies
 

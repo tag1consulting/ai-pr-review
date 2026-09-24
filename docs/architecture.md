@@ -26,7 +26,7 @@ ai-pr-review/
 │   ├── llm/                # Multi-provider LLM clients (Anthropic, OpenAI, Google, Bedrock)
 │   ├── vcs/                # VCS provider clients (GitHub, GitLab, Bitbucket)
 │   ├── findings/           # Findings pipeline: merge, suppress, deduplicate
-│   ├── analyzers/          # Native static analyzer wrappers (13 Python implementations + bridge dispatcher)
+│   ├── analyzers/          # Native static analyzer wrappers (16 Python implementations + bridge dispatcher)
 │   ├── context/            # Context enrichment (tree-sitter symbol injection; opt-in)
 │   ├── feedback/           # Learning loop: feedback store, injection (opt-in)
 │   └── slash/              # Slash command handling (/ai-pr-review false-positive, etc.)

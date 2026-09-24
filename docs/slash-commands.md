@@ -232,7 +232,10 @@ See [Learning loop](learning-loop) for the full architecture and retention polic
 
 ## Access control
 
-Commands can only be triggered by users with `OWNER`, `MEMBER`, or `COLLABORATOR` association on the repository. This is enforced via an `author_association` guard on the job's `if:` condition in the consumer workflow. GitHub does **not** enforce this automatically — without the guard, any authenticated user who can comment on a PR could trigger reviews.
+Commands can only be triggered by users with `OWNER`, `MEMBER`, or `COLLABORATOR` association on the repository. GitHub does **not** enforce this automatically — without a guard, any authenticated user who can comment on a PR could trigger reviews. How that guard is enforced differs by trigger event:
+
+- **`issue_comment`-triggered jobs** (top-level PR comments) trust GitHub's own `author_association` field directly, via a guard on the job's `if:` condition.
+- **`pull_request_review_comment`-triggered jobs** (inline thread replies — dismiss/false-positive/wont-fix/fixed/feedback on an inline finding) do **not** trust `author_association`: it's unreliable on this webhook type (issue #732 — a confirmed org member can come through with an association value that fails the same guard). These jobs instead call a dedicated `authorize` job that checks the commenter's standing live via the GitHub API (`orgs/{org}/members/{actor}` for OWNER/MEMBER-equivalent, `repos/{repo}/collaborators/{actor}/permission` for COLLABORATOR-equivalent) and gate on its result instead.
 
 ## Feedback via emoji reactions
 

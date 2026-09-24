@@ -26,6 +26,7 @@ This page describes the JSON payload that the Python engine writes when
   "head": "abc1234def5678",
   "is_incremental": false,
   "languages": ["Python", "Shell"],
+  "merge_filter_fallback_reason": null,
   "findings": [],
   "token_log": []
 }
@@ -45,6 +46,7 @@ This page describes the JSON payload that the Python engine writes when
 | `head` | string | Head commit SHA. |
 | `is_incremental` | bool | True if this is an incremental (watermark) diff. |
 | `languages` | string[] | Detected language labels. |
+| `merge_filter_fallback_reason` | string \| null | Set when `ignore-merge-commits` filtering fell back to the unfiltered diff (e.g. filtering would have produced an empty diff); null otherwise. |
 | `findings` | Finding[] | Findings from the Python findings pipeline. |
 | `token_log` | TokenEntry[] | Per-agent token usage entries. |
 

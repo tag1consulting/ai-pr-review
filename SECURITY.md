@@ -2,13 +2,7 @@
 
 ## Supported versions
 
-| Version | Supported |
-|---------|-----------|
-| v2.3.x (latest) | ✅ |
-| v2.2.x          | ✅ |
-| v2.1.x          | ✅ |
-| v2.0.x          | ✅ |
-| < v2.0.0        | ❌ |
+This project ships one rolling container image (`:latest` for the current tagged release, `:dev` for pre-release builds) rather than maintaining multiple parallel version branches. Only the latest tagged release is supported for security fixes; upgrade to `:latest` before reporting an issue that may already be fixed.
 
 ## Reporting a vulnerability
 

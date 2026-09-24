@@ -75,7 +75,7 @@ When a PR modifies a supported dependency manifest, the action queries [OSV.dev]
 | `requirements.txt` | PyPI |
 | `composer.json` | Packagist |
 
-Findings are mapped from CVSS score: >= 9.0 → Critical, 7.0–8.9 → High, 4.0–6.9 → Medium, below 4.0 → Low. Unscored or unparseable CVEs map to **High** (fail-safe — the same behavior as the `run-cve-check.sh` `severity_label` function). Critical and High findings trigger `REQUEST_CHANGES` on the PR review just like any other high-severity finding.
+Findings are mapped from CVSS score: >= 9.0 → Critical, 7.0–8.9 → High, 4.0–6.9 → Medium, below 4.0 → Low. Unscored or unparseable CVEs map to **High** (fail-safe — matches the native CVE analyzer's own severity-mapping logic, `ai_pr_review/analyzers/native/cve_check.py`). Critical and High findings trigger `REQUEST_CHANGES` on the PR review just like any other high-severity finding.
 
 No configuration is required — the check runs automatically when a manifest file is in the diff. The OSV.dev API is unauthenticated and free. If the API is unreachable, the check emits a warning and continues — the review is never blocked by CVE-lookup failures.
 
@@ -122,5 +122,5 @@ See `examples/workflows/sarif-codeql.yml` for a complete CodeQL + AI review pipe
 
 ## Implementation reference
 
-All 13 analyzers are implemented as native Python functions in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable. Each analyzer invokes the tool binary directly via `subprocess.run` and parses the JSON output in Python. See `tests/python/test_analyzer_<tool>.py` for each tool's test coverage.
+All 16 analyzers are implemented as native Python functions in `ai_pr_review/analyzers/native/`. The `analyzers/bridge.py` dispatcher maps each tool name to its Python callable. Each analyzer invokes the tool binary directly via `subprocess.run` and parses the JSON output in Python. See `tests/python/test_analyzer_<tool>.py` for each tool's test coverage.
 

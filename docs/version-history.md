@@ -12,6 +12,7 @@ What changed in each release, newest first. The 10 most recent versions each hav
 
 | Version | Highlights |
 |---------|-----------|
+| [v2.13.2](version-history/v2.13.2) | Compute-phase skip crash fixed (#927); Bitbucket brand-new-summary-comment race fixed (#930) |
 | [v2.13.1](version-history/v2.13.1) | Two v2.13.0 release-doc gaps fixed (stale approval-ceiling wording, missing Behavior-change label); docs-only |
 | [v2.13.0](version-history/v2.13.0) | Bitbucket reaches finding-lifecycle parity (dedup, Code Insights, verdict polling); `approval-ceiling`; 5 security fixes (#886/#887/#894/#913/#914); slash-command input-forwarding gaps closed |
 | [v2.12.0](version-history/v2.12.0) | PR title/description now visible to review agents; GitLab findings update in place; per-agent token budgets; pre-flight cost ceiling; judge-verdict persistence |
@@ -21,7 +22,6 @@ What changed in each release, newest first. The 10 most recent versions each hav
 | [v2.8.0](version-history/v2.8.0) | GitLab cross-run finding dedup; canonical-review empty-body/dismiss fixes; Opus 5 default |
 | [v2.7.0](version-history/v2.7.0) | Canonical-review reuse (GitHub); phpstan/checkov/tflint fork-workspace hardening |
 | [v2.6.1](version-history/v2.6.1) | Bitbucket ownership/watermark markers no longer render as visible text |
-| [v2.6.0](version-history/v2.6.0) | Four documentation-checking static analyzers; `golangci-lint`/`phpcs` fixes |
 
 See [Older releases](version-history/archive) for v2.4.9 and earlier, back to v0.7.0.
 

@@ -181,7 +181,7 @@ variables** and add:
 | `BITBUCKET_API_TOKEN` | Yes | The API token from step 1 |
 | `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key (or swap for your provider) |
 | `AI_PROVIDER` | No | `anthropic` (default). Alternatives: `openai`, `google`, `bedrock-proxy` |
-| `AI_REVIEW_MODE` | No | `quick` (default) or `full` |
+| `AI_REVIEW_MODE` | No | Empty (default): defer to `.github/ai-pr-review/policy.yml` route matching if present, else `quick`. Set to `full` to override. |
 | `AI_FAIL_ON_FINDINGS` | No | `true` (default, see the starter pipeline). Exit code 2 when Critical/High findings block approval, failing the pipeline step. Set to `false` to always exit 0. |
 | `AI_REVIEW_IMAGE_TAG` | No | Container tag to pull, e.g. `latest`. Required, no default. The starter pipeline's `image.name` field templates this itself via Bitbucket's `${{VAR}}` syntax, which cannot resolve a secured variable at all, so this one must stay non-secured. |
 | `AI_BITBUCKET_VERDICTS` | No | `false` (default). Set to `true` to enable dismiss/false-positive/wont-fix/fixed comment commands — see [Dismissing findings](#dismissing-findings). |
@@ -219,12 +219,17 @@ canonical contract. If you write your own pipeline, ensure these are set:
 | `VCS_PROVIDER` | Must be set to `bitbucket` |
 | `PR_NUMBER` | `$BITBUCKET_PR_ID` |
 | `BASE_REF` | `$BITBUCKET_PR_DESTINATION_BRANCH` |
+| `HEAD_REF` | `$BITBUCKET_BRANCH` |
 | `HEAD_SHA` | `$BITBUCKET_COMMIT` |
 | `GITHUB_REPOSITORY` | `${BITBUCKET_WORKSPACE}/${BITBUCKET_REPO_SLUG}` |
 | `BITBUCKET_EMAIL` | Repo variable |
 | `BITBUCKET_API_TOKEN` | Repo variable (secured) |
 | `AI_PROVIDER` | Repo variable (default `anthropic`) |
 | `ANTHROPIC_API_KEY` (or equivalent) | Repo variable (secured) |
+| `AI_IGNORE_MERGE_COMMITS` | Repo variable (default `true`) |
+| `AI_FAIL_ON_FINDINGS` | Repo variable (default `true`) |
+| `AI_CONTEXT_ENRICHMENT` | Repo variable (default `false`) |
+| `AI_SARIF_PATHS` | Repo variable (default empty) |
 
 > **Note:** `GITHUB_REPOSITORY` is reused as a generic `owner/repo` identifier
 > so the same env contract works for both providers. You can alternatively

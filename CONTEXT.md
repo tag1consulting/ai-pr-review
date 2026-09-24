@@ -1,6 +1,6 @@
 # ai-pr-review
 
-GitHub Action that runs LLM agents and native static analyzers against PR diffs and posts structured findings back to the pull request.
+Runs LLM agents and native static analyzers against PR/MR diffs and posts structured findings back — as a GitHub Action, a GitLab CI job, or a Bitbucket Pipelines step.
 
 ## Language
 
@@ -16,8 +16,8 @@ _Avoid_: assuming per-source-tag suppression or allowlisting is possible. It isn
 The stable identity of one finding: `source|file|line|code-hash`. It is the key verdicts, the id-map, and thread matching are all keyed on. Two occurrences of "the same" finding at a shifted line or with reworded text are different fingerprints.
 _Avoid_: conflating a fingerprint with its F`<n>` display ID — the ID is a per-PR stable number that maps *to* a fingerprint, not the fingerprint itself.
 
-**Verdict** (GitHub only):
-A human-recorded disposition — `dismissed`, `fixed`, or the `recurred` tombstone — for one finding's fingerprint. Written only by a slash command (`dismiss`/`false-positive`/`wont-fix`/`fixed`), never by the automated review pipeline itself.
+**Verdict** (GitHub and Bitbucket; GitLab has no verdict system):
+A human-recorded disposition — `dismissed`, `fixed`, or the `recurred` tombstone — for one finding's fingerprint. Written only by a slash command (`dismiss`/`false-positive`/`wont-fix`/`fixed`), never by the automated review pipeline itself. Bitbucket's version is polled from the PR's comment log at the start of the next run rather than applied immediately (issue #874), since Bitbucket Pipelines has no comment-triggered event.
 _Avoid_: treating a `feedback`-command entry as a verdict. It is advisory learning-loop context and carries no suppression force (see `_governance.md`).
 
 **Canonical review** (GitHub only):

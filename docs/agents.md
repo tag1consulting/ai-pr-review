@@ -30,10 +30,10 @@ On every PR push, this action:
 
 | Agent | Purpose |
 |-------|---------|
-| **architecture-reviewer** | Evaluates design patterns, coupling, and scalability |
-| **security-reviewer** | Checks for injection, auth, crypto, and supply chain issues |
+| **architecture-reviewer** (conditional) | Evaluates design patterns, coupling, and scalability — runs when the diff touches code or infra files |
+| **security-reviewer** (conditional) | Checks for injection, auth, crypto, and supply chain issues — runs when security-relevant patterns are detected |
 | **blind-hunter** | Context-free review (zero project knowledge, catches familiarity blindness) |
-| **edge-case-hunter** | Traces every branching path for unhandled gaps |
+| **edge-case-hunter** (conditional) | Traces every branching path for unhandled gaps — runs when the diff has control-flow constructs |
 | **adversarial-general** | Cynical adversarial review |
 
 Full mode also runs **issue-linker** (GitHub-only, full mode): discovers related issues/PRs and assesses whether they are resolved by the current changes.
@@ -73,7 +73,7 @@ Findings use shape-distinct icons for accessibility:
 
 **Quick mode** (default): Runs the code-reviewer and (conditionally) silent-failure-hunter. Fast and cheap — suitable for every push.
 
-**Full mode**: Runs up to 8 agents — 6 always-on finding agents (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
+**Full mode**: Runs up to 8 agents — the same 6 finding agents as the table above (code-reviewer, architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, adversarial-general; 3 of them conditional on diff content), plus silent-failure-hunter (conditional) and pr-summarizer on first run. Trigger full mode by:
 - Adding the `ai-review-full` label to the PR
 - Using `workflow_dispatch` with `review_mode: full`
 - Setting the `review-mode` input to `full`
