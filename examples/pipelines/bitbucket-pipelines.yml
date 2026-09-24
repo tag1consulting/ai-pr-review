@@ -41,9 +41,16 @@
 #                           /ai-pr-review dismiss|false-positive|wont-fix|fixed
 #                           F<n> commands at the start of the next run —
 #                           see docs/configuration.md)
+#   AI_BITBUCKET_VERDICT_MIN_ROLE (plain, default: write; minimum Bitbucket
+#                           repository permission -- read/write/admin --
+#                           required to apply a verdict command. Only
+#                           meaningful when AI_BITBUCKET_VERDICTS=true.)
 # Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only — no-op on Bitbucket.
 # Note: AI_BITBUCKET_CODE_INSIGHTS (inline diff annotations) defaults to true
 # and needs no explicit repository variable unless you want it off.
+# Note: AI_BITBUCKET_REVIEW_STATE (real approve/request-changes calls on the
+# PR's reviewer-state UI) defaults to true; set to false to keep the decided
+# outcome as heading text only, same as before issue #918.
 #
 # `clone.depth: full` is required: this step's own `git fetch` below needs the
 # base branch history available locally, and the default shallow Pipelines
