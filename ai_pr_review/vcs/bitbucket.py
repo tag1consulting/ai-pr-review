@@ -449,6 +449,7 @@ class BitbucketProvider:
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
+        summary_comment_id: int | None = None,
     ) -> FindingsResult:
         """Render the summary comment body, with inline-eligible findings
         also posted as Bitbucket Code Insights annotations when
@@ -466,6 +467,30 @@ class BitbucketProvider:
         rendering surface the way GitHub's inline comments do.
         """
         existing = self._list_summary_comments()
+        if not existing and summary_comment_id is not None:
+            # #930: `_list_summary_comments()` is a list-and-filter query,
+            # and Bitbucket's PR-comments listing endpoint isn't guaranteed
+            # to immediately reflect a comment this exact run just created
+            # via post_summary's POST a moment ago -- reproduced live on a
+            # brand-new (POST-created, not PUT-updated) summary comment,
+            # where nothing had this id indexed before this run started.
+            # Fall back to a direct GET on the id post_summary already
+            # resolved, which doesn't depend on that listing endpoint's
+            # consistency. No separate authorship re-check is needed here:
+            # `summary_comment_id` only ever reaches this call as this same
+            # run's own `post_summary` result (`orchestrate.py`), i.e. a
+            # comment these same credentials just created.
+            resp = self.client.request("GET", self._comment_url(summary_comment_id))
+            if resp.status_code < 400:
+                try:
+                    item = resp.json()
+                except ValueError:
+                    item = None
+                if isinstance(item, dict) and (
+                    SUMMARY_MARKER_PREFIX in _comment_body(item)
+                    or SUMMARY_MARKER_HIDDEN_PREFIX in _comment_body(item)
+                ):
+                    existing = [item]
         if not existing:
             # This also means Code Insights annotations never get posted
             # for this run, even though they don't structurally depend on

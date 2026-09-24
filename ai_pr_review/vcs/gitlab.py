@@ -495,6 +495,7 @@ class GitLabProvider:
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
+        summary_comment_id: int | None = None,  # Bitbucket-only (#930); unused here
     ) -> FindingsResult:
         """Post inline discussions for eligible findings.
 

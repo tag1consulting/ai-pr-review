@@ -153,6 +153,62 @@ def test_post_findings_appends_into_existing_comment() -> None:
     _assert_hidden_markers_well_separated(raw)
 
 
+def test_post_findings_falls_back_to_summary_comment_id_when_list_lags() -> None:
+    """#930: on a brand-new (POST-created) summary comment, Bitbucket's
+    PR-comments list endpoint isn't guaranteed to immediately reflect it.
+    `post_findings` must fall back to a direct GET on the id `post_summary`
+    already resolved, instead of failing with "no summary comment to
+    attach findings to" when the list-based lookup comes back empty."""
+    captured: list[dict] = []
+    existing = _existing_summary(comment_id=42)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if req.method == "GET" and path.rstrip("/").endswith("/comments"):
+            # The list endpoint lags -- it does not yet know about comment 42.
+            return httpx.Response(200, json={"values": []})
+        if req.method == "GET" and path.rstrip("/").endswith("/comments/42"):
+            # A direct by-id fetch, however, already sees it.
+            return httpx.Response(200, json=existing)
+        if req.method == "PUT":
+            import json
+
+            captured.append(json.loads(req.content))
+            return httpx.Response(200, json={"id": 42})
+        return httpx.Response(404)
+
+    prov = _make_provider(handler)
+    findings = [Finding(severity="High", confidence=90, finding="x")]
+    result = prov.post_findings(
+        findings,
+        DiffContext(diff_text="", head_sha=_HEAD),
+        event="REQUEST_CHANGES",
+        summary_comment_id=42,
+    )
+    assert result.ok
+    assert result.review_id == 42
+    assert captured, "expected the fallback-found comment to be PUT-updated"
+
+
+def test_post_findings_no_existing_and_no_summary_comment_id_still_errors() -> None:
+    """#930's fallback only fires when a hint id was supplied -- without one,
+    the original "no summary comment" error path is unchanged."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"values": []})
+
+    prov = _make_provider(handler)
+    findings = [Finding(severity="High", confidence=90, finding="x")]
+    result = prov.post_findings(
+        findings,
+        DiffContext(diff_text="", head_sha=_HEAD),
+        event="REQUEST_CHANGES",
+        summary_comment_id=None,
+    )
+    assert not result.ok
+    assert "no summary comment" in (result.error or "")
+
+
 def test_post_findings_demoted_to_body_high_counts_in_headline() -> None:
     """Regression test for #622 on Bitbucket: a judge-downranked High finding
     (demoted_to_body=True) must count at its true severity in the headline —

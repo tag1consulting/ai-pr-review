@@ -987,6 +987,7 @@ class GitHubProvider:
         agent_prompt: str = "",
         max_inline: int = 25,
         enable_suggestions: bool = True,
+        summary_comment_id: int | None = None,  # Bitbucket-only (#930); unused here
     ) -> FindingsResult:
         from ai_pr_review.diff.linemap import parse_diff_sets
         from ai_pr_review.vcs._body import join_findings
