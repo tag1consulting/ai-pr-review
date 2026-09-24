@@ -40,6 +40,12 @@ the full reasoning behind that choice.
   match the review's decided outcome (`AI_BITBUCKET_REVIEW_STATE`, default
   `true`). A downgrade to `COMMENT` clears any prior approve/request-changes
   state rather than leaving a stale badge from an earlier run.
+  **Upgrading into this version**: since this defaults on, you start
+  getting real approve/request-changes state immediately with no opt-in
+  step. If a branch restriction counts this bot's approval toward a merge
+  requirement, or blocks merges on "changes requested", review that rule
+  before upgrading. Set `AI_BITBUCKET_REVIEW_STATE=false` to keep the
+  prior heading-text-only behavior.
 - Cross-run dedup: a finding dismissed via the summary comment's hidden
   verdicts marker is excluded from the next run's Code Insights report as
   long as it stays at the same file and line (part of the same
