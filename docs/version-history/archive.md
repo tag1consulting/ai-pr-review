@@ -8,7 +8,11 @@ render_with_liquid: false
 
 # Older releases
 
-v2.4.9 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.5.0 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.5.0
+
+**`.github/ai-pr-review/policy.yml` lets a repo route review depth — which agents/analyzers run, quick vs. full mode — by changed-file path, base-branch glob, or head-branch glob, instead of hand-rolling a GitHub Actions expression per repo.** A route's `require` field can also turn policy routing into a manual-trigger merge gate: an automatic push runs a cheaper tier, but a required `ai-pr-review/policy-gate` check blocks merge until a qualifying run (automatic or `/ai-pr-review review-full`) lands. GitHub only for now. Six bugs were found and fixed in this release, four of them caught live while dogfooding the feature on this repo, including a deny-all policy silently permitting every agent/analyzer instead of suppressing them, and a `neutral` merge-gate conclusion that never actually blocked a merge. (#663, #664, #665, #669, #670, #671, #672, #674, #675, #676, #677, #678, #679, #683, #684, #686, #687, #688)
 
 ## v2.4.9
 

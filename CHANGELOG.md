@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.1] - 2026-09-24
+
+### Fixed
+
+- **Two v2.13.0 release-doc gaps found by that release's own AI-review response loop (#925)**: `docs/configuration.md`'s `#approval-ceiling` section said GitLab *and* Bitbucket "never post a real approval state", stale as of issue #918 (Bitbucket now makes real approve/request-changes calls, capped by `approval-ceiling` the same as GitHub/GitLab) — also missing a dedicated `AI_BITBUCKET_REVIEW_STATE` row in the configuration reference. And issue #918's Bitbucket default-on real-approval behavior wasn't flagged as a **Behavior change** the way #848/#896 are, despite being able to affect branch-restriction rules on upgrade with no opt-in step — upgrade guidance added to `CHANGELOG.md`, `docs/version-history/v2.13.0.md`, and `docs/bitbucket-setup.md`. Docs-only, no code changed.
+
 ## [2.13.0] - 2026-09-24
 
 ### Added
