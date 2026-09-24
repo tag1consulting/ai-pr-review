@@ -27,6 +27,11 @@
 #   AI_REVIEW_MODE          (plain, default: quick; set to 'full' for deep agents)
 #   AI_IGNORE_MERGE_COMMITS (plain, default: true; strip base-branch merges
 #                            from the diff before review; set to false to include upstream merges)
+#   AI_FAIL_ON_FINDINGS     (plain, default: true; exit 2 when Critical/High
+#                            findings block approval, failing the pipeline
+#                            step -- matches the GitHub Action example's own
+#                            fail-closed default for pull_request-triggered
+#                            reviews. Set to false to always exit 0.)
 #
 # Opt-in capabilities (require the Python engine, which is the default):
 #   AI_CONTEXT_ENRICHMENT  (plain, default: false; tree-sitter symbol context)
@@ -87,6 +92,7 @@ pipelines:
             # matching if present, else 'quick'. Set AI_REVIEW_MODE=full to override.
             - export AI_REVIEW_MODE="${AI_REVIEW_MODE:-}"
             - export AI_IGNORE_MERGE_COMMITS="${AI_IGNORE_MERGE_COMMITS:-true}"
+            - export AI_FAIL_ON_FINDINGS="${AI_FAIL_ON_FINDINGS:-true}"
             # Opt-in capabilities (Python engine only — the default)
             - export AI_CONTEXT_ENRICHMENT="${AI_CONTEXT_ENRICHMENT:-false}"
             - export AI_SARIF_PATHS="${AI_SARIF_PATHS:-}"
