@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A compute-phase skip ("no changed files" / diff too large) crashed instead of posting cleanly when `AI_REVIEW_MODE` was left at its unset-sentinel empty string (issue #927)**. `review_mode=""` is a valid `ReviewConfig` value meaning "not explicitly set," normally resolved to a policy.yml route or `"quick"` inside `build_review_runtime` before a real `ReviewRuntime` is returned. A `SkipPlan` short-circuits before that resolution ever runs, so `cli.py`'s skip-path handling could reach `classify_review_outcome` with an empty mode string, which correctly rejects it — crashing the whole run (`ValueError`, exit 1) instead of skipping. Reproduced live on PR #926's own review run (an already-merged PR with no diff, reviewed with an empty `AI_REVIEW_MODE` env var, the default the reusable workflow templates pass). `_run_review_async`'s skip-path handling now defaults an empty `review_mode` to `"quick"` before calling `_orchestrate_skip`, the same way `build_review_runtime` already does for the non-skip path.
+
 ## [2.13.1] - 2026-09-24
 
 ### Fixed

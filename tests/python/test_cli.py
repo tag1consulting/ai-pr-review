@@ -1463,6 +1463,41 @@ class TestCostCeilingSkipTelemetryOutcome:
         event = json.loads(sink_path.read_text().splitlines()[0])
         assert event["outcome"] == "skipped"
 
+    @pytest.mark.anyio
+    async def test_no_changed_files_skip_with_empty_review_mode_does_not_crash(
+        self,
+    ) -> None:
+        """Issue #927: a plain compute-phase skip (no changes / diff too
+        large) never resolves `review_mode` through policy.yml the way a
+        real ReviewRuntime does -- `config.review_mode` can reach
+        `_orchestrate_skip` as `""`, the valid-but-unresolved sentinel
+        documented on `ReviewConfig._validate_review_mode`, and
+        `classify_review_outcome` rejects it, crashing the whole run instead
+        of posting a clean skip. Reproduced live on PR #926's own review run
+        (empty `AI_REVIEW_MODE` env var, reviewing an already-merged PR with
+        no diff)."""
+        from ai_pr_review.review.runtime import SkipPlan
+        from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+        config = _make_config(review_mode="")
+
+        provider = MagicMock(spec=VcsProvider)
+        provider.post_skip_comment.return_value = SummaryResult(
+            comment_id=1, created=True, updated=False,
+        )
+
+        skip_plan = SkipPlan(reason="no changes", provider=provider)
+
+        with patch(
+            "ai_pr_review.review.runtime.build_review_runtime",
+            new=AsyncMock(return_value=skip_plan),
+        ):
+            from ai_pr_review.cli import _run_review_async
+
+            exit_code = await _run_review_async(config)
+
+        assert exit_code == 0
+
 
 class TestCostCeilingSkipFindingsEndToEnd:
     """#896: a cost-ceiling skip can carry real analyzer/SARIF findings.
