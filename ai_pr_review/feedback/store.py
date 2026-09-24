@@ -147,45 +147,62 @@ def _find_recent_duplicate(
 
 
 # ---------------------------------------------------------------------------
-# GitBranchStore — GitHub implementation
+# _StoreBackend: provider-neutral read/write primitives (issue #906 PR 2/3)
 # ---------------------------------------------------------------------------
+#
+# Extracted from what was, before this, all inline on GitBranchStore. The
+# split exists so a second backend (Bitbucket's `/src` endpoint, PR 3/3) can
+# reuse the retry/jitter, #769 dedup, retention, and oldest-first JSONL wire
+# format below (`_StoreCore`) instead of re-deriving them. `GitBranchStore`
+# keeps its public name/constructor and every private method
+# `tests/python/test_feedback_store.py` calls directly
+# (`_fetch_file_meta`/`_branch_exists`/`_append_once`/`_parse_jsonl`) as thin
+# delegating wrappers, so that suite is unchanged by this refactor.
+
+class _StoreBackend(Protocol):
+    """Raw read/write primitives one VCS provider's feedback-store backend
+    supplies. `_StoreCore` is provider-neutral and depends only on this."""
+
+    def read(self) -> tuple[str | None, object | None]:
+        """Return (decoded text content, version token), or (None, None) if
+        the file doesn't exist. May raise ``RuntimeError`` if the file is too
+        large to safely round-trip (see `_GitHubContentsBackend.read`)."""
+        ...
+
+    def write(self, content: str, version: object | None) -> None:
+        """Write *content*, using *version* for an optimistic-lock compare
+        (``None`` when creating fresh / no prior version is known). Raises
+        ``_ConflictError`` on a lock conflict, ``_MissingBranchError`` if the
+        target branch doesn't exist."""
+        ...
+
+    def branch_exists(self) -> bool | None:
+        """Tri-state: True/False/None (None means unknown, see `_StoreCore.append`)."""
+        ...
+
+    def bootstrap_branch(self) -> bool:
+        """Create the target branch from the repo's default branch HEAD."""
+        ...
+
 
 @dataclass
-class GitBranchStore:
-    """Persist feedback entries in a JSONL file on a dedicated git branch.
-
-    Parameters
-    ----------
-    repo:
-        ``owner/repo`` slug (from ``GITHUB_REPOSITORY``).
-    branch:
-        Branch name (default ``ai-pr-review-bot``).
-    token:
-        GitHub token with ``contents:write`` on the target branch.
-    retention_count:
-        Maximum number of entries to keep (rolling window).
-    retention_age_days:
-        Drop entries older than this many days.
-    client:
-        Injected httpx.Client for testability.
+class _StoreCore:
+    """Provider-neutral store logic: retry/jitter, issue #769 dedup,
+    retention, oldest-first JSONL wire format, fail-soft error handling.
+    Operates on a `_StoreBackend` so GitHub (`_GitHubContentsBackend`) and
+    Bitbucket (`_BitbucketSrcBackend`, PR 3/3) share this instead of each
+    re-deriving it.
     """
 
-    repo: str
-    branch: str
-    token: str = field(repr=False)  # redacted from repr/log output
+    backend: _StoreBackend
     retention_count: int = 500
     retention_age_days: int = 365
-    client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=15))
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def append(self, entry: FeedbackEntry) -> bool:
         """Append *entry* with optimistic-lock retry.
 
-        On a 422 ("branch not found") response, attempts to create the
-        feedback branch from the default branch's HEAD and retries the write.
+        On a missing-branch signal, attempts to create the feedback branch
+        from the default branch's HEAD and retries the write.
 
         Returns True if the entry was persisted; False on any failure mode
         (network error, exhausted retries, missing branch that couldn't be
@@ -196,17 +213,17 @@ class GitBranchStore:
             try:
                 self._append_once(entry)
                 return True
-            except _MissingBranchError:
+            except _MissingBranchError as exc:
                 # Branch doesn't exist — create it from the default branch
                 # and retry once. Avoid infinite loop if bootstrap also fails.
                 if bootstrap_attempted:
                     logger.warning(
                         "feedback store: branch %r still missing after bootstrap; entry dropped",
-                        self.branch,
+                        exc.branch,
                     )
                     return False
                 bootstrap_attempted = True
-                if not self._bootstrap_branch():
+                if not self.backend.bootstrap_branch():
                     return False
                 # Loop back without incrementing the conflict retry budget
                 continue
@@ -226,7 +243,7 @@ class GitBranchStore:
                 )
                 return False
             except RuntimeError as exc:
-                # _fetch_file_meta raises RuntimeError for files >1 MB.
+                # backend.read() raises RuntimeError for files >1 MB.
                 # Catch it explicitly so the WARNING mentions the actual cause
                 # rather than masquerading as a generic "unexpected error".
                 logger.warning(
@@ -247,7 +264,7 @@ class GitBranchStore:
     def load_recent(self) -> list[FeedbackEntry]:
         """Return all entries (newest-first).  Return [] on any error."""
         try:
-            content = self._fetch_file_content()
+            content, _version = self.backend.read()
             if content is None:
                 return []
             return self._parse_jsonl(content)
@@ -255,7 +272,7 @@ class GitBranchStore:
             logger.warning("feedback store: HTTP error loading entries: %s", exc)
             return []
         except RuntimeError as exc:
-            # _fetch_file_meta raises RuntimeError for files >1 MB.
+            # backend.read() raises RuntimeError for files >1 MB.
             logger.warning(
                 "feedback store: cannot load entries — %s. "
                 "Consider lowering AI_FEEDBACK_RETENTION_COUNT.",
@@ -266,53 +283,6 @@ class GitBranchStore:
             logger.error("feedback store: unexpected error in load_recent", exc_info=True)
             return []
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-
-    def _file_url(self) -> str:
-        return (
-            f"https://api.github.com/repos/{self.repo}/contents/{_STORE_PATH}"
-            f"?ref={self.branch}"
-        )
-
-    def _fetch_file_meta(self) -> tuple[str | None, str | None]:
-        """Return (raw_content_b64, sha) or (None, None) if file not found.
-
-        Raises ``RuntimeError`` when the GitHub Contents API omits ``content``
-        for a file that exists (i.e. file > 1 MB) — silently treating this as
-        empty would overwrite the entire feedback history on the next append.
-        """
-        resp = self.client.get(self._file_url(), headers=self._headers())
-        if resp.status_code == 404:
-            return None, None
-        resp.raise_for_status()
-        data = resp.json()
-        sha = data.get("sha")
-        content = data.get("content")
-        if sha is not None and content is None:
-            raise RuntimeError(
-                f"GitHub Contents API returned sha={sha!r} with no 'content' field "
-                f"for {_STORE_PATH} (file may exceed 1 MB). "
-                "Aborting to avoid destroying feedback history."
-            )
-        return content or "", sha
-
-    def _fetch_file_content(self) -> str | None:
-        """Return decoded file content, or None if file doesn't exist."""
-        b64, _sha = self._fetch_file_meta()
-        if b64 is None:
-            return None
-        raw = base64.b64decode(b64.replace("\n", ""))
-        return raw.decode("utf-8", errors="replace")
-
     def _append_once(self, entry: FeedbackEntry) -> None:
         """Read-modify-write the JSONL file.
 
@@ -321,14 +291,8 @@ class GitBranchStore:
         newest-first lists, so we reverse on the write path.  Keeping the file
         order canonical lets multi-append runs round-trip without scrambling.
         """
-        b64_old, sha = self._fetch_file_meta()
-
-        if b64_old is not None:
-            existing = base64.b64decode(b64_old.replace("\n", "")).decode(
-                "utf-8", errors="replace"
-            )
-        else:
-            existing = ""
+        content, version = self.backend.read()
+        existing = content if content is not None else ""
 
         # Parse existing (file is oldest-first; _parse_jsonl returns newest-first)
         existing_entries = self._parse_jsonl(existing)
@@ -367,42 +331,7 @@ class GitBranchStore:
         )
         # Write oldest-first to disk (reversed from in-memory newest-first)
         new_content = "\n".join(e.to_json() for e in reversed(kept)) + "\n"
-        new_b64 = base64.b64encode(new_content.encode()).decode()
-
-        payload: dict[str, object] = {
-            "message": "chore: update AI review feedback store",
-            "content": new_b64,
-            "branch": self.branch,
-        }
-        if sha:
-            payload["sha"] = sha
-
-        url = (
-            f"https://api.github.com/repos/{self.repo}/contents/{_STORE_PATH}"
-        )
-        resp = self.client.put(url, headers=self._headers(), json=payload)
-        if resp.status_code == 409:
-            raise _ConflictError(409)
-        # GitHub returns 404 with "Branch ... not found" when the branch
-        # doesn't exist on a PUT (observed behavior, May 2026).  Some older
-        # docs say 422; handle both for forward compatibility.  We confirm
-        # via _branch_exists() so a 404 on a missing file (vs. missing
-        # branch) isn't misinterpreted.
-        if resp.status_code in (404, 422):
-            # _branch_exists is tri-state: only treat a definitive False as
-            # "branch missing"; None (transient error) must surface as a
-            # generic failure rather than triggering an unnecessary
-            # branch-creation attempt.
-            if self._branch_exists() is False:
-                raise _MissingBranchError(self.branch)
-            # If the branch DOES exist but we got 404/422, that's a genuine
-            # validation error — surface it with the response body so the
-            # operator can diagnose.
-            raise RuntimeError(
-                f"GitHub Contents API returned {resp.status_code}: "
-                f"{resp.text[:200]}"
-            )
-        resp.raise_for_status()
+        self.backend.write(new_content, version)
 
     @staticmethod
     def _parse_jsonl(content: str) -> list[FeedbackEntry]:
@@ -428,11 +357,100 @@ class GitBranchStore:
         entries.reverse()
         return entries
 
-    # ------------------------------------------------------------------
-    # Branch bootstrap (one-time, on first write to a fresh repo)
-    # ------------------------------------------------------------------
 
-    def _branch_exists(self) -> bool | None:
+# ---------------------------------------------------------------------------
+# _GitHubContentsBackend: GitHub Contents API backend
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _GitHubContentsBackend:
+    """GitHub Contents API backend for `_StoreCore` (the HTTP mechanics
+    `GitBranchStore` used to hold inline before this extraction."""
+
+    repo: str
+    branch: str
+    token: str = field(repr=False)  # redacted from repr/log output
+    client: httpx.Client
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+    def _file_url(self) -> str:
+        return (
+            f"https://api.github.com/repos/{self.repo}/contents/{_STORE_PATH}"
+            f"?ref={self.branch}"
+        )
+
+    def _fetch_file_meta(self) -> tuple[str | None, str | None]:
+        """Return (raw_content_b64, sha) or (None, None) if file not found.
+
+        Raises ``RuntimeError`` when the GitHub Contents API omits ``content``
+        for a file that exists (i.e. file > 1 MB): silently treating this as
+        empty would overwrite the entire feedback history on the next append.
+        """
+        resp = self.client.get(self._file_url(), headers=self._headers())
+        if resp.status_code == 404:
+            return None, None
+        resp.raise_for_status()
+        data = resp.json()
+        sha = data.get("sha")
+        content = data.get("content")
+        if sha is not None and content is None:
+            raise RuntimeError(
+                f"GitHub Contents API returned sha={sha!r} with no 'content' field "
+                f"for {_STORE_PATH} (file may exceed 1 MB). "
+                "Aborting to avoid destroying feedback history."
+            )
+        return content or "", sha
+
+    def read(self) -> tuple[str | None, str | None]:
+        b64, sha = self._fetch_file_meta()
+        if b64 is None:
+            return None, None
+        raw = base64.b64decode(b64.replace("\n", ""))
+        return raw.decode("utf-8", errors="replace"), sha
+
+    def write(self, content: str, version: object | None) -> None:
+        new_b64 = base64.b64encode(content.encode()).decode()
+
+        payload: dict[str, object] = {
+            "message": "chore: update AI review feedback store",
+            "content": new_b64,
+            "branch": self.branch,
+        }
+        if version:
+            payload["sha"] = version
+
+        url = f"https://api.github.com/repos/{self.repo}/contents/{_STORE_PATH}"
+        resp = self.client.put(url, headers=self._headers(), json=payload)
+        if resp.status_code == 409:
+            raise _ConflictError(409)
+        # GitHub returns 404 with "Branch ... not found" when the branch
+        # doesn't exist on a PUT (observed behavior, May 2026).  Some older
+        # docs say 422; handle both for forward compatibility.  We confirm
+        # via branch_exists() so a 404 on a missing file (vs. missing
+        # branch) isn't misinterpreted.
+        if resp.status_code in (404, 422):
+            # branch_exists is tri-state: only treat a definitive False as
+            # "branch missing"; None (transient error) must surface as a
+            # generic failure rather than triggering an unnecessary
+            # branch-creation attempt.
+            if self.branch_exists() is False:
+                raise _MissingBranchError(self.branch)
+            # If the branch DOES exist but we got 404/422, that's a genuine
+            # validation error: surface it with the response body so the
+            # operator can diagnose.
+            raise RuntimeError(
+                f"GitHub Contents API returned {resp.status_code}: "
+                f"{resp.text[:200]}"
+            )
+        resp.raise_for_status()
+
+    def branch_exists(self) -> bool | None:
         """Tri-state branch existence check.
 
         Returns:
@@ -461,13 +479,13 @@ class GitBranchStore:
         )
         return None
 
-    def _bootstrap_branch(self) -> bool:
+    def bootstrap_branch(self) -> bool:
         """Create ``self.branch`` from the repo's default branch HEAD.
 
         Returns True on success, False on failure (logs a WARNING with the
         HTTP status code distinguishing 401/403 auth failures from 404 missing-
-        repo from transient transport errors).  Called from ``append()`` when
-        ``_append_once`` raises ``_MissingBranchError``.
+        repo from transient transport errors).  Called from `_StoreCore.append`
+        when `_append_once` raises ``_MissingBranchError``.
         """
         try:
             repo_resp = self.client.get(
@@ -550,6 +568,80 @@ class GitBranchStore:
             self.branch, default_branch, head_sha[:7],
         )
         return True
+
+
+# ---------------------------------------------------------------------------
+# GitBranchStore: GitHub implementation (thin wrapper over _StoreCore)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GitBranchStore:
+    """Persist feedback entries in a JSONL file on a dedicated git branch.
+
+    Parameters
+    ----------
+    repo:
+        ``owner/repo`` slug (from ``GITHUB_REPOSITORY``).
+    branch:
+        Branch name (default ``ai-pr-review-bot``).
+    token:
+        GitHub token with ``contents:write`` on the target branch.
+    retention_count:
+        Maximum number of entries to keep (rolling window).
+    retention_age_days:
+        Drop entries older than this many days.
+    client:
+        Injected httpx.Client for testability.
+    """
+
+    repo: str
+    branch: str
+    token: str = field(repr=False)  # redacted from repr/log output
+    retention_count: int = 500
+    retention_age_days: int = 365
+    client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=15))
+
+    def __post_init__(self) -> None:
+        self._backend = _GitHubContentsBackend(
+            repo=self.repo, branch=self.branch, token=self.token, client=self.client,
+        )
+        self._core = _StoreCore(
+            backend=self._backend,
+            retention_count=self.retention_count,
+            retention_age_days=self.retention_age_days,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def append(self, entry: FeedbackEntry) -> bool:
+        return self._core.append(entry)
+
+    def load_recent(self) -> list[FeedbackEntry]:
+        return self._core.load_recent()
+
+    # ------------------------------------------------------------------
+    # Internal helpers kept as thin delegating wrappers -- exercised
+    # directly by tests/python/test_feedback_store.py (issue #906 PR 2/3:
+    # this refactor must leave that suite passing unchanged).
+    # ------------------------------------------------------------------
+
+    def _fetch_file_meta(self) -> tuple[str | None, str | None]:
+        return self._backend._fetch_file_meta()
+
+    def _branch_exists(self) -> bool | None:
+        return self._backend.branch_exists()
+
+    def _bootstrap_branch(self) -> bool:
+        return self._backend.bootstrap_branch()
+
+    def _append_once(self, entry: FeedbackEntry) -> None:
+        self._core._append_once(entry)
+
+    @staticmethod
+    def _parse_jsonl(content: str) -> list[FeedbackEntry]:
+        return _StoreCore._parse_jsonl(content)
 
 
 class _ConflictError(Exception):
