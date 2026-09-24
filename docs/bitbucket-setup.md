@@ -139,8 +139,6 @@ GitHub dismiss does.
 
 - Writing to the cross-repo learning-loop store from a verdict command
   (see [Dismissing findings](#dismissing-findings) above)
-- APPROVE / REQUEST_CHANGES PR events (Bitbucket has different endpoints
-  for approve/request-changes and the feature is optional)
 - Slash commands other than dismiss/false-positive/wont-fix/fixed
   (`explain`, `revise`, `feedback`, `rescan`, `review-full`, `skip`):
   Bitbucket Pipelines has no `issue_comment` equivalent, so these have no
