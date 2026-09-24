@@ -137,11 +137,14 @@ jobs:
           provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
           api-key: ${{ secrets.AI_REVIEW_API_KEY }}
           base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
+          model-standard: ${{ vars.AI_REVIEW_MODEL_STANDARD || '' }}
+          model-premium: ${{ vars.AI_REVIEW_MODEL_PREMIUM || '' }}
           review-mode: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-full') && 'full' || '' }}
           pr-number: ${{ github.event.pull_request.number }}
           base-ref: ${{ github.event.pull_request.base.ref }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-findings: ${{ vars.AI_REVIEW_FAIL_ON_FINDINGS || 'true' }}
 
   # Job 3: always attempt to remove the ai-review-rescan label.
   # needs: [prepare, review] with if: always() ensures this runs even when
@@ -189,6 +192,7 @@ In the **consuming** repository's settings:
 - `AI_REVIEW_BASE_URL` — Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`)
 - `AI_REVIEW_MODEL_STANDARD` — Override the standard model ID
 - `AI_REVIEW_MODEL_PREMIUM` — Override the premium model ID (full mode only)
+- `AI_REVIEW_FAIL_ON_FINDINGS` — Exit code 2 when Critical/High findings block approval, failing the workflow step (default: `true`; `action.yml`'s own `fail-on-findings` input defaults to `'false'`, so the workflow above sets it explicitly)
 
 ## Updating the submodule pin
 

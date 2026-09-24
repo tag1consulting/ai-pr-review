@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.13.2
+
+**Two real bugs, both found live while validating the prior two releases, are fixed, alongside a full documentation-accuracy pass.** A compute-phase skip ("no changed files" or diff-too-large) crashed instead of posting cleanly whenever `AI_REVIEW_MODE` was left at its unset-sentinel empty string — reachable whenever a review workflow runs against an already-merged PR (issue #927). On Bitbucket, `post_findings` could fail with "no summary comment to attach findings to" on a brand-new (first-ever) summary comment, even though it had just been created successfully — a fresh bot identity's first-ever post to a PR reliably reproduces this (issue #930). Separately, a thorough re-check of every doc against current code found and corrected a batch of stale claims accumulated since v2.12.x — env var defaults, analyzer counts, provider capability descriptions, and two example workflows missing a fail-closed default.
+
+See [Version History → v2.13.2](version-history/v2.13.2) for details.
+
 ## What's new in v2.13.1
 
 **Two v2.13.0 release-doc gaps, found by that release's own AI-review response loop, are fixed.** The `#approval-ceiling` configuration reference said GitLab *and* Bitbucket "never post a real approval state", stale as of issue #918. Issue #918's Bitbucket default-on real-approval behavior is now flagged as a **Behavior change** with upgrade guidance. Docs-only, no code changed.
@@ -79,12 +85,6 @@ See [Version History → v2.13.1](version-history/v2.13.1) for details.
 **Bitbucket reaches finding-lifecycle parity with GitHub/GitLab, and five security findings surfaced during that work are fixed.** Bitbucket now dedups findings across runs and renders them inline as Code Insights annotations (both on by default), and polls PR comments for `/ai-pr-review dismiss|false-positive|wont-fix|fixed` commands at the start of the next run, opt-in via `AI_BITBUCKET_VERDICTS` — the closest a comment-triggerless CI can get to GitHub/GitLab's immediate slash-command handling (issues #839, #873, #874). A follow-up pass against a real Bitbucket Pipelines run found and fixed three more gaps: annotated findings were invisible in the review comment itself (#920), the starter pipeline never failed the build on Critical/High findings (#917), and the decided review outcome had no real effect on the PR's own reviewer-state UI until now (#918, capped by `approval-ceiling` the same as GitHub/GitLab). The same body of work's security-review passes surfaced a verdicts-marker forgery path via unsanitized LLM narrative output, closed in two passes covering both the original gap and the id-map/acks/judge-map/`Finding.source` sibling channels (#886, #913), a bullet-syntax forgery redirecting dismiss commands (#914), a fingerprint delimiter collision (#887), and a Bitbucket comment-authorship gap (#894) — all fixed. Also new: `approval-ceiling`, letting a repo require a human to make every merge decision instead of the bot (issue #858).
 
 See [Version History → v2.13.0](version-history/v2.13.0) for details.
-
-## What's new in v2.12.0
-
-**Review agents now see the PR's own title and description, not just the diff, and GitLab findings update in place instead of only being deduplicated.** A PR's stated intent ("this refactor deliberately changes X, not a regression") was previously invisible to every finding agent — a `<pr-context>` block now closes that gap for all except the deliberately diff-only `blind-hunter` (issue #813). On GitLab, a re-detected finding whose content changed now gets its existing discussion note updated in place, with a reply on severity escalation, closing the last gap between GitLab's cross-run dedup and GitHub's canonical-review reuse (issue #710). Three further capabilities land alongside these: per-agent output-token budget overrides (issue #191), a pre-flight LLM cost estimate with a configurable abort ceiling (issue #24), and judge-pass verdict/corroboration state now persisted to the feedback-learning store for future analysis (issue #841).
-
-See [Version History → v2.12.0](version-history/v2.12.0) for details.
 
 ## Learn more
 

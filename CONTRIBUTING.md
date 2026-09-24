@@ -157,7 +157,7 @@ If your agent produces concrete line-level fixes, set `suggestion_eligible=True`
 This is a larger contribution. The pattern:
 
 1. Create `ai_pr_review/vcs/<provider>.py` following the structure of `ai_pr_review/vcs/bitbucket.py` or `ai_pr_review/vcs/gitlab.py`.
-2. Implement the `VcsProvider` protocol defined in `ai_pr_review/vcs/protocol.py`: `post_summary`, `post_findings`, `advance_sha_watermark`, `resolve_stale`, and `post_skip_comment`.
+2. Implement the `VcsProvider` protocol defined in `ai_pr_review/vcs/protocol.py`: `get_last_reviewed_sha`, `get_summary_body`, `get_pr_description`, `post_summary`, `post_findings`, `resolve_stale`, `advance_sha_watermark`, and `post_skip_comment`.
 3. Register the new provider in `ai_pr_review/vcs/__init__.py` and wire it into `ai_pr_review/cli.py`.
 4. Add tests in `tests/python/vcs/test_<provider>.py`.
 5. Add a setup guide in `docs/<provider>-setup.md`.

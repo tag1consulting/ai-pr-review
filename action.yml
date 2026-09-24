@@ -204,8 +204,10 @@ inputs:
       exit code is unaffected by this setting -- a clean PR still exits 0, a
       Critical/High-finding PR still exits 2, regardless of what actually gets posted.
       A non-'approve' value also disables the /ai-pr-review dismiss auto-approve-on-
-      dismiss escalation. On GitLab/Bitbucket, which never post a real approval state
-      today, this only affects rendered review text. With a non-'approve' value, branch
+      dismiss escalation. On GitLab, which never posts a real approval state, this only
+      affects rendered review text; on Bitbucket, the capped outcome also caps the real
+      approve/request-changes calls AI_BITBUCKET_REVIEW_STATE makes. With a non-'approve'
+      value, branch
       protection cannot require this bot's approval as a merge gate -- use
       fail-on-findings plus a required status check instead. See
       docs/configuration.md#approval-ceiling.
