@@ -131,6 +131,19 @@ class BitbucketConfig:
     # verdict command: "read", "write", or "admin". Checked via
     # check_authority() against the commenter's account_id.
     verdict_min_role: str = "write"
+    # Bitbucket parity (#918): actually call Bitbucket's approve/
+    # request-changes/unapprove reviewer-state endpoints for the decided
+    # review outcome, instead of only rendering it as heading text in the
+    # comment body (which has zero effect on the PR's own reviewer-state
+    # UI or on any branch-restriction rule keyed off "changes requested").
+    # Defaults True for GitHub-parity: GitHub's provider already submits a
+    # real review state for every run, and #918 asks for this to actually
+    # do something on Bitbucket too. Still gets its own kill switch
+    # (AI_BITBUCKET_REVIEW_STATE), following this dataclass's own
+    # code_insights/verdicts precedent, because unlike a comment edit this
+    # is a visible, potentially merge-affecting side effect on someone
+    # else's PR that a workspace admin may want to opt out of.
+    review_state: bool = True
 
 
 def build_client(
@@ -1156,6 +1169,8 @@ class BitbucketProvider:
                 error=err,
             )
         self._comments_cache = None
+        if self.config.review_state:
+            self._set_review_state(event)
         return FindingsResult(
             review_id=keep_id,
             inline_posted=annotated_count,
@@ -1164,6 +1179,74 @@ class BitbucketProvider:
             degraded_to_comment=False,
             suppressed=suppressed_count,
         )
+
+    # ------------------------------------------------------------------
+    # _set_review_state — issue #918: give the decided outcome a real
+    # effect on the PR's own reviewer-state UI (and any branch restriction
+    # keyed off "changes requested"), not just heading text in the
+    # comment.
+    # ------------------------------------------------------------------
+    def _set_review_state(self, event: PostEvent) -> None:
+        """Best-effort: call Bitbucket's approve/request-changes endpoints
+        for the bot account (`self.config.email`) to match `event`.
+
+        Fail-soft, same posture as Code Insights posting: logged and
+        appended to `self._errors`, never raised, never blocks the
+        already-durable comment write above. Called after that PUT
+        succeeds (state changes are secondary to the comment, same
+        ordering Code Insights already follows).
+
+        Bitbucket's REST API has no single "set state" call -- approving
+        and requesting changes are each their own participant-state POST,
+        and Bitbucket Cloud does not clear one when the other is called
+        (confirmed against Atlassian's documented pull-request-participants
+        API; there is no bulk/replace endpoint). So each transition first
+        DELETEs whichever opposing state might be lingering from a prior
+        run's decision, tolerating 404 (nothing to clear), then POSTs the
+        new state. COMMENT clears both without setting either -- this is
+        the "downgrade" case #918 asks for (a PR that previously had
+        Critical findings and now has none shouldn't keep showing
+        "Changes requested" from a stale prior run).
+        """
+        pr_url = self._pull_request_url()
+        approve_url = f"{pr_url}/approve"
+        request_changes_url = f"{pr_url}/request-changes"
+
+        def _delete(url: str) -> None:
+            resp = self.client.request("DELETE", url)
+            if resp.status_code >= 400 and resp.status_code != 404:
+                _log.warning(
+                    "bitbucket: clearing prior review state failed for "
+                    "%s/%s PR #%s (DELETE %s): HTTP %s: %s",
+                    self.config.workspace, self.config.repo_slug,
+                    self.config.pr_id, url, resp.status_code, resp.text[:200],
+                )
+                self._errors.append(
+                    f"_set_review_state DELETE {url}: HTTP {resp.status_code}"
+                )
+
+        def _post(url: str) -> None:
+            resp = self.client.request("POST", url)
+            if resp.status_code >= 400:
+                _log.warning(
+                    "bitbucket: setting review state failed for %s/%s "
+                    "PR #%s (POST %s): HTTP %s: %s",
+                    self.config.workspace, self.config.repo_slug,
+                    self.config.pr_id, url, resp.status_code, resp.text[:200],
+                )
+                self._errors.append(
+                    f"_set_review_state POST {url}: HTTP {resp.status_code}"
+                )
+
+        if event == "APPROVE":
+            _delete(request_changes_url)
+            _post(approve_url)
+        elif event == "REQUEST_CHANGES":
+            _delete(approve_url)
+            _post(request_changes_url)
+        else:
+            _delete(approve_url)
+            _delete(request_changes_url)
 
     # ------------------------------------------------------------------
     # resolve_stale — marker-gated comment cleanup (no separate threads)

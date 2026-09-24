@@ -36,6 +36,10 @@ the full reasoning behind that choice.
   the report API), every finding still renders with its full bullet in the
   summary comment body, exactly as it did before this feature existed.
   Nothing is silently dropped.
+- Setting the PR's own reviewer state (approved / changes requested) to
+  match the review's decided outcome (`AI_BITBUCKET_REVIEW_STATE`, default
+  `true`). A downgrade to `COMMENT` clears any prior approve/request-changes
+  state rather than leaving a stale badge from an earlier run.
 - Cross-run dedup: a finding dismissed via the summary comment's hidden
   verdicts marker is excluded from the next run's Code Insights report as
   long as it stays at the same file and line (part of the same
@@ -178,6 +182,7 @@ variables** and add:
 | `AI_REVIEW_IMAGE_TAG` | No | Container tag to pull, e.g. `latest`. Required, no default. The starter pipeline's `image.name` field templates this itself via Bitbucket's `${{VAR}}` syntax, which cannot resolve a secured variable at all, so this one must stay non-secured. |
 | `AI_BITBUCKET_VERDICTS` | No | `false` (default). Set to `true` to enable dismiss/false-positive/wont-fix/fixed comment commands — see [Dismissing findings](#dismissing-findings). |
 | `AI_BITBUCKET_VERDICT_MIN_ROLE` | No | `write` (default). Minimum Bitbucket repository permission (`read`, `write`, or `admin`) required to apply a verdict command. Only meaningful when `AI_BITBUCKET_VERDICTS=true`. |
+| `AI_BITBUCKET_REVIEW_STATE` | No | `true` (default). Set to `false` to stop the bot from calling Bitbucket's approve/request-changes endpoints — the decided outcome still renders as heading text in the summary comment either way. |
 
 ### 3. Grant PR scopes
 
