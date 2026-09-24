@@ -1226,7 +1226,17 @@ class BitbucketProvider:
                 )
 
         def _post(url: str) -> None:
-            resp = self.client.request("POST", url)
+            # Bitbucket's approve/request-changes POST endpoints return a
+            # bare-text 400 (not even a JSON error body) when the request
+            # carries `Content-Type: application/json` (this client's
+            # default on every call, see build_client) with no body at all
+            # -- live-verified against the real API. Passing an explicit
+            # empty JSON object makes the Content-Type honest and the
+            # endpoint accepts it; the endpoints themselves ignore body
+            # content entirely regardless (participant state comes from the
+            # authenticated user + URL alone), so `{}` carries no meaning
+            # beyond satisfying that header/body agreement.
+            resp = self.client.request("POST", url, json_body={})
             if resp.status_code >= 400:
                 _log.warning(
                     "bitbucket: setting review state failed for %s/%s "
