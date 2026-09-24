@@ -218,7 +218,10 @@ def test_max_inline_cap_overflow_goes_to_body() -> None:
     )
     assert result.ok, result.error
     assert result.inline_posted == 2
-    assert result.body_findings == 1
+    # issue #919: every active finding renders in the body now, not just the
+    # one that overflowed max_inline -- the two annotated ones get a
+    # shortened bullet instead of being omitted.
+    assert result.body_findings == 3
 
 
 def test_demoted_to_body_finding_never_goes_to_annotations() -> None:
@@ -355,7 +358,8 @@ def test_delete_404_on_first_run_is_not_an_error() -> None:
     )
     assert result.ok, result.error
     assert result.inline_posted == 1
-    assert result.body_findings == 0
+    # issue #919: the annotated finding still renders (shortened) in the body.
+    assert result.body_findings == 1
     non_get = [c for c in calls if c[0] != "GET"]
     methods_on_report = [m for m, u in non_get if "/reports/ai-pr-review" in u]
     assert methods_on_report[:3] == ["DELETE", "PUT", "POST"]
@@ -401,7 +405,9 @@ def test_fixed_verdict_that_recurs_still_gets_annotated() -> None:
     assert result.ok, result.error
     assert result.suppressed == 0
     assert result.inline_posted == 1
-    assert result.body_findings == 0
+    # issue #919: still renders (shortened), not omitted -- it recurred, it
+    # wasn't suppressed.
+    assert result.body_findings == 1
 
 
 def test_multi_batch_annotation_posting_and_partial_failure() -> None:
@@ -433,7 +439,9 @@ def test_multi_batch_annotation_posting_and_partial_failure() -> None:
     assert result.ok, result.error
     assert post_calls == [MAX_ANNOTATIONS_PER_BATCH, 50]
     assert result.inline_posted == count
-    assert result.body_findings == 0
+    # issue #919: every active finding still renders (shortened, since all
+    # got annotated this run) rather than being omitted.
+    assert result.body_findings == count
 
     # Now make the second batch fail and confirm the first batch's findings
     # are neither lost nor duplicated: they count toward inline_posted and
@@ -461,18 +469,23 @@ def test_multi_batch_annotation_posting_and_partial_failure() -> None:
     )
     assert result2.ok, result2.error
     assert result2.inline_posted == MAX_ANNOTATIONS_PER_BATCH
-    assert result2.body_findings == 50
+    # issue #919: every active finding renders regardless -- the first
+    # batch's findings get a shortened bullet (successfully annotated), the
+    # second batch's 50 get a full bullet (annotation POST failed for them).
+    assert result2.body_findings == count
     assert any("POST annotations" in e for e in prov2._errors)
 
 
-def test_all_findings_annotated_headline_text_and_no_empty_heading() -> None:
-    """When every active finding lands an annotation, the comment body must
-    not print a bare '### Findings' heading with nothing under it, and must
-    say how many findings moved to Code Insights."""
-    finding = Finding(severity="Critical", confidence=90, finding="sql injection", file="app.py", line=4)
+def test_all_findings_annotated_gets_shortened_bullet_and_pointer_text() -> None:
+    """When every active finding lands an annotation, it must still render
+    as a shortened bullet (no remediation, since that detail already lives
+    on the diff annotation) in the comment body -- not be omitted -- and the
+    comment must say how many findings are also shown as annotations."""
+    finding = Finding(
+        severity="Critical", confidence=90, finding="sql injection",
+        file="app.py", line=4, remediation="Use parameterized queries",
+    )
     existing = _existing_summary()
-    handler = _router(existing=existing)
-    prov = _make_provider(handler)
     captured: dict = {}
 
     def on_comment_put(req: httpx.Request) -> httpx.Response:
@@ -485,6 +498,41 @@ def test_all_findings_annotated_headline_text_and_no_empty_heading() -> None:
         [finding], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="REQUEST_CHANGES"
     )
     assert result.ok, result.error
+    assert result.body_findings == 1
     body = captured["body"]
-    assert "### Findings\n\n" not in body
-    assert "1 additional finding shown inline via Bitbucket Code Insights" in body
+    assert "sql injection" in body
+    assert "**Remediation:**" not in body
+    assert "1 of the finding above is also shown as inline Code Insights annotations" in body
+
+
+def test_annotated_finding_bullet_shortened_unannotated_bullet_full() -> None:
+    """Two findings, only one of which fits within max_inline: the annotated
+    one's bullet must omit its remediation sub-bullet (already on the diff
+    as an annotation); the one bumped to the body by the cap must keep it."""
+    annotated = Finding(
+        severity="High", confidence=90, finding="sql injection",
+        file="app.py", line=4, remediation="Use parameterized queries",
+    )
+    overflow = Finding(
+        severity="Low", confidence=70, finding="unused import",
+        file="app.py", line=5, remediation="Remove the unused import",
+    )
+    existing = _existing_summary()
+    captured: dict = {}
+
+    def on_comment_put(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)["content"]["raw"]
+        return httpx.Response(200, json={"id": existing["id"]})
+
+    handler = _router(existing=existing, on_comment_put=on_comment_put)
+    prov = _make_provider(handler)
+    result = prov.post_findings(
+        [annotated, overflow], DiffContext(diff_text=_DIFF, head_sha=_HEAD),
+        event="REQUEST_CHANGES", max_inline=1,
+    )
+    assert result.ok, result.error
+    assert result.inline_posted == 1
+    assert result.body_findings == 2
+    body = captured["body"]
+    assert "Use parameterized queries" not in body
+    assert "Remove the unused import" in body
