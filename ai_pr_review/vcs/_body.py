@@ -243,6 +243,7 @@ def format_body_finding(
     *,
     location_note: str = "",
     include_suggestion: bool = False,
+    include_remediation: bool = True,
     finding_id: int | None = None,
 ) -> str:
     """Render a finding as a single Markdown bullet for the review body.
@@ -253,6 +254,13 @@ def format_body_finding(
         Optional stable per-PR numeric ID (e.g. 1 → ``**[F1]**``).  When
         provided, the ID token is inserted between the severity and source
         tags so users can reference it in ``/ai-pr-review dismiss F1``.
+    include_remediation:
+        Default True. Pass False to omit the remediation sub-bullet --
+        issue #919: Bitbucket renders a shortened bullet (no remediation)
+        for a finding whose full detail already lives in a Code Insights
+        annotation on the diff, to avoid duplicating that text in the
+        comment body while still keeping the finding itself visible there
+        (severity/text/location), rather than omitting it entirely.
     """
     icon = severity_icon(finding.severity)
     source_tag = format_source_tag(finding)
@@ -289,7 +297,7 @@ def format_body_finding(
     out = "- " + " ".join(header_parts)
     if location:
         out += f" *(at `{location}`{location_note})*"
-    if finding.remediation:
+    if include_remediation and finding.remediation:
         out += f"\n  - **Remediation:** {sanitize_bullet_text(finding.remediation)}"
     if include_suggestion and finding.suggested_code:
         fence_body = finding.suggested_code.replace("```", "``​`")

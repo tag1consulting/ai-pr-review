@@ -522,6 +522,11 @@ class BitbucketProvider:
         headline_findings: Sequence[Finding] = render_findings
         suppressed_count = 0
         annotated_count = 0
+        # Which findings actually landed a Code Insights annotation this
+        # cycle (issue #919) -- those get a shortened bullet in the body.
+        # Empty here (code_insights disabled, or before the try block runs)
+        # means every rendered finding gets its full bullet.
+        annotated_fingerprints: frozenset[str] = frozenset()
         # Set only when this run wrote a change to the verdicts/acks state
         # that needs persisting back into the comment body -- see the
         # reserve-then-append block below, mirroring id_map_marker's own
@@ -682,7 +687,11 @@ class BitbucketProvider:
 
                 added_lines, _new_files = parse_diff_sets(diff.diff_text)
                 eligible_new = {(lr.file, lr.line) for lr in added_lines}
-                inline_candidates, body_only = partition_findings(
+                # issue #919: only the inline candidates are used below now
+                # -- every active finding renders in the body regardless of
+                # inline eligibility, so the old body-only complement of
+                # this split has no remaining consumer.
+                inline_candidates, _body_only = partition_findings(
                     active_findings, eligible_new=eligible_new, max_inline=max_inline
                 )
 
@@ -696,33 +705,36 @@ class BitbucketProvider:
                     id_map=id_map,
                 )
                 annotated_count = ci_result.posted
-                if ci_result.ok:
-                    render_findings = body_only
-                else:
-                    # Plan Q5 fallback: Code Insights unavailable on this
-                    # workspace's plan (403/404), or a batch partway through
-                    # the annotation POST failed. Never drop or duplicate a
-                    # finding: everything in ci_result.posted_findings is
-                    # already live on Bitbucket and must not also render in
-                    # the body. Everything else falls back to the body
-                    # exactly as if it had failed inline eligibility. Logged
-                    # once per run, not once per finding.
+                # issue #919: every active finding renders in the body now
+                # (previously only body_only did) -- a finding whose
+                # fingerprint is in annotated_fingerprints gets a shortened
+                # bullet (no remediation, see _render_combined_body) since
+                # that detail already lives in its annotation. This is why
+                # the body_only/unposted split that used to gate
+                # render_findings is gone: rendering is unconditional now,
+                # only the *shortened-vs-full* choice depends on which
+                # findings actually got an annotation this cycle.
+                annotated_fingerprints = frozenset(
+                    fingerprint(f) for f in ci_result.posted_findings
+                )
+                render_findings = active_findings
+                if not ci_result.ok:
+                    # Code Insights unavailable on this workspace's plan
+                    # (403/404), or a batch partway through the annotation
+                    # POST failed. Every active finding still renders fully
+                    # in the body regardless (only the ones actually in
+                    # annotated_fingerprints get shortened), so nothing is
+                    # lost here -- this branch only needs to log the
+                    # degradation. Logged once per run, not once per
+                    # finding.
                     _log.warning(
                         "bitbucket: Code Insights posting failed for %s/%s "
-                        "PR #%s, falling back to rendering findings in the "
+                        "PR #%s, findings still render fully in the "
                         "summary comment body: %s",
                         self.config.workspace, self.config.repo_slug,
                         self.config.pr_id, ci_result.error,
                     )
                     self._errors.append(f"post_findings: {ci_result.error}")
-                    posted_fps = {
-                        fingerprint(f) for f in ci_result.posted_findings
-                    }
-                    unposted = [
-                        f for f in inline_candidates
-                        if fingerprint(f) not in posted_fps
-                    ]
-                    render_findings = body_only + unposted
             except Exception as exc:  # noqa: BLE001
                 # A bug anywhere in this block (classify/extract_verdicts on
                 # a malformed existing_body, a future change to any of these
@@ -746,6 +758,7 @@ class BitbucketProvider:
                 headline_findings = render_findings
                 suppressed_count = 0
                 annotated_count = 0
+                annotated_fingerprints = frozenset()
                 # Discard any verdict-polling side effects from this cycle
                 # too: if classify() itself is what raised, `verdicts`/
                 # `classified` may be partial or absent -- don't persist a
@@ -797,6 +810,7 @@ class BitbucketProvider:
             findings=render_findings,
             headline_findings=headline_findings,
             annotated_count=annotated_count,
+            annotated_fingerprints=annotated_fingerprints,
             event=event,
             failed_agents=failed_agents,
             agent_prompt=agent_prompt,
@@ -1274,17 +1288,26 @@ def _render_combined_body(
     head_sha: str,
     headline_findings: Sequence[Finding] | None = None,
     annotated_count: int = 0,
+    annotated_fingerprints: frozenset[str] = frozenset(),
 ) -> str:
     """Render the combined summary+findings body for Bitbucket.
 
-    ``findings`` is what actually renders as flat bullets below.
+    ``findings`` is what actually renders as flat bullets below -- every
+    active finding (issue #919), not just the ones that didn't land a Code
+    Insights annotation. A finding whose fingerprint is in
+    ``annotated_fingerprints`` renders a shortened bullet (no remediation
+    sub-bullet, since that detail already lives in its annotation on the
+    diff) rather than being omitted from the body entirely -- omitting it
+    left the comment saying only "N additional findings shown inline",
+    with no indication of what those findings actually were, since
+    Bitbucket Code Insights annotations are far less discoverable than
+    GitHub's real inline review-comment threads.
     ``headline_findings`` (defaults to ``findings`` when not given) is what
-    "Overall Risk"/"Findings: N" describe -- when Code Insights annotations
-    (Bitbucket parity Phase 3) carry some findings instead of the body, the
-    two lists diverge: a finding shown only via annotation still counts
-    toward the headline but isn't one of the bullets below.
-    ``annotated_count`` adds a one-line pointer to those findings so the
-    headline count and the (shorter) bullet list don't look inconsistent.
+    "Overall Risk"/"Findings: N" describe -- kept separate from ``findings``
+    for the same reason GitHub's headline_findings/render_findings split
+    exists: a suppressed finding must not count toward either.
+    ``annotated_count`` adds a one-line pointer noting how many of the
+    findings above are also shown as inline annotations.
 
     Bitbucket has no <details> rendering, so remediation is rendered as a
     flat sub-bullet (per bash post-review-bitbucket.sh:281), and (unlike
@@ -1335,7 +1358,10 @@ def _render_combined_body(
             )
             loc_note = f" [↗]({url})"
         bullet = format_body_finding(
-            f, location_note=loc_note, finding_id=id_map.get(fingerprint(f))
+            f,
+            location_note=loc_note,
+            finding_id=id_map.get(fingerprint(f)),
+            include_remediation=fingerprint(f) not in annotated_fingerprints,
         )
         if _is_new(f):
             # Prepend after the leading "- " so the line still opens with a
@@ -1426,21 +1452,16 @@ def _render_combined_body(
             _render_bullet(f) for f in sorted_findings
         )
 
-    if not sorted_findings and annotated_count:
-        # Every active finding landed an annotation instead of a body
-        # bullet -- a bare "### Findings" heading with nothing under it
-        # would be confusing (and none of the branches above already guard
-        # for this, since they only check the raw `findings`/`finding_total`
-        # emptiness, not this specific "body empty but annotations exist"
-        # case). Drop the heading. The pointer sentence appended below
-        # covers it.
-        findings_block = ""
-
     if annotated_count:
+        # issue #919: every finding renders in findings_block above now
+        # (shortened, not omitted, when also annotated), so this is purely
+        # informational -- a pointer to the diff view, not a "this is where
+        # the content actually is" apology.
         plural = "" if annotated_count == 1 else "s"
+        is_are = "is" if annotated_count == 1 else "are"
         summary_block += (
-            f"\n\n{annotated_count} additional finding{plural} shown inline "
-            "via Bitbucket Code Insights annotations."
+            f"\n\n{annotated_count} of the finding{plural} above {is_are} also "
+            "shown as inline Code Insights annotations on the diff."
         )
 
     # Preserve the marker line + the walkthrough/summary text from the

@@ -26,12 +26,16 @@ the full reasoning behind that choice.
 
 - Summary comment upsert (single comment per PR, updated on each run)
 - Inline findings via Code Insights annotations, rebuilt from scratch every
-  run (`AI_BITBUCKET_CODE_INSIGHTS`, default `true`). Each annotation carries
-  the same `[F<n>]` token as the summary comment's findings, so you can
-  reference it there. If Code Insights isn't available on your workspace's
-  plan (a 403/404 on the report API), every finding falls back to rendering
-  in the summary comment body instead, exactly as it did before this feature
-  existed. Nothing is silently dropped.
+  run (`AI_BITBUCKET_CODE_INSIGHTS`, default `true`). Every active finding
+  still renders as a bullet in the summary comment too — one that also got
+  an annotation just gets a shortened bullet (no remediation sub-bullet,
+  since that detail already lives on the diff) rather than being omitted
+  from the comment entirely. Each annotation carries the same `[F<n>]`
+  token as the summary comment's findings, so you can reference it there.
+  If Code Insights isn't available on your workspace's plan (a 403/404 on
+  the report API), every finding still renders with its full bullet in the
+  summary comment body, exactly as it did before this feature existed.
+  Nothing is silently dropped.
 - Cross-run dedup: a finding dismissed via the summary comment's hidden
   verdicts marker is excluded from the next run's Code Insights report as
   long as it stays at the same file and line (part of the same
