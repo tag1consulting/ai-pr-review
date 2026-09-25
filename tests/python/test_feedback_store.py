@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
+import httpx
 import pytest
 
 from ai_pr_review.feedback.models import FeedbackEntry
 from ai_pr_review.feedback.store import (
+    BitbucketSrcStore,
     GitBranchStore,
     UnsupportedVcsStore,
     make_store,
 )
+from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
 
 # ---------------------------------------------------------------------------
 # make_store factory — guards against the make_store() critical bug
@@ -26,6 +30,8 @@ class _StubConfig:
     feedback_branch: str = "ai-pr-review-bot"
     feedback_retention_count: int = 500
     feedback_retention_age_days: int = 365
+    bitbucket_workspace: str = ""
+    bitbucket_repo_slug: str = ""
 
 
 def test_make_store_uses_vcs_provider_not_llm_provider(
@@ -46,16 +52,90 @@ def test_make_store_uses_vcs_provider_not_llm_provider(
     )
 
 
-def test_make_store_rejects_non_github_vcs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_make_store_rejects_unsupported_vcs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GitLab and unknown providers still get UnsupportedVcsStore.
+
+    Bitbucket is no longer in this set as of issue #906 -- see the dedicated
+    test_make_store_bitbucket_* tests below. Explicitly delenv's the
+    Bitbucket credential vars so this test's "unknown"/"gitlab"/"" cases
+    can't accidentally pass or fail based on the ambient shell environment
+    (this repo's own dev environment happens to export BITBUCKET_EMAIL for
+    live e2e testing -- see reference_test_credentials.md).
+    """
     monkeypatch.setenv("GH_TOKEN", "dummy-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.delenv("BITBUCKET_EMAIL", raising=False)
+    monkeypatch.delenv("BITBUCKET_API_TOKEN", raising=False)
+    monkeypatch.delenv("BITBUCKET_WORKSPACE", raising=False)
+    monkeypatch.delenv("BITBUCKET_REPO_SLUG", raising=False)
 
-    for vcs in ("gitlab", "bitbucket", "", "unknown"):
+    for vcs in ("gitlab", "", "unknown"):
         cfg = _StubConfig(vcs_provider=vcs)
         store = make_store(cfg)
         assert isinstance(store, UnsupportedVcsStore), (
             f"vcs_provider={vcs!r} should yield UnsupportedVcsStore"
         )
+
+
+# ---------------------------------------------------------------------------
+# make_store factory — Bitbucket branch (issue #906)
+# ---------------------------------------------------------------------------
+
+def test_make_store_bitbucket_returns_bitbucket_src_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BITBUCKET_EMAIL", "bot@example.com")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "dummy-token")
+
+    cfg = _StubConfig(
+        vcs_provider="bitbucket",
+        bitbucket_workspace="ws",
+        bitbucket_repo_slug="repo",
+    )
+    store = make_store(cfg)
+    assert isinstance(store, BitbucketSrcStore)
+    assert store.workspace == "ws"
+    assert store.repo_slug == "repo"
+    assert store.branch == "ai-pr-review-bot"
+
+
+def test_make_store_bitbucket_falls_back_to_env_for_workspace_repo_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BITBUCKET_EMAIL", "bot@example.com")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "dummy-token")
+    monkeypatch.setenv("BITBUCKET_WORKSPACE", "env-ws")
+    monkeypatch.setenv("BITBUCKET_REPO_SLUG", "env-repo")
+
+    cfg = _StubConfig(vcs_provider="bitbucket")  # bitbucket_workspace/repo_slug left blank
+    store = make_store(cfg)
+    assert isinstance(store, BitbucketSrcStore)
+    assert store.workspace == "env-ws"
+    assert store.repo_slug == "env-repo"
+
+
+def test_make_store_bitbucket_requires_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BITBUCKET_EMAIL", raising=False)
+    monkeypatch.delenv("BITBUCKET_API_TOKEN", raising=False)
+
+    cfg = _StubConfig(
+        vcs_provider="bitbucket", bitbucket_workspace="ws", bitbucket_repo_slug="repo",
+    )
+    assert isinstance(make_store(cfg), UnsupportedVcsStore)
+
+
+def test_make_store_bitbucket_requires_workspace_and_repo_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BITBUCKET_EMAIL", "bot@example.com")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "dummy-token")
+    monkeypatch.delenv("BITBUCKET_WORKSPACE", raising=False)
+    monkeypatch.delenv("BITBUCKET_REPO_SLUG", raising=False)
+
+    cfg = _StubConfig(vcs_provider="bitbucket")  # no workspace/repo_slug anywhere
+    assert isinstance(make_store(cfg), UnsupportedVcsStore)
 
 
 def test_make_store_requires_github_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -635,3 +715,469 @@ def test_dedup_never_fires_for_bare_feedback_command(monkeypatch: pytest.MonkeyP
 
     assert result is True
     assert len(client.put_calls) == 1  # both notes must land -- bare feedback is never deduped
+
+
+# ---------------------------------------------------------------------------
+# BitbucketSrcStore / _BitbucketSrcBackend (issue #906)
+# ---------------------------------------------------------------------------
+
+class _FakeBitbucketRepo:
+    """In-memory Bitbucket repo simulator for `httpx.MockTransport`.
+
+    Tracks one file's content per branch and a monotonic fake commit hash
+    per branch -- enough to exercise `_BitbucketSrcBackend`'s read/write/
+    branch_exists/bootstrap_branch sequence faithfully (refs/branches
+    lookups, /src reads and writes, refs/branches branch creation) without
+    needing a real git history.
+    """
+
+    def __init__(self, *, main_branch: str = "main") -> None:
+        self.main_branch = main_branch
+        self._next_hash = 1
+        # branch name -> (head hash, {file_path: content})
+        self.branches: dict[str, tuple[str, dict[str, str]]] = {
+            main_branch: (self._new_hash(), {}),
+        }
+        self.calls: list[tuple[str, str]] = []  # (method, path) audit trail
+
+    def _new_hash(self) -> str:
+        h = f"{self._next_hash:040x}"
+        self._next_hash += 1
+        return h
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        method = request.method
+        path = request.url.path
+        self.calls.append((method, path))
+
+        if method == "GET" and path.endswith("/repositories/ws/repo"):
+            return httpx.Response(200, json={"mainbranch": {"name": self.main_branch}})
+
+        if method == "GET" and "/refs/branches/" in path:
+            branch = path.rsplit("/refs/branches/", 1)[1]
+            if branch not in self.branches:
+                return httpx.Response(
+                    404, json={"type": "error", "error": {"message": branch}},
+                )
+            head, _files = self.branches[branch]
+            return httpx.Response(200, json={"target": {"hash": head}})
+
+        if method == "GET" and "/src/" in path:
+            # /repositories/ws/repo/src/{revision}/{path...}
+            after = path.split("/src/", 1)[1]
+            revision, _, file_path = after.partition("/")
+            match = next(
+                ((h, files) for h, files in self.branches.values() if h == revision),
+                None,
+            )
+            if match is None:
+                return httpx.Response(
+                    404,
+                    json={
+                        "type": "error",
+                        "error": {"message": "Commit not found", "data": {"shas": [revision]}},
+                        "data": {"shas": [revision]},
+                    },
+                )
+            _head, files = match
+            if file_path not in files:
+                return httpx.Response(
+                    404,
+                    json={"type": "error", "error": {"message": f"No such file or directory: {file_path}"}},
+                )
+            return httpx.Response(200, text=files[file_path])
+
+        if method == "POST" and path.endswith("/refs/branches"):
+            body = json.loads(request.content)
+            name = body["name"]
+            target_hash = body["target"]["hash"]
+            if name in self.branches:
+                return httpx.Response(
+                    400, json={"type": "error", "error": {"message": f"Branch {name} already exists"}},
+                )
+            source_files: dict[str, str] = {}
+            for h, files in self.branches.values():
+                if h == target_hash:
+                    source_files = dict(files)
+                    break
+            self.branches[name] = (target_hash, source_files)
+            return httpx.Response(201, json={})
+
+        if method == "POST" and path.endswith("/src"):
+            return self._handle_src_post(request)
+
+        raise AssertionError(f"unhandled request: {method} {path}")
+
+    def _handle_src_post(self, request: httpx.Request) -> httpx.Response:
+        # Parse multipart/form-data manually (httpx test requests carry the
+        # raw encoded body; email.parser handles multipart robustly without
+        # pulling in a new dependency).
+        import email
+        from email.message import Message
+
+        content_type = request.headers.get("content-type", "")
+        raw = b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + request.content
+        msg: Message = email.message_from_bytes(raw)
+        fields: dict[str, str] = {}
+        if msg.is_multipart():
+            for part in msg.get_payload():
+                name = part.get_param("name", header="Content-Disposition")
+                if name is not None:
+                    payload = part.get_payload(decode=True)
+                    fields[name] = payload.decode() if isinstance(payload, bytes) else str(payload)
+
+        branch = fields["branch"]
+        parents = fields.get("parents")
+        file_fields = {
+            k: v for k, v in fields.items() if k not in ("branch", "parents", "message")
+        }
+
+        if branch not in self.branches:
+            if parents is None:
+                return httpx.Response(404, json={"type": "error", "error": {"message": "branch not found"}})
+            source_files: dict[str, str] = {}
+            for h, files in self.branches.values():
+                if h == parents:
+                    source_files = dict(files)
+                    break
+        else:
+            _head, source_files = self.branches[branch]
+            source_files = dict(source_files)
+
+        source_files.update(file_fields)
+        new_hash = self._new_hash()
+        self.branches[branch] = (new_hash, source_files)
+        return httpx.Response(201, json={})
+
+
+def _make_bitbucket_store(
+    repo: _FakeBitbucketRepo, *, branch: str = "ai-pr-review-bot",
+) -> BitbucketSrcStore:
+    transport = httpx.MockTransport(repo.handler)
+    http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    client = RecordingClient(
+        http=http,
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    return BitbucketSrcStore(workspace="ws", repo_slug="repo", branch=branch, client=client)
+
+
+def test_bitbucket_store_bootstraps_fresh_branch_and_appends() -> None:
+    repo = _FakeBitbucketRepo()
+    store = _make_bitbucket_store(repo)
+    entry = FeedbackEntry(
+        ts="2026-09-24T00:00:00Z", command="wont-fix", reason="r", source="pylint", file="app.py",
+        extras={"finding_id": 1, "source_comment_id": 100},
+    )
+
+    assert store.append(entry) is True
+    assert "ai-pr-review-bot" in repo.branches
+    _head, files = repo.branches["ai-pr-review-bot"]
+    assert ".ai-pr-review/learnings.jsonl" in files
+    assert '"finding_id": 1' in files[".ai-pr-review/learnings.jsonl"]
+
+
+def test_bitbucket_store_appends_to_existing_branch() -> None:
+    repo = _FakeBitbucketRepo()
+    store = _make_bitbucket_store(repo)
+    first = FeedbackEntry(
+        ts="2026-09-24T00:00:00Z", command="wont-fix", reason="r1", source="pylint", file="a.py",
+        extras={"finding_id": 1, "source_comment_id": 100},
+    )
+    second = FeedbackEntry(
+        ts="2026-09-24T00:05:00Z", command="wont-fix", reason="r2", source="pylint", file="b.py",
+        extras={"finding_id": 2, "source_comment_id": 200},
+    )
+
+    assert store.append(first) is True
+    assert store.append(second) is True
+
+    entries = store.load_recent()
+    assert len(entries) == 2
+    assert {e.extras.get("finding_id") for e in entries} == {1, 2}
+
+
+def test_bitbucket_store_comment_id_dedup_skips_reprocessed_comment() -> None:
+    """Issue #906 Q6: a comment reprocessed on a later pipeline run (because
+    the summary-body ack save failed after this store's write already
+    succeeded) must not append a second, identical entry -- with no time
+    window, unlike the #769 dedup guard above."""
+    repo = _FakeBitbucketRepo()
+    store = _make_bitbucket_store(repo)
+    entry = FeedbackEntry(
+        ts="2026-09-24T00:00:00Z", command="wont-fix", reason="r", source="pylint", file="a.py",
+        extras={"finding_id": 1, "source_comment_id": 100},
+    )
+    reprocessed = FeedbackEntry(
+        ts="2026-09-26T12:00:00Z",  # two days later -- well outside the #769 window
+        command="wont-fix", reason="r (reprocessed)", source="pylint", file="a.py",
+        extras={"finding_id": 1, "source_comment_id": 100},  # same comment id
+    )
+
+    assert store.append(entry) is True
+    calls_before = len(repo.calls)
+    assert store.append(reprocessed) is True  # still "succeeds" -- already recorded
+    calls_after = len(repo.calls)
+
+    entries = store.load_recent()
+    assert len(entries) == 1, "the reprocessed comment must not add a second line"
+    # No POST /src should have happened on the second append.
+    assert not any(m == "POST" and p.endswith("/src") for m, p in repo.calls[calls_before - 0:calls_after])
+
+
+def test_bitbucket_store_dedup_key_includes_finding_id_not_just_comment_id() -> None:
+    """Regression (found in review before merge, issue #906): a single
+    Bitbucket comment can carry more than one /ai-pr-review command
+    (parse_commands() supports multiple lines per comment, issue #733), so
+    two entries built from the SAME comment but for DIFFERENT findings share
+    one source_comment_id. Keying the dedup guard on source_comment_id alone
+    made the second command's entry collide with the first's and get
+    silently dropped, while append() still returned True."""
+    repo = _FakeBitbucketRepo()
+    store = _make_bitbucket_store(repo)
+    first = FeedbackEntry(
+        ts="2026-09-24T00:00:00Z", command="false-positive", reason="r1", source="pylint", file="a.py",
+        extras={"finding_id": 1, "source_comment_id": 200},
+    )
+    second = FeedbackEntry(
+        ts="2026-09-24T00:00:00Z", command="wont-fix", reason="r2", source="pylint", file="b.py",
+        extras={"finding_id": 2, "source_comment_id": 200},  # same comment id, different finding
+    )
+
+    assert store.append(first) is True
+    assert store.append(second) is True
+
+    entries = store.load_recent()
+    assert len(entries) == 2, "both commands from the same comment must persist"
+    assert {e.extras.get("finding_id") for e in entries} == {1, 2}
+
+
+def test_bitbucket_store_load_recent_on_empty_repo_returns_empty() -> None:
+    repo = _FakeBitbucketRepo()  # feedback branch never created
+    store = _make_bitbucket_store(repo)
+    assert store.load_recent() == []
+
+
+def test_bitbucket_backend_write_raises_conflict_when_verify_read_mismatches() -> None:
+    """Best-effort conflict detection (issue #906 Q12): if the file's content
+    immediately after a successful POST doesn't match what was just written
+    (simulating an interleaved concurrent writer Bitbucket's own response
+    didn't surface as an error), `write()` must raise `_ConflictError` so
+    `_StoreCore.append()`'s existing retry loop redoes the read-modify-write.
+    """
+    from ai_pr_review.feedback.store import _BitbucketSrcBackend, _ConflictError
+
+    repo = _FakeBitbucketRepo()
+    repo.branches["ai-pr-review-bot"] = (repo._new_hash(), {})
+    transport = httpx.MockTransport(repo.handler)
+    http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    client = RecordingClient(
+        http=http, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    backend = _BitbucketSrcBackend(workspace="ws", repo_slug="repo", branch="ai-pr-review-bot", client=client)
+    _content, version = backend.read()
+
+    # Simulate a concurrent writer landing a commit between our POST and our
+    # verify re-read by mutating repo state inside a wrapped handler.
+    real_handler = repo.handler
+    written = {"done": False}
+
+    def racing_handler(request: httpx.Request) -> httpx.Response:
+        resp = real_handler(request)
+        if request.method == "POST" and request.url.path.endswith("/src") and not written["done"]:
+            written["done"] = True
+            # A concurrent writer's commit lands right after ours.
+            head, files = repo.branches["ai-pr-review-bot"]
+            files = dict(files)
+            files[".ai-pr-review/learnings.jsonl"] = "concurrent-writer-content\n"
+            repo.branches["ai-pr-review-bot"] = (repo._new_hash(), files)
+        return resp
+
+    http2 = httpx.Client(transport=httpx.MockTransport(racing_handler), base_url="https://api.bitbucket.org/2.0")
+    client2 = RecordingClient(
+        http=http2, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    backend2 = _BitbucketSrcBackend(workspace="ws", repo_slug="repo", branch="ai-pr-review-bot", client=client2)
+
+    with pytest.raises(_ConflictError):
+        backend2.write("our-content\n", version)
+
+
+def test_bitbucket_backend_branch_exists_tri_state() -> None:
+    from ai_pr_review.feedback.store import _BitbucketSrcBackend
+
+    repo = _FakeBitbucketRepo()
+    transport = httpx.MockTransport(repo.handler)
+    http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    client = RecordingClient(http=http, recorder=TapeRecorder(record_dir=None), retry_policy=RetryPolicy())
+    backend = _BitbucketSrcBackend(workspace="ws", repo_slug="repo", branch="main", client=client)
+    assert backend.branch_exists() is True
+
+    backend_missing = _BitbucketSrcBackend(
+        workspace="ws", repo_slug="repo", branch="does-not-exist", client=client,
+    )
+    assert backend_missing.branch_exists() is False
+
+
+def test_bitbucket_backend_branch_exists_transport_error_is_none() -> None:
+    from ai_pr_review.feedback.store import _BitbucketSrcBackend
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down")
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    client = RecordingClient(
+        http=http, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    backend = _BitbucketSrcBackend(workspace="ws", repo_slug="repo", branch="main", client=client)
+    assert backend.branch_exists() is None
+
+
+# ---------------------------------------------------------------------------
+# _BitbucketSrcBackend.bootstrap_branch -- failure branches
+# ---------------------------------------------------------------------------
+
+def _make_backend(handler):
+    from ai_pr_review.feedback.store import _BitbucketSrcBackend
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    client = RecordingClient(
+        http=http, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    return _BitbucketSrcBackend(workspace="ws", repo_slug="repo", branch="ai-pr-review-bot", client=client)
+
+
+def test_bootstrap_branch_returns_true_on_already_exists_race() -> None:
+    """Two concurrent runs both bootstrapping is an expected, harmless race
+    -- the losing run's branch-create POST gets a 400 'already exists',
+    which must be treated as success, not failure."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/refs/branches") and request.method == "POST":
+            return httpx.Response(
+                400, json={"type": "error", "error": {"message": "Branch ai-pr-review-bot already exists"}},
+            )
+        if "/repositories/ws/repo" in request.url.path and request.url.path.endswith("/repo"):
+            return httpx.Response(200, json={"mainbranch": {"name": "main"}})
+        if "/refs/branches/main" in request.url.path:
+            return httpx.Response(200, json={"target": {"hash": "a" * 40}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is True
+
+
+def test_bootstrap_branch_returns_false_on_repo_get_non_200() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is False
+
+
+def test_bootstrap_branch_returns_false_on_transport_error_fetching_repo() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is False
+
+
+def test_bootstrap_branch_returns_false_when_default_branch_head_not_found() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/repo"):
+            return httpx.Response(200, json={"mainbranch": {"name": "main"}})
+        if "/refs/branches/main" in request.url.path:
+            return httpx.Response(404, json={"type": "error", "error": {"message": "main"}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is False
+
+
+def test_bootstrap_branch_returns_false_on_unexpected_create_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/refs/branches") and request.method == "POST":
+            return httpx.Response(500, text="internal error")
+        if request.url.path.endswith("/repo"):
+            return httpx.Response(200, json={"mainbranch": {"name": "main"}})
+        if "/refs/branches/main" in request.url.path:
+            return httpx.Response(200, json={"target": {"hash": "a" * 40}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is False
+
+
+# ---------------------------------------------------------------------------
+# _BitbucketSrcBackend.read/write -- non-404 HTTP errors propagate
+# ---------------------------------------------------------------------------
+
+def test_backend_read_propagates_non_404_error_from_branch_lookup() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal error")
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.read()
+
+
+def test_backend_read_propagates_non_404_error_from_file_get() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/refs/branches/" in request.url.path:
+            return httpx.Response(200, json={"target": {"hash": "a" * 40}})
+        return httpx.Response(403, text="forbidden")
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.read()
+
+
+def test_backend_read_raises_runtime_error_on_malformed_branch_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"target": {}})  # no "hash"
+
+    backend = _make_backend(handler)
+    with pytest.raises(RuntimeError, match="no target.hash"):
+        backend.read()
+
+
+def test_backend_write_propagates_non_404_error_from_post() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/src"):
+            return httpx.Response(500, text="internal error")
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.write("content\n", "a" * 40)
+
+
+def test_backend_write_maps_verify_read_failure_to_conflict_not_a_generic_error() -> None:
+    """Regression (found in review before merge, issue #906): the POST has
+    already committed by the time the best-effort verify-read runs. A
+    failure in that read must never surface as a generic HTTP/transport
+    error, or _StoreCore.append() would report an entry that actually
+    persisted as failed (and, for the RuntimeError case, with a misleading
+    'file may exceed 1 MB' message)."""
+    from ai_pr_review.feedback.store import _ConflictError
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if request.method == "POST" and request.url.path.endswith("/src"):
+            return httpx.Response(201)
+        # Every GET after the POST (the verify read's branch-head lookup)
+        # fails -- simulating a transient error on the check read itself.
+        return httpx.Response(500, text="internal error")
+
+    backend = _make_backend(handler)
+    with pytest.raises(_ConflictError):
+        backend.write("content\n", "a" * 40)

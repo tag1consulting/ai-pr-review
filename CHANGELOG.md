@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bitbucket: the learning-loop store is no longer a stub (issue #906)**. A `false-positive`/`wont-fix` verdict (the `dismiss` alias included; `fixed` never persists on either provider) now writes a `FeedbackEntry` to the same `.ai-pr-review/learnings.jsonl` file on the `ai-pr-review-bot` branch GitHub already uses, injected into future review prompts as `<repo-feedback>` context the same way. Requires `AI_FEEDBACK_LOOP=true` and `AI_BITBUCKET_VERDICTS=true`, plus a **Repository:Write** scope on the Bitbucket API token (a step up from the base Repository:Read + PR:Write scope — see `docs/bitbucket-setup.md`'s security note before enabling this). `feedback/store.py`'s previously GitHub-only `GitBranchStore` was split into a provider-neutral core (`_StoreCore`) plus a per-provider backend (`_GitHubContentsBackend`, `_BitbucketSrcBackend`) so both providers share the same retry/dedup/retention logic. Bitbucket's write path has no confirmed compare-and-swap on Bitbucket's `/src` endpoint (unverified live — see the issue's Phase 0 spike notes), so it uses a best-effort read-after-write check instead. A comment reprocessed by Bitbucket's own poll-every-run design (issue #874) is deduplicated by its source comment id, with no time window, distinct from the existing 10-minute dedup guard (issue #769). Bitbucket `feedback` command handling (the free-form note command) is tracked separately as issue #933.
+
 ## [2.13.2] - 2026-09-24
 
 ### Fixed

@@ -40,12 +40,14 @@ there is free.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
+from ai_pr_review.feedback.models import FeedbackEntry
 from ai_pr_review.slash.parser import (
     ParseError,
     SlashCommand,
@@ -54,8 +56,13 @@ from ai_pr_review.slash.parser import (
 from ai_pr_review.slash.parser import (
     _sanitize_reason as _sanitize_free_text,
 )
-from ai_pr_review.vcs._finding_ids import fingerprint_for_finding_id
+from ai_pr_review.vcs._finding_ids import fingerprint_for_finding_id, split_fingerprint
 from ai_pr_review.vcs.http import RecordingClient
+
+if TYPE_CHECKING:
+    # Deferred: see bitbucket.py's own TYPE_CHECKING import of the same name
+    # for why this can't be a top-level import.
+    from ai_pr_review.feedback.store import FeedbackStore
 from ai_pr_review.vcs.marker import (
     ACKS_MARKER_HIDDEN_PREFIX,
     SKIP_MARKER,
@@ -298,6 +305,12 @@ def check_authority(
     return "authorized" if role_rank >= min_rank else "unauthorized"
 
 
+def _utcnow_iso() -> str:
+    """Same timestamp format `slash/handlers.py`'s `build_entry` uses, so
+    entries from both providers are byte-identical in shape."""
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _reply_for_parse_error(actor: str, err: ParseError) -> str:
     token = err.unknown_token or "?"
     return (
@@ -336,7 +349,19 @@ def _reply_for_authority(actor: str, check: AuthorityCheck) -> str:
     )
 
 
-def _reply_for_verdict(actor: str, command: SlashCommand, verdict: Verdict) -> str:
+def _reply_for_verdict(
+    actor: str, command: SlashCommand, verdict: Verdict, *, persisted: bool | None,
+) -> str:
+    """*persisted* (issue #906):
+    - ``None`` -- the learning loop is off (``AI_FEEDBACK_LOOP`` unset), or
+      this verdict (``fixed``) never persists on either provider.
+    - ``True`` -- the entry was written to the learning-loop store.
+    - ``False`` -- writing was attempted and failed (e.g. the token lacks
+      Repository:Write, or a network/API error) -- fail-soft: the
+      suppression on this PR still took effect, only the cross-PR learning
+      is missing, and the reply says so plainly rather than the ambiguous
+      "applied, not persisted."
+    """
     if verdict == "fixed":
         sha_note = f" (commit `{command.commit_sha}`)" if command.commit_sha else ""
         return (
@@ -345,10 +370,19 @@ def _reply_for_verdict(actor: str, command: SlashCommand, verdict: Verdict) -> s
         )
     reply = (
         f"@{actor} marked **F{command.finding_id}** as `{command.name}`. "
-        "This finding is suppressed on this PR. This does not write to the "
-        "cross-repo learning-loop store on Bitbucket yet -- see "
-        "docs/learning-loop.md."
+        "This finding is suppressed on this PR."
     )
+    if persisted is None:
+        reply += (
+            " The learning loop is disabled on this repo, so future reviews "
+            "won't learn from this -- see docs/learning-loop.md to enable it."
+        )
+    elif persisted is False:
+        reply += (
+            " It was **not** saved to the learning-loop store, so future "
+            "reviews will not learn from this -- check that the Bitbucket "
+            "API token has Repository:Write (see docs/bitbucket-setup.md)."
+        )
     return reply
 
 
@@ -360,6 +394,7 @@ def apply_pending_verdicts(
     comments: Sequence[dict[str, Any]],
     existing_body: str,
     min_role: str,
+    feedback_store: FeedbackStore | None = None,
 ) -> VerdictPollResult:
     """Poll `comments` (already fetched by the caller, see bitbucket.py's
     `_fetch_comments` cache) for `/ai-pr-review` verdict commands and apply
@@ -369,6 +404,15 @@ def apply_pending_verdicts(
     resolve `F<n>` -> fingerprint (`fingerprint_for_finding_id`) and to
     read which comment ids are already acknowledged (`extract_acks`) so a
     rerun never double-replies.
+
+    `feedback_store` (issue #906): when given, a `false-positive`/`wont-fix`
+    verdict also persists a `FeedbackEntry` there (`fixed` never does, on
+    either provider -- see `_reply_for_verdict`'s docstring). `None` means
+    the learning loop is off for this run (``AI_FEEDBACK_LOOP`` unset);
+    every verdict still applies to the PR exactly as it always did, only
+    persistence is skipped. Authority for a store write is the same
+    `check_authority`/`min_role` check already gating suppression itself
+    (issue #906 Q8) -- no separate check.
     """
     from ai_pr_review.vcs.marker import extract_verdicts
 
@@ -461,7 +505,30 @@ def apply_pending_verdicts(
 
             verdict = _VERDICT_BY_CANONICAL_COMMAND[command.canonical_name]
             verdicts[fp] = verdict
-            replies.append((comment_id, _reply_for_verdict(actor, command, verdict)))
+
+            persisted: bool | None = None
+            if verdict == "dismissed" and feedback_store is not None:
+                source, file_, _line, _text_hash = split_fingerprint(fp)
+                entry = FeedbackEntry(
+                    ts=_utcnow_iso(),
+                    command=command.canonical_name,
+                    reason=command.reason,
+                    source=source,
+                    file=file_,
+                    extras={
+                        "finding_id": command.finding_id,
+                        # Issue #906 Q6: lets the store's comment-id dedup
+                        # recognize this exact command if the same comment
+                        # is reprocessed on a later run (see
+                        # _find_comment_id_duplicate's docstring).
+                        "source_comment_id": comment_id,
+                    },
+                )
+                persisted = feedback_store.append(entry)
+
+            replies.append(
+                (comment_id, _reply_for_verdict(actor, command, verdict, persisted=persisted))
+            )
 
         if comment_had_a_command and not comment_had_retryable_failure:
             newly_acked.append(comment_id)

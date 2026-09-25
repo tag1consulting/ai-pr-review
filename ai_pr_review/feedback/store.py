@@ -6,12 +6,16 @@ repository forks.
 
 ``FeedbackStore`` is the protocol all store implementations satisfy.
 ``GitBranchStore`` is the GitHub-backed implementation.
-``UnsupportedVcsStore`` is a no-op stub for GitLab / Bitbucket.
+``BitbucketSrcStore`` is the Bitbucket-backed implementation (issue #906).
+``UnsupportedVcsStore`` is a no-op stub for GitLab.
 
 Concurrency model: optimistic-lock via ETag / SHA-based if-match.  On a
 conflict (HTTP 409 or SHA mismatch) the store retries up to ``_MAX_RETRIES``
 times with random jitter before giving up (fail-soft: the review still posts,
-feedback is silently dropped with a WARNING log).
+feedback is silently dropped with a WARNING log). Bitbucket's ``/src``
+endpoint has no *confirmed* compare-and-swap of this kind (see
+``_BitbucketSrcBackend``'s docstring); it uses a best-effort read-after-write
+check that raises the same ``_ConflictError`` to reuse this retry loop.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import httpx
 
 from ai_pr_review.feedback.models import FeedbackEntry
 from ai_pr_review.feedback.retention import _parse_ts, apply_retention
+from ai_pr_review.vcs.http import RecordingClient, TapeRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +147,52 @@ def _find_recent_duplicate(
         if abs(new_dt - existing_dt) > _DEDUP_WINDOW:
             continue
         if _dedup_key(existing) == key:
+            return existing
+    return None
+
+
+def _find_comment_id_duplicate(
+    entry: FeedbackEntry, existing_entries: list[FeedbackEntry]
+) -> FeedbackEntry | None:
+    """Return the existing entry with the same `(source_comment_id,
+    finding_id)` pair, if any (issue #906 Q6 -- Bitbucket idempotency).
+
+    Bitbucket's verdict-command polling (`vcs/_bitbucket_verdicts.py`)
+    re-scans every PR comment on every pipeline run; a command only stops
+    being "pending" once its ack marker is saved in the summary body, which
+    happens *after* this store's write. If the store write succeeds but the
+    summary-body save then fails -- or the run is killed in between -- the
+    next run reprocesses the same comment and would otherwise append a
+    second, identical entry. Issue #769's `_find_recent_duplicate` above has
+    only a 10-minute window, deliberately: pipeline runs on Bitbucket can be
+    hours or days apart, so a content-based key with any time window would
+    either miss this case or risk swallowing a genuine re-dismissal. Keying
+    on the source comment id instead has no time window and needs none: a
+    genuinely new command on the same finding is posted as a *different*
+    comment (a fresh `/ai-pr-review` reply), so this can never suppress a
+    real re-dismissal the way a content-based key over a long window would.
+
+    `finding_id` is part of the key, not just `source_comment_id`, because
+    `parse_commands()` deliberately returns every `/ai-pr-review` line in one
+    comment (issue #733) -- a single comment posting both `false-positive F1`
+    and `wont-fix F2` produces two `append()` calls that share the same
+    `source_comment_id`. Keying on the comment id alone made the second
+    command's entry collide with the first's and get silently dropped, while
+    `append()` still returned True and the reply claimed it was saved --
+    caught in review before merge, never shipped.
+
+    Inert for any entry without `extras.source_comment_id` -- GitHub's
+    writer (`slash/handlers.py`'s `build_entry`) never sets this key, so
+    this cannot change GitHub's dedup behavior.
+    """
+    comment_id = entry.extras.get("source_comment_id")
+    if comment_id is None:
+        return None
+    key = (comment_id, entry.extras.get("finding_id"))
+    for existing in existing_entries:
+        if existing.extras.get("source_comment_id") is None:
+            continue
+        if (existing.extras.get("source_comment_id"), existing.extras.get("finding_id")) == key:
             return existing
     return None
 
@@ -297,7 +348,13 @@ class _StoreCore:
         # Parse existing (file is oldest-first; _parse_jsonl returns newest-first)
         existing_entries = self._parse_jsonl(existing)
 
-        duplicate_of = _find_recent_duplicate(entry, existing_entries)
+        # Comment-id dedup (issue #906 Q6) is checked first and has no time
+        # window; the #769 content-based dedup below is the fallback for
+        # entries that don't carry a source_comment_id (i.e. every GitHub
+        # entry, and any Bitbucket entry from before this field existed).
+        duplicate_of = _find_comment_id_duplicate(
+            entry, existing_entries
+        ) or _find_recent_duplicate(entry, existing_entries)
         if duplicate_of is not None:
             message = (
                 f"feedback store: skipped a duplicate append for "
@@ -644,6 +701,257 @@ class GitBranchStore:
         return _StoreCore._parse_jsonl(content)
 
 
+# ---------------------------------------------------------------------------
+# _BitbucketSrcBackend — Bitbucket Cloud /src endpoint backend (issue #906)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _BitbucketSrcBackend:
+    """Bitbucket Cloud ``/src`` endpoint backend for `_StoreCore`.
+
+    Concurrency (issue #906, Phase 0 spike, 2026-09-24): live-verified that
+    ``POST /src`` with ``branch=<new>`` and ``parents=<current head>`` both
+    creates a fresh branch from that parent and appends a commit to an
+    existing one. The one thing the spike could **not** verify is whether a
+    *stale* ``parents`` value is rejected (a real compare-and-swap) or
+    silently overwrites the branch — that specific write was blocked by
+    Claude Code's auto-mode classifier mid-spike, and Greg's call at that
+    point was to assume no CAS rather than retry. ``write()`` therefore
+    never trusts the POST response alone: on success it immediately
+    re-reads the file and raises ``_ConflictError`` if the content that
+    comes back isn't what was just written, so `_StoreCore.append()`'s
+    existing retry loop redoes the whole read-modify-write cycle against
+    fresh state (a couple of extra GETs, not one — the branch-head lookup
+    plus the file read). This is best-effort, not a guarantee: a narrow
+    window between the verify re-read and a concurrent writer's own commit
+    can still race. It is still strictly better than trusting an unverified
+    write. If Bitbucket's ``parents`` check does turn out to reject a stale
+    value (unverified either way), that would show up here as a write-time
+    HTTP error rather than a silent bad read-after-write — either path ends
+    up retried the same way.
+    """
+
+    workspace: str
+    repo_slug: str
+    branch: str
+    client: RecordingClient
+
+    def _repo_path(self) -> str:
+        return f"/repositories/{self.workspace}/{self.repo_slug}"
+
+    def _refs_branch_url(self, branch: str) -> str:
+        return f"{self._repo_path()}/refs/branches/{branch}"
+
+    def _src_file_url(self, revision: str) -> str:
+        return f"{self._repo_path()}/src/{revision}/{_STORE_PATH}"
+
+    def _branch_head(self, branch: str) -> str | None:
+        """Return *branch*'s current head commit hash, or None if the branch
+        doesn't exist. Raises ``httpx.HTTPStatusError``/``httpx.TransportError``
+        on any other failure -- callers decide how to handle that."""
+        resp = self.client.request("GET", self._refs_branch_url(branch))
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        head = data.get("target", {}).get("hash")
+        if not head:
+            raise RuntimeError(
+                f"Bitbucket refs/branches response for {branch!r} had no "
+                f"target.hash: {data!r}"
+            )
+        return str(head)
+
+    def read(self) -> tuple[str | None, str | None]:
+        head = self._branch_head(self.branch)
+        if head is None:
+            return None, None
+        resp = self.client.request("GET", self._src_file_url(head))
+        if resp.status_code == 404:
+            # Branch exists (confirmed above) but the file doesn't yet --
+            # still return the branch head as the version token so a
+            # subsequent write anchors its `parents` to it.
+            return None, head
+        resp.raise_for_status()
+        return resp.text, head
+
+    def write(self, content: str, version: object | None) -> None:
+        if version is None:
+            # Our own read() couldn't resolve a branch head, i.e. `self.branch`
+            # doesn't exist yet -- signal the same way `_GitHubContentsBackend`
+            # does so `_StoreCore.append()` takes its existing
+            # bootstrap-then-retry path.
+            raise _MissingBranchError(self.branch)
+
+        fields = {
+            "branch": self.branch,
+            "parents": str(version),
+            "message": "chore: update AI review feedback store",
+            _STORE_PATH: content,
+        }
+        resp = self.client.request_multipart(
+            "POST", f"{self._repo_path()}/src", fields=fields,
+        )
+        if resp.status_code == 404:
+            # The branch vanished between our read() and this write (a race
+            # with something else deleting it), or the repo/workspace is
+            # wrong. Either way, the missing-branch path is the right one:
+            # `append()`'s bootstrap_attempted guard still prevents a loop.
+            raise _MissingBranchError(self.branch)
+        resp.raise_for_status()
+
+        # Best-effort conflict detection -- see this class's docstring. The
+        # POST above has already committed by this point, so a failure in
+        # this check read must never surface as a generic error: that would
+        # tell `_StoreCore.append()` to report a write that actually
+        # succeeded as failed (and, for the RuntimeError case, with a
+        # misleading "file may exceed 1 MB" message that has nothing to do
+        # with what happened). Map any failure here to `_ConflictError`
+        # instead, so the existing retry loop re-reads fresh state: if this
+        # exact write already landed, the comment-id dedup (issue #906 Q6)
+        # recognizes it on the retry and `append()` still returns True with
+        # no second write; if something else is genuinely wrong, the retry's
+        # own read()/write() will surface that on its own terms.
+        try:
+            verify_content, _verify_head = self.read()
+        except (httpx.TransportError, httpx.HTTPStatusError, RuntimeError):
+            raise _ConflictError(0) from None
+        if verify_content != content:
+            raise _ConflictError(0)
+
+    def branch_exists(self) -> bool | None:
+        try:
+            head = self._branch_head(self.branch)
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: Bitbucket branch existence check transport error: %s",
+                exc,
+            )
+            return None
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "feedback store: Bitbucket branch existence check returned unexpected status: %s",
+                exc,
+            )
+            return None
+        return head is not None
+
+    def bootstrap_branch(self) -> bool:
+        """Create ``self.branch`` from the repo's default (main) branch HEAD."""
+        try:
+            repo_resp = self.client.request("GET", self._repo_path())
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: Bitbucket bootstrap aborted — transport error fetching repo: %s",
+                exc,
+            )
+            return False
+        if repo_resp.status_code != 200:
+            logger.warning(
+                "feedback store: Bitbucket bootstrap aborted — GET %s returned %d: %s",
+                self._repo_path(), repo_resp.status_code, repo_resp.text[:200],
+            )
+            return False
+        try:
+            default_branch = repo_resp.json().get("mainbranch", {}).get("name") or "main"
+        except ValueError as exc:
+            logger.warning(
+                "feedback store: Bitbucket bootstrap aborted — bad JSON from repo endpoint: %s",
+                exc,
+            )
+            return False
+
+        try:
+            default_head = self._branch_head(default_branch)
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            logger.warning(
+                "feedback store: Bitbucket bootstrap aborted — could not resolve %r HEAD: %s",
+                default_branch, exc,
+            )
+            return False
+        if default_head is None:
+            logger.warning(
+                "feedback store: Bitbucket bootstrap aborted — default branch %r not found",
+                default_branch,
+            )
+            return False
+
+        try:
+            create_resp = self.client.request(
+                "POST",
+                f"{self._repo_path()}/refs/branches",
+                json_body={"name": self.branch, "target": {"hash": default_head}},
+            )
+        except httpx.TransportError as exc:
+            logger.warning(
+                "feedback store: Bitbucket bootstrap aborted — transport error creating branch: %s",
+                exc,
+            )
+            return False
+        # 201 = created; 400 "already exists" = race with a concurrent run -- both OK.
+        if create_resp.status_code == 201:
+            logger.info(
+                "feedback store: bootstrapped Bitbucket branch %r from %r@%s",
+                self.branch, default_branch, default_head[:7],
+            )
+            return True
+        if create_resp.status_code == 400 and "already exists" in create_resp.text.lower():
+            return True
+        logger.warning(
+            "feedback store: Bitbucket branch create returned %d: %s "
+            "(401/403 = token lacks Repository:Write; 404 = repo missing)",
+            create_resp.status_code, create_resp.text[:200],
+        )
+        return False
+
+
+@dataclass
+class BitbucketSrcStore:
+    """Persist feedback entries in a JSONL file on a dedicated Bitbucket
+    branch, mirroring ``GitBranchStore`` (issue #906).
+
+    Parameters
+    ----------
+    workspace, repo_slug:
+        Bitbucket ``workspace``/``repo_slug`` (from ``BitbucketConfig``).
+    branch:
+        Branch name (default ``ai-pr-review-bot``, same as GitHub).
+    client:
+        A `RecordingClient` already configured with Bitbucket auth
+        (``build_client()`` in ``vcs/bitbucket.py``) -- reused rather than
+        built fresh so this store's writes get the same retry/tape
+        recording every other Bitbucket call already has.
+    retention_count, retention_age_days:
+        Same semantics as `GitBranchStore`.
+    """
+
+    workspace: str
+    repo_slug: str
+    branch: str
+    client: RecordingClient
+    retention_count: int = 500
+    retention_age_days: int = 365
+
+    def __post_init__(self) -> None:
+        self._backend = _BitbucketSrcBackend(
+            workspace=self.workspace,
+            repo_slug=self.repo_slug,
+            branch=self.branch,
+            client=self.client,
+        )
+        self._core = _StoreCore(
+            backend=self._backend,
+            retention_count=self.retention_count,
+            retention_age_days=self.retention_age_days,
+        )
+
+    def append(self, entry: FeedbackEntry) -> bool:
+        return self._core.append(entry)
+
+    def load_recent(self) -> list[FeedbackEntry]:
+        return self._core.load_recent()
+
+
 class _ConflictError(Exception):
     """Internal: optimistic-lock conflict on PUT."""
 
@@ -668,16 +976,86 @@ class _MissingBranchError(Exception):
 # Factory
 # ---------------------------------------------------------------------------
 
+def _bitbucket_store_from_env(
+    *,
+    workspace: str,
+    repo_slug: str,
+    email: str,
+    api_token: str,
+    branch: str,
+    retention_count: int,
+    retention_age_days: int,
+) -> BitbucketSrcStore:
+    """Shared construction helper (issue #906 Q11): build a `BitbucketSrcStore`
+    over a fresh `RecordingClient`. Used by `make_store()` (the read path,
+    which has no access to an already-built provider client) and reusable by
+    `vcs/bitbucket.py`'s provider construction (the write path, which builds
+    its store over its own already-configured `RecordingClient` instead of
+    calling this) if it ever needs the same defaults.
+    """
+    http = httpx.Client(
+        base_url="https://api.bitbucket.org/2.0",
+        auth=httpx.BasicAuth(email, api_token),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        timeout=30.0,
+    )
+    client = RecordingClient(http=http, recorder=TapeRecorder.from_env(provider="bitbucket"))
+    return BitbucketSrcStore(
+        workspace=workspace,
+        repo_slug=repo_slug,
+        branch=branch,
+        client=client,
+        retention_count=retention_count,
+        retention_age_days=retention_age_days,
+    )
+
+
 def make_store(config: object) -> FeedbackStore:
     """Build the appropriate store from *config*.
 
     Reads ``config.vcs_provider``, ``config.feedback_branch``,
     ``config.feedback_retention_count``, ``config.feedback_retention_age_days``.
-    Falls back to ``UnsupportedVcsStore`` for non-GitHub VCS providers.
+    For Bitbucket, also reads ``config.bitbucket_workspace``/``bitbucket_repo_slug``
+    (falling back to ``BITBUCKET_WORKSPACE``/``BITBUCKET_REPO_SLUG`` env vars)
+    and ``BITBUCKET_EMAIL``/``BITBUCKET_API_TOKEN``.
+    Falls back to ``UnsupportedVcsStore`` for GitLab, or on any missing
+    GitHub/Bitbucket credential.
     """
     import os
 
     vcs = getattr(config, "vcs_provider", "").lower()
+
+    if vcs == "bitbucket":
+        email = os.environ.get("BITBUCKET_EMAIL", "").strip()
+        api_token = os.environ.get("BITBUCKET_API_TOKEN", "").strip()
+        if not email or not api_token:
+            logger.warning(
+                "feedback store: no BITBUCKET_EMAIL/BITBUCKET_API_TOKEN; store disabled"
+            )
+            return UnsupportedVcsStore()
+
+        workspace = (getattr(config, "bitbucket_workspace", "") or "").strip() or (
+            os.environ.get("BITBUCKET_WORKSPACE", "").strip()
+        )
+        repo_slug = (getattr(config, "bitbucket_repo_slug", "") or "").strip() or (
+            os.environ.get("BITBUCKET_REPO_SLUG", "").strip()
+        )
+        if not workspace or not repo_slug:
+            logger.warning(
+                "feedback store: no BITBUCKET_WORKSPACE/BITBUCKET_REPO_SLUG; store disabled"
+            )
+            return UnsupportedVcsStore()
+
+        return _bitbucket_store_from_env(
+            workspace=workspace,
+            repo_slug=repo_slug,
+            email=email,
+            api_token=api_token,
+            branch=getattr(config, "feedback_branch", "ai-pr-review-bot"),
+            retention_count=getattr(config, "feedback_retention_count", 500),
+            retention_age_days=getattr(config, "feedback_retention_age_days", 365),
+        )
+
     if vcs != "github":
         return UnsupportedVcsStore()
 

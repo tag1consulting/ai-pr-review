@@ -683,3 +683,160 @@ def test_verdict_polling_errors_are_logged_not_only_absorbed_into_success(caplog
         )
     assert result.ok, result.error
     assert any("verdict polling error" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# feedback_store persistence (issue #906)
+# ---------------------------------------------------------------------------
+
+class _FakeFeedbackStore:
+    """Records every `append()` call; `succeed` controls the return value."""
+
+    def __init__(self, *, succeed: bool = True) -> None:
+        self.succeed = succeed
+        self.appended: list = []
+
+    def append(self, entry) -> bool:
+        self.appended.append(entry)
+        return self.succeed
+
+    def load_recent(self) -> list:
+        return []
+
+
+def _apply_verdicts_directly(
+    *, comments: list[dict], permissions: dict[str, str], feedback_store=None,
+):
+    from ai_pr_review.vcs._bitbucket_verdicts import apply_pending_verdicts
+
+    handler = _build_handler(comments=comments, permissions=permissions)
+    client = RecordingClient(
+        http=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.bitbucket.org/2.0"),
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    return apply_pending_verdicts(
+        client, workspace="ws", repo_slug="repo", comments=comments,
+        existing_body=_summary_body(), min_role="write", feedback_store=feedback_store,
+    )
+
+
+def test_false_positive_persists_feedback_entry_when_store_given() -> None:
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=True)
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert result.verdicts[_FP] == "dismissed"
+    assert len(store.appended) == 1
+    entry = store.appended[0]
+    assert entry.command == "false-positive"
+    assert entry.extras["finding_id"] == 1
+    assert entry.extras["source_comment_id"] == 200
+    reply_text = dict(result.replies)[200]
+    assert "not** saved" not in reply_text
+    assert "disabled" not in reply_text
+
+
+def test_wont_fix_persists_feedback_entry_when_store_given() -> None:
+    cmd = _command_comment(200, "/ai-pr-review wont-fix F1 accepted risk")
+    store = _FakeFeedbackStore(succeed=True)
+    _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert len(store.appended) == 1
+    assert store.appended[0].command == "wont-fix"
+
+
+def test_fixed_command_never_calls_feedback_store() -> None:
+    """`fixed` sets its own "fixed" tombstone verdict (distinct from
+    "dismissed") but is never a feedback-store verdict on either provider --
+    see `_reply_for_verdict`'s docstring and `_VERDICT_BY_CANONICAL_COMMAND`.
+    """
+    cmd = _command_comment(200, "/ai-pr-review fixed F1 abc1234")
+    store = _FakeFeedbackStore(succeed=True)
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert result.verdicts[_FP] == "fixed"
+    assert store.appended == []
+
+
+def test_no_feedback_store_reply_states_learning_loop_disabled() -> None:
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=None,
+    )
+    reply_text = dict(result.replies)[200]
+    assert "learning loop is disabled" in reply_text
+
+
+def test_feedback_store_write_failure_reply_states_not_saved() -> None:
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=False)
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert len(store.appended) == 1  # the attempt happened
+    reply_text = dict(result.replies)[200]
+    assert "not** saved" in reply_text
+    assert "Repository:Write" in reply_text
+
+
+def test_unauthorized_commenter_never_reaches_feedback_store() -> None:
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=True)
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "read"}, feedback_store=store,
+    )
+    assert result.verdicts == {}
+    assert store.appended == []
+
+
+def test_two_verdict_commands_in_one_comment_both_persist() -> None:
+    """apply_pending_verdicts() builds and attempts a separate FeedbackEntry
+    per command, even when two verdicts share one comment (parse_commands()
+    returns every /ai-pr-review line in one comment, issue #733) and
+    therefore one source_comment_id.
+
+    This uses a recording fake store, so it does NOT exercise the real
+    dedup guard in feedback/store.py -- that guard (keying on
+    (source_comment_id, finding_id), not source_comment_id alone) is
+    covered directly by
+    test_bitbucket_store_dedup_key_includes_finding_id_not_just_comment_id
+    in tests/python/test_feedback_store.py, against the real
+    BitbucketSrcStore. Both tests exist because this one alone would have
+    passed even against the collision bug that test caught (the fake store
+    here has no dedup logic to collide in), so it isn't a substitute --
+    verified directly by reverting the fix and re-running both."""
+    from ai_pr_review.vcs._bitbucket_verdicts import apply_pending_verdicts
+    from ai_pr_review.vcs._finding_ids import fingerprint
+
+    finding2 = Finding(
+        severity="Medium", confidence=85, finding="unused import", file="b.py", line=1,
+    )
+    fp2 = fingerprint(finding2)
+    id_map_marker = build_id_map_marker({_FP: 1, fp2: 2}, hidden=True)
+    existing_body = (
+        f"{SUMMARY_MARKER_PREFIX} sha={_HEAD} -->\n## AI Review: Request Changes\n\n"
+        f"- **[F1]** HIGH: hardcoded secret\n- **[F2]** MEDIUM: unused import\n\n{id_map_marker}"
+    )
+    cmd = _command_comment(
+        200,
+        "/ai-pr-review false-positive F1 not exploitable\n"
+        "/ai-pr-review wont-fix F2 cleanup later",
+    )
+    store = _FakeFeedbackStore(succeed=True)
+    handler = _build_handler(comments=[cmd], permissions={"acct-1": "write"})
+    client = RecordingClient(
+        http=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.bitbucket.org/2.0"),
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    apply_pending_verdicts(
+        client, workspace="ws", repo_slug="repo", comments=[cmd],
+        existing_body=existing_body, min_role="write", feedback_store=store,
+    )
+
+    assert len(store.appended) == 2, "both commands from the same comment must persist"
+    assert {e.extras.get("finding_id") for e in store.appended} == {1, 2}

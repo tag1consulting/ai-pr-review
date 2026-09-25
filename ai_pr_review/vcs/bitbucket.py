@@ -25,10 +25,18 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
+
+if TYPE_CHECKING:
+    # Deferred: `feedback.store` imports `vcs.http`, which would otherwise
+    # import this module back (via `ai_pr_review.vcs`'s package `__init__`)
+    # before it finishes executing. `from __future__ import annotations`
+    # above means this is fine for annotations; `_get_feedback_store` does
+    # the real (runtime, local) import itself.
+    from ai_pr_review.feedback.store import FeedbackStore
 
 from ai_pr_review.diff.linemap import parse_diff_sets
 from ai_pr_review.findings.models import Finding, Severity
@@ -144,6 +152,16 @@ class BitbucketConfig:
     # is a visible, potentially merge-affecting side effect on someone
     # else's PR that a workspace admin may want to opt out of.
     review_state: bool = True
+    # Learning-loop store settings (issue #906). Gated by the same
+    # AI_FEEDBACK_LOOP flag GitHub uses -- no separate Bitbucket-only flag,
+    # since writing here needs no capability beyond what reading already
+    # required plus Repository:Write on the token (see docs/bitbucket-setup.md's
+    # security note on that scope). Only takes effect when `verdicts` is also
+    # True: there is nothing to persist without the verdict poller running.
+    enable_feedback_loop: bool = False
+    feedback_branch: str = "ai-pr-review-bot"
+    feedback_retention_count: int = 500
+    feedback_retention_age_days: int = 365
 
 
 def build_client(
@@ -187,6 +205,40 @@ class BitbucketProvider:
     # once-per-comment for the rest of the run.
     _bot_account_id_cache: str | None = field(default=None, init=False, repr=False)
     _bot_account_id_resolved: bool = field(default=False, init=False, repr=False)
+    # Lazily built (issue #906): most runs never persist a verdict, so
+    # there's no reason to construct a store up front. _UNRESOLVED
+    # (sentinel, not None) distinguishes "not built yet" from "feedback
+    # loop disabled" (a real, cached None), matching this class's own
+    # _bot_account_id_cache/_bot_account_id_resolved precedent above.
+    _feedback_store_cache: FeedbackStore | None = field(default=None, init=False, repr=False)
+    _feedback_store_resolved: bool = field(default=False, init=False, repr=False)
+
+    def _get_feedback_store(self) -> FeedbackStore | None:
+        """Return this provider's `BitbucketSrcStore`, built over its own
+        already-configured `RecordingClient` (so writes share the retry/
+        tape-recording behavior every other Bitbucket call already has),
+        or None when `AI_FEEDBACK_LOOP` is off. Local import: `feedback.store`
+        imports `vcs.http`, which would otherwise import this module back
+        (via `ai_pr_review.vcs`'s package `__init__`) before it finishes
+        executing.
+        """
+        if self._feedback_store_resolved:
+            return self._feedback_store_cache
+        self._feedback_store_resolved = True
+        if not self.config.enable_feedback_loop:
+            return None
+        from ai_pr_review.feedback.store import BitbucketSrcStore
+
+        store = BitbucketSrcStore(
+            workspace=self.config.workspace,
+            repo_slug=self.config.repo_slug,
+            branch=self.config.feedback_branch,
+            client=self.client,
+            retention_count=self.config.feedback_retention_count,
+            retention_age_days=self.config.feedback_retention_age_days,
+        )
+        self._feedback_store_cache = store
+        return store
 
     # ------------------------------------------------------------------
     # URL helpers
@@ -620,6 +672,7 @@ class BitbucketProvider:
                         # here.
                         existing_body=existing_body,
                         min_role=self.config.verdict_min_role,
+                        feedback_store=self._get_feedback_store(),
                     )
                     freshly_set_fps = frozenset(
                         fp
