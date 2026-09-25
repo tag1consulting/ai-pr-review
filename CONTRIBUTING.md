@@ -164,6 +164,20 @@ This is a larger contribution. The pattern:
 
 See [docs/architecture-internals.md](docs/architecture-internals.md#multi-provider-support-github--bitbucket-cloud--gitlab) for how the provider abstraction works.
 
+## End-to-end test harness
+
+`tests/e2e/` is a deterministic Python harness that validates the built review container against real throwaway PRs/MRs on the GitHub, GitLab, and Bitbucket test repos, verifying posted output with plain code (telemetry JSON + fetched comments/annotations) rather than LLM-transcribed shell output.
+
+**What it's for:** release-gate validation (see CLAUDE.md's Release process) and local reproduction of a suspected posting/formatting/model regression against a real platform.
+
+**Required env vars:** `E2E_GITHUB_TOKEN` (+ optional `E2E_GITHUB_REVIEWER_TOKEN`), `E2E_GITLAB_TOKEN`, `E2E_BITBUCKET_EMAIL`/`E2E_BITBUCKET_TOKEN`, `E2E_ANTHROPIC_API_KEY` (falls back to `ANTHROPIC_API_KEY`). See `tests/e2e/README.md` for the full table.
+
+**Exit codes:** `0` pass, `1` product failure (the review ran but produced incorrect behavior), `2` infra failure (auth, quota, rate limit, cost-ceiling skip, timeout, or a cleanup failure on the pass path).
+
+**CHECKPOINT:** `run` and `preflight` make real, billed LLM API calls and real platform API calls against the shared test repos. Never invoke either — locally via `tests/e2e/run-local.sh` or via CI's `workflow_dispatch` — without first stopping and getting explicit human confirmation for that specific invocation. `plan` is the only free, fully offline subcommand.
+
+Unit tests for the harness's pure verification logic (`tests/e2e/verify.py`) live in `tests/python/e2e_harness/` and run as part of the normal `pytest tests/python` suite — no network calls, no cost.
+
 ## Pre-PR checklist
 
 Before opening a pull request:

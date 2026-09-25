@@ -136,6 +136,19 @@ mypy ai_pr_review/                      # 99 source files, must be clean
 ruff check ai_pr_review/ tests/python/  # E,F,W,I,UP,B,SIM rules
 ```
 
+## End-to-end test harness
+
+`tests/e2e/` is a deterministic Python harness (replacing the old ~815-line
+LLM-orchestrated e2e script) that opens throwaway PRs/MRs on the real
+GitHub/GitLab/Bitbucket test repos, runs the built review container, and
+verifies posted output with plain code (telemetry JSON + fetched
+comments/annotations) instead of LLM-transcribed shell output. See
+`tests/e2e/README.md` for subcommands, exit codes, required env vars, and
+the checkpoint-before-live-run cost warning — `run`/`preflight` make real,
+billed API calls. Unit tests for its pure verification logic live in
+`tests/python/e2e_harness/` and run as part of the normal `pytest
+tests/python` suite (no network calls, no cost).
+
 ## Deep reference
 
 For detailed implementation internals (findings pipeline, parallel execution, caching, suggestions, suppressions, token accounting, retry/resilience, test architecture, Dockerfile layout), see [docs/architecture-internals.md](docs/architecture-internals.md).
@@ -145,8 +158,8 @@ For contributor how-tos (adding an analyzer, agent, language profile, or VCS pro
 ## Release process
 
 1. **Run `/comprehensive-review`** on the release branch before tagging.
-2. **Run `Workflow({name: 'ai-pr-review-e2e'})`** to build the image from the current checkout and validate it against all three test platforms (GitHub PR #1, GitLab MR !34, Bitbucket PR #2). The workflow throws on failure — do not tag until it passes. Supports `args.mode` (`quick`/`full`, default `full`) and `args.platforms` for targeted runs.
-3. **Tag and push** — `publish-image.yml` promotes `:dev` to `:v1.x.x` + `:latest`.
+2. **The `e2e-gate` required GitHub Actions check must pass** on the release PR (workflow at `.github/workflows/e2e.yml`, added separately from the harness code). It runs the deterministic e2e harness (`tests/e2e/`, see its README) against all three test platforms — do not tag until it passes.
+3. **Tag and push** — `publish-image.yml` rebuilds the image from the tagged source for both `amd64`/`arm64` and pushes `:vX.X.X` + `:latest`; it does not simply promote the existing `:dev` image.
 
 This action is consumed via direct action reference (`@main`, `@v1.0`) or as a git submodule. Breaking changes require a version bump and coordinated updates in consuming repos.
 

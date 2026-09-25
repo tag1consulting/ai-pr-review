@@ -1,0 +1,244 @@
+name: E2E Release Gate
+
+# Deterministic replacement for the old LLM-orchestrated e2e workflow
+# (ai-pr-review-e2e.js). See tests/e2e/README.md for the harness this
+# workflow drives. This is a release-branch merge gate: it opens throwaway
+# PRs/MRs on the ai-pr-review-test repos across GitHub, GitLab, and
+# Bitbucket, runs the built review image against them, and verifies posting
+# deterministically (tests/e2e/verify.py) instead of via LLM transcription.
+#
+# Live legs only run for same-repo PRs whose HEAD branch matches
+# `release/*`. All other PRs get a same-named passing check with the legs
+# skipped, so this never blocks ordinary development.
+#
+# `pull_request` (not `pull_request_target`) is used deliberately: this job
+# builds and runs PR code with real secrets, and must never do that for a
+# fork PR. A `pull_request` `branches:` filter matches the PR's BASE branch,
+# not its head, so branch selection is done in `if:` against
+# `github.head_ref` instead (a documented correctness bug in an earlier
+# draft of this workflow used `branches: [release/*]`, which would have
+# matched merges *into* a branch called release/*, not releases themselves).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "full or quick"
+        default: full
+      platforms:
+        description: "comma-separated platform list"
+        default: "github,gitlab,bitbucket"
+  schedule:
+    # Weekly credential/access check only -- no LLM calls, no PRs opened.
+    # Catches an expired token before release day instead of during it.
+    - cron: '0 8 * * 1'
+
+concurrency:
+  group: e2e-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  eligibility:
+    name: Eligibility and offline checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and dev/context extras
+        run: pip install --quiet ".[dev,context]"
+
+      - name: Offline harness tests
+        run: |
+          ruff check tests/e2e/ tests/python/e2e_harness/
+          mypy --strict tests/e2e/
+          pytest tests/python/e2e_harness -q
+
+      - name: Validate platform selection (no network)
+        run: python -m tests.e2e.run_e2e plan --profile release --platforms github --platforms gitlab --platforms bitbucket
+
+      - name: Determine release eligibility
+        id: check
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          IS_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          elif [ "$IS_SAME_REPO" = "true" ] && [ "$IS_DRAFT" != "true" ] && [[ "$HEAD_REF" == release/* ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  weekly-preflight:
+    name: Weekly credential check
+    needs: eligibility
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package
+        run: pip install --quiet ".[dev,context]"
+
+      - name: Preflight all platforms (no LLM calls, no PRs)
+        id: preflight
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_REVIEWER_TOKEN: ${{ secrets.E2E_GITHUB_REVIEWER_TOKEN }}
+          E2E_GITLAB_TOKEN: ${{ secrets.E2E_GITLAB_TOKEN }}
+          E2E_BITBUCKET_EMAIL: ${{ secrets.E2E_BITBUCKET_EMAIL }}
+          E2E_BITBUCKET_TOKEN: ${{ secrets.E2E_BITBUCKET_TOKEN }}
+        run: python -m tests.e2e.run_e2e preflight --platforms github --platforms gitlab --platforms bitbucket
+
+      - name: File an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --repo "$REPO" --label bug \
+            --title "E2E weekly preflight failed" \
+            --body "The scheduled e2e-harness credential preflight failed. See the run log for which platform: ${RUN_URL}"
+
+  build:
+    name: Build review image
+    needs: eligibility
+    if: needs.eligibility.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image (no secrets)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          tags: ai-pr-review:e2e-candidate
+          outputs: type=docker,dest=/tmp/ai-pr-review-e2e-image.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e2e-image
+          path: /tmp/ai-pr-review-e2e-image.tar
+          retention-days: 1
+
+  e2e:
+    name: E2E (${{ matrix.platform }})
+    needs: [eligibility, build]
+    if: needs.eligibility.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [github, gitlab, bitbucket]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package
+        run: pip install --quiet ".[dev,context]"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: e2e-image
+          path: /tmp
+
+      - name: Load image
+        run: docker load --input /tmp/ai-pr-review-e2e-image.tar
+
+      - name: Run e2e harness
+        id: run
+        env:
+          # The harness must exercise the image built from THIS PR's code,
+          # not whatever is already published under :dev -- that is the
+          # entire point of a release gate. See run_e2e.py's _run_container.
+          AI_PR_REVIEW_E2E_IMAGE: ai-pr-review:e2e-candidate
+          E2E_ANTHROPIC_API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_REVIEWER_TOKEN: ${{ secrets.E2E_GITHUB_REVIEWER_TOKEN }}
+          E2E_GITLAB_TOKEN: ${{ secrets.E2E_GITLAB_TOKEN }}
+          E2E_BITBUCKET_EMAIL: ${{ secrets.E2E_BITBUCKET_EMAIL }}
+          E2E_BITBUCKET_TOKEN: ${{ secrets.E2E_BITBUCKET_TOKEN }}
+        run: |
+          python -m tests.e2e.run_e2e run \
+            --platforms "${{ matrix.platform }}" \
+            --mode "${{ github.event.inputs.mode || 'full' }}" \
+            --out-dir "$GITHUB_WORKSPACE/e2e-out/${{ matrix.platform }}"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-evidence-${{ matrix.platform }}
+          path: e2e-out/${{ matrix.platform }}
+          retention-days: 14
+
+      # No separate cancellation-cleanup step: run_e2e.py installs its own
+      # SIGTERM/SIGINT handler (_install_signal_handlers) that closes any
+      # PR/MR the run opened before the process exits. A GitHub Actions
+      # job cancellation sends SIGTERM to the step's process, which this
+      # handler catches directly -- a second out-of-process cleanup
+      # invocation would just race the first one.
+
+  e2e-gate:
+    name: e2e-gate
+    needs: [eligibility, build, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate gate
+        run: |
+          if [ "${{ needs.eligibility.outputs.is_release }}" != "true" ]; then
+            echo "Not a release/* PR -- e2e legs not required."
+            exit 0
+          fi
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "Build job did not succeed: ${{ needs.build.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "One or more e2e legs did not succeed: ${{ needs.e2e.result }}"
+            echo "A skipped or cancelled leg counts as a failure here -- it is not evidence of a passing release."
+            exit 1
+          fi
+          echo "All required e2e legs passed."
