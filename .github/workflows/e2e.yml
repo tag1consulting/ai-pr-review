@@ -295,12 +295,24 @@ jobs:
           E2E_GITLAB_TOKEN: ${{ secrets.E2E_GITLAB_TOKEN }}
           E2E_BITBUCKET_EMAIL: ${{ secrets.E2E_BITBUCKET_EMAIL }}
           E2E_BITBUCKET_TOKEN: ${{ secrets.E2E_BITBUCKET_TOKEN }}
+          # Passed via env rather than interpolated directly into the shell
+          # command below: workflow_dispatch inputs are free-text and a
+          # value containing shell metacharacters (quotes, `;`, `$(...)`)
+          # would be interpreted by the shell if substituted inline via
+          # `${{ }}` inside `run:`. workflow_dispatch requires write access
+          # to trigger, so this isn't attacker-reachable from PR content the
+          # way an issue/PR title would be, but there's no reason to accept
+          # that risk when env-var passthrough (which the shell does not
+          # re-interpret) costs nothing.
+          E2E_MODE: ${{ github.event.inputs.mode || 'full' }}
+          E2E_MAX_COST_USD: ${{ github.event.inputs.max_cost_usd || '6.00' }}
+          E2E_PLATFORM: ${{ matrix.platform }}
         run: |
           python -m tests.e2e.run_e2e run \
-            --platforms "${{ matrix.platform }}" \
-            --mode "${{ github.event.inputs.mode || 'full' }}" \
-            --max-cost-usd "${{ github.event.inputs.max_cost_usd || '6.00' }}" \
-            --out-dir "$GITHUB_WORKSPACE/e2e-out/${{ matrix.platform }}"
+            --platforms "$E2E_PLATFORM" \
+            --mode "$E2E_MODE" \
+            --max-cost-usd "$E2E_MAX_COST_USD" \
+            --out-dir "$GITHUB_WORKSPACE/e2e-out/$E2E_PLATFORM"
 
       - name: Upload evidence
         if: always()
