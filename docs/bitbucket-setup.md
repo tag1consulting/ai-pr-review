@@ -148,7 +148,11 @@ scopes](#3-grant-pr-scopes) below). If the token lacks that scope, or the
 write fails for any other reason, the finding is still suppressed on
 this PR; the bot's reply says plainly that the entry was **not** saved
 and that future reviews will not learn from it, rather than silently
-degrading. If `AI_FEEDBACK_LOOP` is off, the reply says so instead.
+degrading. If `AI_FEEDBACK_LOOP` is off, the reply says so instead. A
+missing scope produces exactly one "not saved" reply per verdict (issue
+#941), and it does not repeat on every later pipeline run. Once the
+scope is added, the same verdict saves automatically the next time the
+review runs, with no need to re-post the command.
 
 ## What does not work on Bitbucket
 

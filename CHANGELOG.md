@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bitbucket: a permanently-failing feedback-store write (a token missing `Repository:Write`) or a repeatedly-degraded permission check no longer accumulates a duplicate reply comment on every pipeline run (issue #941)**. Each reply now carries a stable outcome key hashed into a hidden marker, so a later run skips posting one already present under the same comment and posts a fresh one automatically once the outcome changes (for example once the token scope is fixed). The `BitbucketSrcStore` feedback backend also stops attempting further store writes for the rest of a run after its first 401/403, so a misconfigured token produces one warning per run instead of repeating the same doomed request for every pending comment.
+
 ## [2.14.0] - 2026-09-25
 
 ### Added

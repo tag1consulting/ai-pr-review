@@ -745,6 +745,32 @@ class _BitbucketSrcBackend:
     branch: str
     client: RecordingClient
 
+    # Issue #941: set once this backend observes a 401/403 on an actual
+    # write-path request: the `/src` POST in `write()`, or bootstrap's
+    # repo GET / branch-create POST in `bootstrap_branch()`. A token
+    # missing Repository:Write fails identically on every future call of
+    # these within the same run -- there is nothing a same-run retry
+    # gains from repeating them, only more failed API calls and
+    # duplicate WARNING logs (each already logged once, inline, by
+    # `_StoreCore.append()`'s own `httpx.HTTPStatusError` handler, the
+    # first time one of these calls raised).
+    #
+    # Deliberately narrower than "any 401/403 this backend sees":
+    # `_branch_head()` (the branch-head lookup shared by `read()` and
+    # `write()`) does NOT set this flag, even though it can also see a
+    # 401/403 -- see its own docstring for why (issue #941 review
+    # finding: a transient GET-only blip there, whether from `write()`'s
+    # pre-write read, its post-write best-effort verify-read, or a
+    # `load_recent()` call, must not be conflated with a durable
+    # write-permission problem and silently suppress every later
+    # `append()` this run).
+    #
+    # Deliberately per-instance (not persisted anywhere), so the *next*
+    # pipeline run always gets a fresh attempt: if the token scope is
+    # fixed between runs, this self-heals with no special-casing
+    # anywhere.
+    auth_failed: bool = field(default=False, init=False, repr=False)
+
     def _repo_path(self) -> str:
         return f"/repositories/{self.workspace}/{self.repo_slug}"
 
@@ -761,6 +787,20 @@ class _BitbucketSrcBackend:
         resp = self.client.request("GET", self._refs_branch_url(branch))
         if resp.status_code == 404:
             return None
+        # Issue #941 review finding: deliberately does NOT set
+        # `auth_failed` on a 401/403 here. This method is shared,
+        # undifferentiated code reached from both a write attempt
+        # (`write()`'s pre-write `_append_once` read, and its post-write
+        # best-effort verify-read) and a pure read (`load_recent()`).
+        # Tripping the flag from here would let a transient GET-only
+        # blip (a network hiccup during the verify-read, momentary
+        # token clock-skew, a `load_recent()` call from
+        # `feedback/inject.py` that happens to race a real outage) look
+        # exactly like a durable write-permission problem and silently
+        # suppress every later `append()` in the run, even though the
+        # write path itself was never actually denied. See `write()`'s
+        # own `/src` POST below, and `bootstrap_branch()`, for the
+        # actual write-path signals this flag is meant to capture.
         resp.raise_for_status()
         data = resp.json()
         head = data.get("target", {}).get("hash")
@@ -807,6 +847,8 @@ class _BitbucketSrcBackend:
             # wrong. Either way, the missing-branch path is the right one:
             # `append()`'s bootstrap_attempted guard still prevents a loop.
             raise _MissingBranchError(self.branch)
+        if resp.status_code in (401, 403):
+            self.auth_failed = True
         resp.raise_for_status()
 
         # Best-effort conflict detection -- see this class's docstring. The
@@ -861,6 +903,8 @@ class _BitbucketSrcBackend:
             )
             return False
         if repo_resp.status_code != 200:
+            if repo_resp.status_code in (401, 403):
+                self.auth_failed = True
             logger.warning(
                 "feedback store: Bitbucket bootstrap aborted — GET %s returned %d: %s",
                 self._repo_path(), repo_resp.status_code, repo_resp.text[:200],
@@ -911,6 +955,8 @@ class _BitbucketSrcBackend:
             return True
         if create_resp.status_code == 400 and "already exists" in create_resp.text.lower():
             return True
+        if create_resp.status_code in (401, 403):
+            self.auth_failed = True
         logger.warning(
             "feedback store: Bitbucket branch create returned %d: %s "
             "(401/403 = token lacks Repository:Write; 404 = repo missing)",
@@ -960,6 +1006,30 @@ class BitbucketSrcStore:
         )
 
     def append(self, entry: FeedbackEntry) -> bool:
+        # Issue #941: once this run has already seen a 401/403 on this
+        # backend's write path (see `auth_failed`'s own docstring for
+        # exactly which calls set it), every further append() in the
+        # same run would hit the identical failure (a token missing
+        # Repository:Write fails the same way on every call) --
+        # short-circuit rather than repeating the read/write/bootstrap
+        # sequence and its retries for a result already known. Logged at
+        # DEBUG (not WARNING) after the first
+        # occurrence: whichever call first set `auth_failed` already
+        # raised an `httpx.HTTPStatusError`, and `_StoreCore.append()`'s
+        # own exception handler already logged one WARNING naming the
+        # probable cause for this run. Repeating it at WARNING for every
+        # subsequent verdict comment in the same run would just be the
+        # same log spam this issue exists to remove, moved from PR
+        # comments to the job log. Scoped to this backend instance
+        # (recreated fresh next run in `bitbucket.py:_get_feedback_store`),
+        # so a token fixed between runs gets a full retry with no
+        # special-casing needed.
+        if self._backend.auth_failed:
+            logger.debug(
+                "feedback store: skipping append — this run already saw an "
+                "auth failure on the Bitbucket feedback-store backend"
+            )
+            return False
         return self._core.append(entry)
 
     def load_recent(self) -> list[FeedbackEntry]:
