@@ -536,3 +536,21 @@ def test_annotated_finding_bullet_shortened_unannotated_bullet_full() -> None:
     body = captured["body"]
     assert "Use parameterized queries" not in body
     assert "Remove the unused import" in body
+
+
+def test_build_annotation_payload_summary_never_exceeds_450_bytes() -> None:
+    """Regression (live-verified 2026-09-25, e2e release-gate run): Bitbucket's
+    Code Insights annotation `summary` field caps at 450 characters -- a POST
+    exceeding it 400s with "The summary field cannot contain more than 450
+    characters." `_MAX_SUMMARY_BYTES` previously allowed up to 2000 bytes,
+    which a long finding + remediation text can exceed, causing a real
+    production failure. `title` has the same 450-byte limit already."""
+    finding = Finding(
+        severity="High", confidence=90, finding="x" * 600,
+        category="injection", file="app.py", line=4,
+        remediation="y" * 600,
+    )
+    payload = build_annotation_payload(finding, finding_id=1)
+    assert payload is not None
+    assert len(payload["summary"].encode("utf-8")) <= 450
+    assert len(payload["title"].encode("utf-8")) <= 450

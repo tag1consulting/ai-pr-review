@@ -38,8 +38,16 @@ _log = logging.getLogger(__name__)
 
 REPORT_ID: Final[str] = "ai-pr-review"
 MAX_ANNOTATIONS_PER_BATCH: Final[int] = 100
+# Live-verified (2026-09-25, e2e release-gate run): Bitbucket's Code
+# Insights annotation `summary` field caps at 450 characters, same as
+# `title` -- a POST exceeding it 400s with
+# "report-service.general.bad-request: The summary field cannot contain
+# more than 450 characters." `_truncate_utf8`'s byte-based truncation is
+# still a safe (conservative) proxy for this character cap: UTF-8 byte
+# count is always >= character count, so truncating to <=450 bytes
+# guarantees <=450 characters.
 _MAX_TITLE_BYTES: Final[int] = 450
-_MAX_SUMMARY_BYTES: Final[int] = 2_000
+_MAX_SUMMARY_BYTES: Final[int] = 450
 
 # Category -> Code Insights annotation_type. VULNERABILITY = an attacker can
 # exploit it. BUG = wrong at runtime (test-gap included: a missing test on a
