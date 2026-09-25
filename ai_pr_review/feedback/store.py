@@ -294,15 +294,16 @@ class _StoreCore:
                 )
                 return False
             except RuntimeError as exc:
-                # backend.read() raises RuntimeError for files >1 MB.
-                # Catch it explicitly so the WARNING mentions the actual cause
-                # rather than masquerading as a generic "unexpected error".
-                logger.warning(
-                    "feedback store: cannot append — %s. "
-                    "Consider lowering AI_FEEDBACK_RETENTION_COUNT or trimming "
-                    "the feedback file manually.",
-                    exc,
-                )
+                # Two distinct backend-specific causes land here: GitHub's
+                # backend.read() for files >1 MB, and Bitbucket's write()
+                # verify-read for a malformed refs/branches response (issue
+                # #906). Catch it explicitly so the WARNING mentions the
+                # actual cause (already in `exc`'s message) rather than
+                # masquerading as a generic "unexpected error" -- but don't
+                # append a backend-specific remediation hint here, since a
+                # single hardcoded suggestion would be wrong for whichever
+                # backend didn't cause this particular failure.
+                logger.warning("feedback store: cannot append — %s.", exc)
                 return False
             except Exception:
                 logger.error(
@@ -323,12 +324,12 @@ class _StoreCore:
             logger.warning("feedback store: HTTP error loading entries: %s", exc)
             return []
         except RuntimeError as exc:
-            # backend.read() raises RuntimeError for files >1 MB.
-            logger.warning(
-                "feedback store: cannot load entries — %s. "
-                "Consider lowering AI_FEEDBACK_RETENTION_COUNT.",
-                exc,
-            )
+            # Two distinct backend-specific causes: GitHub's backend.read()
+            # for files >1 MB, and Bitbucket's backend.read() -> _branch_head
+            # for a malformed refs/branches response. See append()'s own
+            # RuntimeError handler above for why no backend-specific
+            # remediation hint is appended here.
+            logger.warning("feedback store: cannot load entries — %s.", exc)
             return []
         except Exception:
             logger.error("feedback store: unexpected error in load_recent", exc_info=True)
@@ -709,26 +710,34 @@ class GitBranchStore:
 class _BitbucketSrcBackend:
     """Bitbucket Cloud ``/src`` endpoint backend for `_StoreCore`.
 
-    Concurrency (issue #906, Phase 0 spike, 2026-09-24): live-verified that
-    ``POST /src`` with ``branch=<new>`` and ``parents=<current head>`` both
+    Concurrency (issue #906, Phase 0 spike): live-verified that ``POST
+    /src`` with ``branch=<new>`` and ``parents=<current head>`` both
     creates a fresh branch from that parent and appends a commit to an
     existing one. The one thing the spike could **not** verify is whether a
     *stale* ``parents`` value is rejected (a real compare-and-swap) or
-    silently overwrites the branch — that specific write was blocked by
-    Claude Code's auto-mode classifier mid-spike, and Greg's call at that
-    point was to assume no CAS rather than retry. ``write()`` therefore
-    never trusts the POST response alone: on success it immediately
-    re-reads the file and raises ``_ConflictError`` if the content that
-    comes back isn't what was just written, so `_StoreCore.append()`'s
-    existing retry loop redoes the whole read-modify-write cycle against
-    fresh state (a couple of extra GETs, not one — the branch-head lookup
-    plus the file read). This is best-effort, not a guarantee: a narrow
-    window between the verify re-read and a concurrent writer's own commit
-    can still race. It is still strictly better than trusting an unverified
-    write. If Bitbucket's ``parents`` check does turn out to reject a stale
-    value (unverified either way), that would show up here as a write-time
-    HTTP error rather than a silent bad read-after-write — either path ends
-    up retried the same way.
+    silently overwrites the branch, so ``write()`` never trusts the POST
+    response alone: on success it immediately re-reads the file and raises
+    ``_ConflictError`` if the content that comes back isn't what was just
+    written, so `_StoreCore.append()`'s existing retry loop redoes the
+    whole read-modify-write cycle against fresh state (a couple of extra
+    GETs, not one — the branch-head lookup plus the file read). This is
+    best-effort, not a guarantee: a window between the verify re-read and a
+    concurrent writer's own read-modify-write cycle can still race (the
+    unsafe ordering spans that writer's whole request sequence, not just
+    the instant of the verify read). It is still strictly better than
+    trusting an unverified write.
+
+    **Known gap:** if Bitbucket's ``parents`` check *does* reject a stale
+    value, that rejection surfaces as a write-time HTTP error from
+    ``resp.raise_for_status()`` below, which is **not** currently mapped to
+    ``_ConflictError`` — it propagates as a bare ``httpx.HTTPStatusError``,
+    which `_StoreCore.append()` treats as terminal (logs a WARNING and
+    drops the entry, no retry). This is unlike a verify-read mismatch,
+    which *is* retried. Whether Bitbucket's `/src` actually enforces this
+    compare-and-swap has never been observed live (the spike's stale-
+    ``parents`` test was blocked before completion) — if it turns out that
+    it does, this status should be mapped to ``_ConflictError`` here so a
+    real conflict gets the same retry treatment as a verify-read mismatch.
     """
 
     workspace: str
@@ -801,20 +810,25 @@ class _BitbucketSrcBackend:
         resp.raise_for_status()
 
         # Best-effort conflict detection -- see this class's docstring. The
-        # POST above has already committed by this point, so a failure in
-        # this check read must never surface as a generic error: that would
-        # tell `_StoreCore.append()` to report a write that actually
-        # succeeded as failed (and, for the RuntimeError case, with a
-        # misleading "file may exceed 1 MB" message that has nothing to do
-        # with what happened). Map any failure here to `_ConflictError`
-        # instead, so the existing retry loop re-reads fresh state: if this
-        # exact write already landed, the comment-id dedup (issue #906 Q6)
-        # recognizes it on the retry and `append()` still returns True with
-        # no second write; if something else is genuinely wrong, the retry's
-        # own read()/write() will surface that on its own terms.
+        # POST above has already committed by this point, so a transient
+        # failure in this check read must never surface as a generic error:
+        # that would tell `_StoreCore.append()` to report a write that
+        # actually succeeded as failed. Map a transport/HTTP failure here to
+        # `_ConflictError` instead, so the existing retry loop re-reads
+        # fresh state: if this exact write already landed, the comment-id
+        # dedup (issue #906 Q6) recognizes it on the retry and `append()`
+        # still returns True with no second write; if something else is
+        # genuinely wrong, the retry's own read()/write() will surface that
+        # on its own terms. A `RuntimeError` here (a malformed
+        # `refs/branches` response — see `_branch_head`) is a different
+        # class of problem: not a race, and not something a retry fixes.
+        # Let it propagate as-is rather than folding it into
+        # `_ConflictError`, so `append()`'s own `RuntimeError` handler logs
+        # the real cause immediately instead of retrying and eventually
+        # reporting a misleading "SHA conflict after N attempts".
         try:
             verify_content, _verify_head = self.read()
-        except (httpx.TransportError, httpx.HTTPStatusError, RuntimeError):
+        except (httpx.TransportError, httpx.HTTPStatusError):
             raise _ConflictError(0) from None
         if verify_content != content:
             raise _ConflictError(0)

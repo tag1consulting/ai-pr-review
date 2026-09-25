@@ -130,7 +130,7 @@ See [`examples/README.md`](https://github.com/tag1consulting/ai-pr-review/blob/m
 | `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default: `latest`); set to `dev` to dogfood pre-release builds or pin to a release |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | **Context enrichment.** Tree-sitter symbol-context injection (default: `false`) |
 | `AI_REVIEW_SARIF_PATHS` | Variable | No | **SARIF ingestion.** Comma-separated SARIF 2.1.0 paths to merge as findings (default: `''`) |
-| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | **Learning loop.** Enable the learning loop (default: `false`; GitHub-only) |
+| `AI_REVIEW_FEEDBACK_LOOP` | Variable | No | **Learning loop.** Enable the learning loop (default: `false`; GitHub + Bitbucket, see [docs/learning-loop.md](learning-loop.md)) |
 
 See [Configuration → Repository variables](configuration#repository-variables) for the full reference.
 

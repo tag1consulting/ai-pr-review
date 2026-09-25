@@ -51,6 +51,10 @@ def _make_provider(
     *,
     verdicts: bool = True,
     verdict_min_role: str = "write",
+    enable_feedback_loop: bool = False,
+    feedback_branch: str = "ai-pr-review-bot",
+    feedback_retention_count: int = 500,
+    feedback_retention_age_days: int = 365,
 ) -> BitbucketProvider:
     transport = httpx.MockTransport(handler)
     http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
@@ -65,6 +69,10 @@ def _make_provider(
         config=BitbucketConfig(
             workspace="ws", repo_slug="repo", pr_id=7, email="x@y", api_token="t",
             code_insights=True, verdicts=verdicts, verdict_min_role=verdict_min_role,
+            enable_feedback_loop=enable_feedback_loop,
+            feedback_branch=feedback_branch,
+            feedback_retention_count=feedback_retention_count,
+            feedback_retention_age_days=feedback_retention_age_days,
         ),
         client=client,
     )
@@ -840,3 +848,57 @@ def test_two_verdict_commands_in_one_comment_both_persist() -> None:
 
     assert len(store.appended) == 2, "both commands from the same comment must persist"
     assert {e.extras.get("finding_id") for e in store.appended} == {1, 2}
+
+
+def test_failed_persist_leaves_comment_unacked_for_retry() -> None:
+    """A store write failure must not be swallowed as a permanent ack --
+    the comment stays un-acked so a later run's append() gets another
+    chance (comment-id dedup makes reprocessing safe either way)."""
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=False)
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert result.verdicts[_FP] == "dismissed", "suppression still applies on the PR"
+    assert len(store.appended) == 1, "the append was attempted"
+    assert 200 not in result.newly_acked_ids, "comment must stay un-acked for retry"
+    assert any("append failed" in e for e in result.errors)
+
+
+def test_successful_persist_acks_comment() -> None:
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=True)
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert 200 in result.newly_acked_ids
+
+
+def test_get_feedback_store_returns_none_when_disabled() -> None:
+    provider = _make_provider(lambda _r: httpx.Response(200, json={}))
+    assert provider._get_feedback_store() is None
+
+
+def test_get_feedback_store_builds_and_caches_when_enabled() -> None:
+    from ai_pr_review.feedback.store import BitbucketSrcStore
+
+    provider = _make_provider(
+        lambda _r: httpx.Response(200, json={}),
+        enable_feedback_loop=True,
+        feedback_branch="custom-branch",
+        feedback_retention_count=42,
+        feedback_retention_age_days=7,
+    )
+
+    store = provider._get_feedback_store()
+
+    assert isinstance(store, BitbucketSrcStore)
+    assert store.workspace == "ws"
+    assert store.repo_slug == "repo"
+    assert store.branch == "custom-branch"
+    assert store.retention_count == 42
+    assert store.retention_age_days == 7
+    assert store.client is provider.client
+
+    # Lazily built once, then cached -- same instance on a second call.
+    assert provider._get_feedback_store() is store
