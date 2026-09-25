@@ -25,6 +25,7 @@ from ai_pr_review.vcs.marker import (
     extract_verdicts,
 )
 from ai_pr_review.vcs.protocol import DiffContext
+from tests.python.test_feedback_store import _FakeBitbucketRepo
 
 _HEAD = "abc1234def5678abc1234def5678abc1234def56"
 
@@ -902,3 +903,72 @@ def test_get_feedback_store_builds_and_caches_when_enabled() -> None:
 
     # Lazily built once, then cached -- same instance on a second call.
     assert provider._get_feedback_store() is store
+
+
+def _build_combined_handler(
+    *,
+    comments: list[dict],
+    permissions: dict[str, str],
+    repo: _FakeBitbucketRepo,
+    replies: list[dict] | None = None,
+    put_bodies: list[str] | None = None,
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Routes to `_FakeBitbucketRepo` for feedback-store paths (repo info,
+    refs/branches, /src) and to the verdict-polling handler for everything
+    else (user, permissions, PR comments, Code Insights). The two path sets
+    never overlap, so simple path-substring dispatch is enough."""
+    verdict_handler = _build_handler(
+        comments=comments, permissions=permissions, replies=replies, put_bodies=put_bodies,
+    )
+
+    def combined(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if (
+            path.endswith("/repositories/ws/repo")
+            or "/refs/branches" in path
+            or "/src" in path
+        ):
+            return repo.handler(req)
+        return verdict_handler(req)
+
+    return combined
+
+
+def test_post_findings_persists_feedback_entry_end_to_end() -> None:
+    """Issue #906 release-gate follow-up (pr-test-analyzer, 2026-09-25): the
+    three links -- BitbucketProvider._get_feedback_store() construction,
+    apply_pending_verdicts()'s persistence logic, and post_findings()'s call
+    site wiring them together -- were each tested in isolation but never as
+    one chain with the feedback loop actually enabled. A regression that
+    dropped or misconfigured feedback_store=self._get_feedback_store() at
+    that call site would have passed every existing test. This exercises
+    the real path: post_findings() -> apply_pending_verdicts() ->
+    BitbucketSrcStore.append() -> an actual commit on the fake repo's
+    ai-pr-review-bot branch."""
+    existing = _summary_comment(100, _summary_body())
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    repo = _FakeBitbucketRepo()
+    replies: list[dict] = []
+    put_bodies: list[str] = []
+    handler = _build_combined_handler(
+        comments=[existing, cmd], permissions={"acct-1": "write"},
+        repo=repo, replies=replies, put_bodies=put_bodies,
+    )
+    prov = _make_provider(handler, enable_feedback_loop=True)
+
+    result = prov.post_findings(
+        [_FINDING], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT"
+    )
+
+    assert result.ok, result.error
+    assert result.suppressed == 1
+    # The reply must confirm persistence, not "not saved" -- the wording
+    # this same failure mode produces when the wiring is broken.
+    assert len(replies) == 1
+    assert "not saved" not in replies[0]["content"]["raw"]
+
+    _head, files = repo.branches["ai-pr-review-bot"]
+    assert ".ai-pr-review/learnings.jsonl" in files
+    entry = json.loads(files[".ai-pr-review/learnings.jsonl"].strip())
+    assert entry["command"] == "false-positive"
+    assert entry["source_comment_id"] == 200
