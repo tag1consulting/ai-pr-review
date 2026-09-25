@@ -301,16 +301,24 @@ def verify_posting_surfaces(evidence: RawEvidence, *, bitbucket: bool = False) -
         Verdict("posting_summary", bool(evidence.summary_body.strip()),
                 "summary body present" if evidence.summary_body.strip() else "summary body empty",
                 pagination_note=note),
-        Verdict("posting_inline", bool(evidence.inline_comments),
-                f"{len(evidence.inline_comments)} inline comment(s)" if evidence.inline_comments
-                else "no inline comments found",
-                pagination_note=note),
     ]
     if bitbucket:
+        # Bitbucket has no inline-review support (per the harness design and
+        # ai_pr_review/vcs/bitbucket.py:post_findings) -- per-finding
+        # comments never exist there, so posting_inline would always and
+        # meaninglessly fail. Code Insights annotations are Bitbucket's
+        # equivalent per-finding surface; verify that instead.
         verdicts.append(
             Verdict("posting_annotations", bool(evidence.annotations),
                     f"{len(evidence.annotations)} annotation(s)" if evidence.annotations
                     else "no annotations found",
+                    pagination_note=note)
+        )
+    else:
+        verdicts.append(
+            Verdict("posting_inline", bool(evidence.inline_comments),
+                    f"{len(evidence.inline_comments)} inline comment(s)" if evidence.inline_comments
+                    else "no inline comments found",
                     pagination_note=note)
         )
     return verdicts
@@ -326,22 +334,43 @@ def verify_analyzer_findings(evidence: RawEvidence, expected: list[ExpectedFindi
     haystacks = [body, *inline_bodies]
 
     def _found(exp: ExpectedFinding) -> bool:
-        return any(exp.path_substring in h and exp.category in h for h in haystacks)
+        if any(exp.path_substring in h and exp.category in h for h in haystacks):
+            return True
+        # Bitbucket has no inline comments (see verify_posting_surfaces) --
+        # its per-finding text lives in each Code Insights annotation's
+        # `summary` field, with the file path in a separate `path` field.
+        # Check those two fields independently per-annotation rather than
+        # concatenating them into one string: an earlier version joined
+        # `path` and `summary` before matching, which let an annotation on
+        # a DIFFERENT file satisfy path_substring merely by mentioning that
+        # path in its own summary text (e.g. "same pattern as api/user.py").
+        return any(
+            exp.path_substring in a.get("path", "") and exp.category in a.get("summary", "")
+            for a in evidence.annotations
+        )
 
     missing = [exp for exp in expected if not _found(exp)]
-    approx_count = len(evidence.inline_comments) if evidence.inline_comments else (
-        1 if body.strip() else 0
+    per_finding_count = len(evidence.inline_comments) + len(evidence.annotations)
+    approx_count = per_finding_count if per_finding_count else (1 if body.strip() else 0)
+    # A truncated fetch (fetch_annotations/fetch_inline hit their pagination
+    # safety bound) means the counts and matches above are known-incomplete
+    # -- surface that on any failure the same way verify_posting_surfaces
+    # already does, so a false "below floor"/"not found" doesn't read as a
+    # genuine review regression.
+    truncation_note = (
+        " (evidence fetch hit the pagination safety bound; result may be incomplete)"
+        if evidence.truncated else ""
     )
     if approx_count < findings_floor:
         return Verdict(
             "analyzer_findings", False,
-            f"approx findings count {approx_count} below floor {findings_floor}",
+            f"approx findings count {approx_count} below floor {findings_floor}{truncation_note}",
         )
     if missing:
         return Verdict(
             "analyzer_findings", False,
             f"{len(missing)}/{len(expected)} expected finding(s) not found: "
-            f"{[(m.path_substring, m.category) for m in missing]}",
+            f"{[(m.path_substring, m.category) for m in missing]}{truncation_note}",
         )
     return Verdict("analyzer_findings", True, f"approx findings count {approx_count}, all expected findings present")
 

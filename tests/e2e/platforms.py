@@ -598,19 +598,43 @@ class BitbucketAdapter(_BaseAdapter):
         if resp.status_code != 200:
             raise AdapterError(mask(f"Bitbucket fetch-report failed: {resp.status_code} {resp.text[:300]}"))
         ann_url = f"{report_url}/annotations"
-        page_url: str | None = ann_url
+        # Do NOT follow Bitbucket's own `next` href for this endpoint --
+        # confirmed live (2026-09-25) that it comes back malformed
+        # ("commits" plural instead of "commit", and a doubled
+        # "reports/reports" segment), which 404s as "Commit not found" on
+        # the very next page. Page 1 (a plain GET against ann_url) is fine;
+        # only the `next` link is broken. Paginate ourselves against our own
+        # known-correct ann_url with an explicit ?page= param instead.
+        #
+        # Termination is driven by the response's own `size` field (the
+        # authoritative total count -- confirmed live to be present
+        # alongside the malformed `next`) rather than by `next`'s
+        # presence/absence, since that's the exact signal already known to
+        # be unreliable on this endpoint. `next`/`values` emptiness is kept
+        # only as a fallback for the case `size` is ever absent.
+        page_num = 1
         pages_seen = 0
-        while page_url:
+        total_size: int | None = None
+        while True:
+            page_url = ann_url if page_num == 1 else f"{ann_url}?page={page_num}"
             aresp = _request_with_retry(self._client, "GET", page_url, auth=self._auth)
             if aresp.status_code != 200:
                 raise AdapterError(mask(f"Bitbucket fetch-annotations failed: {aresp.status_code} {aresp.text[:300]}"))
             data = aresp.json()
-            evidence.annotations.extend(data.get("values", []))
-            page_url = data.get("next")
+            values = data.get("values", [])
+            evidence.annotations.extend(values)
             pages_seen += 1
-            if pages_seen > 20:
+            if total_size is None:
+                total_size = data.get("size")
+            if pages_seen >= 20:
                 evidence.truncated = True
                 break
+            if total_size is not None:
+                if len(evidence.annotations) >= total_size:
+                    break
+            elif not values or not data.get("next"):
+                break
+            page_num += 1
 
     def close(self, pr: PullRequest) -> None:
         url = f"{self.API_ROOT}/repositories/{self.config.repo_slug}/pullrequests/{pr.number}/decline"
