@@ -120,47 +120,96 @@ def test_verify_summary_marker_missing_marker_fails():
 
 # --- verify_event_not_degraded ---------------------------------------------
 
-def test_verify_event_not_degraded_ok_via_posted_event():
-    # telemetry.outcome is verified (against cli.py/orchestrate.py) to be
-    # the pre-posting decision, never updated to reflect a post-time
-    # degrade -- so it must NOT be consulted here. Passing a telemetry
-    # fixture alongside a matching posted_event exercises that telemetry is
-    # correctly ignored, not that it drives the verdict.
+def test_verify_event_not_degraded_ok_when_posted_matches_intent():
+    # telemetry_valid.json's outcome is "APPROVE". posted_event matching it
+    # exactly means the review was not degraded.
     telemetry = load_telemetry(FIXTURES_DIR / "telemetry_valid.json")
-    verdict = verify_event_not_degraded("APPROVE", "APPROVE", telemetry=telemetry)
+    verdict = verify_event_not_degraded("APPROVE", telemetry=telemetry)
     assert verdict.ok
-    assert "posted_event" in verdict.reason
+    assert "matches intended outcome" in verdict.reason
+
+
+def test_verify_event_not_degraded_ok_when_intent_and_post_both_request_changes():
+    # The GitLab live-run case that an earlier, hardcoded-"APPROVE" version
+    # of this function got wrong: the review correctly intended AND posted
+    # REQUEST_CHANGES (a legitimate outcome for a fixture with real
+    # findings), never degraded at all. Comparing against telemetry's own
+    # intent (not an assumption that every review ends in approval) must
+    # pass this, not fail it.
+    telemetry = {"outcome": "REQUEST_CHANGES"}
+    verdict = verify_event_not_degraded("REQUEST_CHANGES", telemetry=telemetry)
+    assert verdict.ok
 
 
 def test_verify_event_not_degraded_caught_via_posted_event():
     # The real #651 degrade: the run intended APPROVE (telemetry.outcome
-    # would show "APPROVE", the pre-posting decision) but the container
-    # actually posted a plain COMMENT -- only posted_event (parsed from the
-    # "Review complete: ... event=..." log line) carries that signal.
+    # shows "APPROVE", the pre-posting decision) but the container actually
+    # posted a plain COMMENT -- only posted_event (parsed from the "Review
+    # complete: ... event=..." log line) carries that signal.
     telemetry = load_telemetry(FIXTURES_DIR / "telemetry_valid.json")
-    verdict = verify_event_not_degraded("COMMENT", "APPROVE", telemetry=telemetry)
+    verdict = verify_event_not_degraded("COMMENT", telemetry=telemetry)
     assert not verdict.ok
     assert "posted_event" in verdict.reason
 
 
+def test_verify_event_not_degraded_caught_when_request_changes_degrades_to_comment():
+    # The live GitHub-run case: intent was REQUEST_CHANGES (not APPROVE),
+    # but GitHub's self-review restriction degraded it to a plain COMMENT.
+    telemetry = {"outcome": "REQUEST_CHANGES"}
+    verdict = verify_event_not_degraded("COMMENT", telemetry=telemetry)
+    assert not verdict.ok
+
+
 def test_verify_event_not_degraded_caught_via_text_fallback():
-    # Only reached when posted_event is unavailable (empty) -- posted_event
-    # takes priority whenever it's present, per the function's docstring.
+    # Only reached when telemetry is unavailable.
     body = "This PR has NOT been approved because a prior review is unresolved."
-    verdict = verify_event_not_degraded("", "APPROVE", telemetry=None, summary_body=body)
+    verdict = verify_event_not_degraded("", telemetry=None, summary_body=body)
     assert not verdict.ok
     assert "summary body" in verdict.reason
 
 
 def test_verify_event_not_degraded_unavailable_and_no_fallback_text_fails():
-    verdict = verify_event_not_degraded("", "APPROVE", telemetry=None, summary_body="nothing relevant here")
+    verdict = verify_event_not_degraded("", telemetry=None, summary_body="nothing relevant here")
     assert not verdict.ok
     assert "unavailable" in verdict.reason
 
 
-def test_verify_event_not_degraded_not_applicable_for_comment_expectation():
-    verdict = verify_event_not_degraded("COMMENT", "COMMENT")
+def test_verify_event_not_degraded_not_applicable_when_intent_is_comment():
+    telemetry = {"outcome": "COMMENT"}
+    verdict = verify_event_not_degraded("COMMENT", telemetry=telemetry)
     assert verdict.ok
+    assert "not applicable" in verdict.reason
+
+
+def test_verify_event_not_degraded_empty_posted_event_with_telemetry_fails():
+    # Regression test: an earlier version of this function's `if posted_event
+    # and posted_event != intended` guard short-circuited on an empty
+    # posted_event (e.g. the "Review complete: ..." log line lacked an
+    # `event=` group) and fell through to a bare "matches" ok=True verdict,
+    # without comparing anything -- silently masking exactly the #651-style
+    # degrade this function exists to catch. An empty posted_event must fall
+    # through to the summary_body text-scan fallback instead.
+    telemetry = {"outcome": "APPROVE"}
+    verdict = verify_event_not_degraded("", telemetry=telemetry, summary_body="nothing relevant here")
+    assert not verdict.ok
+    assert "posted_event unavailable" in verdict.reason
+
+
+def test_verify_event_not_degraded_missing_outcome_key_is_malformed_not_not_applicable():
+    # A telemetry dict missing "outcome" entirely (malformed/corrupt
+    # telemetry) must not be silently treated the same as a legitimate
+    # COMMENT-style "not applicable" outcome.
+    verdict = verify_event_not_degraded("COMMENT", telemetry={})
+    assert not verdict.ok
+    assert "malformed" in verdict.reason
+
+
+def test_verify_event_not_degraded_empty_posted_event_with_telemetry_and_degrade_text():
+    telemetry = {"outcome": "APPROVE"}
+    body = "This PR has NOT been approved because a prior review is unresolved."
+    verdict = verify_event_not_degraded("", telemetry=telemetry, summary_body=body)
+    assert not verdict.ok
+    assert "summary body" in verdict.reason
 
 
 # --- verify_model ------------------------------------------------------------

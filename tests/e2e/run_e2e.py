@@ -415,12 +415,7 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
             verify_summary_marker(evidence, run_commit.commit_sha),
             verify_no_failed_agents(log_result, telemetry),
             verify_event_not_degraded(
-                # expected_event is the harness's own request, not read back
-                # from telemetry -- this run relies on the default
-                # AI_APPROVAL_CEILING ("approve"), so a clean run should post
-                # APPROVE or REQUEST_CHANGES, never a degraded plain COMMENT.
-                log_result.event or "", "APPROVE",
-                telemetry=telemetry, summary_body=evidence.summary_body,
+                log_result.event or "", telemetry=telemetry, summary_body=evidence.summary_body,
             ),
             verify_model(telemetry, DEFAULT_MODELS["anthropic"][0]),
             *verify_posting_surfaces(evidence, bitbucket=(name == "bitbucket")),
