@@ -24,12 +24,14 @@ def _current_default_models(provider: str) -> tuple[str, str]:
 # Pinned seed commit
 # ---------------------------------------------------------------------------
 
-# TODO(before first use): replace with the real, current tip commit SHA of
-# the `test/v2.6.0-docs-dogfood` branch shared across the three test repos
-# (see reference_live_test_repos.md in project memory). This harness must
-# never guess or fabricate a SHA -- fill this in by actually inspecting the
-# branch (`git ls-remote` / provider API) before the first live `run`.
-PINNED_SEED_SHA = "REPLACE_ME_PINNED_SHA"
+# Verified via `gh api repos/tag1consulting/ai-pr-review-test/git/refs/heads/
+# test/v2.6.0-docs-dogfood` on 2026-09-25 -- 2 commits ahead of `main`, clean
+# merge-base equal to `main`'s own tip (checked via the /compare API before
+# using this value). GitLab and Bitbucket seed SHAs are unverified: this
+# harness's own PLATFORMS config still points GitLab/Bitbucket at the same
+# GitHub-verified branch name, but each provider's actual tip commit for
+# that branch name has not been independently checked yet.
+PINNED_SEED_SHA = "4851571360ad7ad6d23ad4c99ff47ea8408106a8"
 
 # Marker file the harness commits on top of the pinned seed SHA to create a
 # uniquely identifiable run commit. Content is just the run_id (see

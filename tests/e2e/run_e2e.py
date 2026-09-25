@@ -286,6 +286,15 @@ def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sh
         "AI_FAIL_ON_COST_CEILING": "true",
         "AI_REVIEW_MODE": mode,
         "ANTHROPIC_API_KEY": os.environ.get("E2E_ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", "")),
+        # Both required by ai_pr_review/diff/compute.py's compute_diff(): it
+        # builds range_spec as f"origin/{base_ref}...{head_sha}" with no
+        # fallback for either being empty -- confirmed live on this
+        # harness's first real run, which crashed with a literal
+        # "bad revision 'origin/...'" before this fix. base_ref is the bare
+        # branch name (compute_diff prepends "origin/" itself, so passing
+        # "origin/main" here would double it).
+        "BASE_REF": PLATFORMS[platform].base_ref,
+        "HEAD_SHA": pr.run_commit.commit_sha,
         **_provider_env_vars(platform, pr),
     }
     if platform == "github":
