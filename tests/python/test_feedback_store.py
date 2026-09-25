@@ -1201,3 +1201,159 @@ def test_backend_write_propagates_runtime_error_from_verify_read_instead_of_conf
     backend = _make_backend(handler)
     with pytest.raises(RuntimeError, match="no target.hash"):
         backend.write("content\n", "a" * 40)
+
+
+# ---------------------------------------------------------------------------
+# Issue #941: per-run auth-failure cap on _BitbucketSrcBackend
+# ---------------------------------------------------------------------------
+
+def test_backend_write_403_sets_auth_failed_flag() -> None:
+    """A 401/403 on the /src POST is the most likely permanent failure this
+    backend can see (a token missing Repository:Write) -- it must be
+    flagged so `BitbucketSrcStore.append()` can short-circuit further
+    attempts within the same run (issue #941)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/src"):
+            return httpx.Response(403, text="forbidden")
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    assert backend.auth_failed is False
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.write("content\n", "a" * 40)
+    assert backend.auth_failed is True
+
+
+def test_backend_write_500_does_not_set_auth_failed_flag() -> None:
+    """A transient 5xx is not the same failure class as a bad token scope
+    -- it must not trip the same-run short-circuit, since a retry on a
+    transient failure can plausibly succeed."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/src"):
+            return httpx.Response(500, text="internal error")
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.write("content\n", "a" * 40)
+    assert backend.auth_failed is False
+
+
+def test_backend_read_403_on_branch_head_does_not_set_auth_failed_flag() -> None:
+    """Silent-failure-hunter review finding (issue #941): `_branch_head` is
+    shared, undifferentiated code reached from both a write attempt and a
+    pure read (`load_recent`). A 401/403 there must NOT trip the same-run
+    short-circuit -- doing so would let a transient GET-only blip (a
+    `load_recent()` call racing an outage, for instance) look exactly like
+    a durable write-permission problem and silently suppress every later
+    `append()` in the run, even though the write path itself was never
+    actually denied."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    backend = _make_backend(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        backend.read()
+    assert backend.auth_failed is False
+
+
+def test_backend_write_verify_read_403_does_not_set_auth_failed_flag() -> None:
+    """The best-effort post-write verify-read also goes through
+    `_branch_head` -- a 401/403 there is already folded into
+    `_ConflictError` (retryable) by `write()`'s own docstring, and must
+    not ALSO trip the separate, stronger `auth_failed` signal. The
+    original POST already succeeded in this scenario, so the write itself
+    was never denied."""
+    from ai_pr_review.feedback.store import _ConflictError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/src"):
+            return httpx.Response(201)
+        # Every GET after the POST (the verify read's branch-head lookup)
+        # returns 403 -- simulating a transient auth-adjacent blip on the
+        # check read itself, not a rejection of the write.
+        return httpx.Response(403, text="forbidden")
+
+    backend = _make_backend(handler)
+    with pytest.raises(_ConflictError):
+        backend.write("content\n", "a" * 40)
+    assert backend.auth_failed is False
+
+
+def test_backend_bootstrap_403_on_branch_create_sets_auth_failed_flag() -> None:
+    """A read-only token can often still GET the repo and the default
+    branch head, so the first 401/403 it hits is the branch-create POST --
+    this must also set the flag, not just the /src write path."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/refs/branches") and request.method == "POST":
+            return httpx.Response(403, text="forbidden")
+        if request.url.path.endswith("/repo"):
+            return httpx.Response(200, json={"mainbranch": {"name": "main"}})
+        if "/refs/branches/main" in request.url.path:
+            return httpx.Response(200, json={"target": {"hash": "a" * 40}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is False
+    assert backend.auth_failed is True
+
+
+def test_backend_bootstrap_403_on_repo_get_sets_auth_failed_flag() -> None:
+    """A token that can't even read the repo also sets the flag -- the
+    'GET repo' step, not just branch-create."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    backend = _make_backend(handler)
+    assert backend.bootstrap_branch() is False
+    assert backend.auth_failed is True
+
+
+def test_bitbucket_store_append_short_circuits_after_auth_failure_same_run() -> None:
+    """Issue #941: once one append() in a run has hit a 401/403, a second
+    append() in the same run must not repeat the same doomed request
+    sequence -- it should return False immediately with no further HTTP
+    calls, since a token missing Repository:Write fails identically every
+    time within the run. The next run gets a fresh backend instance (see
+    bitbucket.py's `_get_feedback_store` caching), so this never blocks a
+    fixed token from working again later."""
+    from ai_pr_review.feedback.store import BitbucketSrcStore
+
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if request.url.path.endswith("/repo"):
+            return httpx.Response(200, json={"mainbranch": {"name": "main"}})
+        if "/refs/branches/main" in request.url.path:
+            return httpx.Response(200, json={"target": {"hash": "a" * 40}})
+        if request.url.path.endswith("/refs/branches") and request.method == "POST":
+            return httpx.Response(403, text="forbidden")
+        if request.url.path.endswith("/src") and request.method == "POST":
+            return httpx.Response(403, text="forbidden")
+        if "/refs/branches/ai-pr-review-bot" in request.url.path:
+            return httpx.Response(404, json={"type": "error", "error": {"message": "x"}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    client = RecordingClient(
+        http=http, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    store = BitbucketSrcStore(workspace="ws", repo_slug="repo", branch="ai-pr-review-bot", client=client)
+
+    entry = FeedbackEntry(
+        ts="2026-09-25T00:00:00Z", command="false-positive", reason="x", source="ruff",
+        file="a.py", extras={"finding_id": 1, "source_comment_id": 200},
+    )
+    assert store.append(entry) is False
+    calls_after_first = call_count["n"]
+    assert calls_after_first > 0
+
+    entry2 = FeedbackEntry(
+        ts="2026-09-25T00:00:01Z", command="false-positive", reason="y", source="ruff",
+        file="b.py", extras={"finding_id": 2, "source_comment_id": 201},
+    )
+    assert store.append(entry2) is False
+    assert call_count["n"] == calls_after_first, "no further HTTP calls after the first auth failure"

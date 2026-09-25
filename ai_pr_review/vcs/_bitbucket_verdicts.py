@@ -36,11 +36,44 @@ silently breaks if the reply POST succeeds but this run's body write
 (carrying the updated acks marker) fails -- the ack set already rides
 along in a body `post_findings` rewrites every run anyway, so recording it
 there is free.
+
+Issue #941: a comment can stay un-acked *on purpose* across many runs (a
+retryable failure -- a degraded permission lookup, or a feedback-store
+write that failed, see `comment_had_retryable_failure` below) and every
+one of those runs re-derives the same reply. Without a second layer of
+idempotency, that reply gets re-POSTed every run forever -- unbounded if
+the failure is permanent (e.g. a Bitbucket token missing
+`Repository:Write`, which fails identically on every future attempt).
+Reply dedup closes this: every reply carries a semantic key (built from
+fixed fields, e.g. `verdict:<finding_id>:<command>:<persisted>` -- never
+from the rendered text, so a future wording change to a reply template
+doesn't invalidate every key already posted) hashed into a second hidden
+marker line. `_existing_reply_keys` scans the same `comments` this poll
+already fetched (no extra API call) for prior bot replies carrying that
+marker, and a reply whose `(parent id, key hash)` already appears there is
+dropped before posting. This reuses the reply-vs-acks split already in
+this module: the *ack* stays pending (so the next run's `check_authority`/
+`feedback_store.append` gets a fresh chance -- self-heals once the token
+scope is fixed), only the *duplicate reply* is suppressed. When the
+underlying outcome actually changes (`persisted=False` becomes `True`
+after the fix), the key changes too, so a fresh reply posts.
+
+Accepted residual risks: (1) a comment carrying a forged marker/key-hash
+pair could suppress one bot reply it doesn't own -- ownership on Bitbucket
+is marker-only by design (see `_OWN_MARKERS` below), and the impact here
+is a nuisance (one missed reply), not a security issue. (2) a reply posted
+before this change carries no key line and can't be recognized as a
+duplicate of anything -- each still-pending comment gets one more reply
+after upgrading, then dedup applies normally from there. (3) two
+concurrent pipeline runs can still race and both post before either sees
+the other's reply in a fetched comment list -- the same race every
+GET-then-POST pattern in this module already has.
 """
 
 from __future__ import annotations
 
 import datetime
+import hashlib
 import logging
 import re
 from collections.abc import Sequence
@@ -103,6 +136,18 @@ _MAX_COMMENTS_SCANNED: Final[int] = 200
 # independent of whether the newline theory is exploitable in practice.
 _REPLY_MARKER_HIDDEN: Final[str] = "[//]: # (ai-pr-review-verdict-reply)"
 
+# Issue #941: a second hidden marker line, carrying a hash of the reply's
+# semantic key (never the rendered text -- see this module's own docstring
+# for why), so a later run can recognize "I already posted a reply for
+# this exact outcome under this exact comment" without re-deriving or
+# storing the outcome anywhere else. Hashed rather than embedding the key
+# directly so no user-controlled text (e.g. an unrecognized command token
+# in a parse-error key) ever lands in a marker line this module itself
+# scans for ownership. Its own line, distinct from _REPLY_MARKER_HIDDEN,
+# so _OWN_MARKERS' substring-based ownership check (`_is_own_comment`)
+# does not need to change at all.
+_REPLY_KEY_MARKER_PREFIX: Final[str] = "[//]: # (ai-pr-review-verdict-reply-key:"
+
 _OWN_MARKERS: Final[tuple[str, ...]] = (
     SUMMARY_MARKER_PREFIX,
     SUMMARY_MARKER_HIDDEN_PREFIX,
@@ -149,6 +194,9 @@ class VerdictPollResult:
     one per processed command comment -- rejections included, so a
     legitimately-authorized user hitting a transient permissions-API
     failure can tell "you're not allowed" from "could not verify, retry."
+    Already-posted duplicates (issue #941 -- see this module's docstring)
+    are filtered out before this is returned, so every pair here is safe
+    for the caller to post unconditionally.
     """
 
     verdicts: dict[str, str] = field(default_factory=dict)
@@ -183,6 +231,43 @@ def _comment_account_id(item: dict[str, Any]) -> str | None:
 
 def _is_own_comment(body: str) -> bool:
     return any(marker in body for marker in _OWN_MARKERS)
+
+
+def _reply_key_hash(key: str) -> str:
+    """16 hex chars of sha256(key) -- enough to make an accidental
+    collision between two distinct keys practically impossible for this
+    module's purposes, short enough to keep the marker line unobtrusive."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _existing_reply_keys(
+    comments: Sequence[dict[str, Any]],
+) -> frozenset[tuple[int, str]]:
+    """Return the ``(parent_id, key_hash)`` pairs of every bot reply already
+    present in `comments` (issue #941).
+
+    Scans the *entire* sequence, not the `_MAX_COMMENTS_SCANNED` window the
+    main poll loop uses -- a bot reply can be newer than the command
+    comment it replies to and would otherwise sort ahead of it in this
+    `-updated_on`-sorted list, but a reply is never itself a command
+    comment to apply, so scanning the full list here costs nothing the
+    main loop's own cap is protecting against.
+    """
+    found: set[tuple[int, str]] = set()
+    for item in comments:
+        body = ((item.get("content") or {}).get("raw")) or ""
+        if _REPLY_MARKER_HIDDEN not in body:
+            continue
+        parent = item.get("parent") or {}
+        parent_id = parent.get("id")
+        if not isinstance(parent_id, int):
+            continue
+        for line in body.splitlines():
+            line = line.strip()
+            if line.startswith(_REPLY_KEY_MARKER_PREFIX) and line.endswith(")"):
+                key_hash = line[len(_REPLY_KEY_MARKER_PREFIX):-1]
+                found.add((parent_id, key_hash))
+    return frozenset(found)
 
 
 def check_authority(
@@ -419,9 +504,15 @@ def apply_pending_verdicts(
     verdicts = dict(extract_verdicts(existing_body))
     already_acked = extract_acks(existing_body)
     newly_acked: list[int] = []
-    replies: list[tuple[int, str]] = []
+    # Issue #941: key alongside each reply is a stable identifier for "this
+    # exact outcome, for this exact comment" -- never the rendered text
+    # (see this module's docstring). Kept parallel to `replies` rather than
+    # merged into `VerdictPollResult` itself, since callers outside this
+    # module never need to see it.
+    replies: list[tuple[int, str, str]] = []
     errors: list[str] = []
     authority_cache: dict[str, AuthorityCheck] = {}
+    already_replied = _existing_reply_keys(comments)
 
     for item in comments[:_MAX_COMMENTS_SCANNED]:
         comment_id = item.get("id")
@@ -454,7 +545,10 @@ def apply_pending_verdicts(
 
         for result in parsed:
             if isinstance(result, ParseError):
-                replies.append((comment_id, _reply_for_parse_error(actor, result)))
+                token = result.unknown_token or "?"
+                replies.append(
+                    (comment_id, f"parse-error:{token}", _reply_for_parse_error(actor, result))
+                )
                 comment_had_a_command = True
                 continue
 
@@ -471,19 +565,29 @@ def apply_pending_verdicts(
             comment_had_a_command = True
             if command.finding_id is None:
                 replies.append(
-                    (comment_id, _reply_for_missing_finding_id(actor, command))
+                    (
+                        comment_id,
+                        f"missing-fid:{command.canonical_name}",
+                        _reply_for_missing_finding_id(actor, command),
+                    )
                 )
                 continue
 
             fp = fingerprint_for_finding_id([existing_body], command.finding_id)
             if fp is None:
                 replies.append(
-                    (comment_id, _reply_for_unknown_finding_id(actor, command.finding_id))
+                    (
+                        comment_id,
+                        f"unknown-fid:{command.finding_id}",
+                        _reply_for_unknown_finding_id(actor, command.finding_id),
+                    )
                 )
                 continue
 
             if account_id is None:
-                replies.append((comment_id, _reply_for_authority(actor, "degraded")))
+                replies.append(
+                    (comment_id, "authority:degraded", _reply_for_authority(actor, "degraded"))
+                )
                 errors.append(
                     f"apply_pending_verdicts: comment {comment_id} has no "
                     "account_id, treating as a failed permission check"
@@ -500,7 +604,9 @@ def apply_pending_verdicts(
             if check != "authorized":
                 if check == "degraded":
                     comment_had_retryable_failure = True
-                replies.append((comment_id, _reply_for_authority(actor, check)))
+                replies.append(
+                    (comment_id, f"authority:{check}", _reply_for_authority(actor, check))
+                )
                 continue
 
             verdict = _VERDICT_BY_CANONICAL_COMMAND[command.canonical_name]
@@ -540,17 +646,43 @@ def apply_pending_verdicts(
                         "append failed, will retry on next run"
                     )
 
+            persisted_key = "none" if persisted is None else str(persisted).lower()
             replies.append(
-                (comment_id, _reply_for_verdict(actor, command, verdict, persisted=persisted))
+                (
+                    comment_id,
+                    f"verdict:{command.finding_id}:{command.canonical_name}:{persisted_key}",
+                    _reply_for_verdict(actor, command, verdict, persisted=persisted),
+                )
             )
 
         if comment_had_a_command and not comment_had_retryable_failure:
             newly_acked.append(comment_id)
 
-    marked_replies = tuple(
-        (comment_id, f"{text}\n\n{_REPLY_MARKER_HIDDEN}")
-        for comment_id, text in replies
-    )
+    # Issue #941 review finding: `already_replied` only covers replies from
+    # *prior* runs (derived from `comments`, fetched before this loop ran).
+    # Two commands processed in this same pass can independently produce
+    # the same key under the same parent -- e.g. two distinct malformed
+    # commands in one comment both resolving to the same
+    # `missing-fid:<canonical_name>` key, since that key has no
+    # per-command discriminator beyond the command name. Without also
+    # deduping against replies queued earlier in *this* loop, both would
+    # post, defeating the "one reply per outcome" intent for that case
+    # even though cross-run dedup (the actual #941 symptom) is unaffected.
+    queued_this_run: set[tuple[int, str]] = set()
+    marked_replies_list: list[tuple[int, str]] = []
+    for comment_id, key, text in replies:
+        dedup_key = (comment_id, _reply_key_hash(key))
+        if dedup_key in already_replied or dedup_key in queued_this_run:
+            continue
+        queued_this_run.add(dedup_key)
+        marked_replies_list.append(
+            (
+                comment_id,
+                f"{text}\n\n{_REPLY_MARKER_HIDDEN}\n"
+                f"{_REPLY_KEY_MARKER_PREFIX}{_reply_key_hash(key)})",
+            )
+        )
+    marked_replies = tuple(marked_replies_list)
     return VerdictPollResult(
         verdicts=verdicts,
         newly_acked_ids=tuple(newly_acked),

@@ -875,6 +875,219 @@ def test_successful_persist_acks_comment() -> None:
     assert 200 in result.newly_acked_ids
 
 
+# ---------------------------------------------------------------------------
+# Reply dedup (issue #941): a permanently-failing store write (or a
+# repeatedly-degraded permission check) leaves the comment un-acked run
+# after run, so `apply_pending_verdicts` re-derives -- and without this
+# guard, re-posts -- the identical reply every time.
+# ---------------------------------------------------------------------------
+
+def _bot_reply_comment(reply_id: int, *, parent_id: int, key: str, text: str = "reply") -> dict:
+    """Build a fake prior bot reply as Bitbucket's comments-list endpoint
+    would return it: both hidden markers this module stamps onto every
+    reply it posts, plus a `parent` object."""
+    from ai_pr_review.vcs._bitbucket_verdicts import (
+        _REPLY_KEY_MARKER_PREFIX,
+        _REPLY_MARKER_HIDDEN,
+        _reply_key_hash,
+    )
+
+    body = (
+        f"{text}\n\n{_REPLY_MARKER_HIDDEN}\n"
+        f"{_REPLY_KEY_MARKER_PREFIX}{_reply_key_hash(key)})"
+    )
+    return {
+        "id": reply_id,
+        "content": {"raw": body},
+        "parent": {"id": parent_id},
+        "user": {"account_id": _BOT_ACCOUNT_ID},
+    }
+
+
+def test_duplicate_reply_suppressed_when_already_posted_with_same_outcome() -> None:
+    """A store write that keeps failing across runs must not re-post the
+    same 'not saved' reply forever -- the second run's comments list
+    already carries that exact reply (same parent, same outcome key)."""
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=False)
+    prior_reply = _bot_reply_comment(
+        9000, parent_id=200, key="verdict:1:false-positive:false",
+    )
+    result = _apply_verdicts_directly(
+        comments=[cmd, prior_reply], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert result.replies == ()
+    assert 200 not in result.newly_acked_ids  # still retryable -- only the reply is suppressed
+
+
+def test_reply_posted_again_when_persisted_outcome_changes() -> None:
+    """Once the store starts succeeding (e.g. the token scope was fixed),
+    the outcome key changes (persisted False -> True), so a fresh reply
+    posts even though a prior 'not saved' reply exists under the same
+    parent."""
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    store = _FakeFeedbackStore(succeed=True)
+    prior_reply = _bot_reply_comment(
+        9000, parent_id=200, key="verdict:1:false-positive:false",
+    )
+    result = _apply_verdicts_directly(
+        comments=[cmd, prior_reply], permissions={"acct-1": "write"}, feedback_store=store,
+    )
+    assert len(result.replies) == 1
+    assert "not** saved" not in dict(result.replies)[200]
+    assert 200 in result.newly_acked_ids
+
+
+def test_degraded_authority_duplicate_reply_suppressed() -> None:
+    """The pre-existing 'degraded permission check' retry-forever pattern
+    gets the same treatment: no duplicate 'could not verify' reply."""
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 x", account_id="acct-flaky")
+    prior_reply = _bot_reply_comment(9000, parent_id=200, key="authority:degraded")
+    handler = _build_handler(
+        comments=[cmd, prior_reply], permissions={"acct-flaky": "__error__"},
+    )
+    client = RecordingClient(
+        http=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.bitbucket.org/2.0"),
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    from ai_pr_review.vcs._bitbucket_verdicts import apply_pending_verdicts
+
+    result = apply_pending_verdicts(
+        client, workspace="ws", repo_slug="repo", comments=[cmd, prior_reply],
+        existing_body=_summary_body(), min_role="write", feedback_store=None,
+    )
+    assert result.replies == ()
+    assert 200 not in result.newly_acked_ids
+
+
+def test_two_commands_in_one_comment_get_distinct_reply_keys_not_collapsed() -> None:
+    """Two verdict outcomes under the same parent comment must not
+    collapse into each other just because they share a parent id -- each
+    carries its own key derived from its own finding_id/command."""
+    finding2 = Finding(
+        severity="Medium", confidence=85, finding="unused import", file="b.py", line=1,
+    )
+    fp2 = fingerprint(finding2)
+    id_map_marker = build_id_map_marker({_FP: 1, fp2: 2}, hidden=True)
+    existing_body = (
+        f"{SUMMARY_MARKER_PREFIX} sha={_HEAD} -->\n## AI Review: Request Changes\n\n"
+        f"- **[F1]** HIGH: hardcoded secret\n- **[F2]** MEDIUM: unused import\n\n{id_map_marker}"
+    )
+    cmd = _command_comment(
+        200,
+        "/ai-pr-review false-positive F1 not exploitable\n"
+        "/ai-pr-review wont-fix F2 cleanup later",
+    )
+    # A prior reply for F1's outcome only -- F2's reply must still post.
+    prior_reply = _bot_reply_comment(9000, parent_id=200, key="verdict:1:false-positive:none")
+    handler = _build_handler(comments=[cmd, prior_reply], permissions={"acct-1": "write"})
+    client = RecordingClient(
+        http=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.bitbucket.org/2.0"),
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=2, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+    from ai_pr_review.vcs._bitbucket_verdicts import apply_pending_verdicts
+
+    result = apply_pending_verdicts(
+        client, workspace="ws", repo_slug="repo", comments=[cmd, prior_reply],
+        existing_body=existing_body, min_role="write", feedback_store=None,
+    )
+    assert len(result.replies) == 1
+    assert "F2" in dict(result.replies)[200]
+
+
+def test_two_commands_sharing_identical_key_in_same_comment_post_only_one_reply() -> None:
+    """Silent-failure-hunter review finding (issue #941): two commands in
+    one comment that both resolve to the *same* outcome key (here, two
+    missing-finding-id commands, whose key has no per-command
+    discriminator beyond the canonical name) must not both post -- dedup
+    has to apply within a single pass, not only against replies already on
+    the PR from a prior run."""
+    cmd = _command_comment(
+        200,
+        "/ai-pr-review false-positive\n"
+        "/ai-pr-review false-positive",
+    )
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={}, feedback_store=None,
+    )
+    assert len(result.replies) == 1
+
+
+def test_bot_reply_under_different_parent_does_not_suppress() -> None:
+    """A prior reply's key hash matching by coincidence must not suppress
+    a reply for a different command comment."""
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    other_parent_reply = _bot_reply_comment(
+        9000, parent_id=999, key="verdict:1:false-positive:none",
+    )
+    result = _apply_verdicts_directly(
+        comments=[cmd, other_parent_reply], permissions={"acct-1": "write"}, feedback_store=None,
+    )
+    assert len(result.replies) == 1
+
+
+def test_old_format_reply_without_key_marker_does_not_suppress() -> None:
+    """A reply posted before this feature shipped carries the ownership
+    marker but no key-hash line -- it must not be mistaken for a match
+    against any current key (documented upgrade behavior: one more reply
+    posts, then dedup applies normally from there)."""
+    from ai_pr_review.vcs._bitbucket_verdicts import _REPLY_MARKER_HIDDEN
+
+    old_reply = {
+        "id": 9000,
+        "content": {"raw": f"@alice marked F1.\n\n{_REPLY_MARKER_HIDDEN}"},
+        "parent": {"id": 200},
+        "user": {"account_id": _BOT_ACCOUNT_ID},
+    }
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    result = _apply_verdicts_directly(
+        comments=[cmd, old_reply], permissions={"acct-1": "write"}, feedback_store=None,
+    )
+    assert len(result.replies) == 1
+
+
+def test_parse_error_reply_key_hash_never_contains_raw_unknown_token() -> None:
+    """The key incorporates the unrecognized token so distinct malformed
+    commands get distinct keys, but only the *hash* of that key is ever
+    stamped into the marker line -- the raw, possibly attacker-controlled
+    token text must never appear verbatim in a marker this module scans
+    for ownership/dedup."""
+    cmd = _command_comment(200, "/ai-pr-review not-a-real-command F1")
+    result = _apply_verdicts_directly(
+        comments=[cmd], permissions={}, feedback_store=None,
+    )
+    assert len(result.replies) == 1
+    reply_text = dict(result.replies)[200]
+    assert "not-a-real-command" not in reply_text.split("\n\n")[-1]
+
+
+def test_post_findings_sends_no_reply_post_when_duplicate_suppressed() -> None:
+    """End-to-end through post_findings: a second run whose reply would be
+    an exact duplicate of one already on the PR makes zero POSTs to the
+    comments endpoint."""
+    existing = _summary_comment(100, _summary_body())
+    cmd = _command_comment(200, "/ai-pr-review false-positive F1 not exploitable")
+    prior_reply = _bot_reply_comment(
+        9000, parent_id=200, key="verdict:1:false-positive:none",
+    )
+    replies: list[dict] = []
+    put_bodies: list[str] = []
+    handler = _build_handler(
+        comments=[existing, cmd, prior_reply],
+        permissions={"acct-1": "write"},
+        replies=replies,
+        put_bodies=put_bodies,
+    )
+    prov = _make_provider(handler, enable_feedback_loop=False)
+    result = prov.post_findings(
+        [_FINDING], DiffContext(diff_text=_DIFF, head_sha=_HEAD), event="COMMENT"
+    )
+    assert result.ok, result.error
+    assert replies == []
+
+
 def test_get_feedback_store_returns_none_when_disabled() -> None:
     provider = _make_provider(lambda _r: httpx.Response(200, json={}))
     assert provider._get_feedback_store() is None
