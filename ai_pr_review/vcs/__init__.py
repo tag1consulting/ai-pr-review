@@ -89,6 +89,21 @@ def _require_env(name: str) -> str:
     return val
 
 
+def _local_int_env(key: str, default: int) -> int:
+    """Temporary duplicate of `config.py`'s `from_env()`-local int-parsing
+    behavior (issue #906) -- see this function's one call site above for why
+    it isn't importing `config._int_env` yet.
+    """
+    raw = os.environ.get(key, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a valid integer; using default %d", key, raw, default,
+        )
+        return default
+
+
 def _require_int_env(name: str) -> int:
     raw = _require_env(name)
     try:
@@ -315,6 +330,20 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         not in ("false", "0", "no")
     )
 
+    # Learning-loop store (issue #906): the same AI_FEEDBACK_LOOP/
+    # AI_FEEDBACK_BRANCH/AI_FEEDBACK_RETENTION_* vars GitHub's ReviewConfig
+    # reads (config.py's from_env()). PR #934 (not yet merged as of this
+    # writing) extracts that parsing to a reusable module-level
+    # `config._int_env` -- once it lands, replace `_local_int_env` below
+    # with an import of it rather than keeping this duplicate.
+    enable_feedback_loop = (
+        os.environ.get("AI_FEEDBACK_LOOP", "false").strip().lower()
+        in ("true", "1", "yes")
+    )
+    feedback_branch = os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot")
+    feedback_retention_count = _local_int_env("AI_FEEDBACK_RETENTION_COUNT", 500)
+    feedback_retention_age_days = _local_int_env("AI_FEEDBACK_RETENTION_AGE_DAYS", 365)
+
     config = BitbucketConfig(
         workspace=workspace,
         repo_slug=repo_slug,
@@ -325,5 +354,9 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
         verdicts=verdicts,
         verdict_min_role=verdict_min_role,
         review_state=review_state,
+        enable_feedback_loop=enable_feedback_loop,
+        feedback_branch=feedback_branch,
+        feedback_retention_count=feedback_retention_count,
+        feedback_retention_age_days=feedback_retention_age_days,
     )
     return BitbucketProvider(config=config, client=build_bitbucket_client(config))

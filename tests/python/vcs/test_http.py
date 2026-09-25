@@ -278,3 +278,61 @@ def test_recording_client_records_requests(tmp_path: Path) -> None:
     assert resp.status_code == 200
     files = list(tmp_path.iterdir())
     assert len(files) == 1
+
+
+def test_recording_client_multipart_survives_default_json_content_type_header() -> None:
+    """Regression guard for the exact bug `request_multipart`'s docstring
+    describes: a client with a static default Content-Type header (every VCS
+    client in this repo sets `application/json`, see e.g. bitbucket.py's
+    `build_client`) must not let that header win over the auto-computed
+    multipart boundary header. Every other multipart test in this repo builds
+    its httpx.Client with no default headers at all, so none of them would
+    catch a regression back to `self.http.request(..., files=...)` -- which
+    would pass those tests while silently breaking against the real
+    Bitbucket API."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["content_type"] = request.headers.get("content-type", "")
+        captured["body"] = request.content.decode(errors="replace")
+        return httpx.Response(201)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(
+        transport=transport,
+        base_url="https://api.bitbucket.org/2.0",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    rc = RecordingClient(
+        http=client,
+        recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None),
+    )
+
+    resp = rc.request_multipart(
+        "POST", "/repositories/ws/repo/src",
+        fields={"branch": "ai-pr-review-bot", "parents": "abc123"},
+    )
+
+    assert resp.status_code == 201
+    assert captured["content_type"].startswith("multipart/form-data; boundary=")
+    assert "application/json" not in captured["content_type"]
+    assert "ai-pr-review-bot" in captured["body"]
+
+
+def test_recording_client_multipart_joins_base_url_without_double_slash() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(201)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport, base_url="https://api.bitbucket.org/2.0")
+    rc = RecordingClient(
+        http=client, recorder=TapeRecorder(record_dir=None), retry_policy=RetryPolicy(),
+    )
+
+    rc.request_multipart("POST", "/repositories/ws/repo/src", fields={"branch": "main"})
+
+    assert captured["url"] == "https://api.bitbucket.org/2.0/repositories/ws/repo/src"

@@ -9,6 +9,10 @@
 #   BITBUCKET_EMAIL     (plain)    — Atlassian account email for the bot user.
 #   BITBUCKET_API_TOKEN (secured)  — Atlassian API token with
 #                                    Repository:Read + PR:Write scopes.
+#                                    Add Repository:Write if you also set
+#                                    AI_FEEDBACK_LOOP=true below -- see the
+#                                    security note where that variable is
+#                                    documented.
 #   AI_REVIEW_IMAGE_TAG (plain)    — Container tag to pull. Recommended:
 #                                    'latest' (stable), 'dev' (pre-release),
 #                                    or a pinned release like '0.11.0'
@@ -45,7 +49,18 @@
 #                           repository permission -- read/write/admin --
 #                           required to apply a verdict command. Only
 #                           meaningful when AI_BITBUCKET_VERDICTS=true.)
-# Note: AI_FEEDBACK_LOOP (learning loop) is GitHub-only — no-op on Bitbucket.
+#   AI_FEEDBACK_LOOP        (plain, default: false; persist false-positive/
+#                           wont-fix verdicts to the cross-repo learning-loop
+#                           store, same as GitHub -- issue #906. Also
+#                           requires AI_BITBUCKET_VERDICTS=true above, AND
+#                           a Repository:Write scope on BITBUCKET_API_TOKEN
+#                           (a step up from the base Repository:Read +
+#                           PR:Write above -- Bitbucket cannot scope that
+#                           write access to a single branch, so this token
+#                           can then push anywhere in the repo, not just the
+#                           feedback-store branch; see docs/bitbucket-setup.md's
+#                           "BITBUCKET_API_TOKEN scope" section before
+#                           enabling this).
 # Note: AI_BITBUCKET_CODE_INSIGHTS (inline diff annotations) defaults to true
 # and needs no explicit repository variable unless you want it off.
 # Note: AI_BITBUCKET_REVIEW_STATE (real approve/request-changes calls on the

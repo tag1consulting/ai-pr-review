@@ -236,3 +236,64 @@ class RecordingClient:
         )
         self.recorder.record(method, url, body_text, response)
         return response
+
+    def request_multipart(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        fields: Mapping[str, str],
+    ) -> httpx.Response:
+        """Send a ``multipart/form-data`` request (Bitbucket's ``/src`` endpoint,
+        issue #906, is the sole caller: it takes plain string fields — branch
+        name, ``parents``, commit message, and one field per file path whose
+        value is the file's new content — as multipart parts, not JSON).
+
+        Built as a bare ``httpx.Request`` and sent via ``self.http.send()``
+        rather than ``self.http.request(..., files=...)``: a client
+        constructed with a static default ``Content-Type`` header (every VCS
+        client here sets ``application/json``, see e.g. `bitbucket.py`'s
+        ``build_client``) does not let a per-request ``files=`` argument
+        override that header when going through ``request()``/
+        ``build_request()`` — httpx merges the client's default headers over
+        the request's own before the multipart boundary is computed, so the
+        request would go out as ``Content-Type: application/json`` with a
+        multipart body, which Bitbucket's API silently fails to parse as
+        form fields. Constructing the ``Request`` directly (not through the
+        client) computes the correct ``multipart/form-data; boundary=...``
+        header from scratch with nothing to collide with; ``client.send()``
+        still applies the client's configured auth to a bare ``Request`` the
+        same way ``client.request()`` would. Verified directly against a
+        mock transport before relying on it here.
+        """
+        # httpx normalizes `base_url` to always carry a trailing slash (verified
+        # directly: constructing a Client with base_url="https://x/2.0" reports
+        # str(client.base_url) == "https://x/2.0/"), so naively concatenating a
+        # leading-slash relative path produces a double slash the server may
+        # not accept identically to the single-slash form. rstrip once here
+        # rather than relying on every caller to pass a bare (no leading
+        # slash) path.
+        full_url = (
+            url if url.startswith("http")
+            else f"{str(self.http.base_url).rstrip('/')}{url}"
+        )
+        request = httpx.Request(
+            method,
+            full_url,
+            headers=headers,
+            files={k: (None, v) for k, v in fields.items()},
+        )
+
+        def _call() -> httpx.Response:
+            return self.http.send(request)
+
+        response = retry_transient(_call, policy=self.retry_policy)
+        # Recorded for tape/debugging purposes only -- field values (including
+        # file content) are omitted, not just the field names, since this is
+        # the feedback-store write path and file content can carry PR-derived
+        # text (see this module's own redact_secrets, which this omission
+        # makes belt-and-suspenders for rather than the only guard).
+        body_summary = json.dumps({k: "<omitted>" for k in fields}, sort_keys=True)
+        self.recorder.record(method, url, body_summary, response)
+        return response

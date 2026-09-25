@@ -35,3 +35,11 @@ _Avoid_: deriving severity from confidence. They are independent axes, and a pro
 **Confidence** (of a finding):
 An agent's self-reported certainty that the finding is real, 0-100. It gates *existence*, never severity: `findings/merge.py` drops anything below `confidence_threshold` (default 75, `AI_CONFIDENCE_THRESHOLD`) before findings reach the verdict stage. A finding that survives the floor is treated as true, and its severity is then decided by the blocking contract alone, not recomputed from confidence.
 _Avoid_: reading a surviving finding's confidence as a severity signal, or expecting the judge pass's "below 60" downrank rule to fire — the confidence floor has already removed everything that rule describes.
+
+**Learning loop**:
+The whole feature: a human's `false-positive`/`wont-fix` verdict (plus a bare `feedback` note, on GitHub) gets recorded, persisted across PRs, and injected into future review prompts as `<repo-feedback>` context. Gated by `AI_FEEDBACK_LOOP`, same variable name on every supporting provider (GitHub, and Bitbucket as of issue #906).
+_Avoid_: using "learning loop" to mean just the storage mechanism — that's the feedback store (see next entry). The learning loop also covers the record and inject steps, which have nothing to do with where the data lives.
+
+**Feedback store**:
+The storage part of the learning loop only: the JSONL file on the dedicated `ai-pr-review-bot` git branch, plus the `FeedbackStore` protocol (`feedback/store.py`) every provider implementation satisfies (`GitBranchStore` for GitHub, `BitbucketSrcStore` for Bitbucket, `UnsupportedVcsStore` elsewhere).
+_Avoid_: using "feedback store" to mean the whole learning-loop feature — a finding suppressed on a PR via the hidden verdicts marker is not itself a feedback-store write; only a persisted `FeedbackEntry` is.

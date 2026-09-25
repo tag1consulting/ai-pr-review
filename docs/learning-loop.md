@@ -103,15 +103,26 @@ The `reason` text is sanitized before storage:
 
 ## Required setup
 
+**GitHub:**
+
 1. Set `feedback-loop: 'true'` in `action.yml` inputs (review action) and `enable-feedback-loop: 'true'` in the reusable slash-commands workflow inputs (command handling).
 2. Ensure `GH_TOKEN` (a PAT or GitHub App token) has `contents:write` permission on the repository. The `ai-pr-review-bot` branch is created automatically on first write.
 3. No additional engine configuration is required.
 
+**Bitbucket** (issue #906):
+
+1. Set `AI_FEEDBACK_LOOP=true` in the pipeline environment — the same variable name GitHub reads, no separate Bitbucket-only flag.
+2. Also requires `AI_BITBUCKET_VERDICTS=true` (verdict-command polling, see `docs/bitbucket-setup.md`) — without it there is nothing to persist.
+3. The Bitbucket API token needs **Repository:Write**, not just the Repository:Read + PR:Write documented for the base setup. See `docs/bitbucket-setup.md`'s "Dismissing findings" section for the security implications of this scope before granting it.
+4. `AI_FEEDBACK_BRANCH`/`AI_FEEDBACK_RETENTION_COUNT`/`AI_FEEDBACK_RETENTION_AGE_DAYS` are shared with GitHub, same defaults.
+
 ## Access control
 
-Feedback-writing commands (`false-positive`, `wont-fix`, `feedback`, plus the `dismiss` alias) are restricted to users with `OWNER` or `MEMBER` association. `COLLABORATOR` is intentionally excluded — these commands persist data that influences every future review repo-wide, so we apply the same trust level GitHub uses to gate "approve workflow runs from forks". Transient commands like `/ai-pr-review rescan` and `/ai-pr-review skip` continue to accept `COLLABORATOR` per the existing `handle-command` job.
+**GitHub:** feedback-writing commands (`false-positive`, `wont-fix`, `feedback`, plus the `dismiss` alias) are restricted to users with `OWNER` or `MEMBER` association. `COLLABORATOR` is intentionally excluded — these commands persist data that influences every future review repo-wide, so we apply the same trust level GitHub uses to gate "approve workflow runs from forks". Transient commands like `/ai-pr-review rescan` and `/ai-pr-review skip` continue to accept `COLLABORATOR` per the existing `handle-command` job.
 
 This is enforced by `SLASH_FEEDBACK_WRITE_ALLOWED` on both `dismiss-body-finding` and `dismiss-finding` (issue #769) — before this, a `COLLABORATOR`'s top-level `false-positive`/`wont-fix` was persisted to the store despite `dismiss-body-finding` itself admitting `COLLABORATOR`, because the OWNER/MEMBER bar was only enforced by `feedback-command`'s own admission gate on the now-removed second write path. `dismiss-body-finding`/`dismiss-finding` still admit `COLLABORATOR` for the resolve/dismiss/reply side effects; only the store write requires OWNER/MEMBER, the same relationship `--approve-allowed` already has to those jobs' own admission gate.
+
+**Bitbucket:** there is no association concept equivalent to GitHub's OWNER/MEMBER/COLLABORATOR. A store write reuses the same `check_authority()`/`AI_BITBUCKET_VERDICT_MIN_ROLE` check that already gates suppressing the finding at all (issue #906 — deliberately no second, separate authority check: anyone trusted to suppress a finding on the PR is trusted to record why). This is a real trust difference from GitHub, not an oversight: GitHub's OWNER/MEMBER bar is deliberately stricter than the `write`-role default this shares with suppression, because a GitHub store entry has no equivalent suppression action a lower-trust `COLLABORATOR` is otherwise allowed to take. If you lower `AI_BITBUCKET_VERDICT_MIN_ROLE` below its `write` default (to `read`), you are also lowering who can write persistent, repo-wide learning-loop entries, not just who can suppress a finding on one PR — weigh that before doing so.
 
 ## Defensive prompt framing
 
@@ -122,5 +133,5 @@ The `<repo-feedback>` block is injected into agent system prompts with an explic
 | Provider | Learning loop |
 |----------|---------------|
 | GitHub | Full support |
+| Bitbucket | Full support (issue #906) — `false-positive`/`wont-fix` only; `feedback` command handling is tracked separately (issue #933) |
 | GitLab | Stub (no-op) |
-| Bitbucket | Stub (no-op) |

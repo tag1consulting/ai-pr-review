@@ -134,17 +134,24 @@ permission check itself couldn't be completed (distinguished in the
 reply text so you know whether to fix your access or just retry) — so a
 command is never silently ignored.
 
-**Not yet supported:** writing to the cross-repo learning-loop store
-(the `<repo-feedback>` context injected into future prompts) — see
-[Learning loop → Provider support](learning-loop#provider-support). A
-verdict still suppresses the finding on this PR via the hidden verdicts
-marker; it just doesn't teach future reviews on other PRs the way a
-GitHub dismiss does.
+**Learning loop (issue #906):** a `false-positive`/`wont-fix` verdict (the
+`dismiss` alias included; `fixed` never persists on either provider) also
+writes to the cross-repo learning-loop store — the `<repo-feedback>`
+context injected into future review prompts — the same way a GitHub
+dismiss does. This needs both `AI_FEEDBACK_LOOP=true` and
+`AI_BITBUCKET_VERDICTS=true`; see
+[Learning loop → Required setup](learning-loop#required-setup) for the
+full checklist, including the **Repository:Write** token scope this
+requires (a step up from the Repository:Read + Pull request:Write the
+base setup needs — see the security note under [Grant PR
+scopes](#3-grant-pr-scopes) below). If the token lacks that scope, or the
+write fails for any other reason, the finding is still suppressed on
+this PR; the bot's reply says plainly that the entry was **not** saved
+and that future reviews will not learn from it, rather than silently
+degrading. If `AI_FEEDBACK_LOOP` is off, the reply says so instead.
 
 ## What does not work on Bitbucket
 
-- Writing to the cross-repo learning-loop store from a verdict command
-  (see [Dismissing findings](#dismissing-findings) above)
 - Slash commands other than dismiss/false-positive/wont-fix/fixed
   (`explain`, `revise`, `feedback`, `rescan`, `review-full`, `skip`):
   Bitbucket Pipelines has no `issue_comment` equivalent, so these have no
@@ -187,6 +194,8 @@ variables** and add:
 | `AI_BITBUCKET_VERDICTS` | No | `false` (default). Set to `true` to enable dismiss/false-positive/wont-fix/fixed comment commands — see [Dismissing findings](#dismissing-findings). |
 | `AI_BITBUCKET_VERDICT_MIN_ROLE` | No | `write` (default). Minimum Bitbucket repository permission (`read`, `write`, or `admin`) required to apply a verdict command. Only meaningful when `AI_BITBUCKET_VERDICTS=true`. |
 | `AI_BITBUCKET_REVIEW_STATE` | No | `true` (default). Set to `false` to stop the bot from calling Bitbucket's approve/request-changes endpoints — the decided outcome still renders as heading text in the summary comment either way. |
+| `AI_FEEDBACK_LOOP` | No | `false` (default). Set to `true` to persist `false-positive`/`wont-fix` verdicts to the cross-repo learning-loop store — see [Dismissing findings → Learning loop](#dismissing-findings). Also requires `AI_BITBUCKET_VERDICTS=true` and the **Repository:Write** scope below. |
+| `AI_FEEDBACK_BRANCH` | No | `ai-pr-review-bot` (default). Branch the learning-loop store's JSONL file lives on — same variable GitHub reads. |
 
 ### 3. Grant PR scopes
 
@@ -195,6 +204,26 @@ user must have at least:
 
 - **Repository:Read** on the repo being reviewed
 - **Pull request:Write** on the repo (to create and update comments)
+
+**If `AI_FEEDBACK_LOOP=true`**, the token also needs **Repository:Write**.
+Read this before granting it: Bitbucket has no way to scope a token's
+write access to a single branch (unlike GitHub, which can be locked down
+with branch protection rules on `ai-pr-review-bot` even for a
+`contents:write` token). Repository:Write on this token means it can push
+to *any* branch in the repo, not only the feedback-store branch. The risk
+this adds starts the moment the token *has* the scope, not only once
+`AI_FEEDBACK_LOOP=true` is actually set — a token with Repository:Write
+sitting unused is still a bigger blast radius if it leaks. Since this is a
+secured pipeline variable (see [Secret exposure to pipeline
+contributors](#secret-exposure-to-pipeline-contributors) below), anyone
+who can modify `bitbucket-pipelines.yml` on a branch they can push can
+read it out, and with this scope granted, that reach now extends to
+pushing to your default/release branches, not just posting comments and
+reactions. Grant Repository:Write only when you're ready to enable the
+learning loop, and if your workspace has branch restrictions available,
+protect your default/release branches against this token specifically
+first — the same caution you'd apply to any bot token that gains write
+access.
 
 ### 4. Copy the starter pipeline
 
@@ -291,6 +320,14 @@ Mitigations:
 Use the minimum scope required (Repository:Read + Pull request:Write). If the
 bot user has broader Workspace or Project admin rights, a token compromise has
 a much larger blast radius.
+
+**If you enable `AI_FEEDBACK_LOOP`** (issue #906), the token additionally
+needs Repository:Write, and that scope is not limited to the feedback-store
+branch — see the note under [Grant PR scopes](#3-grant-pr-scopes) above.
+This is a real, deliberate increase in what a compromised token could do
+(push to any branch, not just comment/react), traded for the learning
+loop persisting on Bitbucket at all. It is off by default and stays off
+unless you opt in.
 
 ## Troubleshooting
 
