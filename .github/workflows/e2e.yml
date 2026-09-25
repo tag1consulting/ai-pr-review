@@ -36,6 +36,17 @@ on:
       platforms:
         description: "comma-separated platform list"
         default: "github,gitlab,bitbucket"
+      max_cost_usd:
+        description: >-
+          Per-platform AI_MAX_COST_USD ceiling. The harness's own default
+          ($2.00) is well below the real worst-case pre-flight estimate for
+          a full-mode review of this fixture (~$4.34, confirmed live
+          2026-09-25) -- that estimate deliberately assumes every agent uses
+          its full max_output_tokens cap (see cost_ceiling.py's docstring),
+          not typical actual spend (the same run's real cost was $1.22).
+          $6.00 leaves headroom above the observed worst case without
+          disabling the ceiling as a genuine runaway-cost guard.
+        default: "6.00"
   schedule:
     # Weekly credential/access check only -- no LLM calls, no PRs opened.
     # Catches an expired token before release day instead of during it.
@@ -288,6 +299,7 @@ jobs:
           python -m tests.e2e.run_e2e run \
             --platforms "${{ matrix.platform }}" \
             --mode "${{ github.event.inputs.mode || 'full' }}" \
+            --max-cost-usd "${{ github.event.inputs.max_cost_usd || '6.00' }}" \
             --out-dir "$GITHUB_WORKSPACE/e2e-out/${{ matrix.platform }}"
 
       - name: Upload evidence
