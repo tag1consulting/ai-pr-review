@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from ai_pr_review.config import _int_env
 from ai_pr_review.findings.scope import is_analyzer_source
 from ai_pr_review.slash.github_orchestration import (
     FeedbackContext,
@@ -1243,7 +1244,21 @@ def persist_verdict(
     )
 
     class _DismissConfig:
+        """Minimal `make_store()` shape for the dismiss/dismiss-inline path.
+
+        Issue #906 follow-up: this used to hard-code the store defaults
+        (`ai-pr-review-bot`, 500, 365) regardless of what the workflow's
+        `AI_FEEDBACK_BRANCH`/`AI_FEEDBACK_RETENTION_*` env vars said, since
+        `make_store()`'s `getattr(config, ..., default)` calls silently fell
+        back whenever the attribute was missing. Reuses `config._int_env`
+        (the same parsing/warning behavior `ReviewConfig.from_env()` uses)
+        rather than re-deriving int parsing here.
+        """
+
         vcs_provider = "github"
+        feedback_branch = _os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot")
+        feedback_retention_count = _int_env("AI_FEEDBACK_RETENTION_COUNT", 500)
+        feedback_retention_age_days = _int_env("AI_FEEDBACK_RETENTION_AGE_DAYS", 365)
 
     entry = build_entry(
         command_for_entry,
