@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-09-25
+
 ### Added
 
 - **Bitbucket: the learning-loop store is no longer a stub (issue #906)**. A `false-positive`/`wont-fix` verdict (the `dismiss` alias included; `fixed` never persists on either provider) now writes a `FeedbackEntry` to the same `.ai-pr-review/learnings.jsonl` file on the `ai-pr-review-bot` branch GitHub already uses, injected into future review prompts as `<repo-feedback>` context the same way. Requires `AI_FEEDBACK_LOOP=true` and `AI_BITBUCKET_VERDICTS=true`, plus a **Repository:Write** scope on the Bitbucket API token (a step up from the base Repository:Read + PR:Write scope — see `docs/bitbucket-setup.md`'s security note before enabling this). `feedback/store.py`'s previously GitHub-only `GitBranchStore` was split into a provider-neutral core (`_StoreCore`) plus a per-provider backend (`_GitHubContentsBackend`, `_BitbucketSrcBackend`) so both providers share the same retry/dedup/retention logic. Bitbucket's write path has no confirmed compare-and-swap on Bitbucket's `/src` endpoint (unverified live — see the issue's Phase 0 spike notes), so it uses a best-effort read-after-write check instead. A comment reprocessed by Bitbucket's own poll-every-run design (issue #874) is deduplicated by its source comment id, with no time window, distinct from the existing 10-minute dedup guard (issue #769). Bitbucket `feedback` command handling (the free-form note command) is tracked separately as issue #933.
+
+### Fixed
+
+- **A post-merge retrospective `/comprehensive-review --full` pass over the merged #906 change set found and fixed several issues (PR #939)**: a failed feedback-store write during Bitbucket verdict polling was silently acked and never retried, defeating the comment-id dedup mechanism built to make retries safe; a stale duplicate env-var parser (`_local_int_env`) was left in `vcs/__init__.py` after its replacement (`config._int_env`) landed; `_BitbucketSrcBackend`'s docstring overclaimed retry behavior the code didn't actually have for a stale-`parents` rejection; a malformed-API-response `RuntimeError` was being misclassified as a retryable conflict instead of propagating with its real cause. Docs also gained a security note on the `<repo-feedback>` render step's reliance on write-time sanitization, and fixed stale "GitHub-only" claims about the learning loop.
+- **A release-gate review before tagging found one integration-test gap (PR #940)**: nothing exercised `BitbucketProvider._get_feedback_store()`, `apply_pending_verdicts()`, and `post_findings()` wired together with the feedback loop actually enabled, so a regression dropping that wiring would have passed every existing test. Added a combined-transport test covering the full path end to end.
+
+### Known issue
+
+- **Bitbucket: a permanently-failing feedback-store write (e.g. a token missing the required Repository:Write scope) causes a duplicate "not saved" reply comment on every future pipeline run, indefinitely (issue #941)**. This is comment/log spam only — no data loss, no security exposure — and predates #906 (the same retry-forever pattern already existed for a degraded authority-check failure); #906 just adds a more-likely-to-be-permanent trigger. Tracked as a fast-follow, not fixed in this release.
 
 ## [2.13.2] - 2026-09-24
 

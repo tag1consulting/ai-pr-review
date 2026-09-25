@@ -68,6 +68,12 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.14.0
+
+**Bitbucket's learning-loop store is no longer a stub.** A `false-positive`/`wont-fix` verdict now persists a `FeedbackEntry` to the same `.ai-pr-review/learnings.jsonl` file GitHub already uses, feeding future review prompts the same way on both providers — opt-in via `AI_FEEDBACK_LOOP` + `AI_BITBUCKET_VERDICTS`, and requires a **Repository:Write** scope bump on the Bitbucket API token (issue #906). The underlying store was split into a provider-neutral core plus per-provider backends so GitHub and Bitbucket share the same retry/dedup/retention logic. Two follow-up passes — a post-merge retrospective review and a pre-tag release-gate review — found and fixed several real issues before this release shipped: a failed feedback-store write during verdict polling was silently acked instead of retried, a stale duplicate env-var parser was removed, a docstring was corrected to stop overclaiming untested retry behavior, and a missing integration test covering the full store-construction-to-persistence chain was added. One known, non-blocking issue remains open as a fast-follow: a permanently-misconfigured token causes duplicate reply-comment spam rather than a clean one-time failure (issue #941).
+
+See [Version History → v2.14.0](version-history/v2.14.0) for details.
+
 ## What's new in v2.13.2
 
 **Two real bugs, both found live while validating the prior two releases, are fixed, alongside a full documentation-accuracy pass.** A compute-phase skip ("no changed files" or diff-too-large) crashed instead of posting cleanly whenever `AI_REVIEW_MODE` was left at its unset-sentinel empty string — reachable whenever a review workflow runs against an already-merged PR (issue #927). On Bitbucket, `post_findings` could fail with "no summary comment to attach findings to" on a brand-new (first-ever) summary comment, even though it had just been created successfully — a fresh bot identity's first-ever post to a PR reliably reproduces this (issue #930). Separately, a thorough re-check of every doc against current code found and corrected a batch of stale claims accumulated since v2.12.x — env var defaults, analyzer counts, provider capability descriptions, and two example workflows missing a fail-closed default.
@@ -79,12 +85,6 @@ See [Version History → v2.13.2](version-history/v2.13.2) for details.
 **Two v2.13.0 release-doc gaps, found by that release's own AI-review response loop, are fixed.** The `#approval-ceiling` configuration reference said GitLab *and* Bitbucket "never post a real approval state", stale as of issue #918. Issue #918's Bitbucket default-on real-approval behavior is now flagged as a **Behavior change** with upgrade guidance. Docs-only, no code changed.
 
 See [Version History → v2.13.1](version-history/v2.13.1) for details.
-
-## What's new in v2.13.0
-
-**Bitbucket reaches finding-lifecycle parity with GitHub/GitLab, and five security findings surfaced during that work are fixed.** Bitbucket now dedups findings across runs and renders them inline as Code Insights annotations (both on by default), and polls PR comments for `/ai-pr-review dismiss|false-positive|wont-fix|fixed` commands at the start of the next run, opt-in via `AI_BITBUCKET_VERDICTS` — the closest a comment-triggerless CI can get to GitHub/GitLab's immediate slash-command handling (issues #839, #873, #874). A follow-up pass against a real Bitbucket Pipelines run found and fixed three more gaps: annotated findings were invisible in the review comment itself (#920), the starter pipeline never failed the build on Critical/High findings (#917), and the decided review outcome had no real effect on the PR's own reviewer-state UI until now (#918, capped by `approval-ceiling` the same as GitHub/GitLab). The same body of work's security-review passes surfaced a verdicts-marker forgery path via unsanitized LLM narrative output, closed in two passes covering both the original gap and the id-map/acks/judge-map/`Finding.source` sibling channels (#886, #913), a bullet-syntax forgery redirecting dismiss commands (#914), a fingerprint delimiter collision (#887), and a Bitbucket comment-authorship gap (#894) — all fixed. Also new: `approval-ceiling`, letting a repo require a human to make every merge decision instead of the bot (issue #858).
-
-See [Version History → v2.13.0](version-history/v2.13.0) for details.
 
 ## Learn more
 
