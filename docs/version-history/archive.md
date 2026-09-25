@@ -2,13 +2,17 @@
 layout: default
 title: Older releases
 parent: Version History
-nav_order: 11
+nav_order: 12
 render_with_liquid: false
 ---
 
 # Older releases
 
-v2.6.0 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.6.1 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.6.1
+
+**Bitbucket's PR-comment renderer HTML-escapes raw `<!-- -->` comments instead of hiding them like GitHub and GitLab do**, so the `ai-pr-review-summary`/`ai-pr-review-inline`/`ai-pr-review-skip` ownership and watermark markers rendered as visible literal text at the top or bottom of every Bitbucket review comment — with the summary marker's embedded commit SHA autolinked to a commit page. Bitbucket now emits these markers as a `[//]: # (...)` reference-link definition instead, which all three providers render as nothing. Marker parsing recognizes both forms, so already-posted Bitbucket comments using the old format are unaffected. GitHub and GitLab are unchanged — they already rendered the HTML-comment form correctly.
 
 ## v2.6.0
 
