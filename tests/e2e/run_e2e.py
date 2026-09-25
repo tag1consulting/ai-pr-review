@@ -332,7 +332,15 @@ def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sh
             returncode = -1
             stderr_text = f"failed to invoke docker: {exc}"
         finally:
-            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True)
+            rm_proc = subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True)
+            if rm_proc.returncode != 0:
+                # Best-effort cleanup; a failure here (e.g. runner resource
+                # pressure) shouldn't fail the run, but it should be visible
+                # instead of silently leaving a stray container behind.
+                click.echo(
+                    f"run: {platform}: warning: 'docker rm -f {container_name}' failed "
+                    f"(rc={rm_proc.returncode}): {mask(rm_proc.stderr[:300])}", err=True,
+                )
     finally:
         env_file.unlink(missing_ok=True)
 
