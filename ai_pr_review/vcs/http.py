@@ -289,11 +289,12 @@ class RecordingClient:
             return self.http.send(request)
 
         response = retry_transient(_call, policy=self.retry_policy)
-        # Recorded for tape/debugging purposes only -- field values (including
-        # file content) are omitted, not just the field names, since this is
-        # the feedback-store write path and file content can carry PR-derived
-        # text (see this module's own redact_secrets, which this omission
-        # makes belt-and-suspenders for rather than the only guard).
+        # Recorded for tape/debugging purposes only -- field names are kept
+        # for tape readability, but every value (including file content) is
+        # replaced with a redaction marker, since this is the feedback-store
+        # write path and file content can carry PR-derived text (see this
+        # module's own redact_secrets, which this omission makes
+        # belt-and-suspenders for rather than the only guard).
         body_summary = json.dumps({k: "<omitted>" for k in fields}, sort_keys=True)
         self.recorder.record(method, url, body_summary, response)
         return response

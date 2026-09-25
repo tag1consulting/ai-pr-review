@@ -1162,10 +1162,9 @@ def test_backend_write_propagates_non_404_error_from_post() -> None:
 def test_backend_write_maps_verify_read_failure_to_conflict_not_a_generic_error() -> None:
     """Regression (found in review before merge, issue #906): the POST has
     already committed by the time the best-effort verify-read runs. A
-    failure in that read must never surface as a generic HTTP/transport
+    transport/HTTP failure in that read must never surface as a generic
     error, or _StoreCore.append() would report an entry that actually
-    persisted as failed (and, for the RuntimeError case, with a misleading
-    'file may exceed 1 MB' message)."""
+    persisted as failed."""
     from ai_pr_review.feedback.store import _ConflictError
 
     call_count = {"n": 0}
@@ -1180,4 +1179,25 @@ def test_backend_write_maps_verify_read_failure_to_conflict_not_a_generic_error(
 
     backend = _make_backend(handler)
     with pytest.raises(_ConflictError):
+        backend.write("content\n", "a" * 40)
+
+
+def test_backend_write_propagates_runtime_error_from_verify_read_instead_of_conflict() -> None:
+    """Issue #906 review follow-up: a RuntimeError from the verify-read's
+    branch-head lookup (malformed refs/branches response -- not a race, and
+    not something a retry fixes) must propagate as-is, not be folded into
+    _ConflictError. This is a different case from the transport/HTTP
+    failure above: _StoreCore.append() has a dedicated RuntimeError handler
+    that logs the real cause and returns False immediately, rather than
+    retrying and eventually reporting a misleading "SHA conflict after N
+    attempts"."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/src"):
+            return httpx.Response(201)
+        # The verify read's branch-head lookup succeeds with a malformed
+        # body (no "hash") rather than failing transiently.
+        return httpx.Response(200, json={"target": {}})
+
+    backend = _make_backend(handler)
+    with pytest.raises(RuntimeError, match="no target.hash"):
         backend.write("content\n", "a" * 40)

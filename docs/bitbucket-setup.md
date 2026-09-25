@@ -223,7 +223,16 @@ reactions. Grant Repository:Write only when you're ready to enable the
 learning loop, and if your workspace has branch restrictions available,
 protect your default/release branches against this token specifically
 first — the same caution you'd apply to any bot token that gains write
-access.
+access. This scope also means anyone able to push directly to
+`ai-pr-review-bot` (not only the slash-command flow) can write raw
+entries into its JSONL file that bypass the slash-command parser's
+write-time sanitization (HTML-escaping, secret-pattern rejection): the
+`<repo-feedback>` render step does not escape `reason` a second time,
+by design, since it assumes every entry already passed through that
+sanitization once. Restrict push access to `ai-pr-review-bot`
+specifically wherever your workspace's branch-restriction settings
+allow it, the same as you would for any other branch a bot token can
+reach.
 
 ### 4. Copy the starter pipeline
 

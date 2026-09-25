@@ -37,11 +37,13 @@ Feedback is persisted as `.ai-pr-review/learnings.jsonl` on the `ai-pr-review-bo
 {"ts":"2026-05-14T12:00:00Z","command":"false-positive","reason":"intentional","source":"code-reviewer","file":"src/foo.py","rule_id":""}
 ```
 
-The file survives PR branch deletion and repository forks. Concurrent writes use optimistic-lock (SHA-based `if-match` on the GitHub Contents API) with up to 3 retries and exponential backoff + jitter. If all retries fail, the entry is silently dropped (fail-soft) and the review still posts.
+The file survives PR branch deletion and repository forks. Retention, dedup, and the wire format above are shared across providers (`_StoreCore`); the mechanics below (bootstrap, concurrency handling) are provider-specific.
 
-### First-time branch bootstrap
+### GitHub (`GitBranchStore`)
 
-The `ai-pr-review-bot` branch is created automatically on the first feedback write. The store detects the missing branch via a 422 response from the Contents API, then:
+Concurrent writes use optimistic-lock (SHA-based `if-match` on the GitHub Contents API) with up to 3 retries and exponential backoff + jitter. If all retries fail, the entry is silently dropped (fail-soft) and the review still posts.
+
+**First-time branch bootstrap**: the `ai-pr-review-bot` branch is created automatically on the first feedback write. The store detects the missing branch via a 422 response from the Contents API, then:
 
 1. Resolves the repo's default branch via `GET /repos/{repo}` → `default_branch`.
 2. Resolves the default branch's HEAD sha via `GET /repos/{repo}/git/ref/heads/{default}`.
@@ -49,6 +51,12 @@ The `ai-pr-review-bot` branch is created automatically on the first feedback wri
 4. Retries the original write.
 
 No manual setup is required, but the `GH_TOKEN` must have `contents:write` scope on the repository. If the bootstrap step fails (e.g. fine-grained PAT without write access to refs), a WARNING is logged and the entry is dropped — the review still posts.
+
+### Bitbucket (`BitbucketSrcStore`, issue #906)
+
+Writes go through Bitbucket's `/src` multipart commit-creation endpoint rather than a Contents-API-style single-file PUT. Bitbucket's `/src` endpoint has no confirmed compare-and-swap on a stale `parents` value (unverified as of this writing), so the store instead does **best-effort read-after-write verification**: after each write, it re-reads the file and treats a mismatch as a conflict, redoing the read-modify-write cycle (same retry budget as GitHub). This narrows, but does not close, the lost-update window under concurrent writers — see the code comments on `_BitbucketSrcBackend` for the exact race this can still miss. The data here is advisory prompt context, not an audit log, so this tradeoff is accepted rather than adding real server-side locking infrastructure.
+
+**First-time branch bootstrap**: the `ai-pr-review-bot` branch is created automatically on the first feedback write, from the repository's `mainbranch` HEAD via `POST /refs/branches`. No manual setup is required beyond granting the token **Repository:Write** — see [docs/bitbucket-setup.md](bitbucket-setup.md) for the security note on that scope's blast radius (it cannot be limited to just this branch). If bootstrap fails, a WARNING is logged and the entry is dropped — the review still posts.
 
 ## Retention policy
 

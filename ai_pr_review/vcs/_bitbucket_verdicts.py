@@ -525,6 +525,20 @@ def apply_pending_verdicts(
                     },
                 )
                 persisted = feedback_store.append(entry)
+                if persisted is False:
+                    # A failed store write is retryable the same way a
+                    # degraded authority check is (see this flag's docstring
+                    # above): leaving the comment un-acked means the next
+                    # run's append() attempt gets a fresh chance instead of
+                    # the loss becoming permanent. The store's comment-id
+                    # dedup (issue #906 Q6) makes this safe even if the
+                    # write actually landed despite reporting failure.
+                    comment_had_retryable_failure = True
+                    errors.append(
+                        f"apply_pending_verdicts: comment {comment_id} "
+                        f"finding {command.finding_id}: feedback store "
+                        "append failed, will retry on next run"
+                    )
 
             replies.append(
                 (comment_id, _reply_for_verdict(actor, command, verdict, persisted=persisted))

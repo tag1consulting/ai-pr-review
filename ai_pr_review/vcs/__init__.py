@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 
+from ai_pr_review.config import _int_env
 from ai_pr_review.vcs.bitbucket import (
     BitbucketConfig,
     BitbucketProvider,
@@ -87,21 +88,6 @@ def _require_env(name: str) -> str:
     if not val:
         raise ProviderConfigError(f"{name} is required for the selected VCS provider")
     return val
-
-
-def _local_int_env(key: str, default: int) -> int:
-    """Temporary duplicate of `config.py`'s `from_env()`-local int-parsing
-    behavior (issue #906) -- see this function's one call site above for why
-    it isn't importing `config._int_env` yet.
-    """
-    raw = os.environ.get(key, str(default))
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning(
-            "%s=%r is not a valid integer; using default %d", key, raw, default,
-        )
-        return default
 
 
 def _require_int_env(name: str) -> int:
@@ -332,17 +318,15 @@ def _build_bitbucket_from_env() -> BitbucketProvider:
 
     # Learning-loop store (issue #906): the same AI_FEEDBACK_LOOP/
     # AI_FEEDBACK_BRANCH/AI_FEEDBACK_RETENTION_* vars GitHub's ReviewConfig
-    # reads (config.py's from_env()). PR #934 (not yet merged as of this
-    # writing) extracts that parsing to a reusable module-level
-    # `config._int_env` -- once it lands, replace `_local_int_env` below
-    # with an import of it rather than keeping this duplicate.
+    # reads (config.py's from_env()), parsed via the same `config._int_env`
+    # helper `slash/github_ops.py`'s `_DismissConfig` uses.
     enable_feedback_loop = (
         os.environ.get("AI_FEEDBACK_LOOP", "false").strip().lower()
         in ("true", "1", "yes")
     )
     feedback_branch = os.environ.get("AI_FEEDBACK_BRANCH", "ai-pr-review-bot")
-    feedback_retention_count = _local_int_env("AI_FEEDBACK_RETENTION_COUNT", 500)
-    feedback_retention_age_days = _local_int_env("AI_FEEDBACK_RETENTION_AGE_DAYS", 365)
+    feedback_retention_count = _int_env("AI_FEEDBACK_RETENTION_COUNT", 500)
+    feedback_retention_age_days = _int_env("AI_FEEDBACK_RETENTION_AGE_DAYS", 365)
 
     config = BitbucketConfig(
         workspace=workspace,

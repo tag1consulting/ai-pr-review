@@ -42,6 +42,10 @@ def _clear_provider_envs(monkeypatch: pytest.MonkeyPatch) -> None:
         "BITBUCKET_REPO_SLUG",
         "AI_CANONICAL_REUSE",
         "AI_GITLAB_CROSS_RUN_DEDUP",
+        "AI_FEEDBACK_LOOP",
+        "AI_FEEDBACK_BRANCH",
+        "AI_FEEDBACK_RETENTION_COUNT",
+        "AI_FEEDBACK_RETENTION_AGE_DAYS",
     ]:
         monkeypatch.delenv(name, raising=False)
 
@@ -255,6 +259,71 @@ def test_bitbucket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BITBUCKET_REPO_SLUG", "repo")
     monkeypatch.setenv("PR_NUMBER", "42")
     assert isinstance(provider_from_env(), BitbucketProvider)
+
+
+def test_bitbucket_feedback_loop_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #906: AI_FEEDBACK_LOOP/BRANCH/RETENTION_* reach BitbucketConfig
+    the same way GitHub's ReviewConfig.from_env() reads them."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", "x@y")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "tok")
+    monkeypatch.setenv("BITBUCKET_WORKSPACE", "ws")
+    monkeypatch.setenv("BITBUCKET_REPO_SLUG", "repo")
+    monkeypatch.setenv("PR_NUMBER", "42")
+    monkeypatch.setenv("AI_FEEDBACK_LOOP", "true")
+    monkeypatch.setenv("AI_FEEDBACK_BRANCH", "custom-bot-branch")
+    monkeypatch.setenv("AI_FEEDBACK_RETENTION_COUNT", "42")
+    monkeypatch.setenv("AI_FEEDBACK_RETENTION_AGE_DAYS", "7")
+
+    provider = provider_from_env()
+
+    assert isinstance(provider, BitbucketProvider)
+    assert provider.config.enable_feedback_loop is True
+    assert provider.config.feedback_branch == "custom-bot-branch"
+    assert provider.config.feedback_retention_count == 42
+    assert provider.config.feedback_retention_age_days == 7
+
+
+def test_bitbucket_feedback_loop_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AI_FEEDBACK_LOOP unset -> disabled, with GitHub's own defaults for
+    branch/retention (issue #906 Q2: same storage as GitHub)."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", "x@y")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "tok")
+    monkeypatch.setenv("BITBUCKET_WORKSPACE", "ws")
+    monkeypatch.setenv("BITBUCKET_REPO_SLUG", "repo")
+    monkeypatch.setenv("PR_NUMBER", "42")
+
+    provider = provider_from_env()
+
+    assert isinstance(provider, BitbucketProvider)
+    assert provider.config.enable_feedback_loop is False
+    assert provider.config.feedback_branch == "ai-pr-review-bot"
+    assert provider.config.feedback_retention_count == 500
+    assert provider.config.feedback_retention_age_days == 365
+
+
+def test_bitbucket_feedback_retention_malformed_int_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-integer AI_FEEDBACK_RETENTION_COUNT falls back to the default
+    (via config._int_env) rather than raising -- unlike PR_NUMBER, this
+    isn't a hard-required value."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "bitbucket")
+    monkeypatch.setenv("BITBUCKET_EMAIL", "x@y")
+    monkeypatch.setenv("BITBUCKET_API_TOKEN", "tok")
+    monkeypatch.setenv("BITBUCKET_WORKSPACE", "ws")
+    monkeypatch.setenv("BITBUCKET_REPO_SLUG", "repo")
+    monkeypatch.setenv("PR_NUMBER", "42")
+    monkeypatch.setenv("AI_FEEDBACK_RETENTION_COUNT", "not-a-number")
+
+    provider = provider_from_env()
+
+    assert isinstance(provider, BitbucketProvider)
+    assert provider.config.feedback_retention_count == 500
 
 
 def test_bitbucket_falls_back_to_github_repository(
