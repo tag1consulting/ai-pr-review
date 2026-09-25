@@ -18,3 +18,9 @@ __pycache__/
 *.egg-info/
 .venv/
 pyrightconfig.json
+
+# Local e2e harness run output (result.json, summary.md, container logs,
+# telemetry) -- the default --out-dir for tests/e2e/run_e2e.py's `run`
+# subcommand. Never intended to be committed; discovered missing during
+# this harness's first live run.
+tests/e2e/.runs/
