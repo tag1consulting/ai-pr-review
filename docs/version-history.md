@@ -22,7 +22,6 @@ What changed in each release, newest first. The 10 most recent versions each hav
 | [v2.9.0](version-history/v2.9.0) | Token usage moved out of the review comment by default; container-action env passthrough gaps closed |
 | [v2.8.0](version-history/v2.8.0) | GitLab cross-run finding dedup; canonical-review empty-body/dismiss fixes; Opus 5 default |
 | [v2.7.0](version-history/v2.7.0) | Canonical-review reuse (GitHub); phpstan/checkov/tflint fork-workspace hardening |
-| [v2.6.1](version-history/archive#v261) | Bitbucket ownership/watermark markers no longer render as visible text |
 
 See [Older releases](version-history/archive) for v2.6.1 and earlier, back to v0.7.0.
 
