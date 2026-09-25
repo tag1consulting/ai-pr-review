@@ -65,7 +65,12 @@ jobs:
         run: |
           ruff check tests/e2e/ tests/python/e2e_harness/
           mypy --strict tests/e2e/
-          pytest tests/python/e2e_harness -q
+          # python -m pytest (not bare `pytest`), matching lint.yml's convention:
+          # `-m` puts the repo root on sys.path, which `from tests.e2e.config
+          # import ...`-style imports in test_verify.py depend on. Bare `pytest`
+          # does not add it, and failed here on the first real CI run (a bug this
+          # comment exists to prevent reintroducing).
+          python -m pytest tests/python/e2e_harness -q
 
       - name: Validate platform selection (no network)
         run: python -m tests.e2e.run_e2e plan --profile release --platforms github --platforms gitlab --platforms bitbucket

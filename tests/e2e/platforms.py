@@ -39,6 +39,10 @@ def mask(text: str) -> str:
     message. Defense in depth on top of "never log token values directly".
     """
     text = re.sub(r"(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 <redacted>", text, flags=re.I)
+    # GitLab's auth header is "PRIVATE-TOKEN: <value>" -- no Bearer/Basic/token
+    # keyword, so the pattern above never matches it (e.g. in a verbose httpx
+    # exception repr that includes request headers).
+    text = re.sub(r"(PRIVATE-TOKEN)\s*:?\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 <redacted>", text, flags=re.I)
     text = re.sub(r"(https?://)[^:@/\s]+:[^@/\s]+@", r"\1<redacted>@", text)
     return text
 
@@ -212,11 +216,25 @@ class GitHubAdapter(_BaseAdapter):
             "content": base64.b64encode(run_id.encode()).decode(),
             "branch": branch,
         }
-        put_resp = _request_with_retry(self._client, "PUT", content_url, headers=self._headers(), json=payload)
-        if put_resp.status_code not in (200, 201):
-            raise AdapterError(mask(f"GitHub create-file failed: {put_resp.status_code} {put_resp.text[:300]}"))
+        try:
+            put_resp = _request_with_retry(self._client, "PUT", content_url, headers=self._headers(), json=payload)
+            if put_resp.status_code not in (200, 201):
+                raise AdapterError(mask(f"GitHub create-file failed: {put_resp.status_code} {put_resp.text[:300]}"))
+        except AdapterError:
+            # The branch was already created above; a failure here would
+            # otherwise leave an orphan branch (never tracked by
+            # _opened_prs, so never cleaned up) littering the shared test
+            # repo with zero debugging value.
+            self._delete_branch_best_effort(branch)
+            raise
         commit_sha = put_resp.json()["commit"]["sha"]
         return RunCommit(platform="github", run_id=run_id, branch=branch, commit_sha=commit_sha)
+
+    def _delete_branch_best_effort(self, branch: str) -> None:
+        try:
+            self.delete_branch(branch)
+        except AdapterError as exc:
+            logger.warning("GitHub: could not clean up orphan branch %s: %s", branch, mask(str(exc)))
 
     def open_pr(self, run_commit: RunCommit) -> PullRequest:
         url = f"{self.API_ROOT}/repos/{self.config.repo_slug}/pulls"
@@ -230,6 +248,9 @@ class GitHubAdapter(_BaseAdapter):
             },
         )
         if resp.status_code not in (201,):
+            # The branch+commit already exist; clean up the orphan before
+            # raising, same reasoning as create_run_commit above.
+            self._delete_branch_best_effort(run_commit.branch)
             raise AdapterError(mask(f"GitHub open-pr failed: {resp.status_code} {resp.text[:300]}"))
         data = resp.json()
         return PullRequest(platform="github", number=data["number"], url=data["html_url"],
@@ -258,7 +279,13 @@ class GitHubAdapter(_BaseAdapter):
         # Also check review bodies (the bot may post as a review, not a plain comment).
         reviews_url = f"{self.API_ROOT}/repos/{self.config.repo_slug}/pulls/{pr.number}/reviews"
         rresp = _request_with_retry(self._client, "GET", reviews_url, headers=self._headers())
-        reviews = rresp.json() if rresp.status_code == 200 else []
+        if rresp.status_code != 200:
+            # Must raise, not silently treat as "no reviews exist": an
+            # auth/permission failure here would otherwise surface downstream
+            # as a false "no marker found" product_failure instead of the
+            # infra_failure it actually is.
+            raise AdapterError(mask(f"GitHub fetch-reviews failed: {rresp.status_code} {rresp.text[:300]}"))
+        reviews = rresp.json()
         bodies = [c.get("body", "") for c in comments if c.get("body")] + \
                  [r.get("body", "") for r in reviews if r.get("body")]
         evidence.summary_body = "\n\n---\n\n".join(bodies)
@@ -332,11 +359,22 @@ class GitLabAdapter(_BaseAdapter):
             "commit_message": f"e2e: run {run_id}",
             "actions": [{"action": "create", "file_path": RUN_MARKER_PATH, "content": run_id}],
         }
-        cresp = _request_with_retry(self._client, "POST", commits_url, headers=self._headers(), json=payload)
-        if cresp.status_code not in (201,):
-            raise AdapterError(mask(f"GitLab create-commit failed: {cresp.status_code} {cresp.text[:300]}"))
+        try:
+            cresp = _request_with_retry(self._client, "POST", commits_url, headers=self._headers(), json=payload)
+            if cresp.status_code not in (201,):
+                raise AdapterError(mask(f"GitLab create-commit failed: {cresp.status_code} {cresp.text[:300]}"))
+        except AdapterError:
+            # Same orphan-branch reasoning as GitHubAdapter.create_run_commit.
+            self._delete_branch_best_effort(branch)
+            raise
         commit_sha = cresp.json()["id"]
         return RunCommit(platform="gitlab", run_id=run_id, branch=branch, commit_sha=commit_sha)
+
+    def _delete_branch_best_effort(self, branch: str) -> None:
+        try:
+            self.delete_branch(branch)
+        except AdapterError as exc:
+            logger.warning("GitLab: could not clean up orphan branch %s: %s", branch, mask(str(exc)))
 
     def open_pr(self, run_commit: RunCommit) -> PullRequest:
         url = f"{self._api_url}/api/v4/projects/{self._project_path}/merge_requests"
@@ -350,6 +388,7 @@ class GitLabAdapter(_BaseAdapter):
             },
         )
         if resp.status_code not in (201,):
+            self._delete_branch_best_effort(run_commit.branch)
             raise AdapterError(mask(f"GitLab open-mr failed: {resp.status_code} {resp.text[:300]}"))
         data = resp.json()
         return PullRequest(platform="gitlab", number=data["iid"], url=data["web_url"],

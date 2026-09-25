@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_pr_review.vcs.marker import build_summary_marker
 from tests.e2e.config import ExpectedFinding
 from tests.e2e.platforms import RawEvidence
 from tests.e2e.run_e2e import validate_platforms
@@ -86,19 +87,26 @@ def test_load_telemetry_empty_file_is_infra_failure(tmp_path):
 # --- verify_summary_marker --------------------------------------------------
 
 def test_verify_summary_marker_correct_sha_github_style():
-    evidence = RawEvidence(summary_body="hello\n<!-- ai-pr-review:sha:abc1234 -->\nworld")
+    # Built via the product's own build_summary_marker (not a hand-rolled
+    # string) so this test can't drift from the real format the way an
+    # earlier version of this suite did -- see verify_summary_marker's
+    # docstring for that history.
+    marker = build_summary_marker("abc1234")
+    evidence = RawEvidence(summary_body=f"hello\n{marker}\nworld")
     verdict = verify_summary_marker(evidence, "abc1234def")
     assert verdict.ok
 
 
 def test_verify_summary_marker_bitbucket_hidden_form():
-    evidence = RawEvidence(summary_body="visible text\n[ai-pr-review:sha:abc1234]: #\nmore text")
+    marker = build_summary_marker("abc1234", hidden=True)
+    evidence = RawEvidence(summary_body=f"visible text\n{marker}\nmore text")
     verdict = verify_summary_marker(evidence, "abc1234def")
     assert verdict.ok
 
 
 def test_verify_summary_marker_stale_sha_fails():
-    evidence = RawEvidence(summary_body="<!-- ai-pr-review:sha:deadbeef -->")
+    marker = build_summary_marker("deadbeef")
+    evidence = RawEvidence(summary_body=marker)
     verdict = verify_summary_marker(evidence, "abc1234def")
     assert not verdict.ok
     assert "stale" in verdict.reason.lower() or "does not match" in verdict.reason.lower()
@@ -112,24 +120,42 @@ def test_verify_summary_marker_missing_marker_fails():
 
 # --- verify_event_not_degraded ---------------------------------------------
 
-def test_verify_event_not_degraded_ok_via_telemetry():
+def test_verify_event_not_degraded_ok_via_posted_event():
+    # telemetry.outcome is verified (against cli.py/orchestrate.py) to be
+    # the pre-posting decision, never updated to reflect a post-time
+    # degrade -- so it must NOT be consulted here. Passing a telemetry
+    # fixture alongside a matching posted_event exercises that telemetry is
+    # correctly ignored, not that it drives the verdict.
     telemetry = load_telemetry(FIXTURES_DIR / "telemetry_valid.json")
     verdict = verify_event_not_degraded("APPROVE", "APPROVE", telemetry=telemetry)
     assert verdict.ok
-    assert "telemetry" in verdict.reason
+    assert "posted_event" in verdict.reason
 
 
-def test_verify_event_not_degraded_caught_via_telemetry():
-    telemetry = load_telemetry(FIXTURES_DIR / "telemetry_degraded.json")
-    verdict = verify_event_not_degraded("APPROVE", "APPROVE", telemetry=telemetry)
+def test_verify_event_not_degraded_caught_via_posted_event():
+    # The real #651 degrade: the run intended APPROVE (telemetry.outcome
+    # would show "APPROVE", the pre-posting decision) but the container
+    # actually posted a plain COMMENT -- only posted_event (parsed from the
+    # "Review complete: ... event=..." log line) carries that signal.
+    telemetry = load_telemetry(FIXTURES_DIR / "telemetry_valid.json")
+    verdict = verify_event_not_degraded("COMMENT", "APPROVE", telemetry=telemetry)
     assert not verdict.ok
+    assert "posted_event" in verdict.reason
 
 
 def test_verify_event_not_degraded_caught_via_text_fallback():
+    # Only reached when posted_event is unavailable (empty) -- posted_event
+    # takes priority whenever it's present, per the function's docstring.
     body = "This PR has NOT been approved because a prior review is unresolved."
-    verdict = verify_event_not_degraded("APPROVE", "APPROVE", telemetry=None, summary_body=body)
+    verdict = verify_event_not_degraded("", "APPROVE", telemetry=None, summary_body=body)
     assert not verdict.ok
     assert "summary body" in verdict.reason
+
+
+def test_verify_event_not_degraded_unavailable_and_no_fallback_text_fails():
+    verdict = verify_event_not_degraded("", "APPROVE", telemetry=None, summary_body="nothing relevant here")
+    assert not verdict.ok
+    assert "unavailable" in verdict.reason
 
 
 def test_verify_event_not_degraded_not_applicable_for_comment_expectation():

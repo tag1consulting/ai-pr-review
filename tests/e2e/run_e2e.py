@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -32,7 +34,7 @@ from .config import (
     RELEASE_PROFILE_PLATFORMS,
     VALID_PLATFORM_NAMES,
 )
-from .platforms import AdapterError, PlatformAdapter, PullRequest, build_adapter, mask
+from .platforms import AdapterError, PlatformAdapter, PullRequest, RunCommit, build_adapter, mask
 from .verify import (
     HarnessError,
     InfraFailure,
@@ -43,6 +45,7 @@ from .verify import (
     verify_analyzer_findings,
     verify_event_not_degraded,
     verify_model,
+    verify_no_failed_agents,
     verify_posting_surfaces,
     verify_summary_marker,
 )
@@ -157,31 +160,142 @@ def _write_env_file(path: Path, env_vars: dict[str, str]) -> None:
             fh.write(f"{key}={value}\n")
 
 
-def _run_container(platform: str, run_id: str, out_dir: Path, *, mode: str, max_cost_usd: float) -> tuple[int, str]:
+def _run_git(argv: list[str], *, timeout: int = 120) -> str:
+    """Run a git command via subprocess (argv list, never shell=True).
+    Raises InfraFailure (with any embedded credential URL masked) on
+    failure or timeout."""
+    try:
+        proc = subprocess.run(
+            ["git", *argv], capture_output=True, text=True, timeout=timeout, check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise InfraFailure(mask(f"git {' '.join(argv[:2])} failed: {exc.stderr[:300]}")) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise InfraFailure(mask(f"git {' '.join(argv[:2])} timed out after {timeout}s: {exc}")) from exc
+    except OSError as exc:
+        raise InfraFailure(f"git not available on this runner: {exc}") from exc
+    return proc.stdout
+
+
+def _clone_workspace(platform: str, run_commit: RunCommit, base_ref: str) -> tuple[Path, str]:
+    """Shallow-clone the run branch (plus the base ref) into a temp dir for
+    mounting at /workspace, and return (workspace_dir, diff_base_sha).
+
+    This is a deliberate, narrow exception to the "no local git clone/push"
+    design goal stated elsewhere in this harness: that goal is about the
+    WRITE path (creating the run commit), which stays on each provider's
+    content API with no local git credentials needed for authoring. A
+    read-only clone here is a separate, necessary concern: the product's
+    own diff computation (ai_pr_review/diff/compute.py) runs `git -C
+    /workspace` *inside the container*, and the container has no way to
+    materialize a checkout on its own -- the caller must mount one.
+
+    Uses a token-embedded HTTPS URL. The token never reaches disk outside
+    this process's argv (subprocess argv, not a shell string), and any URL
+    that leaks into a git error message is masked via mask()'s
+    credential-URL pattern before it's ever raised or logged.
+
+    Unverified: this whole clone-and-mount path has not been exercised
+    against a live run. It exists to satisfy a real product requirement
+    (diff/compute.py needs a checkout) discovered by review after the
+    initial harness build, not something confirmed working end-to-end.
+    """
+    repo_slug = PLATFORMS[platform].repo_slug
+    if platform == "github":
+        token = os.environ.get("E2E_GITHUB_REVIEWER_TOKEN", os.environ.get("E2E_GITHUB_TOKEN", ""))
+        url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
+    elif platform == "gitlab":
+        token = os.environ.get("E2E_GITLAB_TOKEN", "")
+        url = f"https://oauth2:{token}@gitlab.com/{repo_slug}.git"
+    elif platform == "bitbucket":
+        email = os.environ.get("E2E_BITBUCKET_EMAIL", "")
+        token = os.environ.get("E2E_BITBUCKET_TOKEN", "")
+        url = f"https://{email}:{token}@bitbucket.org/{repo_slug}.git"
+    else:
+        raise InfraFailure(f"unknown platform {platform!r} for workspace clone")
+
+    workspace = Path(tempfile.mkdtemp(prefix=f"e2e-ws-{platform}-"))
+    try:
+        _run_git(["clone", "--quiet", "--depth", "50", "--branch", run_commit.branch,
+                  "--single-branch", url, str(workspace)])
+        _run_git(["-C", str(workspace), "fetch", "--quiet", "--depth", "50",
+                  "origin", f"{base_ref}:refs/remotes/origin/{base_ref}"])
+        diff_base_sha = _run_git(["-C", str(workspace), "merge-base", "HEAD",
+                                   f"origin/{base_ref}"]).strip()
+        # The container runs as a fixed non-root uid (1001, per Dockerfile);
+        # this host-created checkout must be readable regardless of which
+        # uid actually cloned it (a GH-hosted runner and a developer's own
+        # machine will differ).
+        _run_git(["-C", str(workspace), "config", "--local", "--add", "safe.directory", str(workspace)])
+        for root, _dirs, files in os.walk(workspace):
+            os.chmod(root, 0o755)
+            for f in files:
+                os.chmod(os.path.join(root, f), 0o644)
+    except Exception:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+    return workspace, diff_base_sha
+
+
+def _provider_env_vars(platform: str, pr: PullRequest) -> dict[str, str]:
+    """Build the per-platform env vars ai_pr_review's own env-driven Config
+    needs to target this run's PR/MR, per ai_pr_review/vcs/__init__.py's
+    documented per-provider requirements (verified against source, not
+    guessed): GitHub needs GITHUB_REPOSITORY + PR_NUMBER; GitLab needs a
+    project identifier (CI_PROJECT_PATH here), MR_IID, and
+    GITLAB_DIFF_BASE_SHA (all three are hard-required -- a run without them
+    fails at provider construction, before any review logic runs);
+    Bitbucket needs BITBUCKET_WORKSPACE + BITBUCKET_REPO_SLUG + PR_NUMBER.
+    """
+    repo_slug = PLATFORMS[platform].repo_slug
+    if platform == "github":
+        return {"VCS_PROVIDER": "github", "GITHUB_REPOSITORY": repo_slug, "PR_NUMBER": str(pr.number)}
+    if platform == "gitlab":
+        return {"VCS_PROVIDER": "gitlab", "CI_PROJECT_PATH": repo_slug, "MR_IID": str(pr.number)}
+    if platform == "bitbucket":
+        workspace, _, repo = repo_slug.partition("/")
+        return {
+            "VCS_PROVIDER": "bitbucket",
+            "BITBUCKET_WORKSPACE": workspace,
+            "BITBUCKET_REPO_SLUG": repo,
+            "PR_NUMBER": str(pr.number),
+        }
+    raise InfraFailure(f"unknown platform {platform!r} for provider env vars")
+
+
+def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sha: str,
+                    out_dir: Path, *, mode: str, max_cost_usd: float) -> tuple[int, str]:
     """Run the review container via subprocess (argv list, never shell=True).
     Returns (returncode, redacted_stderr_text). Always docker-rm's the
     container in a finally, regardless of outcome.
     """
+    run_id = pr.run_commit.run_id
     container_name = f"e2e-{platform}-{run_id}"
-    env_file = out_dir / f"{platform}.env"
+    # Written to a temp file OUTSIDE out_dir, not under it: out_dir is what
+    # e2e.yml uploads as a CI artifact (14-day retention, and this repo is
+    # public), so a secret-bearing file must never live inside it even
+    # transiently. Deleted in `finally` regardless of outcome.
+    env_fd, env_file_str = tempfile.mkstemp(prefix=f"e2e-{platform}-", suffix=".env")
+    os.close(env_fd)
+    env_file = Path(env_file_str)
 
-    env_vars = {
+    env_vars: dict[str, str] = {
         "AI_TELEMETRY_ENABLED": "true",
         "AI_TELEMETRY_SINK": "file:///output/telemetry.json",
         "AI_MAX_COST_USD": str(max_cost_usd),
         "AI_FAIL_ON_COST_CEILING": "true",
         "AI_REVIEW_MODE": mode,
         "ANTHROPIC_API_KEY": os.environ.get("E2E_ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", "")),
+        **_provider_env_vars(platform, pr),
     }
     if platform == "github":
         env_vars["GH_TOKEN"] = os.environ.get("E2E_GITHUB_REVIEWER_TOKEN", os.environ.get("E2E_GITHUB_TOKEN", ""))
     elif platform == "gitlab":
         env_vars["GITLAB_TOKEN"] = os.environ.get("E2E_GITLAB_TOKEN", "")
+        env_vars["GITLAB_DIFF_BASE_SHA"] = diff_base_sha
     elif platform == "bitbucket":
         env_vars["BITBUCKET_EMAIL"] = os.environ.get("E2E_BITBUCKET_EMAIL", "")
         env_vars["BITBUCKET_API_TOKEN"] = os.environ.get("E2E_BITBUCKET_TOKEN", "")
-
-    _write_env_file(env_file, env_vars)
 
     # CI builds a fresh candidate image from the PR's own code and must test
     # THAT image, not whatever is already published -- that is the entire
@@ -190,24 +304,37 @@ def _run_container(platform: str, run_id: str, out_dir: Path, *, mode: str, max_
     # point at that candidate tag. It only falls back to the published
     # :dev tag for an ad hoc local smoke-check against what's already live.
     image = os.environ.get("AI_PR_REVIEW_E2E_IMAGE", "ghcr.io/tag1consulting/ai-pr-review:dev")
-    argv = [
-        "docker", "run", "--rm=false",  # explicit rm in finally, not --rm, so we control timing
-        "--name", container_name,
-        "--env-file", str(env_file),
-        "-v", f"{out_dir}:/output",
-        image,
-    ]
     try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=CONTAINER_TIMEOUT_SECONDS,
-        )
-        returncode = proc.returncode
-        stderr_text = proc.stderr
-    except subprocess.TimeoutExpired as exc:
-        returncode = -1
-        stderr_text = f"container timed out after {CONTAINER_TIMEOUT_SECONDS}s: {exc}"
+        _write_env_file(env_file, env_vars)
+        argv = [
+            "docker", "run", "--rm=false",  # explicit rm in finally, not --rm, so we control timing
+            "--name", container_name,
+            "--env-file", str(env_file),
+            "-v", f"{workspace}:/workspace",
+            "-v", f"{out_dir}:/output",
+            image,
+        ]
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=CONTAINER_TIMEOUT_SECONDS,
+            )
+            returncode = proc.returncode
+            stderr_text = proc.stderr
+        except subprocess.TimeoutExpired as exc:
+            returncode = -1
+            stderr_text = f"container timed out after {CONTAINER_TIMEOUT_SECONDS}s: {exc}"
+        except OSError as exc:
+            # e.g. FileNotFoundError if `docker` isn't installed. Previously
+            # only TimeoutExpired was caught here, so this would have
+            # propagated uncaught out of _run_one_platform's try block
+            # (which doesn't wrap this call), crashing the whole run
+            # instead of being classified as this platform's infra_failure.
+            returncode = -1
+            stderr_text = f"failed to invoke docker: {exc}"
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True)
     finally:
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True)
+        env_file.unlink(missing_ok=True)
 
     redacted = mask(stderr_text)
     (out_dir / f"{platform}.container.log").write_text(redacted, encoding="utf-8")
@@ -218,6 +345,12 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
     adapter = build_adapter(name, dict(os.environ))
     platform_out_dir = out_dir / name
     platform_out_dir.mkdir(parents=True, exist_ok=True)
+    # uid 1001 (the container's fixed non-root user, per Dockerfile) must be
+    # able to write telemetry.json here regardless of the host uid that
+    # created this directory -- GH-hosted runners happen to also be uid
+    # 1001, which masked this on CI, but a local run under a different uid
+    # would otherwise fail every time with a misleading InfraFailure.
+    os.chmod(platform_out_dir, 0o777)
 
     try:
         adapter.preflight()
@@ -227,7 +360,27 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
     except AdapterError as exc:
         return aggregate(name, [], infra_error=InfraFailure(str(exc)))
 
-    returncode, stderr_text = _run_container(name, run_id, platform_out_dir, mode=mode, max_cost_usd=max_cost_usd)
+    try:
+        workspace, diff_base_sha = _clone_workspace(name, run_commit, PLATFORMS[name].base_ref)
+    except HarnessError as exc:
+        return aggregate(name, [], infra_error=exc)
+
+    try:
+        returncode, stderr_text = _run_container(
+            name, pr, workspace, diff_base_sha, platform_out_dir, mode=mode, max_cost_usd=max_cost_usd,
+        )
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    if returncode != 0:
+        # The only prior signals were a regex match against stderr and
+        # telemetry's presence -- neither of which reflects the process's
+        # own exit status. A crash after partially flushing telemetry, or
+        # after emitting the completion line but failing during cleanup,
+        # was previously invisible to the harness and could still score a
+        # pass. This must be checked before trusting anything else below.
+        return aggregate(name, [], infra_error=InfraFailure(
+            f"review container exited {returncode}: {stderr_text[-500:]}"))
 
     try:
         log_result = parse_review_log_line(stderr_text)
@@ -243,6 +396,7 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
 
         verdicts = [
             verify_summary_marker(evidence, run_commit.commit_sha),
+            verify_no_failed_agents(log_result, telemetry),
             verify_event_not_degraded(
                 # expected_event is the harness's own request, not read back
                 # from telemetry -- this run relies on the default
@@ -313,7 +467,7 @@ def run(platforms_raw: tuple[str, ...], mode: str, out_dir: Path | None, max_cos
 
     summary_lines = [f"# e2e run {run_id}", ""]
     for name, r in results.items():
-        summary_lines.append(f"- **{name}**: {r.category}" + (f" — {'; '.join(r.reasons)}" if r.reasons else ""))
+        summary_lines.append(f"- **{name}**: {r.category}" + (f": {'; '.join(r.reasons)}" if r.reasons else ""))
     summary_text = "\n".join(summary_lines) + "\n"
     (out_dir / "summary.md").write_text(summary_text, encoding="utf-8")
 

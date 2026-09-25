@@ -96,7 +96,12 @@ PLATFORMS: dict[str, PlatformConfig] = {
     ),
     "bitbucket": PlatformConfig(
         name="bitbucket",
-        repo_slug="tag1consulting/ai-pr-review-test",
+        # NOT tag1consulting -- the Bitbucket test repo lives in a different
+        # workspace than the GitHub/GitLab ones. Verified against the old
+        # harness (ai-pr-review-e2e.js) and project memory
+        # (reference_live_test_repos.md); an earlier version of this file
+        # had this wrong, which would have 404'd every Bitbucket API call.
+        repo_slug="gchaix-tag1/ai-pr-review-test",
         base_ref="test/openai-provider-parity",
         expected_findings=(
             ExpectedFinding(path_substring="docs/", category="documentation"),

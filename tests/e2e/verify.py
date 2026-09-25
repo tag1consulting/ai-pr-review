@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ai_pr_review.vcs.marker import extract_summary_sha
+
 from .config import ExpectedFinding
 from .platforms import RawEvidence
 
@@ -123,28 +125,32 @@ class Verdict:
     pagination_note: str | None = None
 
 
-_VISIBLE_MARKER_RE = re.compile(r"<!--\s*ai-pr-review:sha:(?P<sha>[0-9a-fA-F]{7,40})\s*-->")
-# Bitbucket has no HTML comments in its markdown renderer; the same marker is
-# hidden as an unrendered reference-style link definition instead.
-_HIDDEN_LINK_MARKER_RE = re.compile(
-    r"^\[ai-pr-review:sha:(?P<sha>[0-9a-fA-F]{7,40})\]:\s*#\s*$", re.MULTILINE,
-)
 _DEGRADE_TEXT = "has NOT been approved"
 
 
 def verify_summary_marker(evidence: RawEvidence, expected_sha: str) -> Verdict:
-    """Check the visible HTML-comment marker (GitHub/GitLab) or Bitbucket's
-    hidden link-reference form, and that the SHA matches this run's own
-    commit -- not a stale marker left by a previous run against the same
-    PR/MR.
+    """Check the summary marker (either GitHub/GitLab's visible HTML-comment
+    form or Bitbucket's hidden link-reference form), and that the SHA
+    matches this run's own commit -- not a stale marker left by a prior run
+    against the same PR/MR.
+
+    Uses ai_pr_review.vcs.marker.extract_summary_sha (the product's own
+    marker parser) rather than a hand-rolled regex duplicated here: an
+    earlier version of this function used an invented marker format
+    (`<!-- ai-pr-review:sha:... -->`) that the product has never emitted
+    (the real format is `<!-- ai-pr-review-summary sha=... -->` /
+    `[//]: # (ai-pr-review-summary sha=...)`), which would have made every
+    live run fail this check regardless of whether posting actually worked.
+    This is a deliberate, narrow exception to platforms.py's "no
+    ai_pr_review.vcs dependency" rule: that rule is about not sharing
+    *posting* logic with the layer that independently re-fetches evidence;
+    reusing the read-only marker *parser* here means the verifier tracks
+    the real format instead of drifting from it, which is a correctness
+    improvement, not the coupling that rule guards against.
     """
-    body = evidence.summary_body
-    visible = _VISIBLE_MARKER_RE.search(body)
-    hidden = _HIDDEN_LINK_MARKER_RE.search(body)
-    match = visible or hidden
-    if not match:
+    sha = extract_summary_sha(evidence.summary_body)
+    if not sha:
         return Verdict("summary_marker", False, "no sha marker (visible or hidden) found in summary body")
-    sha = match.group("sha")
     if not expected_sha.startswith(sha) and not sha.startswith(expected_sha):
         return Verdict(
             "summary_marker", False,
@@ -160,40 +166,71 @@ def verify_event_not_degraded(posted_event: str, expected_event: str,
     """Fail if a review requested as APPROVE/REQUEST_CHANGES was actually
     posted as a plain COMMENT (the self-approval degrade case, issue #651).
 
-    Prefers telemetry's `outcome` field (schema v2+, always present per
-    load_telemetry's required-field check) when *telemetry* is given.
-    Falls back to scanning summary_body for the degrade-fallback text
-    ("has NOT been approved") when telemetry is unavailable -- documented
-    here so a caller knows which signal produced the verdict.
+    *posted_event* (parsed from the container's "Review complete: ...
+    event=..." stderr line, see parse_review_log_line) is the primary and
+    only authoritative signal: verified against cli.py/orchestrate.py that
+    it reflects the event actually posted, including a post-time degrade.
+    *telemetry* is NOT used for this check even when present: its `outcome`
+    field is assembled from the pre-posting classification decision
+    (orchestrate.py's classify_review_outcome, threaded through as
+    `outcome.event` to the posting call) and is never updated to reflect a
+    degrade that happens during posting -- an earlier version of this
+    function preferred telemetry.outcome first, which meant it could never
+    actually catch the #651 degrade it exists to check for (telemetry
+    would always report the original APPROVE intent, not the COMMENT that
+    was really posted). summary_body's degrade-fallback text
+    ("has NOT been approved") is kept as a secondary corroborating check
+    only, for the case where posted_event is unavailable.
     """
     if expected_event not in ("APPROVE", "REQUEST_CHANGES"):
         return Verdict("event_not_degraded", True, f"expected_event={expected_event!r}; degrade check not applicable")
 
-    if telemetry is not None:
-        outcome = telemetry.get("outcome", "")
-        if outcome == "COMMENT" or (isinstance(outcome, str) and "comment" in outcome.lower()
-                                     and "approve" not in outcome.lower()):
+    if posted_event:
+        if posted_event != expected_event:
             return Verdict(
                 "event_not_degraded", False,
-                f"telemetry outcome={outcome!r} but expected_event={expected_event!r} "
-                "(source: telemetry.outcome)",
+                f"posted_event={posted_event!r} != expected_event={expected_event!r} "
+                "(source: posted_event, the actually-posted event)",
             )
-        return Verdict("event_not_degraded", True, f"telemetry outcome={outcome!r} (source: telemetry.outcome)")
+        return Verdict("event_not_degraded", True, f"posted_event={posted_event!r} matches expected_event")
 
+    # posted_event unavailable (e.g. the log line failed to parse) -- fall
+    # back to the summary body's degrade-fallback text as a weaker signal.
     if _DEGRADE_TEXT in summary_body:
         return Verdict(
             "event_not_degraded", False,
             f"summary body contains degrade-fallback text {_DEGRADE_TEXT!r} "
-            "(source: summary_body text scan; telemetry unavailable)",
+            "(source: summary_body text scan; posted_event unavailable)",
         )
-    if posted_event != expected_event:
+    return Verdict(
+        "event_not_degraded", False,
+        "posted_event unavailable and no degrade-fallback text found in summary_body "
+        "-- cannot confirm the review was not degraded",
+    )
+
+
+def verify_no_failed_agents(log_result: ReviewLogResult, telemetry: dict[str, Any] | None) -> Verdict:
+    """Fail if any review agent failed mid-run, even though the overall
+    review completed (a degraded/partial review, not a crash).
+
+    The container's own log line and telemetry both carry this count/list,
+    but neither was ever checked anywhere before this function existed --
+    the harness collected exactly the signal needed to catch a partially-
+    failed review and then dropped it on the floor, letting a degraded run
+    pass as a clean release-gate result.
+    """
+    telemetry_failed = telemetry.get("failed_agents") if telemetry else None
+    if isinstance(telemetry_failed, list) and telemetry_failed:
         return Verdict(
-            "event_not_degraded", False,
-            f"posted_event={posted_event!r} != expected_event={expected_event!r} "
-            "(source: posted_event; telemetry unavailable)",
+            "no_failed_agents", False,
+            f"telemetry reports {len(telemetry_failed)} failed agent(s): {telemetry_failed}",
         )
-    return Verdict("event_not_degraded", True,
-                    f"posted_event={posted_event!r} matches expected (source: posted_event; telemetry unavailable)")
+    if log_result.failed_agents:
+        return Verdict(
+            "no_failed_agents", False,
+            f"log line reports {log_result.failed_agents} failed agent(s)",
+        )
+    return Verdict("no_failed_agents", True, "no failed agents reported")
 
 
 def verify_model(telemetry: dict[str, Any], expected_model_id: str) -> Verdict:

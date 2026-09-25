@@ -131,23 +131,14 @@ Create `language-profiles/<language>.md` (filename must match the lowercase lang
 
 ```bash
 pip install -e ".[dev,context]"
-pytest tests/python -q                  # < 60s
+python -m pytest tests/python -q        # < 60s; module invocation so tests.e2e.* imports resolve
 mypy ai_pr_review/                      # 99 source files, must be clean
 ruff check ai_pr_review/ tests/python/  # E,F,W,I,UP,B,SIM rules
 ```
 
 ## End-to-end test harness
 
-`tests/e2e/` is a deterministic Python harness (replacing the old ~815-line
-LLM-orchestrated e2e script) that opens throwaway PRs/MRs on the real
-GitHub/GitLab/Bitbucket test repos, runs the built review container, and
-verifies posted output with plain code (telemetry JSON + fetched
-comments/annotations) instead of LLM-transcribed shell output. See
-`tests/e2e/README.md` for subcommands, exit codes, required env vars, and
-the checkpoint-before-live-run cost warning — `run`/`preflight` make real,
-billed API calls. Unit tests for its pure verification logic live in
-`tests/python/e2e_harness/` and run as part of the normal `pytest
-tests/python` suite (no network calls, no cost).
+`tests/e2e/` is a deterministic Python harness (replacing the old ~815-line LLM-orchestrated e2e script) that opens throwaway PRs/MRs on the real GitHub/GitLab/Bitbucket test repos, runs the built review container, and verifies posted output with plain code (telemetry JSON and fetched comments/annotations) instead of LLM-transcribed shell output. See `tests/e2e/README.md` for subcommands, exit codes, required env vars, and the checkpoint-before-live-run cost warning: `run`/`preflight` make real, billed API calls. Unit tests for its pure verification logic live in `tests/python/e2e_harness/` and run as part of the normal `python -m pytest tests/python` suite (no network calls, no cost). As of this writing the harness has not yet completed a live pilot run; do not treat `e2e-gate` (below) as a proven release gate until it has.
 
 ## Deep reference
 
@@ -158,8 +149,8 @@ For contributor how-tos (adding an analyzer, agent, language profile, or VCS pro
 ## Release process
 
 1. **Run `/comprehensive-review`** on the release branch before tagging.
-2. **The `e2e-gate` required GitHub Actions check must pass** on the release PR (workflow at `.github/workflows/e2e.yml`, added separately from the harness code). It runs the deterministic e2e harness (`tests/e2e/`, see its README) against all three test platforms — do not tag until it passes.
-3. **Tag and push** — `publish-image.yml` rebuilds the image from the tagged source for both `amd64`/`arm64` and pushes `:vX.X.X` + `:latest`; it does not simply promote the existing `:dev` image.
+2. **The `e2e-gate` GitHub Actions check must pass** on the release PR (`.github/workflows/e2e.yml`, which runs the deterministic e2e harness at `tests/e2e/`, see its README, against all three test platforms). This check is not yet required on `main`: it becomes required only after two consecutive green `workflow_dispatch` runs with verified cleanup (a separate, explicitly confirmed step). Until then, treat a green `e2e-gate` as informative, not as proof the release is safe to tag.
+3. **Tag and push**: `publish-image.yml` rebuilds the image from the tagged source for both `amd64` and `arm64` and pushes `:vX.X.X` plus `:latest`. It does not simply promote the existing `:dev` image.
 
 This action is consumed via direct action reference (`@main`, `@v1.0`) or as a git submodule. Breaking changes require a version bump and coordinated updates in consuming repos.
 
