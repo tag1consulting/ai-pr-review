@@ -8,7 +8,11 @@ render_with_liquid: false
 
 # Older releases
 
-v2.6.1 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+v2.7.0 and earlier, back to v0.7.0. See [Version History](../version-history) for the 10 most recent releases.
+
+## v2.7.0
+
+**Canonical-review reuse (GitHub)**: rerunning the review no longer always posts a new review object. A fully quiet rerun updates the existing review's body in place, a still-open finding is updated rather than reposted, and a dismissed/wont-fixed finding is never reposted, even a fuzzy-matched nearby one. GitHub-only; GitLab/Bitbucket parity tracked in issue #710. Also fixed: a multi-line verdict comment (`dismiss`/`false-positive`/`wont-fix`/`fixed`/`feedback`) only acted on its first line (#733), a GraphQL-vs-REST bot-login mismatch made canonical-review thread-ownership checks a no-op in production (#717/#718), and a Bitbucket review comment could silently truncate away the token-usage table at the 32,000-byte limit (#728). **Security:** `pull_request_target`'s fork-PR checkout reopened a code-execution path in `phpstan`/`checkov`/`tflint` via auto-discovered config files, now closed the same way `eslint`'s equivalent bug was (#739). Also several canonical-review-reuse correctness fixes closing double-matched-thread and premature-dismissal edge cases (#720).
 
 ## v2.6.1
 

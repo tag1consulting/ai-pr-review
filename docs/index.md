@@ -68,9 +68,15 @@ jobs:
 
 That's it — reviews start firing on the next PR.
 
+## What's new in v2.14.1
+
+**Bitbucket no longer accumulates a duplicate reply comment on every pipeline run when a verdict-command reply keeps failing to save.** A permanently-failing feedback-store write (most commonly a token missing the `Repository:Write` scope) or a repeatedly-degraded permission check used to re-derive and re-post the identical "not saved"/"could not verify" reply forever. Every reply now carries a stable outcome key hashed into a hidden marker, so a later run skips one already present under the same comment and posts a fresh one automatically once the outcome changes, for example once the token scope is fixed. The feedback-store backend also stops attempting further writes for the rest of a run after its first 401/403, so a misconfigured token produces one warning per run instead of repeating the same doomed request for every pending comment (issue #941, the fast-follow left open from v2.14.0).
+
+See [Version History → v2.14.1](version-history/v2.14.1) for details.
+
 ## What's new in v2.14.0
 
-**Bitbucket's learning-loop store is no longer a stub.** A `false-positive`/`wont-fix` verdict now persists a `FeedbackEntry` to the same `.ai-pr-review/learnings.jsonl` file GitHub already uses, feeding future review prompts the same way on both providers — opt-in via `AI_FEEDBACK_LOOP` + `AI_BITBUCKET_VERDICTS`, and requires a **Repository:Write** scope bump on the Bitbucket API token (issue #906). The underlying store was split into a provider-neutral core plus per-provider backends so GitHub and Bitbucket share the same retry/dedup/retention logic. Two follow-up passes — a post-merge retrospective review and a pre-tag release-gate review — found and fixed several real issues before this release shipped: a failed feedback-store write during verdict polling was silently acked instead of retried, a stale duplicate env-var parser was removed, a docstring was corrected to stop overclaiming untested retry behavior, and a missing integration test covering the full store-construction-to-persistence chain was added. A separate, unrelated bug surfaced live during this release's own e2e validation: Bitbucket Code Insights annotation posting could fail on a long finding because the annotation `summary` field's byte limit was set to 2000 instead of Bitbucket's real 450-character cap — now fixed. One known, non-blocking issue remains open as a fast-follow: a permanently-misconfigured token causes duplicate reply-comment spam rather than a clean one-time failure (issue #941).
+**Bitbucket's learning-loop store is no longer a stub.** A `false-positive`/`wont-fix` verdict now persists a `FeedbackEntry` to the same `.ai-pr-review/learnings.jsonl` file GitHub already uses, feeding future review prompts the same way on both providers — opt-in via `AI_FEEDBACK_LOOP` + `AI_BITBUCKET_VERDICTS`, and requires a **Repository:Write** scope bump on the Bitbucket API token (issue #906). The underlying store was split into a provider-neutral core plus per-provider backends so GitHub and Bitbucket share the same retry/dedup/retention logic. Two follow-up passes — a post-merge retrospective review and a pre-tag release-gate review — found and fixed several real issues before this release shipped: a failed feedback-store write during verdict polling was silently acked instead of retried, a stale duplicate env-var parser was removed, a docstring was corrected to stop overclaiming untested retry behavior, and a missing integration test covering the full store-construction-to-persistence chain was added. A separate, unrelated bug surfaced live during this release's own e2e validation: Bitbucket Code Insights annotation posting could fail on a long finding because the annotation `summary` field's byte limit was set to 2000 instead of Bitbucket's real 450-character cap — now fixed.
 
 See [Version History → v2.14.0](version-history/v2.14.0) for details.
 
@@ -79,12 +85,6 @@ See [Version History → v2.14.0](version-history/v2.14.0) for details.
 **Two real bugs, both found live while validating the prior two releases, are fixed, alongside a full documentation-accuracy pass.** A compute-phase skip ("no changed files" or diff-too-large) crashed instead of posting cleanly whenever `AI_REVIEW_MODE` was left at its unset-sentinel empty string — reachable whenever a review workflow runs against an already-merged PR (issue #927). On Bitbucket, `post_findings` could fail with "no summary comment to attach findings to" on a brand-new (first-ever) summary comment, even though it had just been created successfully — a fresh bot identity's first-ever post to a PR reliably reproduces this (issue #930). Separately, a thorough re-check of every doc against current code found and corrected a batch of stale claims accumulated since v2.12.x — env var defaults, analyzer counts, provider capability descriptions, and two example workflows missing a fail-closed default.
 
 See [Version History → v2.13.2](version-history/v2.13.2) for details.
-
-## What's new in v2.13.1
-
-**Two v2.13.0 release-doc gaps, found by that release's own AI-review response loop, are fixed.** The `#approval-ceiling` configuration reference said GitLab *and* Bitbucket "never post a real approval state", stale as of issue #918. Issue #918's Bitbucket default-on real-approval behavior is now flagged as a **Behavior change** with upgrade guidance. Docs-only, no code changed.
-
-See [Version History → v2.13.1](version-history/v2.13.1) for details.
 
 ## Learn more
 
