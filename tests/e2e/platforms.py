@@ -420,6 +420,7 @@ class GitLabAdapter(_BaseAdapter):
     def fetch_inline(self, pr: PullRequest, evidence: RawEvidence) -> None:
         url = f"{self._api_url}/api/v4/projects/{self._project_path}/merge_requests/{pr.number}/discussions"
         page = 1
+        total_notes_seen = 0
         while True:
             resp = _request_with_retry(
                 self._client, "GET", url, headers=self._headers(),
@@ -429,13 +430,43 @@ class GitLabAdapter(_BaseAdapter):
                 raise AdapterError(mask(f"GitLab fetch-inline failed: {resp.status_code} {resp.text[:300]}"))
             batch = resp.json()
             for discussion in batch:
-                evidence.inline_comments.extend(discussion.get("notes", []))
+                for note in discussion.get("notes", []):
+                    total_notes_seen += 1
+                    # A discussion's notes include system notes ("assigned to
+                    # X", "changed the description") and plain top-level
+                    # notes, not just positioned diff comments -- collecting
+                    # all of them let posting_inline pass on the MR's
+                    # summary note alone, with no real inline comment
+                    # present. Only DiffNote entries (identified by a
+                    # non-null `position`, matching GitLab's own model) are
+                    # real inline findings; system notes are always excluded
+                    # regardless of type.
+                    if note.get("system", False):
+                        continue
+                    if note.get("position") is None and note.get("type") != "DiffNote":
+                        continue
+                    evidence.inline_comments.append(note)
             if len(batch) < 100:
                 break
             page += 1
             if page > 20:
                 evidence.truncated = True
                 break
+        if total_notes_seen and not evidence.inline_comments:
+            # verify.py's posting_inline check is entirely bool(inline_comments)
+            # -- if GitLab ever changes note shape (renamed/nested `type` or
+            # `position` fields) this filter could start discarding every
+            # note. Without this line, that failure mode is indistinguishable
+            # in the CI log from "the review genuinely posted zero inline
+            # comments" (a real regression). Logged, not raised: this is
+            # diagnostic context for whichever failure verify.py already
+            # reports, not a new error path of its own.
+            logger.warning(
+                "GitLab: fetch_inline saw %d note(s) across all discussions but kept none after "
+                "filtering -- if this is unexpected, GitLab's note shape may have changed "
+                "(expected a non-null `position` or type == 'DiffNote' on real inline comments)",
+                total_notes_seen,
+            )
 
     def close(self, pr: PullRequest) -> None:
         url = f"{self._api_url}/api/v4/projects/{self._project_path}/merge_requests/{pr.number}"

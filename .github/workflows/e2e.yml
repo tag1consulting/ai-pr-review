@@ -21,7 +21,13 @@ name: E2E Release Gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # No `synchronize`: a push to an existing release/* PR must not auto-fire
+    # a real, billed live run with no per-push confirmation -- that was in
+    # direct tension with this repo's own checkpoint-before-live-run
+    # convention (see tests/e2e/README.md's cost warning). Re-running after
+    # a push now requires a deliberate `workflow_dispatch`, which is itself
+    # a natural per-invocation confirmation point.
+    types: [opened, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       mode:
@@ -49,6 +55,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
+      platforms_json: ${{ steps.check.outputs.platforms_json }}
     steps:
       - uses: actions/checkout@v7
 
@@ -72,24 +79,98 @@ jobs:
           # comment exists to prevent reintroducing).
           python -m pytest tests/python/e2e_harness -q
 
-      - name: Validate platform selection (no network)
-        run: python -m tests.e2e.run_e2e plan --profile release --platforms github --platforms gitlab --platforms bitbucket
-
-      - name: Determine release eligibility
+      - name: Determine release eligibility and platform selection
         id: check
         env:
+          EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
+          # github.head_ref is only populated for pull_request events; a
+          # workflow_dispatch run has no PR context, so its "which branch is
+          # this" signal is ref_name (the branch selected when dispatching).
+          REF_NAME: ${{ github.ref_name }}
           IS_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
+          # workflow_dispatch inputs are set by whoever triggers the manual
+          # run (a repo maintainer via the Actions UI/API), not derived from
+          # PR/issue content -- routed through env, not interpolated
+          # directly into `run:`, as a matter of course rather than because
+          # this specific input is attacker-reachable.
+          DISPATCH_PLATFORMS: ${{ github.event.inputs.platforms }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          is_release_ref=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [[ "$REF_NAME" == release/* ]]; then
+            is_release_ref=true
           elif [ "$IS_SAME_REPO" = "true" ] && [ "$IS_DRAFT" != "true" ] && [[ "$HEAD_REF" == release/* ]]; then
+            is_release_ref=true
+          fi
+          echo "is_release_ref=${is_release_ref}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            # Build the JSON array the `e2e` job's matrix consumes via
+            # fromJSON(). Previously this input was declared but ignored --
+            # every dispatch ran all three platforms regardless of what was
+            # requested.
+            # Lowercased before building the array: validate_platforms() does
+            # a set-based unknown/duplicate check, so "GitHub,github" would
+            # otherwise slip past duplicate detection as two distinct
+            # strings and fail much later, inside a matrix job's
+            # build_adapter() lookup, with a far less actionable error.
+            platforms_json=$(echo "${DISPATCH_PLATFORMS:-github,gitlab,bitbucket}" \
+              | tr ',' '\n' | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | jq -R . | jq -s -c .)
+            echo "platforms_json=${platforms_json}" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "schedule" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "platforms_json=[]" >> "$GITHUB_OUTPUT"
+          elif [ "$is_release_ref" = "true" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo 'platforms_json=["github","gitlab","bitbucket"]' >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "platforms_json=[]" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate platform selection (no network)
+        if: steps.check.outputs.is_release == 'true'
+        env:
+          PLATFORMS_JSON: ${{ steps.check.outputs.platforms_json }}
+          IS_RELEASE_REF: ${{ steps.check.outputs.is_release_ref }}
+        run: |
+          # A workflow_dispatch targeting a release/* branch is held to the
+          # same full-triple requirement as the automatic PR trigger --
+          # otherwise, since `synchronize` no longer auto-reruns the gate,
+          # a single-platform manual dispatch would be the only way to
+          # refresh e2e-gate after a push, and it could green the gate
+          # having exercised only one of the three required platforms.
+          # A dispatch NOT targeting a release/* branch (e.g. an ad hoc
+          # single-platform smoke test on a feature branch) may request any
+          # valid non-empty subset.
+          # A plain `var=$(...)` assignment (not `for p in $(...)`, and not
+          # `mapfile < <(...)` -- process substitution doesn't propagate the
+          # substituted command's exit status either) so a jq parse failure
+          # is actually caught: a failed command substitution inside a
+          # `for ... in $(...)` word list, or read via `< <(...)`, is NOT
+          # surfaced by `set -e` or by `||` on the consuming command -- it
+          # just yields empty output, and the loop silently runs zero times.
+          # That looks identical to "zero platforms selected" below, hiding
+          # a real jq/environment bug behind a misleading "no platforms"
+          # message.
+          platform_list_raw=$(jq -r '.[]' <<<"$PLATFORMS_JSON") || {
+            echo "::error::failed to parse platforms_json=${PLATFORMS_JSON}" >&2
+            exit 1
+          }
+          args=()
+          while IFS= read -r p; do
+            [ -n "$p" ] && args+=(--platforms "$p")
+          done <<< "$platform_list_raw"
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::No platforms selected (empty or whitespace-only platforms input) -- refusing to fall back to run_e2e's own default." >&2
+            exit 1
+          fi
+          if [ "$IS_RELEASE_REF" = "true" ]; then
+            python -m tests.e2e.run_e2e plan --profile release "${args[@]}"
+          else
+            python -m tests.e2e.run_e2e plan "${args[@]}"
           fi
 
   weekly-preflight:
@@ -169,7 +250,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [github, gitlab, bitbucket]
+        platform: ${{ fromJSON(needs.eligibility.outputs.platforms_json) }}
     steps:
       - uses: actions/checkout@v7
 
