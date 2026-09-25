@@ -125,8 +125,12 @@ PLATFORMS: dict[str, PlatformConfig] = {
         repo_slug="gchaix-tag1/ai-pr-review-test",
         base_ref="test/openai-provider-parity",
         seed_sha=BITBUCKET_SEED_SHA,
+        # Verified live against this fixture's real posted Code Insights
+        # annotations on 2026-09-25 (25 annotations, all security findings --
+        # no docs/ finding was ever produced, unlike the placeholder this
+        # replaces). api/user.py has 4 separate injection findings (F1-F4).
         expected_findings=(
-            ExpectedFinding(path_substring="docs/", category="documentation"),
+            ExpectedFinding(path_substring="api/user.py", category="injection"),
         ),
     ),
 }

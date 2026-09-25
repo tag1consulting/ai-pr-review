@@ -22,6 +22,7 @@ import tempfile
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import quote
 
 import click
 
@@ -195,22 +196,30 @@ def _clone_workspace(platform: str, run_commit: RunCommit, base_ref: str) -> tup
     that leaks into a git error message is masked via mask()'s
     credential-URL pattern before it's ever raised or logged.
 
-    Unverified: this whole clone-and-mount path has not been exercised
-    against a live run. It exists to satisfy a real product requirement
-    (diff/compute.py needs a checkout) discovered by review after the
-    initial harness build, not something confirmed working end-to-end.
+    Bitbucket leg verified live on 2026-09-25 (this is the path that
+    surfaced the clone-auth-scheme and annotation-pagination bugs this
+    module's git history fixes). Unverified: GitHub and GitLab were not
+    re-verified against a live run after the URL-encoding change above.
     """
     repo_slug = PLATFORMS[platform].repo_slug
     if platform == "github":
         token = os.environ.get("E2E_GITHUB_REVIEWER_TOKEN", os.environ.get("E2E_GITHUB_TOKEN", ""))
-        url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
+        url = f"https://x-access-token:{quote(token, safe='')}@github.com/{repo_slug}.git"
     elif platform == "gitlab":
         token = os.environ.get("E2E_GITLAB_TOKEN", "")
-        url = f"https://oauth2:{token}@gitlab.com/{repo_slug}.git"
+        url = f"https://oauth2:{quote(token, safe='')}@gitlab.com/{repo_slug}.git"
     elif platform == "bitbucket":
-        email = os.environ.get("E2E_BITBUCKET_EMAIL", "")
+        # Git-over-HTTPS with a Bitbucket API token uses the fixed username
+        # "x-bitbucket-api-token-auth", NOT the account email -- that's a
+        # different scheme from the REST API's Basic auth (email:token),
+        # which is what preflight's API calls use. Confirmed live via
+        # `git ls-remote` after the email:token form failed with "You may
+        # not have access to this repository" despite preflight passing.
+        # Still URL-encode the token defensively (see the github/gitlab
+        # branches above for the same '@'/'/' concern, though this fixed
+        # username has neither).
         token = os.environ.get("E2E_BITBUCKET_TOKEN", "")
-        url = f"https://{email}:{token}@bitbucket.org/{repo_slug}.git"
+        url = f"https://x-bitbucket-api-token-auth:{quote(token, safe='')}@bitbucket.org/{repo_slug}.git"
     else:
         raise InfraFailure(f"unknown platform {platform!r} for workspace clone")
 

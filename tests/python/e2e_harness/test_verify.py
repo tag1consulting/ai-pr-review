@@ -229,15 +229,26 @@ def test_verify_model_mismatch_fails():
 # --- verify_posting_surfaces -------------------------------------------------
 
 def test_verify_posting_surfaces_all_present():
-    evidence = RawEvidence(
-        summary_body="the summary",
-        inline_comments=[{"body": "an inline finding"}],
-        annotations=[{"summary": "an annotation"}],
-    )
+    evidence = RawEvidence(summary_body="the summary", inline_comments=[{"body": "an inline finding"}])
+    verdicts = verify_posting_surfaces(evidence, bitbucket=False)
+    assert all(v.ok for v in verdicts)
+    names = {v.name for v in verdicts}
+    assert names == {"posting_summary", "posting_inline"}
+
+
+def test_verify_posting_surfaces_bitbucket_checks_annotations_not_inline():
+    # Bitbucket has no inline-review support at all (ai_pr_review's own
+    # bitbucket.py:post_findings uses Code Insights annotations exclusively)
+    # -- posting_inline would always and meaninglessly fail there. Confirmed
+    # live 2026-09-25: a real Bitbucket run posted 0 inline comments and 25
+    # annotations, and an earlier version of this function checked
+    # posting_inline unconditionally, which would have failed every
+    # Bitbucket run regardless of how many findings were actually posted.
+    evidence = RawEvidence(summary_body="the summary", annotations=[{"summary": "an annotation"}])
     verdicts = verify_posting_surfaces(evidence, bitbucket=True)
     assert all(v.ok for v in verdicts)
     names = {v.name for v in verdicts}
-    assert names == {"posting_summary", "posting_inline", "posting_annotations"}
+    assert names == {"posting_summary", "posting_annotations"}
 
 
 def test_verify_posting_surfaces_missing_summary_fails():
@@ -291,6 +302,58 @@ def test_verify_analyzer_findings_missing_expected_fails():
     expected = [ExpectedFinding(path_substring="docs/", category="documentation")]
     verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
     assert not verdict.ok
+
+
+def test_verify_analyzer_findings_counts_and_matches_bitbucket_annotations():
+    # Bitbucket has no inline_comments at all (see verify_posting_surfaces
+    # tests above) -- its per-finding text lives in each annotation's
+    # `summary` field with the file path in `path`. An earlier version of
+    # this function only ever looked at inline_comments, so it always saw
+    # approx_count=0 for Bitbucket and reported "below floor" even when
+    # dozens of real findings were posted (confirmed live 2026-09-25: 25
+    # real annotations, reported as 0).
+    evidence = RawEvidence(
+        summary_body="",
+        annotations=[
+            {"path": "api/user.py", "summary": "[F1] Critical: SQL injection via string concatenation"},
+            {"path": "api/user.py", "summary": "[F2] Critical: SQL injection in second query"},
+            {"path": "lib/utils.go", "summary": "[F3] High: path traversal"},
+        ],
+    )
+    expected = [ExpectedFinding(path_substring="api/user.py", category="injection")]
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    assert verdict.ok
+    assert "approx findings count 3" in verdict.reason
+
+
+def test_verify_analyzer_findings_annotation_path_and_category_checked_independently():
+    # Regression test: an earlier version concatenated an annotation's
+    # `path` and `summary` into one string before matching, so an
+    # annotation on a DIFFERENT file whose summary text happened to mention
+    # the expected path (e.g. "same pattern as api/user.py") would
+    # incorrectly satisfy path_substring even though its actual `path`
+    # field is unrelated. path_substring must match against `path` only,
+    # and category against `summary` only, never a combined string.
+    evidence = RawEvidence(
+        summary_body="",
+        annotations=[
+            {"path": "lib/utils.go", "summary": "High: same injection pattern as api/user.py, fix similarly"},
+            {"path": "web/auth.js", "summary": "High: hardcoded credentials"},
+            {"path": "infra/deploy.sh", "summary": "Critical: unquoted variable expansion"},
+        ],
+    )
+    expected = [ExpectedFinding(path_substring="api/user.py", category="injection")]
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    assert not verdict.ok
+    assert "not found" in verdict.reason
+
+
+def test_verify_analyzer_findings_truncated_evidence_notes_incomplete_result():
+    evidence = RawEvidence(summary_body="", annotations=[], truncated=True)
+    expected: list[ExpectedFinding] = []
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    assert not verdict.ok
+    assert "may be incomplete" in verdict.reason
 
 
 # --- validate_platforms (plan's offline validation) --------------------------
