@@ -24,7 +24,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from .config import PINNED_SEED_SHA, PLATFORMS, RUN_MARKER_PATH, PlatformConfig
+from .config import PLATFORMS, RUN_MARKER_PATH, PlatformConfig
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ class GitHubAdapter(_BaseAdapter):
         ref_url = f"{self.API_ROOT}/repos/{self.config.repo_slug}/git/refs"
         resp = _request_with_retry(
             self._client, "POST", ref_url, headers=self._headers(),
-            json={"ref": f"refs/heads/{branch}", "sha": PINNED_SEED_SHA},
+            json={"ref": f"refs/heads/{branch}", "sha": self.config.seed_sha},
         )
         if resp.status_code not in (201,):
             raise AdapterError(mask(f"GitHub create-ref failed: {resp.status_code} {resp.text[:300]}"))
@@ -348,7 +348,7 @@ class GitLabAdapter(_BaseAdapter):
         branches_url = f"{self._api_url}/api/v4/projects/{self._project_path}/repository/branches"
         resp = _request_with_retry(
             self._client, "POST", branches_url, headers=self._headers(),
-            params={"branch": branch, "ref": PINNED_SEED_SHA},
+            params={"branch": branch, "ref": self.config.seed_sha},
         )
         if resp.status_code not in (201,):
             raise AdapterError(mask(f"GitLab create-branch failed: {resp.status_code} {resp.text[:300]}"))
@@ -507,7 +507,7 @@ class BitbucketAdapter(_BaseAdapter):
             self._client, "POST", url, auth=self._auth,
             data={
                 "branch": branch,
-                "parents": PINNED_SEED_SHA,
+                "parents": self.config.seed_sha,
                 "message": f"e2e: run {run_id}",
             },
             files={RUN_MARKER_PATH: run_id.encode()},

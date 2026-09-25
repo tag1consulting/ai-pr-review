@@ -160,51 +160,89 @@ def verify_summary_marker(evidence: RawEvidence, expected_sha: str) -> Verdict:
     return Verdict("summary_marker", True, f"marker sha {sha!r} matches run commit")
 
 
-def verify_event_not_degraded(posted_event: str, expected_event: str,
-                               telemetry: dict[str, Any] | None = None,
+def verify_event_not_degraded(posted_event: str, telemetry: dict[str, Any] | None = None,
                                summary_body: str = "") -> Verdict:
-    """Fail if a review requested as APPROVE/REQUEST_CHANGES was actually
-    posted as a plain COMMENT (the self-approval degrade case, issue #651).
+    """Fail if the review's own intended decision (APPROVE or
+    REQUEST_CHANGES) was actually posted as a plain COMMENT (the
+    self-approval degrade case, issue #651).
 
-    *posted_event* (parsed from the container's "Review complete: ...
-    event=..." stderr line, see parse_review_log_line) is the primary and
-    only authoritative signal: verified against cli.py/orchestrate.py that
-    it reflects the event actually posted, including a post-time degrade.
-    *telemetry* is NOT used for this check even when present: its `outcome`
-    field is assembled from the pre-posting classification decision
-    (orchestrate.py's classify_review_outcome, threaded through as
-    `outcome.event` to the posting call) and is never updated to reflect a
-    degrade that happens during posting -- an earlier version of this
-    function preferred telemetry.outcome first, which meant it could never
-    actually catch the #651 degrade it exists to check for (telemetry
-    would always report the original APPROVE intent, not the COMMENT that
-    was really posted). summary_body's degrade-fallback text
-    ("has NOT been approved") is kept as a secondary corroborating check
-    only, for the case where posted_event is unavailable.
+    Compares two signals against each other, not against a hardcoded
+    expectation:
+
+    - *posted_event* (parsed from the container's "Review complete: ...
+      event=..." stderr line, see parse_review_log_line): verified against
+      cli.py/orchestrate.py to reflect the event actually posted, including
+      a post-time degrade.
+    - telemetry's `outcome` field: the pre-posting classification decision
+      (orchestrate.py's classify_review_outcome, threaded through as
+      `outcome.event` to the posting call), never updated to reflect a
+      degrade that happens during posting -- this is what the review
+      *intended* to post, not necessarily what it did.
+
+    An earlier version of this function took a hardcoded `expected_event`
+    string (always "APPROVE") instead of reading intent from telemetry.
+    That was wrong in two different ways, both caught live: it happened to
+    catch a real GitHub degrade (intent was actually REQUEST_CHANGES,
+    posted COMMENT -- coincidentally also != "APPROVE") but then produced a
+    false failure on GitLab, where the review correctly intended AND
+    posted REQUEST_CHANGES (a legitimate outcome for a fixture with real
+    findings, never actually degraded) -- flagged as a failure only
+    because REQUEST_CHANGES != the hardcoded "APPROVE". The fix is to
+    compare posted_event against telemetry's own stated intent, not an
+    assumption that every review should end in approval.
+
+    summary_body's degrade-fallback text ("has NOT been approved") is kept
+    as a secondary corroborating check only, for when telemetry is
+    unavailable.
     """
-    if expected_event not in ("APPROVE", "REQUEST_CHANGES"):
-        return Verdict("event_not_degraded", True, f"expected_event={expected_event!r}; degrade check not applicable")
-
-    if posted_event:
-        if posted_event != expected_event:
+    if telemetry is not None:
+        if "outcome" not in telemetry:
+            # load_telemetry() requires this field on the real call path, so
+            # a telemetry dict missing it entirely means malformed/corrupt
+            # telemetry (schema drift, partial write), not a legitimate
+            # non-approve/request-changes outcome -- keep that distinct from
+            # the "not applicable" case below instead of defaulting to "".
+            return Verdict("event_not_degraded", False,
+                            "telemetry present but missing 'outcome' field -- malformed telemetry, "
+                            "cannot verify degrade")
+        intended = telemetry["outcome"]
+        if intended not in ("APPROVE", "REQUEST_CHANGES"):
+            return Verdict("event_not_degraded", True,
+                            f"intended outcome={intended!r}; degrade check not applicable")
+        if not posted_event:
+            # posted_event is unavailable (e.g. the "Review complete: ..."
+            # log line lacked an `event=` group) -- fall through to the
+            # summary_body text scan below rather than treating an empty
+            # string as a vacuous match against `intended`.
+            return _check_degrade_text_fallback(summary_body, reason_suffix="posted_event unavailable")
+        if posted_event != intended:
             return Verdict(
                 "event_not_degraded", False,
-                f"posted_event={posted_event!r} != expected_event={expected_event!r} "
-                "(source: posted_event, the actually-posted event)",
+                f"intended outcome={intended!r} but posted_event={posted_event!r} "
+                "(source: telemetry.outcome vs. posted_event)",
             )
-        return Verdict("event_not_degraded", True, f"posted_event={posted_event!r} matches expected_event")
+        return Verdict("event_not_degraded", True,
+                        f"posted_event={posted_event!r} matches intended outcome={intended!r}")
 
-    # posted_event unavailable (e.g. the log line failed to parse) -- fall
-    # back to the summary body's degrade-fallback text as a weaker signal.
+    # telemetry unavailable -- fall back to the summary body's
+    # degrade-fallback text as a weaker signal.
+    return _check_degrade_text_fallback(summary_body, reason_suffix="telemetry unavailable")
+
+
+def _check_degrade_text_fallback(summary_body: str, *, reason_suffix: str) -> Verdict:
+    """Shared fallback for verify_event_not_degraded when posted_event and/or
+    telemetry can't confirm the outcome directly: scan summary_body for the
+    degrade-fallback text as a weaker corroborating signal.
+    """
     if _DEGRADE_TEXT in summary_body:
         return Verdict(
             "event_not_degraded", False,
             f"summary body contains degrade-fallback text {_DEGRADE_TEXT!r} "
-            "(source: summary_body text scan; posted_event unavailable)",
+            f"({reason_suffix})",
         )
     return Verdict(
         "event_not_degraded", False,
-        "posted_event unavailable and no degrade-fallback text found in summary_body "
+        f"no degrade-fallback text found in summary_body ({reason_suffix}) "
         "-- cannot confirm the review was not degraded",
     )
 
