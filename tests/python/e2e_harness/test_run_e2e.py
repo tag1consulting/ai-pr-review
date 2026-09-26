@@ -16,6 +16,7 @@ from click.testing import CliRunner
 
 from tests.e2e.models import AdapterError, PullRequest, RunCommit
 from tests.e2e.run_e2e import (
+    _atomic_write_json,
     _clone_auth_env,
     _github_reviewer_token,
     _known_secret_values,
@@ -25,6 +26,22 @@ from tests.e2e.run_e2e import (
     _resolve_opened,
     cleanup,
 )
+
+# --- _atomic_write_json ----------------------------------------------------------
+
+def test_atomic_write_json_writes_valid_json_and_no_leftover_temp_file(tmp_path: Path):
+    target = tmp_path / "opened.json"
+    _atomic_write_json(target, [{"platform": "github", "number": 1}])
+    assert json.loads(target.read_text(encoding="utf-8")) == [{"platform": "github", "number": 1}]
+    # No leftover .opened.json.tmp -- os.replace() must have moved it into place.
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_atomic_write_json_overwrites_existing_file(tmp_path: Path):
+    target = tmp_path / "opened.json"
+    target.write_text('[{"platform": "gitlab"}]', encoding="utf-8")
+    _atomic_write_json(target, [{"platform": "github"}])
+    assert json.loads(target.read_text(encoding="utf-8")) == [{"platform": "github"}]
 
 # --- _github_reviewer_token ---------------------------------------------------
 

@@ -209,6 +209,19 @@ def _install_signal_handlers() -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
+def _atomic_write_json(path: Path, data: object) -> None:
+    """Write *data* to *path* via a temp file in the same directory plus
+    os.replace(), never a direct write_text() -- a plain write_text() on
+    opened.json can be truncated mid-write by exactly the SIGKILL/cancel
+    scenario this file exists to survive, silently losing every prior
+    platform's durable cleanup record on the very next write. os.replace()
+    is atomic on the same filesystem: a reader never observes a partially-
+    written file."""
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def _record_opened(out_dir: Path, platform: str, pr: PullRequest) -> None:
     """Append this run's opened PR/MR to out_dir/opened.json.
 
@@ -239,7 +252,7 @@ def _record_opened(out_dir: Path, platform: str, pr: PullRequest) -> None:
             )
             entries = []
     entries.append({"platform": platform, "number": pr.number, "branch": pr.branch, "url": pr.url})
-    path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    _atomic_write_json(path, entries)
 
 
 def _resolve_opened(out_dir: Path, platform: str, resolution: str) -> None:
@@ -261,7 +274,7 @@ def _resolve_opened(out_dir: Path, platform: str, resolution: str) -> None:
     for entry in entries:
         if entry.get("platform") == platform and "resolution" not in entry:
             entry["resolution"] = resolution
-    path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    _atomic_write_json(path, entries)
 
 
 def _write_env_file(path: Path, env_vars: dict[str, str]) -> None:
@@ -300,10 +313,14 @@ def _github_reviewer_token() -> str:
     sets the env var, as an empty string when that (documented-optional)
     secret isn't configured, so the old `.get(A, .get(B))` pattern silently
     passed an empty token to git clone / GH_TOKEN in that case instead of
-    falling back. `build_adapter()` already used `reviewer_token or
-    seeder_token`, matching this; this helper is the single place both the
-    clone auth and the container's GH_TOKEN now read from, so they can't
-    diverge from that adapter behavior again."""
+    falling back. GitHubAdapter itself authenticates every call (including
+    evidence fetches) as the seeder identity only -- it never reads a
+    reviewer token at all (an earlier version stored one but never used
+    it; removed rather than wired up, see GitHubAdapter's own docstring).
+    This helper is the SOLE source for the reviewer identity actually used
+    anywhere in the harness: both the read-only workspace clone's auth and
+    the container's own GH_TOKEN read from it, so they can't diverge from
+    each other."""
     return os.environ.get("E2E_GITHUB_REVIEWER_TOKEN") or os.environ.get("E2E_GITHUB_TOKEN", "")
 
 
@@ -611,94 +628,114 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
     except AdapterError as exc:
         return aggregate(name, [], infra_error=InfraFailure(str(exc)))
 
+    # From here on, a PR/MR has definitely been opened and recorded in
+    # opened.json. The `finally` below resolves it "left_open" no matter
+    # HOW this function exits from this point -- a HarnessError/
+    # AdapterError we handle explicitly, an unhandled exception of some
+    # other type escaping (a malformed API response's KeyError, an
+    # unexpected OSError), or a normal return. An earlier version called
+    # _resolve_opened(..., "left_open") individually at each early-return
+    # site, which reliably covered the cases it enumerated but left any
+    # OTHER exception type free to escape this function with the entry
+    # still unresolved -- exactly the case where a later cancel fallback
+    # or manual cleanup could then close a PR the debug policy meant to
+    # leave open. _resolve_opened's own "already resolved" guard (it never
+    # overwrites an existing resolution) is what lets the pass path's
+    # explicit _resolve_opened(..., "closed") below still win even though
+    # this `finally` also runs afterward.
+    #
+    # leave_genuinely_unresolved is the one deliberate exception: a
+    # cleanup-failed-after-pass return (below) must NOT be marked
+    # "left_open" by this finally, because "left_open" means "cleanup
+    # should skip this entry" and this is exactly the case where `cleanup`
+    # should still retry the close/delete-branch call that just failed.
+    leave_genuinely_unresolved = False
     try:
-        workspace, diff_base_sha = _clone_workspace(name, run_commit, PLATFORMS[name].base_ref)
-    except HarnessError as exc:
-        _resolve_opened(out_dir, name, "left_open")
-        return aggregate(name, [], infra_error=exc)
-
-    try:
-        returncode, stderr_text = _run_container(
-            name, pr, workspace, diff_base_sha, platform_out_dir, mode=mode, max_cost_usd=max_cost_usd,
-        )
-    finally:
-        shutil.rmtree(workspace, ignore_errors=True)
-
-    if returncode != 0:
-        # The only prior signals were a regex match against stderr and
-        # telemetry's presence -- neither of which reflects the process's
-        # own exit status. A crash after partially flushing telemetry, or
-        # after emitting the completion line but failing during cleanup,
-        # was previously invisible to the harness and could still score a
-        # pass. This must be checked before trusting anything else below.
-        _resolve_opened(out_dir, name, "left_open")
-        return aggregate(name, [], infra_error=InfraFailure(
-            f"review container exited {returncode}: {stderr_text[-500:]}"))
-
-    try:
-        log_result = parse_review_log_line(stderr_text)
-        if log_result.skipped:
-            raise InfraFailure(f"review was skipped: {log_result.skip_reason}")
-
-        telemetry = load_telemetry(platform_out_dir / "telemetry.json")
-
-        evidence = adapter.fetch_summary(pr)
-        adapter.fetch_inline(pr, evidence)
-        # fetch_annotations is a documented no-op on every adapter except
-        # Bitbucket's (_BaseAdapter's default), so calling it unconditionally
-        # here is correct for every platform, not just a Bitbucket special
-        # case -- no per_finding_surface check needed for this one.
-        adapter.fetch_annotations(pr, evidence)
-
-        verdicts = [
-            verify_summary_marker(evidence, run_commit.commit_sha),
-            verify_no_failed_agents(log_result, telemetry),
-            verify_event_not_degraded(
-                log_result.event or "", telemetry=telemetry, summary_body=evidence.summary_body,
-            ),
-            verify_model(telemetry, DEFAULT_MODELS["anthropic"][0]),
-            *verify_posting_surfaces(evidence, per_finding_surface=PLATFORMS[name].per_finding_surface),
-            verify_analyzer_findings(
-                evidence, list(PLATFORMS[name].expected_findings),
-                findings_floor=PLATFORMS[name].findings_floor,
-                per_finding_surface=PLATFORMS[name].per_finding_surface,
-            ),
-        ]
-    except HarnessError as exc:
-        _resolve_opened(out_dir, name, "left_open")
-        return aggregate(name, [], infra_error=exc)
-    except AdapterError as exc:
-        _resolve_opened(out_dir, name, "left_open")
-        return aggregate(name, [], infra_error=InfraFailure(str(exc)))
-
-    result = aggregate(name, verdicts)
-
-    # Cleanup policy: on pass, close + delete branch, confirming each step.
-    # On fail (product or infra), leave everything open -- no janitor.
-    if result.ok:
         try:
-            adapter.close(pr)
-            adapter.delete_branch(pr.branch)
-            click.echo(f"run: {name}: pass -- closed PR/MR {pr.url} and deleted branch {pr.branch}")
-            _resolve_opened(out_dir, name, "closed")
-        except AdapterError as exc:
-            # A cleanup failure on the pass path is itself an infra failure
-            # per the exit-code contract. Left unresolved in opened.json
-            # (neither "closed" nor "left_open" cleanly describes it): the
-            # `cleanup` subcommand should still retry a genuinely unresolved
-            # close/delete-branch failure like this one. Logged here (not
-            # just embedded in the returned RunResult's reasons tuple),
-            # since whether that tuple reaches an operator depends on how
-            # aggregate()/reporting formats and truncates it downstream --
-            # this warning is visible in the job log regardless.
-            logger.warning("run: %s: cleanup failed after pass: %s", name, mask(str(exc)))
-            return RunResult(platform=name, category="infra_failure", verdicts=result.verdicts,
-                              reasons=(f"cleanup failed after pass: {exc}",))
-    else:
-        click.echo(f"run: {name}: {result.category} -- leaving PR/MR {pr.url} open for inspection", err=True)
-        _resolve_opened(out_dir, name, "left_open")
+            workspace, diff_base_sha = _clone_workspace(name, run_commit, PLATFORMS[name].base_ref)
+        except HarnessError as exc:
+            return aggregate(name, [], infra_error=exc)
 
-    return result
+        try:
+            returncode, stderr_text = _run_container(
+                name, pr, workspace, diff_base_sha, platform_out_dir, mode=mode, max_cost_usd=max_cost_usd,
+            )
+        finally:
+            shutil.rmtree(workspace, ignore_errors=True)
+
+        if returncode != 0:
+            # The only prior signals were a regex match against stderr and
+            # telemetry's presence -- neither of which reflects the process's
+            # own exit status. A crash after partially flushing telemetry, or
+            # after emitting the completion line but failing during cleanup,
+            # was previously invisible to the harness and could still score a
+            # pass. This must be checked before trusting anything else below.
+            return aggregate(name, [], infra_error=InfraFailure(
+                f"review container exited {returncode}: {stderr_text[-500:]}"))
+
+        try:
+            log_result = parse_review_log_line(stderr_text)
+            if log_result.skipped:
+                raise InfraFailure(f"review was skipped: {log_result.skip_reason}")
+
+            telemetry = load_telemetry(platform_out_dir / "telemetry.json")
+
+            evidence = adapter.fetch_summary(pr)
+            adapter.fetch_inline(pr, evidence)
+            # fetch_annotations is a documented no-op on every adapter except
+            # Bitbucket's (_BaseAdapter's default), so calling it unconditionally
+            # here is correct for every platform, not just a Bitbucket special
+            # case -- no per_finding_surface check needed for this one.
+            adapter.fetch_annotations(pr, evidence)
+
+            verdicts = [
+                verify_summary_marker(evidence, run_commit.commit_sha),
+                verify_no_failed_agents(log_result, telemetry),
+                verify_event_not_degraded(
+                    log_result.event or "", telemetry=telemetry, summary_body=evidence.summary_body,
+                ),
+                verify_model(telemetry, DEFAULT_MODELS["anthropic"][0]),
+                *verify_posting_surfaces(evidence, per_finding_surface=PLATFORMS[name].per_finding_surface),
+                verify_analyzer_findings(
+                    evidence, list(PLATFORMS[name].expected_findings),
+                    findings_floor=PLATFORMS[name].findings_floor,
+                    per_finding_surface=PLATFORMS[name].per_finding_surface,
+                ),
+            ]
+        except HarnessError as exc:
+            return aggregate(name, [], infra_error=exc)
+        except AdapterError as exc:
+            return aggregate(name, [], infra_error=InfraFailure(str(exc)))
+
+        result = aggregate(name, verdicts)
+
+        # Cleanup policy: on pass, close + delete branch, confirming each
+        # step. On fail (product or infra), leave everything open -- no
+        # janitor; the enclosing `finally` records that.
+        if result.ok:
+            try:
+                adapter.close(pr)
+                adapter.delete_branch(pr.branch)
+                click.echo(f"run: {name}: pass -- closed PR/MR {pr.url} and deleted branch {pr.branch}")
+                _resolve_opened(out_dir, name, "closed")
+            except AdapterError as exc:
+                # A cleanup failure on the pass path is itself an infra
+                # failure per the exit-code contract. Left unresolved in
+                # opened.json (neither "closed" nor "left_open" cleanly
+                # describes it): the `cleanup` subcommand should still
+                # retry a genuinely unresolved close/delete-branch failure
+                # like this one -- see leave_genuinely_unresolved above.
+                logger.warning("run: %s: cleanup failed after pass: %s", name, mask(str(exc)))
+                leave_genuinely_unresolved = True
+                return RunResult(platform=name, category="infra_failure", verdicts=result.verdicts,
+                                  reasons=(f"cleanup failed after pass: {exc}",))
+        else:
+            click.echo(f"run: {name}: {result.category} -- leaving PR/MR {pr.url} open for inspection", err=True)
+
+        return result
+    finally:
+        if not leave_genuinely_unresolved:
+            _resolve_opened(out_dir, name, "left_open")
 
 
 @cli.command()
