@@ -245,13 +245,23 @@ jobs:
             }
           done
           python3 -c "
+          import math
           import os
           import sys
           raw = os.environ['MAX_COST_USD']
           try:
-              float(raw)
+              value = float(raw)
           except ValueError:
               print(f\"::error::max_cost_usd input {raw!r} is not a valid number.\", file=sys.stderr)
+              sys.exit(1)
+          # float() also accepts 'nan', 'inf', and negative/zero values --
+          # none of which is a usable cost ceiling. 'inf'/'nan' would never
+          # trip AI_MAX_COST_USD's comparison (silently disabling the
+          # ceiling entirely); zero or negative would fail every leg
+          # immediately, but only after the 30-minute image build this
+          # check exists to avoid wasting.
+          if not math.isfinite(value) or value <= 0:
+              print(f\"::error::max_cost_usd input {raw!r} must be a finite number greater than 0.\", file=sys.stderr)
               sys.exit(1)
           "
 
