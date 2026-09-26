@@ -155,7 +155,7 @@ def cleanup(from_file: Path) -> None:
         # cancel-in-progress triggered by a later push) would have this same
         # `cleanup` invoked against opened.json by e2e.yml's cancel fallback
         # step, closing a PR that was correctly left open moments earlier.
-        if entry.get("resolution"):
+        if "resolution" in entry:
             continue
         name = str(entry["platform"])
         adapter = build_adapter(name, dict(os.environ))
@@ -460,13 +460,29 @@ def _redact_known_values_in_file(path: Path, secret_values: list[str]) -> None:
     uploaded as a CI artifact. Silently no-ops if the file doesn't exist
     (e.g. the container crashed before writing telemetry.json) -- that
     absence is InfraFailure territory handled elsewhere, not this
-    function's concern."""
+    function's concern.
+
+    Rewrites via a temp file in the same directory plus os.replace(), never
+    a direct path.write_text() on the original: telemetry.json is written
+    by the container as its own fixed uid (1001), so on a local run under a
+    different host uid, the file itself is owned by 1001 even though its
+    containing directory (0o1733, sticky bit) is owned by the harness's own
+    uid. Opening the existing file for writing would need permission on
+    the FILE (owned by 1001, not this uid) and raise PermissionError,
+    crashing the run right after the billed container run completed. A
+    temp file plus os.replace() only needs permission to create/rename
+    within the DIRECTORY, which the harness's own uid has as that
+    directory's owner -- the same sticky-bit rule that lets a directory
+    owner clean up files they don't personally own, same as /tmp."""
     if not path.exists() or not secret_values:
         return
     text = path.read_text(encoding="utf-8")
     redacted = _redact_known_values(text, secret_values)
-    if redacted != text:
-        path.write_text(redacted, encoding="utf-8")
+    if redacted == text:
+        return
+    tmp_path = path.with_name(f".{path.name}.redact-tmp")
+    tmp_path.write_text(redacted, encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sha: str,

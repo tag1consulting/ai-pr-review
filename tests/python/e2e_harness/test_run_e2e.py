@@ -8,8 +8,10 @@ No network calls; no real credentials. `cleanup` tests stub out
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from tests.e2e.models import AdapterError, PullRequest, RunCommit
@@ -133,6 +135,27 @@ def test_redact_known_values_in_file_missing_file_is_a_noop(tmp_path: Path):
     missing = tmp_path / "does-not-exist.json"
     _redact_known_values_in_file(missing, ["sk-ant-1234567890"])  # must not raise
     assert not missing.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permission bits")
+def test_redact_known_values_in_file_works_when_original_file_is_read_only(tmp_path: Path):
+    # Regression test: an earlier version rewrote via path.write_text()
+    # directly on the original file, which needs write permission on the
+    # FILE itself -- exactly what's missing when telemetry.json is owned
+    # by the container's fixed uid (1001) and the harness runs as a
+    # different host uid. A temp-file-plus-os.replace() rewrite only needs
+    # permission to create/rename within the containing directory, which
+    # this test simulates by making the original file itself read-only
+    # while its directory stays writable (tmp_path's default mode).
+    target = tmp_path / "telemetry.json"
+    target.write_text('{"key": "sk-ant-1234567890"}', encoding="utf-8")
+    target.chmod(0o444)
+    try:
+        _redact_known_values_in_file(target, ["sk-ant-1234567890"])  # must not raise
+    finally:
+        target.chmod(0o644)  # restore so tmp_path's own cleanup can remove it
+    assert "sk-ant-1234567890" not in target.read_text(encoding="utf-8")
+    assert "<secret-redacted>" in target.read_text(encoding="utf-8")
 
 
 # --- _record_opened / _resolve_opened -------------------------------------------
