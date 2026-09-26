@@ -249,7 +249,7 @@ def test_cleanup_reports_failure_exit_code_when_close_fails(tmp_path: Path, monk
     assert stub.deleted_branches == []  # never attempted after close failed
 
 
-def test_cleanup_still_deletes_branch_when_close_succeeds_but_delete_fails(tmp_path: Path, monkeypatch):
+def test_cleanup_reports_failure_when_close_succeeds_but_delete_fails(tmp_path: Path, monkeypatch):
     stub = _StubAdapter(fail_delete=True)
     monkeypatch.setattr("tests.e2e.run_e2e.build_adapter", lambda name, env: stub)
     opened_file = _write_opened(tmp_path, [

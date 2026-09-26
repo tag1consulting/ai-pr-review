@@ -576,6 +576,12 @@ jobs:
             # seeing that message would have no reason to suspect the final
             # merged SHA never had a live run at all.
             if [ "${{ needs.eligibility.outputs.is_release_ref }}" = "true" ]; then
+              # A ::warning:: annotation (not just a job-log echo) surfaces
+              # on the PR's checks/Files-changed UI, so this unvalidated-SHA
+              # state is visible without opening the job log -- the gap
+              # F23's review flagged: a job-log-only message is easy to
+              # miss on a check that otherwise just shows green.
+              echo "::warning::release/* branch, live e2e legs skipped for this push (synchronize) -- this SHA has NOT been live-validated. Trigger a workflow_dispatch run against this branch before merge."
               echo "release/* branch, but this run was triggered by a push (synchronize) -- live e2e legs were deliberately skipped for this SHA. Passing so a required check doesn't block every push, but this does NOT mean the pushed commit has been live-validated. Trigger a workflow_dispatch run against this branch before merge to actually validate it."
             else
               echo "Not a release/* PR -- e2e legs not required."
