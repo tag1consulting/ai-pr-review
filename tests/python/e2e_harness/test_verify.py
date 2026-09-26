@@ -14,7 +14,7 @@ import pytest
 
 from ai_pr_review.vcs.marker import build_summary_marker
 from tests.e2e.config import ExpectedFinding
-from tests.e2e.platforms import RawEvidence
+from tests.e2e.models import RawEvidence
 from tests.e2e.run_e2e import validate_platforms
 from tests.e2e.verify import (
     InfraFailure,
@@ -230,7 +230,7 @@ def test_verify_model_mismatch_fails():
 
 def test_verify_posting_surfaces_all_present():
     evidence = RawEvidence(summary_body="the summary", inline_comments=[{"body": "an inline finding"}])
-    verdicts = verify_posting_surfaces(evidence, bitbucket=False)
+    verdicts = verify_posting_surfaces(evidence, per_finding_surface="inline")
     assert all(v.ok for v in verdicts)
     names = {v.name for v in verdicts}
     assert names == {"posting_summary", "posting_inline"}
@@ -245,7 +245,7 @@ def test_verify_posting_surfaces_bitbucket_checks_annotations_not_inline():
     # posting_inline unconditionally, which would have failed every
     # Bitbucket run regardless of how many findings were actually posted.
     evidence = RawEvidence(summary_body="the summary", annotations=[{"summary": "an annotation"}])
-    verdicts = verify_posting_surfaces(evidence, bitbucket=True)
+    verdicts = verify_posting_surfaces(evidence, per_finding_surface="annotations")
     assert all(v.ok for v in verdicts)
     names = {v.name for v in verdicts}
     assert names == {"posting_summary", "posting_annotations"}
@@ -261,7 +261,7 @@ def test_verify_posting_surfaces_missing_summary_fails():
 
 def test_verify_posting_surfaces_no_bitbucket_annotation_check_for_other_platforms():
     evidence = RawEvidence(summary_body="x", inline_comments=[{"body": "y"}])
-    verdicts = verify_posting_surfaces(evidence, bitbucket=False)
+    verdicts = verify_posting_surfaces(evidence, per_finding_surface="inline")
     names = {v.name for v in verdicts}
     assert "posting_annotations" not in names
 
@@ -278,12 +278,32 @@ def test_verify_posting_surfaces_truncated_flag_adds_pagination_note_not_failure
 
 def test_verify_analyzer_findings_happy_path():
     evidence = RawEvidence(
-        summary_body="finding in docs/index.md category=documentation",
-        inline_comments=[{"body": "a"}, {"body": "b"}, {"body": "c"}],
+        summary_body="3 findings posted",
+        inline_comments=[
+            {"body": "finding in docs/index.md category=documentation"},
+            {"body": "b"},
+            {"body": "c"},
+        ],
     )
     expected = [ExpectedFinding(path_substring="docs/", category="documentation")]
     verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
     assert verdict.ok
+
+
+def test_verify_analyzer_findings_summary_body_match_not_used_when_inline_present():
+    # A path+category pair that only co-occurs in the whole summary body
+    # (which can list many unrelated findings) must NOT satisfy the check
+    # once real per-finding inline comments exist to check instead --
+    # otherwise an unrelated finding on a different file/category could
+    # accidentally satisfy path_substring/category just by both appearing
+    # somewhere in the same summary text.
+    evidence = RawEvidence(
+        summary_body="finding in docs/index.md category=documentation",
+        inline_comments=[{"body": "unrelated finding, different file"}],
+    )
+    expected = [ExpectedFinding(path_substring="docs/", category="documentation")]
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=1)
+    assert not verdict.ok
 
 
 def test_verify_analyzer_findings_below_floor_fails():
@@ -321,7 +341,7 @@ def test_verify_analyzer_findings_counts_and_matches_bitbucket_annotations():
         ],
     )
     expected = [ExpectedFinding(path_substring="api/user.py", category="injection")]
-    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3, per_finding_surface="annotations")
     assert verdict.ok
     assert "approx findings count 3" in verdict.reason
 
@@ -343,7 +363,31 @@ def test_verify_analyzer_findings_annotation_path_and_category_checked_independe
         ],
     )
     expected = [ExpectedFinding(path_substring="api/user.py", category="injection")]
-    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3, per_finding_surface="annotations")
+    assert not verdict.ok
+    assert "not found" in verdict.reason
+
+
+def test_verify_analyzer_findings_bitbucket_does_not_fall_back_to_whole_summary():
+    # Regression test for a real bug (issue found in PR #954's own review):
+    # per_finding_surface="annotations" platforms (Bitbucket) never have
+    # inline_comments, so a version of this function keyed off
+    # "inline_bodies is empty" (rather than "THIS platform's own designated
+    # surface is empty") always fell back to the loose whole-summary match
+    # for Bitbucket, regardless of whether real, populated annotations
+    # existed -- silently reopening the exact loophole the per-finding
+    # scoping fix was meant to close, for every Bitbucket run. Here, the
+    # summary body mentions the expected path+category pair together, but
+    # the real annotations (the actual per-finding surface) describe
+    # something unrelated -- this must fail, not pass on the summary text.
+    evidence = RawEvidence(
+        summary_body="See the PR walkthrough for context: docs/index.md changes relate to the documentation category.",
+        annotations=[
+            {"path": "web/auth.js", "summary": "High: hardcoded credentials"},
+        ],
+    )
+    expected = [ExpectedFinding(path_substring="docs/index.md", category="documentation")]
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=1, per_finding_surface="annotations")
     assert not verdict.ok
     assert "not found" in verdict.reason
 

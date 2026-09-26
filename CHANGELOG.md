@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-09-25
+
+### Added
+
+- **A deterministic Python e2e test harness (`tests/e2e/`), replacing the old ~815-line LLM-orchestrated e2e script**. It opens throwaway PRs/MRs on the real GitHub/GitLab/Bitbucket test repos, runs the built review container against them, and verifies the posted output with plain code (telemetry JSON, fetched comments/annotations) instead of asking an LLM to eyeball shell output. A new `.github/workflows/e2e.yml` builds the candidate image once and runs it against all three platforms in parallel matrix legs, gated behind an `e2e-gate` aggregate check and a dedicated `e2e-live` GitHub Environment restricted to `release/*` branches. Live-verified end to end against all three platforms, including a full 3-platform `workflow_dispatch` run. Unit tests for the harness's pure verification logic live in `tests/python/e2e_harness/` (42 tests, no network, no cost) and run as part of the normal test suite.
+- **`.github/workflows/lint.yml`'s test/lint job is now a required branch-protection status check on `main`**, alongside the existing AI review check. It already ran on every PR; it just wasn't required, so a PR with failing tests, ruff, or mypy could previously still merge.
+
+### Fixed
+
+Found and fixed during this harness's own live validation runs and a follow-up comprehensive review, before any of it shipped:
+
+- Per-platform pinned fixture seed SHAs (GitHub, GitLab, and Bitbucket are independent repositories with genuinely different commit hashes for "the same" content — a single shared seed SHA 404'd on GitLab).
+- The self-approval-degrade check now compares the posted event against telemetry's own stated intent instead of a hardcoded `expected_event="APPROVE"`, which produced a false failure on a legitimate `REQUEST_CHANGES` outcome.
+- Bitbucket auth scheme (git-over-HTTPS requires the fixed username `x-bitbucket-api-token-auth`, not the account email), URL-encoding of account emails embedded in clone URLs, and Code Insights annotation pagination (Bitbucket's own `next` link for that endpoint is malformed and 404s on page 2; the harness now paginates itself against a known-correct URL, terminated by the response's own `size` field).
+- The `e2e-gate` check could report success on a release PR whose own eligibility checks (ruff/mypy/pytest) were failing, because the gate never checked `needs.eligibility.result` before its `is_release` branch — confirmed independently by three review agents before it could ship.
+- Reviewer-token and Anthropic-key env var fallbacks (`.get(A, .get(B, ""))`) didn't fall back when GitHub Actions sets an unconfigured optional secret to an empty string rather than leaving it absent.
+- Git clone credentials are now passed via `GIT_CONFIG_*` environment variables (an `http.extraHeader` Basic-auth header) instead of embedded in the clone URL, removing them from process argv (`/proc/<pid>/cmdline`, `ps`) and from the cloned workspace's `.git/config`.
+- The harness's own output directory was created world-writable (`0o777`); now `0o1733` (sticky bit), the standard mitigation against another local user tampering with files they don't own.
+- Non-idempotent resource-creation POSTs (branch/ref creation, commit creation, opening a PR/MR) no longer retry on a timeout or 5xx, which could otherwise create a duplicate resource if the original request had actually succeeded server-side.
+- Bitbucket's adapter now cleans up an orphaned branch on a failed `create_run_commit`/`open_pr`, matching GitHub and GitLab's existing behavior (previously only they had this).
+- `ExpectedFinding` matching in `verify.py` no longer treats a platform's entire summary comment as one substring-matchable string; it now matches within each individually-scoped finding (an inline comment, or a Bitbucket annotation's own fields) so an unrelated finding elsewhere in the same summary can't coincidentally satisfy a different finding's expected path/category pair.
+- Four hand-copied, inconsistently-bounded pagination loops across the GitHub and GitLab adapters, plus two on Bitbucket, are consolidated into two shared helpers with one consistent page cap and truncation signal.
+- CI artifacts (`*.container.log`, `telemetry.json`) now get a literal-value secret redaction pass on top of the existing pattern-based redaction, guarding against a real secret value that doesn't happen to appear in a recognizable `Bearer`/`Basic`/token-labeled shape.
+- `run-local.sh` now builds a local candidate image from the invoking checkout instead of defaulting to the mutable, published `:dev` tag, and fixed its `glab auth status` token extraction (missing `--show-token`, which was capturing the masked placeholder instead of a usable token).
+- The `verify.py`/`platforms.py` data-shape classes (`RawEvidence`, `RunCommit`, `PullRequest`, `AdapterError`) moved into a new `models.py` with no I/O imports, so `verify.py`'s "pure, no I/O" claim no longer depends on merely not calling into the I/O-performing `platforms.py` — it no longer imports that module at all.
+
+### Known limitation
+
+- **GitHub's e2e leg runs self-review-degraded**: the seeder and reviewer identities are currently the same personal token (no second GitHub identity has been provisioned yet), so GitHub downgrades an intended `REQUEST_CHANGES`/`APPROVE` to a plain `COMMENT` — a real platform restriction the harness correctly detects and fails on, not a harness bug. `e2e-gate` is not yet a required branch-protection check on `main`; it becomes required only after two consecutive green `workflow_dispatch` runs with verified cleanup, a separate future step.
+
 ## [2.14.1] - 2026-09-25
 
 ### Fixed

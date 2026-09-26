@@ -21,17 +21,25 @@ name: E2E Release Gate
 
 on:
   pull_request:
-    # No `synchronize`: a push to an existing release/* PR must not auto-fire
-    # a real, billed live run with no per-push confirmation -- that was in
-    # direct tension with this repo's own checkpoint-before-live-run
-    # convention (see tests/e2e/README.md's cost warning). Re-running after
-    # a push now requires a deliberate `workflow_dispatch`, which is itself
-    # a natural per-invocation confirmation point.
-    types: [opened, reopened, ready_for_review]
+    # `synchronize` IS included: e2e-gate is planned to become a required
+    # check (see CLAUDE.md's release process). A required check that never
+    # reports on a pushed SHA blocks merge forever ("Expected -- waiting for
+    # status"), for every PR in the repo, not just release ones. The
+    # eligibility/is_release logic below still refuses to run the expensive
+    # live legs (build+e2e) on a `synchronize` event even for a release/*
+    # branch -- only opened/reopened/ready_for_review and an explicit
+    # workflow_dispatch do that -- so a push still can't auto-fire a real,
+    # billed live run with no per-invocation confirmation. A push to a
+    # release/* PR gets a cheap, immediately-completing "skip" e2e-gate;
+    # re-running the live legs after a push still requires a deliberate
+    # workflow_dispatch.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       mode:
         description: "full or quick"
+        type: choice
+        options: [full, quick]
         default: full
       platforms:
         description: "comma-separated platform list"
@@ -53,7 +61,29 @@ on:
     - cron: '0 8 * * 1'
 
 concurrency:
-  group: e2e-${{ github.head_ref || github.ref }}
+  # github.ref_name (bare branch/tag name), not github.ref (full ref path
+  # e.g. refs/heads/release/v2.15.0): a pull_request run's group key
+  # resolves via head_ref to "e2e-release/v2.15.0", but a workflow_dispatch
+  # on the identical branch previously resolved via github.ref to
+  # "e2e-refs/heads/release/v2.15.0" -- a different string, so the two
+  # never shared a group and could run (and bill) concurrently on the same
+  # SHA instead of one cancelling/queuing behind the other.
+  #
+  # A trailing "-sync"/"-live" suffix splits the group in two: a cheap,
+  # immediately-completing "skip" run (triggered by `synchronize`, which
+  # never runs the billed live legs -- see the trigger comment above) must
+  # never be able to cancel an in-flight expensive live run just because it
+  # shares the same branch. Without this split, a routine push made while a
+  # real workflow_dispatch/opened live run was still executing would cancel
+  # that live run via `cancel-in-progress`, silently discarding partial
+  # progress and its billed spend so far. Two "live" runs on the same
+  # branch (e.g. two workflow_dispatch runs back to back) still share one
+  # group and cancel each other, which is the desired, pre-existing
+  # resource-saving behavior for that case.
+  group: >-
+    e2e-${{ github.head_ref || github.ref_name }}-${{
+      (github.event_name == 'pull_request' && github.event.action == 'synchronize') && 'sync' || 'live'
+    }}
   cancel-in-progress: true
 
 permissions:
@@ -66,6 +96,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
+      is_release_ref: ${{ steps.check.outputs.is_release_ref }}
       platforms_json: ${{ steps.check.outputs.platforms_json }}
     steps:
       - uses: actions/checkout@v7
@@ -94,6 +125,7 @@ jobs:
         id: check
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
           HEAD_REF: ${{ github.head_ref }}
           # github.head_ref is only populated for pull_request events; a
           # workflow_dispatch run has no PR context, so its "which branch is
@@ -116,7 +148,16 @@ jobs:
           fi
           echo "is_release_ref=${is_release_ref}" >> "$GITHUB_OUTPUT"
 
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          # A `synchronize` event (a push to an already-open PR) never sets
+          # is_release=true, even on a release/* branch -- see the `on:`
+          # block comment above for why. It still reaches this step and
+          # completes (with is_release=false, platforms_json=[]), which is
+          # what lets e2e-gate report a normal "skip" result on the new SHA
+          # instead of never running at all.
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "synchronize" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "platforms_json=[]" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             # Build the JSON array the `e2e` job's matrix consumes via
             # fromJSON(). Previously this input was declared but ignored --
@@ -184,9 +225,54 @@ jobs:
             python -m tests.e2e.run_e2e plan "${args[@]}"
           fi
 
+      - name: Validate run CLI contract (no network, no billed legs)
+        if: steps.check.outputs.is_release == 'true'
+        env:
+          MAX_COST_USD: ${{ github.event.inputs.max_cost_usd || '6.00' }}
+        run: |
+          # Confirms the `e2e` job's later `run --platforms ... --mode ...
+          # --max-cost-usd ... --out-dir ...` invocation matches the actual
+          # Click interface before paying for a 30-minute image build and
+          # up to 3 billed live legs. Without this, CLI drift (a renamed
+          # flag, or a typo in a workflow_dispatch max_cost_usd input) only
+          # surfaces as a generic "one or more e2e legs did not succeed"
+          # gate failure after all of that cost has already been spent.
+          python -m tests.e2e.run_e2e run --help > /tmp/run-help.txt
+          for flag in --platforms --mode --max-cost-usd --out-dir; do
+            grep -qF -- "$flag" /tmp/run-help.txt || {
+              echo "::error::run_e2e.py's 'run' subcommand no longer accepts '${flag}', which this workflow invokes -- update .github/workflows/e2e.yml." >&2
+              exit 1
+            }
+          done
+          python3 -c "
+          import math
+          import os
+          import sys
+          raw = os.environ['MAX_COST_USD']
+          try:
+              value = float(raw)
+          except ValueError:
+              print(f\"::error::max_cost_usd input {raw!r} is not a valid number.\", file=sys.stderr)
+              sys.exit(1)
+          # float() also accepts 'nan', 'inf', and negative/zero values --
+          # none of which is a usable cost ceiling. 'inf'/'nan' would never
+          # trip AI_MAX_COST_USD's comparison (silently disabling the
+          # ceiling entirely); zero or negative would fail every leg
+          # immediately, but only after the 30-minute image build this
+          # check exists to avoid wasting.
+          if not math.isfinite(value) or value <= 0:
+              print(f\"::error::max_cost_usd input {raw!r} must be a finite number greater than 0.\", file=sys.stderr)
+              sys.exit(1)
+          "
+
   weekly-preflight:
     name: Weekly credential check
-    needs: eligibility
+    # No `needs: eligibility`: this job runs on a `schedule` trigger, which
+    # never touches the eligibility job's offline ruff/mypy/pytest checks --
+    # a regression there has no bearing on whether these credentials work,
+    # but a `needs:` dependency would have silently skipped this whole job
+    # (including the failure-alerting issue-file step) whenever eligibility
+    # failed on `main`, with nobody told either check had a problem.
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -215,6 +301,100 @@ jobs:
           E2E_BITBUCKET_TOKEN: ${{ secrets.E2E_BITBUCKET_TOKEN }}
         run: python -m tests.e2e.run_e2e preflight --platforms github --platforms gitlab --platforms bitbucket
 
+      - name: Deeper checks preflight doesn't cover
+        id: deep_preflight
+        if: always() && steps.preflight.outcome != 'cancelled'
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_REVIEWER_TOKEN: ${{ secrets.E2E_GITHUB_REVIEWER_TOKEN }}
+          E2E_GITLAB_TOKEN: ${{ secrets.E2E_GITLAB_TOKEN }}
+          E2E_BITBUCKET_EMAIL: ${{ secrets.E2E_BITBUCKET_EMAIL }}
+          E2E_BITBUCKET_TOKEN: ${{ secrets.E2E_BITBUCKET_TOKEN }}
+          E2E_ANTHROPIC_API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+        run: |
+          # preflight() above only does a read-only `GET /repo` with the
+          # seeder token -- it does not catch a dead reviewer token, a
+          # seeder token that lost write access, broken git-over-HTTPS
+          # clone auth (confirmed live 2026-09-25: Bitbucket's clone auth
+          # failed with this exact preflight passing), or a dead/exhausted
+          # LLM key -- all real failure modes this release fixed or hit.
+          fail=0
+
+          # E2E_GITHUB_REVIEWER_TOKEN is documented as optional, falling
+          # back to E2E_GITHUB_TOKEN when empty (see run_e2e.py's
+          # _github_reviewer_token() and its own comment on why GitHub
+          # Actions sets an unconfigured secret to an empty string, not an
+          # absent one -- ${VAR:-fallback} handles both cases the same way
+          # that function does). Probing the bare secret directly would
+          # otherwise always fail this check on a repo that hasn't
+          # provisioned a separate reviewer identity yet.
+          REVIEWER_TOKEN="${E2E_GITHUB_REVIEWER_TOKEN:-$E2E_GITHUB_TOKEN}"
+
+          # Reviewer token: a plain authenticated GitHub API call, distinct
+          # from the seeder token preflight already checked. The token is
+          # passed via a curl config file built with printf (a bash
+          # builtin, not a subprocess) and handed to curl through process
+          # substitution, not a `-H` argv value, so it never appears in a
+          # child process's argv (visible via `ps`/`/proc/<pid>/cmdline` to
+          # any other user on a shared runner) -- matching how run_e2e.py's
+          # own _clone_auth_env avoids the same exposure for git clone
+          # credentials.
+          if ! curl -sf -o /dev/null -K <(printf 'url = "https://api.github.com/user"\nheader = "Authorization: Bearer %s"\n' "${REVIEWER_TOKEN}"); then
+            echo "::error::E2E_GITHUB_REVIEWER_TOKEN (or its E2E_GITHUB_TOKEN fallback) failed a basic authenticated GitHub API call."
+            fail=1
+          fi
+
+          # Seeder write access: repo GET already run by preflight; check
+          # its own `permissions.push` field instead of a second call.
+          if ! curl -sf -K <(printf 'url = "https://api.github.com/repos/tag1consulting/ai-pr-review-test"\nheader = "Authorization: Bearer %s"\n' "${E2E_GITHUB_TOKEN}") \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('permissions',{}).get('push') else 1)"; then
+            echo "::error::E2E_GITHUB_TOKEN no longer has push access to the GitHub test repo."
+            fail=1
+          fi
+
+          # Git-over-HTTPS clone auth for each provider, using the same
+          # GIT_CONFIG_*-based Basic-auth header injection _clone_auth_env
+          # uses (never a token embedded in the URL or in argv), with the
+          # same per-provider username scheme: x-access-token for GitHub,
+          # oauth2 for GitLab, the fixed x-bitbucket-api-token-auth username
+          # for Bitbucket -- NOT the account email, a distinct auth scheme
+          # from the REST Basic-auth preflight() already checks.
+          _ls_remote_auth() {
+            local user="$1" token="$2" url="$3"
+            local basic
+            basic="$(printf '%s:%s' "$user" "$token" | base64 -w0)"
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.extraheader \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${basic}" \
+              git ls-remote "$url" HEAD >/dev/null 2>&1
+          }
+          if ! _ls_remote_auth x-access-token "${E2E_GITHUB_TOKEN}" https://github.com/tag1consulting/ai-pr-review-test.git; then
+            echo "::error::git clone auth failed for GitHub (E2E_GITHUB_TOKEN)."
+            fail=1
+          fi
+          if ! _ls_remote_auth oauth2 "${E2E_GITLAB_TOKEN}" https://gitlab.com/tag1consulting/ai-pr-review-test.git; then
+            echo "::error::git clone auth failed for GitLab (E2E_GITLAB_TOKEN)."
+            fail=1
+          fi
+          if ! _ls_remote_auth x-bitbucket-api-token-auth "${E2E_BITBUCKET_TOKEN}" https://bitbucket.org/gchaix-tag1/ai-pr-review-test.git; then
+            echo "::error::git clone auth failed for Bitbucket (E2E_BITBUCKET_TOKEN)."
+            fail=1
+          fi
+
+          # LLM key: GET /v1/models is a free, model-agnostic auth check --
+          # confirms the key is live/unexhausted without betting on one
+          # specific model id staying valid (a hardcoded probe model here
+          # would false-fail this check the day that model is retired,
+          # exactly the kind of drift ReviewConfig-derived model ids
+          # elsewhere in this harness are meant to avoid).
+          llm_status=$(curl -s -o /dev/null -w '%{http_code}' -K <(printf 'url = "https://api.anthropic.com/v1/models"\nheader = "x-api-key: %s"\nheader = "anthropic-version: 2023-06-01"\n' "${E2E_ANTHROPIC_API_KEY}"))
+          if [ "$llm_status" != "200" ]; then
+            echo "::error::AI_REVIEW_API_KEY probe returned HTTP ${llm_status} (expected 200)."
+            fail=1
+          fi
+
+          exit "$fail"
+
       - name: File an issue on failure
         if: failure()
         env:
@@ -222,9 +402,18 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh issue create --repo "$REPO" --label bug \
-            --title "E2E weekly preflight failed" \
-            --body "The scheduled e2e-harness credential preflight failed. See the run log for which platform: ${RUN_URL}"
+          # Dedup: comment on an existing open issue instead of filing a
+          # fresh one every week a credential stays broken.
+          existing=$(gh issue list --repo "$REPO" --label bug --state open \
+            --search "E2E weekly preflight failed in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" \
+              --body "Still failing: ${RUN_URL}"
+          else
+            gh issue create --repo "$REPO" --label bug \
+              --title "E2E weekly preflight failed" \
+              --body "The scheduled e2e-harness credential preflight failed. See the run log for which platform: ${RUN_URL}"
+          fi
 
   build:
     name: Build review image
@@ -258,6 +447,13 @@ jobs:
     if: needs.eligibility.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Enforces a repo-level (not just in-workflow-logic) restriction that
+    # this job -- the one with all six live credentials -- can only run for
+    # a release/* branch. The `if:` above is workflow-file logic, which is
+    # itself editable on the very branch under test; this environment's
+    # deployment-branch-policy is a separate GitHub setting a PR diff cannot
+    # bypass on its own.
+    environment: e2e-live
     strategy:
       fail-fast: false
       matrix:
@@ -322,12 +518,32 @@ jobs:
           path: e2e-out/${{ matrix.platform }}
           retention-days: 14
 
-      # No separate cancellation-cleanup step: run_e2e.py installs its own
-      # SIGTERM/SIGINT handler (_install_signal_handlers) that closes any
-      # PR/MR the run opened before the process exits. A GitHub Actions
-      # job cancellation sends SIGTERM to the step's process, which this
-      # handler catches directly -- a second out-of-process cleanup
-      # invocation would just race the first one.
+      - name: Cleanup on cancel (fallback)
+        # run_e2e.py's own SIGTERM/SIGINT handler is the primary cleanup
+        # path and usually wins the race with this step. It is not fully
+        # reliable: its network calls (close + delete-branch, each with
+        # retries) can outlast the runner's cancel grace period before
+        # SIGKILL, especially on a rate-limited or slow response, and a
+        # SIGINT immediately followed by a SIGTERM re-enters it mid-cleanup.
+        # This step is the out-of-process fallback: it reads opened.json
+        # (written the instant a PR/MR is created, independent of the
+        # in-process handler surviving to clean it up) and is idempotent,
+        # so running it after a handler that already partially succeeded is
+        # safe -- see cleanup's docstring.
+        if: cancelled()
+        env:
+          E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+          E2E_GITHUB_REVIEWER_TOKEN: ${{ secrets.E2E_GITHUB_REVIEWER_TOKEN }}
+          E2E_GITLAB_TOKEN: ${{ secrets.E2E_GITLAB_TOKEN }}
+          E2E_BITBUCKET_EMAIL: ${{ secrets.E2E_BITBUCKET_EMAIL }}
+          E2E_BITBUCKET_TOKEN: ${{ secrets.E2E_BITBUCKET_TOKEN }}
+        run: |
+          opened_file="$GITHUB_WORKSPACE/e2e-out/${{ matrix.platform }}/opened.json"
+          if [ -f "$opened_file" ]; then
+            python -m tests.e2e.run_e2e cleanup --from-file "$opened_file"
+          else
+            echo "No opened.json for this platform -- nothing to clean up (likely cancelled before any PR/MR was created)."
+          fi
 
   e2e-gate:
     name: e2e-gate
@@ -338,8 +554,38 @@ jobs:
     steps:
       - name: Evaluate gate
         run: |
+          # Checked BEFORE is_release: eligibility's own offline checks
+          # (ruff/mypy/pytest) run before it ever sets is_release. If
+          # eligibility fails on that step, is_release is never written and
+          # this output resolves to "" -- which used to take the same branch
+          # as "not a release/* PR" below and exit 0, reporting a broken
+          # harness as a passing gate. A skipped/cancelled eligibility run
+          # is not success either, so it fails here too.
+          if [ "${{ needs.eligibility.result }}" != "success" ]; then
+            echo "Eligibility job did not succeed: ${{ needs.eligibility.result }}"
+            exit 1
+          fi
           if [ "${{ needs.eligibility.outputs.is_release }}" != "true" ]; then
-            echo "Not a release/* PR -- e2e legs not required."
+            # is_release is false either because this genuinely isn't a
+            # release/* PR at all, or because it IS one but this run was
+            # triggered by a `synchronize` push (which deliberately never
+            # runs the billed live legs -- see the `on:` trigger's own
+            # comment). Distinguish the two: reporting "Not a release/* PR"
+            # for a push that actually IS on a release/* branch is
+            # misleading, and once this check becomes required, a operator
+            # seeing that message would have no reason to suspect the final
+            # merged SHA never had a live run at all.
+            if [ "${{ needs.eligibility.outputs.is_release_ref }}" = "true" ]; then
+              # A ::warning:: annotation (not just a job-log echo) surfaces
+              # on the PR's checks/Files-changed UI, so this unvalidated-SHA
+              # state is visible without opening the job log -- the gap
+              # F23's review flagged: a job-log-only message is easy to
+              # miss on a check that otherwise just shows green.
+              echo "::warning::release/* branch, live e2e legs skipped for this push (synchronize) -- this SHA has NOT been live-validated. Trigger a workflow_dispatch run against this branch before merge."
+              echo "release/* branch, but this run was triggered by a push (synchronize) -- live e2e legs were deliberately skipped for this SHA. Passing so a required check doesn't block every push, but this does NOT mean the pushed commit has been live-validated. Trigger a workflow_dispatch run against this branch before merge to actually validate it."
+            else
+              echo "Not a release/* PR -- e2e legs not required."
+            fi
             exit 0
           fi
           if [ "${{ needs.build.result }}" != "success" ]; then

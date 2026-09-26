@@ -8,6 +8,7 @@ module performs I/O.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 # Sourced from the actual ReviewConfig.resolve_models() defaults rather than
 # a duplicated string literal here -- if config.py's provider defaults ever
@@ -82,6 +83,14 @@ class PlatformConfig:
     # at all", not "the review produced everything we expect".
     findings_floor: int = 3
     expected_findings: tuple[ExpectedFinding, ...] = field(default_factory=tuple)
+    # Which surface carries this platform's per-finding detail: GitHub/GitLab
+    # post real inline review comments; Bitbucket has no inline-review
+    # support at all (ai_pr_review/vcs/bitbucket.py:post_findings posts
+    # Code Insights annotations instead -- see _code_insights.py). Reading
+    # this off config, instead of an `if platform == "bitbucket"` scattered
+    # at each call site that cares, keeps the "which platform is special"
+    # knowledge in one place.
+    per_finding_surface: Literal["inline", "annotations"] = "inline"
 
 
 # Bitbucket's base differs from GitHub/GitLab (main/master) because the
@@ -126,6 +135,7 @@ PLATFORMS: dict[str, PlatformConfig] = {
     ),
     "bitbucket": PlatformConfig(
         name="bitbucket",
+        per_finding_surface="annotations",
         # NOT tag1consulting -- the Bitbucket test repo lives in a different
         # workspace than the GitHub/GitLab ones. Verified against the old
         # harness (ai-pr-review-e2e.js) and project memory
