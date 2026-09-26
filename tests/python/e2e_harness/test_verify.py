@@ -14,7 +14,7 @@ import pytest
 
 from ai_pr_review.vcs.marker import build_summary_marker
 from tests.e2e.config import ExpectedFinding
-from tests.e2e.platforms import RawEvidence
+from tests.e2e.models import RawEvidence
 from tests.e2e.run_e2e import validate_platforms
 from tests.e2e.verify import (
     InfraFailure,
@@ -278,12 +278,32 @@ def test_verify_posting_surfaces_truncated_flag_adds_pagination_note_not_failure
 
 def test_verify_analyzer_findings_happy_path():
     evidence = RawEvidence(
-        summary_body="finding in docs/index.md category=documentation",
-        inline_comments=[{"body": "a"}, {"body": "b"}, {"body": "c"}],
+        summary_body="3 findings posted",
+        inline_comments=[
+            {"body": "finding in docs/index.md category=documentation"},
+            {"body": "b"},
+            {"body": "c"},
+        ],
     )
     expected = [ExpectedFinding(path_substring="docs/", category="documentation")]
     verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
     assert verdict.ok
+
+
+def test_verify_analyzer_findings_summary_body_match_not_used_when_inline_present():
+    # A path+category pair that only co-occurs in the whole summary body
+    # (which can list many unrelated findings) must NOT satisfy the check
+    # once real per-finding inline comments exist to check instead --
+    # otherwise an unrelated finding on a different file/category could
+    # accidentally satisfy path_substring/category just by both appearing
+    # somewhere in the same summary text.
+    evidence = RawEvidence(
+        summary_body="finding in docs/index.md category=documentation",
+        inline_comments=[{"body": "unrelated finding, different file"}],
+    )
+    expected = [ExpectedFinding(path_substring="docs/", category="documentation")]
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=1)
+    assert not verdict.ok
 
 
 def test_verify_analyzer_findings_below_floor_fails():

@@ -12,6 +12,7 @@ repo's CLAUDE.md checkpoint conventions.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -22,7 +23,6 @@ import tempfile
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from urllib.parse import quote
 
 import click
 
@@ -131,8 +131,42 @@ def preflight(platforms_raw: tuple[str, ...]) -> None:
     sys.exit(EXIT_INFRA_FAILURE if failures else EXIT_PASS)
 
 
+@cli.command()
+@click.option("--from-file", "from_file", type=click.Path(exists=True, path_type=Path), required=True)
+def cleanup(from_file: Path) -> None:
+    """Idempotent out-of-process cleanup: close + delete-branch every PR/MR
+    recorded in an opened.json file (see _record_opened's docstring for why
+    this exists -- the in-process signal handler alone isn't a reliable
+    enough safety net). Safe to re-run: close()/delete_branch() already
+    tolerate an already-gone branch (404/422), and closing an already-closed
+    PR/MR is a harmless no-op on all three providers."""
+    entries = json.loads(from_file.read_text(encoding="utf-8"))
+    failures = []
+    for entry in entries:
+        name = str(entry["platform"])
+        adapter = build_adapter(name, dict(os.environ))
+        pr = PullRequest(
+            platform=name, number=int(entry["number"]), branch=str(entry["branch"]), url=str(entry["url"]),
+            run_commit=RunCommit(platform=name, run_id="", branch=str(entry["branch"]), commit_sha=""),
+        )
+        try:
+            adapter.close(pr)
+            adapter.delete_branch(pr.branch)
+            click.echo(f"cleanup: {name} #{pr.number}: closed and branch deleted")
+        except AdapterError as exc:
+            click.echo(f"cleanup: {name} #{pr.number}: FAILED: {exc}", err=True)
+            failures.append(name)
+    sys.exit(EXIT_INFRA_FAILURE if failures else EXIT_PASS)
+
+
 # --- run --------------------------------------------------------------
 
+# Only platforms currently in flight (no result decided yet for this run()
+# invocation) -- see `run`'s loop, which prunes an entry the moment
+# _run_one_platform returns, whatever the outcome. Without that pruning, a
+# signal during platform 2 of a local multi-platform run would also close
+# platform 1's PR/MR even when platform 1 had already failed and the
+# leave-open-on-failure policy said to keep it for debugging.
 _opened_prs: list[tuple[PlatformAdapter, PullRequest]] = []  # for signal-handler cleanup
 
 
@@ -152,6 +186,33 @@ def _install_signal_handlers() -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
+def _record_opened(out_dir: Path, platform: str, pr: PullRequest) -> None:
+    """Append this run's opened PR/MR to out_dir/opened.json.
+
+    This is the durable, out-of-process record the `cleanup` subcommand
+    reads. The in-process signal handler above is the only cleanup path
+    today, and it has a real gap: its network calls go through
+    _request_with_retry (multiple attempts, tens of seconds of backoff), and
+    a CI runner's cancel grace period before SIGKILL can be shorter than
+    that, especially if a SIGINT is immediately followed by a SIGTERM
+    (re-entering the handler mid-cleanup). Writing this file the moment a
+    PR/MR is created means a stuck cleanup can be finished later by anyone
+    running `run_e2e cleanup --from-file opened.json`, instead of the PR/MR
+    leaking forever with no record of it ever having existed. Also merged
+    into result.json (see `run`) so a failed run's CI artifacts name the
+    PR/MR to inspect without grepping stderr.
+    """
+    path = out_dir / "opened.json"
+    entries: list[dict[str, str | int]] = []
+    if path.exists():
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            entries = []
+    entries.append({"platform": platform, "number": pr.number, "branch": pr.branch, "url": pr.url})
+    path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+
+
 def _write_env_file(path: Path, env_vars: dict[str, str]) -> None:
     """Write a KEY=VALUE env file with 0600 permissions (never world/group
     readable -- this file carries provider API keys and tokens)."""
@@ -161,13 +222,16 @@ def _write_env_file(path: Path, env_vars: dict[str, str]) -> None:
             fh.write(f"{key}={value}\n")
 
 
-def _run_git(argv: list[str], *, timeout: int = 120) -> str:
+def _run_git(argv: list[str], *, timeout: int = 120, extra_env: dict[str, str] | None = None) -> str:
     """Run a git command via subprocess (argv list, never shell=True).
     Raises InfraFailure (with any embedded credential URL masked) on
-    failure or timeout."""
+    failure or timeout. `extra_env` (the GIT_CONFIG_* auth vars from
+    _clone_auth_env, when this call needs them) is merged over the current
+    environment rather than replacing it, so PATH/HOME/etc. still resolve."""
     try:
         proc = subprocess.run(
             ["git", *argv], capture_output=True, text=True, timeout=timeout, check=True,
+            env={**os.environ, **extra_env} if extra_env else None,
         )
     except subprocess.CalledProcessError as exc:
         raise InfraFailure(mask(f"git {' '.join(argv[:2])} failed: {exc.stderr[:300]}")) from exc
@@ -176,6 +240,67 @@ def _run_git(argv: list[str], *, timeout: int = 120) -> str:
     except OSError as exc:
         raise InfraFailure(f"git not available on this runner: {exc}") from exc
     return proc.stdout
+
+
+def _github_reviewer_token() -> str:
+    """E2E_GITHUB_REVIEWER_TOKEN falls back to E2E_GITHUB_TOKEN when unset
+    OR empty. `os.environ.get(A, os.environ.get(B, ""))` only falls back
+    when A is absent -- e2e.yml's `secrets.E2E_GITHUB_REVIEWER_TOKEN` always
+    sets the env var, as an empty string when that (documented-optional)
+    secret isn't configured, so the old `.get(A, .get(B))` pattern silently
+    passed an empty token to git clone / GH_TOKEN in that case instead of
+    falling back. `build_adapter()` already used `reviewer_token or
+    seeder_token`, matching this; this helper is the single place both the
+    clone auth and the container's GH_TOKEN now read from, so they can't
+    diverge from that adapter behavior again."""
+    return os.environ.get("E2E_GITHUB_REVIEWER_TOKEN") or os.environ.get("E2E_GITHUB_TOKEN", "")
+
+
+def _clone_auth_env(platform: str) -> tuple[str, dict[str, str]]:
+    """Return (credential-free clone URL, extra subprocess env) for the
+    given platform.
+
+    Auth is injected via `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_N`/
+    `GIT_CONFIG_VALUE_N` (an `http.extraHeader` Basic-auth header), NOT a
+    token embedded in the URL. Two reasons, found in the same live-debugging
+    session: (1) a URL passed as a subprocess argv element is visible to any
+    local user via `ps`/`/proc/<pid>/cmdline` for the life of the clone,
+    unlike a value passed via `env=` (still readable via `/proc/<pid>/
+    environ`, but that already requires the same privilege as reading the
+    process's own memory, a materially narrower default exposure than argv,
+    which is often world-readable); (2) it also means `.git/config`'s
+    `remote.origin.url` in the cloned workspace never contains the token,
+    closing that persistence path too instead of just moving it.
+    """
+    repo_slug = PLATFORMS[platform].repo_slug
+    if platform == "github":
+        token = _github_reviewer_token()
+        url = f"https://github.com/{repo_slug}.git"
+        userpass = f"x-access-token:{token}"
+    elif platform == "gitlab":
+        token = os.environ.get("E2E_GITLAB_TOKEN", "")
+        url = f"https://gitlab.com/{repo_slug}.git"
+        userpass = f"oauth2:{token}"
+    elif platform == "bitbucket":
+        # Git-over-HTTPS with a Bitbucket API token uses the fixed username
+        # "x-bitbucket-api-token-auth", NOT the account email -- that's a
+        # different scheme from the REST API's Basic auth (email:token),
+        # which is what preflight's API calls use. Confirmed live via
+        # `git ls-remote` after the email:token form failed with "You may
+        # not have access to this repository" despite preflight passing.
+        token = os.environ.get("E2E_BITBUCKET_TOKEN", "")
+        url = f"https://bitbucket.org/{repo_slug}.git"
+        userpass = f"x-bitbucket-api-token-auth:{token}"
+    else:
+        raise InfraFailure(f"unknown platform {platform!r} for workspace clone")
+
+    auth_header = "Authorization: Basic " + base64.b64encode(userpass.encode()).decode()
+    extra_env = {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": auth_header,
+    }
+    return url, extra_env
 
 
 def _clone_workspace(platform: str, run_commit: RunCommit, base_ref: str) -> tuple[Path, str]:
@@ -191,50 +316,32 @@ def _clone_workspace(platform: str, run_commit: RunCommit, base_ref: str) -> tup
     /workspace` *inside the container*, and the container has no way to
     materialize a checkout on its own -- the caller must mount one.
 
-    Uses a token-embedded HTTPS URL. The token never reaches disk outside
-    this process's argv (subprocess argv, not a shell string), and any URL
-    that leaks into a git error message is masked via mask()'s
-    credential-URL pattern before it's ever raised or logged.
+    Auth is passed via env, not a token-embedded URL -- see
+    _clone_auth_env's docstring. Any URL/header that still leaks into a git
+    error message is masked via mask()'s credential-URL pattern before it's
+    ever raised or logged, as defense in depth.
 
-    Bitbucket leg verified live on 2026-09-25 (this is the path that
-    surfaced the clone-auth-scheme and annotation-pagination bugs this
-    module's git history fixes). Unverified: GitHub and GitLab were not
-    re-verified against a live run after the URL-encoding change above.
+    Verified live against all three platforms as of 2026-09-25, including a
+    full 3-platform `workflow_dispatch` run. The Bitbucket leg is what
+    originally surfaced the clone-auth-scheme and annotation-pagination
+    bugs this module's git history fixes.
     """
-    repo_slug = PLATFORMS[platform].repo_slug
-    if platform == "github":
-        token = os.environ.get("E2E_GITHUB_REVIEWER_TOKEN", os.environ.get("E2E_GITHUB_TOKEN", ""))
-        url = f"https://x-access-token:{quote(token, safe='')}@github.com/{repo_slug}.git"
-    elif platform == "gitlab":
-        token = os.environ.get("E2E_GITLAB_TOKEN", "")
-        url = f"https://oauth2:{quote(token, safe='')}@gitlab.com/{repo_slug}.git"
-    elif platform == "bitbucket":
-        # Git-over-HTTPS with a Bitbucket API token uses the fixed username
-        # "x-bitbucket-api-token-auth", NOT the account email -- that's a
-        # different scheme from the REST API's Basic auth (email:token),
-        # which is what preflight's API calls use. Confirmed live via
-        # `git ls-remote` after the email:token form failed with "You may
-        # not have access to this repository" despite preflight passing.
-        # Still URL-encode the token defensively (see the github/gitlab
-        # branches above for the same '@'/'/' concern, though this fixed
-        # username has neither).
-        token = os.environ.get("E2E_BITBUCKET_TOKEN", "")
-        url = f"https://x-bitbucket-api-token-auth:{quote(token, safe='')}@bitbucket.org/{repo_slug}.git"
-    else:
-        raise InfraFailure(f"unknown platform {platform!r} for workspace clone")
+    url, clone_env = _clone_auth_env(platform)
 
     workspace = Path(tempfile.mkdtemp(prefix=f"e2e-ws-{platform}-"))
     try:
         _run_git(["clone", "--quiet", "--depth", "50", "--branch", run_commit.branch,
-                  "--single-branch", url, str(workspace)])
+                  "--single-branch", url, str(workspace)], extra_env=clone_env)
         _run_git(["-C", str(workspace), "fetch", "--quiet", "--depth", "50",
-                  "origin", f"{base_ref}:refs/remotes/origin/{base_ref}"])
+                  "origin", f"{base_ref}:refs/remotes/origin/{base_ref}"], extra_env=clone_env)
         diff_base_sha = _run_git(["-C", str(workspace), "merge-base", "HEAD",
                                    f"origin/{base_ref}"]).strip()
         # The container runs as a fixed non-root uid (1001, per Dockerfile);
         # this host-created checkout must be readable regardless of which
         # uid actually cloned it (a GH-hosted runner and a developer's own
-        # machine will differ).
+        # machine will differ). No credentials live in .git/config now (see
+        # _clone_auth_env), so this world-readable chmod no longer exposes
+        # any secret -- only the fixture content itself.
         _run_git(["-C", str(workspace), "config", "--local", "--add", "safe.directory", str(workspace)])
         for root, _dirs, files in os.walk(workspace):
             os.chmod(root, 0o755)
@@ -272,6 +379,45 @@ def _provider_env_vars(platform: str, pr: PullRequest) -> dict[str, str]:
     raise InfraFailure(f"unknown platform {platform!r} for provider env vars")
 
 
+_SECRET_ENV_KEYS = {"ANTHROPIC_API_KEY", "GH_TOKEN", "GITLAB_TOKEN", "BITBUCKET_API_TOKEN"}
+
+
+def _known_secret_values(env_vars: dict[str, str]) -> list[str]:
+    """The actual secret values used for this run's container, for a
+    literal-value redaction pass in addition to mask()'s pattern matching.
+    mask() only catches values that appear in a recognizable shape (after
+    "Bearer"/"Basic"/"token"/"PRIVATE-TOKEN", or embedded as URL userinfo);
+    a real secret echoed bare (e.g. by an errant `env`/`printenv` in the
+    reviewed diff, or a library that logs its own config) would sail
+    through untouched. Redacting by literal value is a second, independent
+    net under the same artifacts (container.log, telemetry.json) that get
+    uploaded from a public repo. Short values are excluded (len < 8) to
+    avoid mangling unrelated short text that happens to match an
+    unset/placeholder value.
+    """
+    return [v for k, v in env_vars.items() if k in _SECRET_ENV_KEYS and len(v) >= 8]
+
+
+def _redact_known_values(text: str, secret_values: list[str]) -> str:
+    for value in secret_values:
+        text = text.replace(value, "<secret-redacted>")
+    return text
+
+
+def _redact_known_values_in_file(path: Path, secret_values: list[str]) -> None:
+    """Best-effort in-place literal-value redaction of a file that will be
+    uploaded as a CI artifact. Silently no-ops if the file doesn't exist
+    (e.g. the container crashed before writing telemetry.json) -- that
+    absence is InfraFailure territory handled elsewhere, not this
+    function's concern."""
+    if not path.exists() or not secret_values:
+        return
+    text = path.read_text(encoding="utf-8")
+    redacted = _redact_known_values(text, secret_values)
+    if redacted != text:
+        path.write_text(redacted, encoding="utf-8")
+
+
 def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sha: str,
                     out_dir: Path, *, mode: str, max_cost_usd: float) -> tuple[int, str]:
     """Run the review container via subprocess (argv list, never shell=True).
@@ -294,7 +440,7 @@ def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sh
         "AI_MAX_COST_USD": str(max_cost_usd),
         "AI_FAIL_ON_COST_CEILING": "true",
         "AI_REVIEW_MODE": mode,
-        "ANTHROPIC_API_KEY": os.environ.get("E2E_ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", "")),
+        "ANTHROPIC_API_KEY": os.environ.get("E2E_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", ""),
         # Both required by ai_pr_review/diff/compute.py's compute_diff(): it
         # builds range_spec as f"origin/{base_ref}...{head_sha}" with no
         # fallback for either being empty -- confirmed live on this
@@ -307,7 +453,7 @@ def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sh
         **_provider_env_vars(platform, pr),
     }
     if platform == "github":
-        env_vars["GH_TOKEN"] = os.environ.get("E2E_GITHUB_REVIEWER_TOKEN", os.environ.get("E2E_GITHUB_TOKEN", ""))
+        env_vars["GH_TOKEN"] = _github_reviewer_token()
     elif platform == "gitlab":
         env_vars["GITLAB_TOKEN"] = os.environ.get("E2E_GITLAB_TOKEN", "")
         env_vars["GITLAB_DIFF_BASE_SHA"] = diff_base_sha
@@ -362,8 +508,10 @@ def _run_container(platform: str, pr: PullRequest, workspace: Path, diff_base_sh
     finally:
         env_file.unlink(missing_ok=True)
 
-    redacted = mask(stderr_text)
+    secret_values = _known_secret_values(env_vars)
+    redacted = _redact_known_values(mask(stderr_text), secret_values)
     (out_dir / f"{platform}.container.log").write_text(redacted, encoding="utf-8")
+    _redact_known_values_in_file(out_dir / "telemetry.json", secret_values)
     return returncode, redacted
 
 
@@ -375,14 +523,24 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
     # able to write telemetry.json here regardless of the host uid that
     # created this directory -- GH-hosted runners happen to also be uid
     # 1001, which masked this on CI, but a local run under a different uid
-    # would otherwise fail every time with a misleading InfraFailure.
-    os.chmod(platform_out_dir, 0o777)
+    # would otherwise fail every time with a misleading InfraFailure. Mode
+    # 0o1733 (not 0o777): the sticky bit stops another local user on a
+    # shared host from renaming/deleting files they don't own in this
+    # world-writable directory (the standard /tmp-style mitigation) --
+    # relevant to local multi-user dev, not GH-hosted single-tenant runners.
+    os.chmod(platform_out_dir, 0o1733)
 
     try:
         adapter.preflight()
         run_commit = adapter.create_run_commit(run_id)
         pr = adapter.open_pr(run_commit)
         _opened_prs.append((adapter, pr))
+        # Written immediately, independent of _opened_prs (an in-process
+        # list a SIGKILL mid-cleanup loses entirely): the sole out-of-process
+        # cleanup fallback -- a `cleanup` subcommand -- reads this file to
+        # find PRs/branches an in-process signal handler didn't get to
+        # close before the runner's cancel grace period expired.
+        _record_opened(out_dir, name, pr)
     except AdapterError as exc:
         return aggregate(name, [], infra_error=InfraFailure(str(exc)))
 
@@ -417,8 +575,11 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
 
         evidence = adapter.fetch_summary(pr)
         adapter.fetch_inline(pr, evidence)
-        if name == "bitbucket":
-            adapter.fetch_annotations(pr, evidence)
+        # fetch_annotations is a documented no-op on every adapter except
+        # Bitbucket's (_BaseAdapter's default), so calling it unconditionally
+        # here is correct for every platform, not just a Bitbucket special
+        # case -- no per_finding_surface check needed for this one.
+        adapter.fetch_annotations(pr, evidence)
 
         verdicts = [
             verify_summary_marker(evidence, run_commit.commit_sha),
@@ -427,7 +588,7 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
                 log_result.event or "", telemetry=telemetry, summary_body=evidence.summary_body,
             ),
             verify_model(telemetry, DEFAULT_MODELS["anthropic"][0]),
-            *verify_posting_surfaces(evidence, bitbucket=(name == "bitbucket")),
+            *verify_posting_surfaces(evidence, bitbucket=(PLATFORMS[name].per_finding_surface == "annotations")),
             verify_analyzer_findings(
                 evidence, list(PLATFORMS[name].expected_findings),
                 findings_floor=PLATFORMS[name].findings_floor,
@@ -480,15 +641,38 @@ def run(platforms_raw: tuple[str, ...], mode: str, out_dir: Path | None, max_cos
     results: dict[str, RunResult] = {}
     for name in resolved:
         results[name] = _run_one_platform(name, run_id, out_dir, mode=mode, max_cost_usd=max_cost_usd)
+        # This platform's outcome is now decided -- prune it from the
+        # signal-handler's list so a later platform's Ctrl-C/SIGTERM can't
+        # also close THIS one's PR/MR, contradicting the leave-open-on-
+        # failure policy for a platform that already finished and failed.
+        _opened_prs[:] = [(a, p) for a, p in _opened_prs if p.platform != name]
 
-    result_payload = {name: {"category": r.category, "reasons": list(r.reasons),
-                              "verdicts": [asdict(v) for v in r.verdicts]}
-                       for name, r in results.items()}
+    opened_by_platform: dict[str, dict[str, object]] = {}
+    opened_path = out_dir / "opened.json"
+    if opened_path.exists():
+        try:
+            for entry in json.loads(opened_path.read_text(encoding="utf-8")):
+                opened_by_platform[str(entry["platform"])] = entry
+        except (json.JSONDecodeError, OSError):
+            pass  # result.json still gets written without pr_url/branch below
+
+    result_payload = {
+        name: {
+            "category": r.category, "reasons": list(r.reasons),
+            "verdicts": [asdict(v) for v in r.verdicts],
+            **({"pr_url": opened_by_platform[name]["url"], "branch": opened_by_platform[name]["branch"]}
+               if name in opened_by_platform else {}),
+        }
+        for name, r in results.items()
+    }
     (out_dir / "result.json").write_text(json.dumps(result_payload, indent=2), encoding="utf-8")
 
     summary_lines = [f"# e2e run {run_id}", ""]
     for name, r in results.items():
-        summary_lines.append(f"- **{name}**: {r.category}" + (f": {'; '.join(r.reasons)}" if r.reasons else ""))
+        line = f"- **{name}**: {r.category}" + (f": {'; '.join(r.reasons)}" if r.reasons else "")
+        if not r.ok and name in opened_by_platform:
+            line += f" -- {opened_by_platform[name]['url']}"
+        summary_lines.append(line)
     summary_text = "\n".join(summary_lines) + "\n"
     (out_dir / "summary.md").write_text(summary_text, encoding="utf-8")
 

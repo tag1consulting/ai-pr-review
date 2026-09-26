@@ -18,7 +18,7 @@ from typing import Any
 from ai_pr_review.vcs.marker import extract_summary_sha
 
 from .config import ExpectedFinding
-from .platforms import RawEvidence
+from .models import RawEvidence
 
 
 class HarnessError(Exception):
@@ -331,10 +331,18 @@ def verify_analyzer_findings(evidence: RawEvidence, expected: list[ExpectedFindi
     """
     body = evidence.summary_body
     inline_bodies = [c.get("body", "") or c.get("content", {}).get("raw", "") for c in evidence.inline_comments]
-    haystacks = [body, *inline_bodies]
+    # Each inline_bodies entry is already scoped to one finding, so matching
+    # path_substring/category within a single entry means both actually
+    # describe the same finding. The summary body is NOT scoped this way --
+    # it can list many unrelated findings in one string, so checking it with
+    # the same whole-string substring test would let a path mentioned near
+    # an unrelated category's finding satisfy the check by coincidence. Only
+    # fall back to it when there are no per-finding comments at all to check
+    # instead (verify_posting_surfaces already fails that case on its own).
+    per_finding_haystacks = inline_bodies if inline_bodies else [body]
 
     def _found(exp: ExpectedFinding) -> bool:
-        if any(exp.path_substring in h and exp.category in h for h in haystacks):
+        if any(exp.path_substring in h and exp.category in h for h in per_finding_haystacks):
             return True
         # Bitbucket has no inline comments (see verify_posting_surfaces) --
         # its per-finding text lives in each Code Insights annotation's
