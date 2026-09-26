@@ -645,6 +645,7 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
             verify_analyzer_findings(
                 evidence, list(PLATFORMS[name].expected_findings),
                 findings_floor=PLATFORMS[name].findings_floor,
+                per_finding_surface=PLATFORMS[name].per_finding_surface,
             ),
         ]
     except HarnessError as exc:
@@ -718,8 +719,13 @@ def run(platforms_raw: tuple[str, ...], mode: str, out_dir: Path | None, max_cos
         try:
             for entry in json.loads(opened_path.read_text(encoding="utf-8")):
                 opened_by_platform[str(entry["platform"])] = entry
-        except (json.JSONDecodeError, OSError):
-            pass  # result.json still gets written without pr_url/branch below
+        except (json.JSONDecodeError, OSError) as exc:
+            # result.json still gets written below, just without pr_url/
+            # branch for any platform -- logged so that gap is traceable to
+            # a corrupt/unreadable opened.json rather than reading as "no
+            # PR was ever opened" to whoever inspects result.json later.
+            logger.warning("run: %s is unreadable/corrupt (%s) -- result.json will be missing "
+                           "pr_url/branch for every platform", opened_path, exc)
 
     result_payload = {
         name: {

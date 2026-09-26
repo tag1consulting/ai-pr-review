@@ -332,7 +332,10 @@ def verify_posting_surfaces(
     return verdicts
 
 
-def verify_analyzer_findings(evidence: RawEvidence, expected: list[ExpectedFinding], *, findings_floor: int) -> Verdict:
+def verify_analyzer_findings(
+    evidence: RawEvidence, expected: list[ExpectedFinding], *, findings_floor: int,
+    per_finding_surface: Literal["inline", "annotations"] = "inline",
+) -> Verdict:
     """Check the fixture-specific deterministic assertions plus a low
     findings-count floor as a sanity backstop (NOT the old harness's >=10
     threshold, which was tuned against unreliable LLM-transcribed output).
@@ -344,26 +347,41 @@ def verify_analyzer_findings(evidence: RawEvidence, expected: list[ExpectedFindi
     # describe the same finding. The summary body is NOT scoped this way --
     # it can list many unrelated findings in one string, so checking it with
     # the same whole-string substring test would let a path mentioned near
-    # an unrelated category's finding satisfy the check by coincidence. Only
-    # fall back to it when there are no per-finding comments at all to check
-    # instead (verify_posting_surfaces already fails that case on its own).
-    per_finding_haystacks = inline_bodies if inline_bodies else [body]
+    # an unrelated category's finding satisfy the check by coincidence.
+    #
+    # Only fall back to the whole summary body when THIS platform's own
+    # designated per-finding surface (per_finding_surface) is empty -- not
+    # merely whenever inline_bodies happens to be empty. An earlier version
+    # used the latter condition, which is wrong for any "annotations"
+    # platform (Bitbucket, today): its inline_bodies is always empty
+    # (verify_posting_surfaces already checks annotations for it, never
+    # inline), so every Bitbucket run silently fell back to the loose
+    # whole-body match unconditionally -- exactly the loophole this
+    # per-finding scoping was meant to close, just moved from "always" to
+    # "always, but only for one platform."
+    use_annotations = per_finding_surface == "annotations"
+    per_finding_haystacks = inline_bodies if (not use_annotations and inline_bodies) else []
+    fall_back_to_body = not per_finding_haystacks and not (use_annotations and evidence.annotations)
 
     def _found(exp: ExpectedFinding) -> bool:
         if any(exp.path_substring in h and exp.category in h for h in per_finding_haystacks):
             return True
-        # Bitbucket has no inline comments (see verify_posting_surfaces) --
-        # its per-finding text lives in each Code Insights annotation's
-        # `summary` field, with the file path in a separate `path` field.
-        # Check those two fields independently per-annotation rather than
-        # concatenating them into one string: an earlier version joined
-        # `path` and `summary` before matching, which let an annotation on
-        # a DIFFERENT file satisfy path_substring merely by mentioning that
+        # Bitbucket's per-finding text lives in each Code Insights
+        # annotation's `summary` field, with the file path in a separate
+        # `path` field. Check those two fields independently per-annotation
+        # rather than concatenating them into one string: joining `path`
+        # and `summary` before matching would let an annotation on a
+        # DIFFERENT file satisfy path_substring merely by mentioning that
         # path in its own summary text (e.g. "same pattern as api/user.py").
-        return any(
+        if any(
             exp.path_substring in a.get("path", "") and exp.category in a.get("summary", "")
             for a in evidence.annotations
-        )
+        ):
+            return True
+        # Only reached when this platform's own designated per-finding
+        # surface came back empty (see fall_back_to_body above) -- not
+        # whenever the OTHER platform's surface happens to be unpopulated.
+        return fall_back_to_body and exp.path_substring in body and exp.category in body
 
     missing = [exp for exp in expected if not _found(exp)]
     per_finding_count = len(evidence.inline_comments) + len(evidence.annotations)

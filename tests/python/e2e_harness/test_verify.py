@@ -341,7 +341,7 @@ def test_verify_analyzer_findings_counts_and_matches_bitbucket_annotations():
         ],
     )
     expected = [ExpectedFinding(path_substring="api/user.py", category="injection")]
-    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3, per_finding_surface="annotations")
     assert verdict.ok
     assert "approx findings count 3" in verdict.reason
 
@@ -363,7 +363,31 @@ def test_verify_analyzer_findings_annotation_path_and_category_checked_independe
         ],
     )
     expected = [ExpectedFinding(path_substring="api/user.py", category="injection")]
-    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3)
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=3, per_finding_surface="annotations")
+    assert not verdict.ok
+    assert "not found" in verdict.reason
+
+
+def test_verify_analyzer_findings_bitbucket_does_not_fall_back_to_whole_summary():
+    # Regression test for a real bug (issue found in PR #954's own review):
+    # per_finding_surface="annotations" platforms (Bitbucket) never have
+    # inline_comments, so a version of this function keyed off
+    # "inline_bodies is empty" (rather than "THIS platform's own designated
+    # surface is empty") always fell back to the loose whole-summary match
+    # for Bitbucket, regardless of whether real, populated annotations
+    # existed -- silently reopening the exact loophole the per-finding
+    # scoping fix was meant to close, for every Bitbucket run. Here, the
+    # summary body mentions the expected path+category pair together, but
+    # the real annotations (the actual per-finding surface) describe
+    # something unrelated -- this must fail, not pass on the summary text.
+    evidence = RawEvidence(
+        summary_body="See the PR walkthrough for context: docs/index.md changes relate to the documentation category.",
+        annotations=[
+            {"path": "web/auth.js", "summary": "High: hardcoded credentials"},
+        ],
+    )
+    expected = [ExpectedFinding(path_substring="docs/index.md", category="documentation")]
+    verdict = verify_analyzer_findings(evidence, expected, findings_floor=1, per_finding_surface="annotations")
     assert not verdict.ok
     assert "not found" in verdict.reason
 
