@@ -151,11 +151,20 @@ def cleanup(from_file: Path) -> None:
         )
         try:
             adapter.close(pr)
-            adapter.delete_branch(pr.branch)
-            click.echo(f"cleanup: {name} #{pr.number}: closed and branch deleted")
         except AdapterError as exc:
-            click.echo(f"cleanup: {name} #{pr.number}: FAILED: {exc}", err=True)
+            click.echo(f"cleanup: {name} #{pr.number}: FAILED to close: {exc}", err=True)
             failures.append(name)
+            continue
+        try:
+            adapter.delete_branch(pr.branch)
+        except AdapterError as exc:
+            click.echo(
+                f"cleanup: {name} #{pr.number}: closed, but FAILED to delete branch "
+                f"{pr.branch!r}: {exc}", err=True,
+            )
+            failures.append(name)
+            continue
+        click.echo(f"cleanup: {name} #{pr.number}: closed and branch deleted")
     sys.exit(EXIT_INFRA_FAILURE if failures else EXIT_PASS)
 
 
