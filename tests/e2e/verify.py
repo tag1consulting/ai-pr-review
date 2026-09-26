@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ai_pr_review.vcs.marker import extract_summary_sha
 
@@ -286,11 +286,24 @@ def verify_model(telemetry: dict[str, Any], expected_model_id: str) -> Verdict:
     )
 
 
-def verify_posting_surfaces(evidence: RawEvidence, *, bitbucket: bool = False) -> list[Verdict]:
-    """Independently verify summary, inline/discussions, and (Bitbucket
-    only) annotations were posted at all. Each Verdict carries a
-    pagination_note when evidence.truncated is True, so a truncated fetch
-    warns rather than silently passing/failing on incomplete data.
+def verify_posting_surfaces(
+    evidence: RawEvidence, *, per_finding_surface: Literal["inline", "annotations"] = "inline",
+) -> list[Verdict]:
+    """Independently verify summary, plus whichever per-finding surface this
+    platform actually uses (inline review comments, or -- Bitbucket, which
+    has no inline-review support at all, per the harness design and
+    ai_pr_review/vcs/bitbucket.py:post_findings -- Code Insights
+    annotations) were posted at all. Each Verdict carries a pagination_note
+    when evidence.truncated is True, so a truncated fetch warns rather than
+    silently passing/failing on incomplete data.
+
+    Takes the platform's `per_finding_surface` directly (the same
+    `PlatformConfig` field callers already have) rather than a `bitbucket:
+    bool` flag: a config field named after a vendor is itself the platform-
+    name check this was meant to get away from, just moved one level
+    removed from the call site instead of eliminated -- a future
+    annotations-style platform would otherwise inherit a parameter named
+    after Bitbucket specifically.
     """
     note = (
         "evidence fetch hit the pagination safety bound (20 pages); "
@@ -302,12 +315,7 @@ def verify_posting_surfaces(evidence: RawEvidence, *, bitbucket: bool = False) -
                 "summary body present" if evidence.summary_body.strip() else "summary body empty",
                 pagination_note=note),
     ]
-    if bitbucket:
-        # Bitbucket has no inline-review support (per the harness design and
-        # ai_pr_review/vcs/bitbucket.py:post_findings) -- per-finding
-        # comments never exist there, so posting_inline would always and
-        # meaninglessly fail. Code Insights annotations are Bitbucket's
-        # equivalent per-finding surface; verify that instead.
+    if per_finding_surface == "annotations":
         verdicts.append(
             Verdict("posting_annotations", bool(evidence.annotations),
                     f"{len(evidence.annotations)} annotation(s)" if evidence.annotations

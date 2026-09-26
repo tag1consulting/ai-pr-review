@@ -230,7 +230,7 @@ def test_verify_model_mismatch_fails():
 
 def test_verify_posting_surfaces_all_present():
     evidence = RawEvidence(summary_body="the summary", inline_comments=[{"body": "an inline finding"}])
-    verdicts = verify_posting_surfaces(evidence, bitbucket=False)
+    verdicts = verify_posting_surfaces(evidence, per_finding_surface="inline")
     assert all(v.ok for v in verdicts)
     names = {v.name for v in verdicts}
     assert names == {"posting_summary", "posting_inline"}
@@ -245,7 +245,7 @@ def test_verify_posting_surfaces_bitbucket_checks_annotations_not_inline():
     # posting_inline unconditionally, which would have failed every
     # Bitbucket run regardless of how many findings were actually posted.
     evidence = RawEvidence(summary_body="the summary", annotations=[{"summary": "an annotation"}])
-    verdicts = verify_posting_surfaces(evidence, bitbucket=True)
+    verdicts = verify_posting_surfaces(evidence, per_finding_surface="annotations")
     assert all(v.ok for v in verdicts)
     names = {v.name for v in verdicts}
     assert names == {"posting_summary", "posting_annotations"}
@@ -261,7 +261,7 @@ def test_verify_posting_surfaces_missing_summary_fails():
 
 def test_verify_posting_surfaces_no_bitbucket_annotation_check_for_other_platforms():
     evidence = RawEvidence(summary_body="x", inline_comments=[{"body": "y"}])
-    verdicts = verify_posting_surfaces(evidence, bitbucket=False)
+    verdicts = verify_posting_surfaces(evidence, per_finding_surface="inline")
     names = {v.name for v in verdicts}
     assert "posting_annotations" not in names
 

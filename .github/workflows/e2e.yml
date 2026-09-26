@@ -68,7 +68,22 @@ concurrency:
   # "e2e-refs/heads/release/v2.15.0" -- a different string, so the two
   # never shared a group and could run (and bill) concurrently on the same
   # SHA instead of one cancelling/queuing behind the other.
-  group: e2e-${{ github.head_ref || github.ref_name }}
+  #
+  # A trailing "-sync"/"-live" suffix splits the group in two: a cheap,
+  # immediately-completing "skip" run (triggered by `synchronize`, which
+  # never runs the billed live legs -- see the trigger comment above) must
+  # never be able to cancel an in-flight expensive live run just because it
+  # shares the same branch. Without this split, a routine push made while a
+  # real workflow_dispatch/opened live run was still executing would cancel
+  # that live run via `cancel-in-progress`, silently discarding partial
+  # progress and its billed spend so far. Two "live" runs on the same
+  # branch (e.g. two workflow_dispatch runs back to back) still share one
+  # group and cancel each other, which is the desired, pre-existing
+  # resource-saving behavior for that case.
+  group: >-
+    e2e-${{ github.head_ref || github.ref_name }}-${{
+      (github.event_name == 'pull_request' && github.event.action == 'synchronize') && 'sync' || 'live'
+    }}
   cancel-in-progress: true
 
 permissions:
@@ -229,11 +244,13 @@ jobs:
             }
           done
           python3 -c "
+          import os
           import sys
+          raw = os.environ['MAX_COST_USD']
           try:
-              float('$MAX_COST_USD')
+              float(raw)
           except ValueError:
-              print(\"::error::max_cost_usd input '$MAX_COST_USD' is not a valid number.\", file=sys.stderr)
+              print(f\"::error::max_cost_usd input {raw!r} is not a valid number.\", file=sys.stderr)
               sys.exit(1)
           "
 
@@ -292,46 +309,74 @@ jobs:
           # LLM key -- all real failure modes this release fixed or hit.
           fail=0
 
+          # E2E_GITHUB_REVIEWER_TOKEN is documented as optional, falling
+          # back to E2E_GITHUB_TOKEN when empty (see run_e2e.py's
+          # _github_reviewer_token() and its own comment on why GitHub
+          # Actions sets an unconfigured secret to an empty string, not an
+          # absent one -- ${VAR:-fallback} handles both cases the same way
+          # that function does). Probing the bare secret directly would
+          # otherwise always fail this check on a repo that hasn't
+          # provisioned a separate reviewer identity yet.
+          REVIEWER_TOKEN="${E2E_GITHUB_REVIEWER_TOKEN:-$E2E_GITHUB_TOKEN}"
+
           # Reviewer token: a plain authenticated GitHub API call, distinct
-          # from the seeder token preflight already checked.
-          if ! curl -sf -o /dev/null -H "Authorization: Bearer ${E2E_GITHUB_REVIEWER_TOKEN}" https://api.github.com/user; then
-            echo "::error::E2E_GITHUB_REVIEWER_TOKEN failed a basic authenticated GitHub API call."
+          # from the seeder token preflight already checked. The token is
+          # passed via a curl config file built with printf (a bash
+          # builtin, not a subprocess) and handed to curl through process
+          # substitution, not a `-H` argv value, so it never appears in a
+          # child process's argv (visible via `ps`/`/proc/<pid>/cmdline` to
+          # any other user on a shared runner) -- matching how run_e2e.py's
+          # own _clone_auth_env avoids the same exposure for git clone
+          # credentials.
+          if ! curl -sf -o /dev/null -K <(printf 'url = "https://api.github.com/user"\nheader = "Authorization: Bearer %s"\n' "${REVIEWER_TOKEN}"); then
+            echo "::error::E2E_GITHUB_REVIEWER_TOKEN (or its E2E_GITHUB_TOKEN fallback) failed a basic authenticated GitHub API call."
             fail=1
           fi
 
           # Seeder write access: repo GET already run by preflight; check
           # its own `permissions.push` field instead of a second call.
-          if ! curl -sf -H "Authorization: Bearer ${E2E_GITHUB_TOKEN}" https://api.github.com/repos/tag1consulting/ai-pr-review-test \
+          if ! curl -sf -K <(printf 'url = "https://api.github.com/repos/tag1consulting/ai-pr-review-test"\nheader = "Authorization: Bearer %s"\n' "${E2E_GITHUB_TOKEN}") \
               | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('permissions',{}).get('push') else 1)"; then
             echo "::error::E2E_GITHUB_TOKEN no longer has push access to the GitHub test repo."
             fail=1
           fi
 
-          # Git-over-HTTPS clone auth for each provider, using the same URL
-          # schemes _clone_workspace uses (x-access-token for GitHub, oauth2
-          # for GitLab, the fixed x-bitbucket-api-token-auth username for
-          # Bitbucket -- NOT the account email, a distinct auth scheme from
-          # the REST Basic-auth preflight() already checks).
-          if ! git ls-remote "https://x-access-token:${E2E_GITHUB_TOKEN}@github.com/tag1consulting/ai-pr-review-test.git" HEAD >/dev/null 2>&1; then
+          # Git-over-HTTPS clone auth for each provider, using the same
+          # GIT_CONFIG_*-based Basic-auth header injection _clone_auth_env
+          # uses (never a token embedded in the URL or in argv), with the
+          # same per-provider username scheme: x-access-token for GitHub,
+          # oauth2 for GitLab, the fixed x-bitbucket-api-token-auth username
+          # for Bitbucket -- NOT the account email, a distinct auth scheme
+          # from the REST Basic-auth preflight() already checks.
+          _ls_remote_auth() {
+            local user="$1" token="$2" url="$3"
+            local basic
+            basic="$(printf '%s:%s' "$user" "$token" | base64 -w0)"
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.extraheader \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${basic}" \
+              git ls-remote "$url" HEAD >/dev/null 2>&1
+          }
+          if ! _ls_remote_auth x-access-token "${E2E_GITHUB_TOKEN}" https://github.com/tag1consulting/ai-pr-review-test.git; then
             echo "::error::git clone auth failed for GitHub (E2E_GITHUB_TOKEN)."
             fail=1
           fi
-          if ! git ls-remote "https://oauth2:${E2E_GITLAB_TOKEN}@gitlab.com/tag1consulting/ai-pr-review-test.git" HEAD >/dev/null 2>&1; then
+          if ! _ls_remote_auth oauth2 "${E2E_GITLAB_TOKEN}" https://gitlab.com/tag1consulting/ai-pr-review-test.git; then
             echo "::error::git clone auth failed for GitLab (E2E_GITLAB_TOKEN)."
             fail=1
           fi
-          if ! git ls-remote "https://x-bitbucket-api-token-auth:${E2E_BITBUCKET_TOKEN}@bitbucket.org/gchaix-tag1/ai-pr-review-test.git" HEAD >/dev/null 2>&1; then
+          if ! _ls_remote_auth x-bitbucket-api-token-auth "${E2E_BITBUCKET_TOKEN}" https://bitbucket.org/gchaix-tag1/ai-pr-review-test.git; then
             echo "::error::git clone auth failed for Bitbucket (E2E_BITBUCKET_TOKEN)."
             fail=1
           fi
 
-          # LLM key: a near-zero-cost auth probe (max_tokens=1) rather than
-          # a real review call -- confirms the key is live/unexhausted
-          # without spending anything meaningful.
-          llm_status=$(curl -s -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/messages \
-            -H "x-api-key: ${E2E_ANTHROPIC_API_KEY}" -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}')
+          # LLM key: GET /v1/models is a free, model-agnostic auth check --
+          # confirms the key is live/unexhausted without betting on one
+          # specific model id staying valid (a hardcoded probe model here
+          # would false-fail this check the day that model is retired,
+          # exactly the kind of drift ReviewConfig-derived model ids
+          # elsewhere in this harness are meant to avoid).
+          llm_status=$(curl -s -o /dev/null -w '%{http_code}' -K <(printf 'url = "https://api.anthropic.com/v1/models"\nheader = "x-api-key: %s"\nheader = "anthropic-version: 2023-06-01"\n' "${E2E_ANTHROPIC_API_KEY}"))
           if [ "$llm_status" != "200" ]; then
             echo "::error::AI_REVIEW_API_KEY probe returned HTTP ${llm_status} (expected 200)."
             fail=1

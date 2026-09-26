@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import shutil
 import signal
@@ -50,6 +51,8 @@ from .verify import (
     verify_posting_surfaces,
     verify_summary_marker,
 )
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -143,6 +146,17 @@ def cleanup(from_file: Path) -> None:
     entries = json.loads(from_file.read_text(encoding="utf-8"))
     failures = []
     for entry in entries:
+        # An entry already carries a resolution once `run`'s own pass/fail
+        # cleanup logic has decided its fate -- "closed" (already closed on
+        # the pass path) or "left_open" (deliberately kept open on a
+        # product/infra failure, for debugging, per the leave-open-on-
+        # failure policy). Without this check, a run cancelled AFTER that
+        # decision but before the process exits (e.g. by a concurrency-group
+        # cancel-in-progress triggered by a later push) would have this same
+        # `cleanup` invoked against opened.json by e2e.yml's cancel fallback
+        # step, closing a PR that was correctly left open moments earlier.
+        if entry.get("resolution"):
+            continue
         name = str(entry["platform"])
         adapter = build_adapter(name, dict(os.environ))
         pr = PullRequest(
@@ -216,9 +230,37 @@ def _record_opened(out_dir: Path, platform: str, pr: PullRequest) -> None:
     if path.exists():
         try:
             entries = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "_record_opened: %s is unreadable/corrupt (%s) -- discarding its prior "
+                "entries rather than losing this run's own record of them too. Any "
+                "already-opened PR/MR named in the lost entries no longer has a durable "
+                "cleanup record.", path, exc,
+            )
             entries = []
     entries.append({"platform": platform, "number": pr.number, "branch": pr.branch, "url": pr.url})
+    path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+
+
+def _resolve_opened(out_dir: Path, platform: str, resolution: str) -> None:
+    """Mark this run's opened.json entry for *platform* with its final
+    resolution ("closed" or "left_open"), so the `cleanup` subcommand (and
+    e2e.yml's cancel-on-signal fallback step, which invokes it against this
+    same file) knows this entry's fate is already decided and must not be
+    touched -- see `cleanup`'s own comment on why that matters for a
+    deliberately-left-open failure."""
+    path = out_dir / "opened.json"
+    if not path.exists():
+        return
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("_resolve_opened: %s is unreadable/corrupt (%s) -- cannot record "
+                        "%s's resolution", path, exc, platform)
+        return
+    for entry in entries:
+        if entry.get("platform") == platform and "resolution" not in entry:
+            entry["resolution"] = resolution
     path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
 
 
@@ -556,6 +598,7 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
     try:
         workspace, diff_base_sha = _clone_workspace(name, run_commit, PLATFORMS[name].base_ref)
     except HarnessError as exc:
+        _resolve_opened(out_dir, name, "left_open")
         return aggregate(name, [], infra_error=exc)
 
     try:
@@ -572,6 +615,7 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
         # after emitting the completion line but failing during cleanup,
         # was previously invisible to the harness and could still score a
         # pass. This must be checked before trusting anything else below.
+        _resolve_opened(out_dir, name, "left_open")
         return aggregate(name, [], infra_error=InfraFailure(
             f"review container exited {returncode}: {stderr_text[-500:]}"))
 
@@ -597,15 +641,17 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
                 log_result.event or "", telemetry=telemetry, summary_body=evidence.summary_body,
             ),
             verify_model(telemetry, DEFAULT_MODELS["anthropic"][0]),
-            *verify_posting_surfaces(evidence, bitbucket=(PLATFORMS[name].per_finding_surface == "annotations")),
+            *verify_posting_surfaces(evidence, per_finding_surface=PLATFORMS[name].per_finding_surface),
             verify_analyzer_findings(
                 evidence, list(PLATFORMS[name].expected_findings),
                 findings_floor=PLATFORMS[name].findings_floor,
             ),
         ]
     except HarnessError as exc:
+        _resolve_opened(out_dir, name, "left_open")
         return aggregate(name, [], infra_error=exc)
     except AdapterError as exc:
+        _resolve_opened(out_dir, name, "left_open")
         return aggregate(name, [], infra_error=InfraFailure(str(exc)))
 
     result = aggregate(name, verdicts)
@@ -617,13 +663,18 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
             adapter.close(pr)
             adapter.delete_branch(pr.branch)
             click.echo(f"run: {name}: pass -- closed PR/MR {pr.url} and deleted branch {pr.branch}")
+            _resolve_opened(out_dir, name, "closed")
         except AdapterError as exc:
             # A cleanup failure on the pass path is itself an infra failure
-            # per the exit-code contract.
+            # per the exit-code contract. Left unresolved in opened.json
+            # (neither "closed" nor "left_open" cleanly describes it): the
+            # `cleanup` subcommand should still retry a genuinely unresolved
+            # close/delete-branch failure like this one.
             return RunResult(platform=name, category="infra_failure", verdicts=result.verdicts,
                               reasons=(f"cleanup failed after pass: {exc}",))
     else:
         click.echo(f"run: {name}: {result.category} -- leaving PR/MR {pr.url} open for inspection", err=True)
+        _resolve_opened(out_dir, name, "left_open")
 
     return result
 
