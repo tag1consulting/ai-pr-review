@@ -97,12 +97,18 @@ PLATFORMS: dict[str, PlatformConfig] = {
         repo_slug="tag1consulting/ai-pr-review-test",
         base_ref="main",
         seed_sha=GITHUB_SEED_SHA,
+        # Verified live against this fixture's real posted findings on
+        # 2026-09-26 (PR #38): the docs-ref-check analyzer's broken-link
+        # finding on docs/test-notes.md ("*(at `docs/test-notes.md:6`)*")
+        # appears in the summary body alongside its `[docs-ref-check]` agent
+        # tag -- "documentation" never literally appears anywhere in a real
+        # run's output, so the placeholder this replaces could never pass.
+        # The `.py`/"security" entry was left as-is: it already passes,
+        # matching on the literal substring "security" from the
+        # "security-reviewer" agent tag next to any of the many real
+        # api/user.py findings that agent contributes to.
         expected_findings=(
-            # TODO: fill in from an actual inspection of the GitHub fixture
-            # diff (tests/canary/corpus/ or the seeded dogfood branch) --
-            # these two entries are plausible placeholders, not confirmed
-            # real analyzer output. Do not treat as verified until replaced.
-            ExpectedFinding(path_substring="docs/", category="documentation"),
+            ExpectedFinding(path_substring="docs/test-notes.md", category="docs-ref-check"),
             ExpectedFinding(path_substring=".py", category="security"),
         ),
     ),
@@ -111,8 +117,11 @@ PLATFORMS: dict[str, PlatformConfig] = {
         repo_slug="tag1consulting/ai-pr-review-test",
         base_ref="master",
         seed_sha=GITLAB_SEED_SHA,
+        # Verified live against this fixture's real posted findings on
+        # 2026-09-26 (MR #57) -- same docs-ref-check finding on
+        # docs/test-notes.md as GitHub's fixture (see that entry's comment).
         expected_findings=(
-            ExpectedFinding(path_substring="docs/", category="documentation"),
+            ExpectedFinding(path_substring="docs/test-notes.md", category="docs-ref-check"),
         ),
     ),
     "bitbucket": PlatformConfig(
