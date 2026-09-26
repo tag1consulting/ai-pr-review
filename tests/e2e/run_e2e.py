@@ -669,7 +669,12 @@ def _run_one_platform(name: str, run_id: str, out_dir: Path, *, mode: str, max_c
             # per the exit-code contract. Left unresolved in opened.json
             # (neither "closed" nor "left_open" cleanly describes it): the
             # `cleanup` subcommand should still retry a genuinely unresolved
-            # close/delete-branch failure like this one.
+            # close/delete-branch failure like this one. Logged here (not
+            # just embedded in the returned RunResult's reasons tuple),
+            # since whether that tuple reaches an operator depends on how
+            # aggregate()/reporting formats and truncates it downstream --
+            # this warning is visible in the job log regardless.
+            logger.warning("run: %s: cleanup failed after pass: %s", name, mask(str(exc)))
             return RunResult(platform=name, category="infra_failure", verdicts=result.verdicts,
                               reasons=(f"cleanup failed after pass: {exc}",))
     else:
