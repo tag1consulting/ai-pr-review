@@ -96,6 +96,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
+      is_release_ref: ${{ steps.check.outputs.is_release_ref }}
       platforms_json: ${{ steps.check.outputs.platforms_json }}
     steps:
       - uses: actions/checkout@v7
@@ -555,7 +556,20 @@ jobs:
             exit 1
           fi
           if [ "${{ needs.eligibility.outputs.is_release }}" != "true" ]; then
-            echo "Not a release/* PR -- e2e legs not required."
+            # is_release is false either because this genuinely isn't a
+            # release/* PR at all, or because it IS one but this run was
+            # triggered by a `synchronize` push (which deliberately never
+            # runs the billed live legs -- see the `on:` trigger's own
+            # comment). Distinguish the two: reporting "Not a release/* PR"
+            # for a push that actually IS on a release/* branch is
+            # misleading, and once this check becomes required, a operator
+            # seeing that message would have no reason to suspect the final
+            # merged SHA never had a live run at all.
+            if [ "${{ needs.eligibility.outputs.is_release_ref }}" = "true" ]; then
+              echo "release/* branch, but this run was triggered by a push (synchronize) -- live e2e legs were deliberately skipped for this SHA. Passing so a required check doesn't block every push, but this does NOT mean the pushed commit has been live-validated. Trigger a workflow_dispatch run against this branch before merge to actually validate it."
+            else
+              echo "Not a release/* PR -- e2e legs not required."
+            fi
             exit 0
           fi
           if [ "${{ needs.build.result }}" != "success" ]; then
