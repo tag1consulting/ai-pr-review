@@ -1394,3 +1394,86 @@ def test_orchestrate_judge_off_leaves_findings_unchanged(tmp_path: Path) -> None
         assert result.findings[0].out_of_diff is False
 
     anyio.run(_run)
+
+
+# ---------------------------------------------------------------------------
+# Agent yield (#1088)
+# ---------------------------------------------------------------------------
+
+
+def _yield_spec(name: str) -> AgentSpec:
+    return AgentSpec(
+        name=name,
+        prompt_path=f"prompts/{name}.md",
+        tier=1,
+        conditional_trigger=None,
+        max_output_tokens=4096,
+        full_mode_only=False,
+        context_enrichment_eligible=False,
+    )
+
+
+def test_agent_yield_tells_empty_unreadable_and_floored_apart(tmp_path: Path) -> None:
+    """An agent with no findings, one with an unreadable answer and one whose
+    findings fall under the confidence floor must not look the same."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    floored = _findings_block(
+        [
+            {"severity": "High", "confidence": 60, "finding": "weak", "file": "a.py", "line": 1},
+            {"severity": "High", "confidence": 90, "finding": "solid", "file": "a.py", "line": 9},
+        ]
+    )
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="",
+            agents=[
+                _yield_spec("code-reviewer"),
+                _yield_spec("security-reviewer"),
+                _yield_spec("edge-case-hunter"),
+            ],
+            llm_call=_llm_call_factory(
+                {
+                    "security-reviewer": "No block here.",
+                    "edge-case-hunter": floored,
+                }
+            ),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(confidence_threshold=75),
+        )
+        y = result.agent_yield
+        assert y["code-reviewer"]["status"] == "ok"
+        assert (y["code-reviewer"]["parsed"], y["code-reviewer"]["below_threshold"]) == (0, 0)
+        assert y["security-reviewer"]["status"] == "no_block"
+        assert y["security-reviewer"]["parsed"] == 0
+        assert y["edge-case-hunter"]["status"] == "ok"
+        assert (y["edge-case-hunter"]["parsed"], y["edge-case-hunter"]["below_threshold"]) == (2, 1)
+        assert y["edge-case-hunter"]["output_tokens"] == 20
+
+    anyio.run(_run)
+
+
+def test_agent_yield_does_not_count_analyzer_findings(tmp_path: Path) -> None:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    analyzer_finding = Finding(
+        severity="Low", confidence=90, finding="lint", source="ruff", file="a.py", line=2,
+    )
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="",
+            agents=[_yield_spec("code-reviewer")],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(extra_findings=(analyzer_finding,)),
+        )
+        assert result.agent_yield["code-reviewer"]["parsed"] == 0
+        assert set(result.agent_yield) == {"code-reviewer"}
+
+    anyio.run(_run)

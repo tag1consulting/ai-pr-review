@@ -45,6 +45,29 @@ def _is_self_refuting(text: str) -> bool:
     return any(p.search(text) for p in _REFUTATION_PATTERNS)
 
 
+def output_status(agent_output: str, *, truncated: bool = False) -> str:
+    """Say what the agent output held, without building findings (#1088).
+
+    An empty result from ``extract_findings`` can mean three things: the agent
+    found nothing, the agent's answer could not be read, or the findings were
+    dropped later. This names the first two apart. Values:
+
+    * ``ok``: a ``json-findings`` block holds a JSON array (it may be empty).
+    * ``no_block``: no ``json-findings`` block.
+    * ``truncated_no_block``: no block, and the output stopped at the token cap.
+    * ``invalid_json``: the block is not valid JSON.
+    * ``not_array``: the block is JSON, but not an array.
+    """
+    match = _FENCE_RE.search(agent_output)
+    if not match:
+        return "truncated_no_block" if truncated else "no_block"
+    try:
+        data = json.loads(match.group(1).strip())
+    except json.JSONDecodeError:
+        return "invalid_json"
+    return "ok" if isinstance(data, list) else "not_array"
+
+
 def extract_findings(
     agent_output: str,
     agent_name: str = "unknown",

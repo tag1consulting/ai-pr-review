@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class TelemetryEvent:
-    """Structured event emitted after each review run (schema version 3).
+    """Structured event emitted after each review run (schema version 4).
 
     Schema version history:
       1 — initial fields
@@ -32,6 +32,9 @@ class TelemetryEvent:
           "stop_reason" per agent (#592: lets a telemetry consumer alert
           on max_tokens-truncation rate or thinking-budget exhaustion
           without waiting for a user to hit a crash)
+      4 — added agent_yield (#1088): per finding agent, what its output held
+          (status), how many findings it gave (parsed), how many of those fell
+          under the confidence floor (below_threshold) and its output tokens
     """
 
     correlation_id: str
@@ -54,6 +57,8 @@ class TelemetryEvent:
     review_mode: str = ""
     is_incremental: bool = False
     failed_agent_latency_ms: dict[str, int] = dataclasses.field(default_factory=dict)
+    # Schema v4 addition
+    agent_yield: dict[str, dict[str, object]] = dataclasses.field(default_factory=dict)
 
 
 def emit_telemetry(event: TelemetryEvent, *, sink: str) -> None:
