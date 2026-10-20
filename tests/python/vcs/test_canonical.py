@@ -1501,3 +1501,44 @@ def test_regressed_match_prefers_the_closest_line_then_the_newest_comment() -> N
     near_old = _bot_resolved(_finding(line=10), thread_id="near_old", comment_id=1)
     near_new = _bot_resolved(_finding(line=10), thread_id="near_new", comment_id=2)
     assert find_regressed_match(_finding("x", line=10), [far, near_old, near_new]) is near_new
+
+
+def test_regressed_match_survives_a_thread_with_no_or_legacy_fingerprint_and_no_line() -> None:
+    f = _finding("x", line=10)
+    no_fp = _thread(fp=None, is_resolved=True, resolved_by_bot=True, line=10)
+    legacy = _thread(fp="not-a-fingerprint", is_resolved=True, resolved_by_bot=True, line=10)
+    no_line = _thread(
+        fp=fingerprint(_finding(line=10)), is_resolved=True, resolved_by_bot=True, line=None
+    )
+    assert find_regressed_match(f, [no_fp, legacy, no_line]) is None
+
+
+def test_regressed_match_keeps_other_kinds_apart_only_for_suppression_check() -> None:
+    """A thread of an ordinary source does not match a suppression-check finding."""
+    thread = _bot_resolved(_finding(source="ruff", category="lint", line=10))
+    sc = _finding("x", source="suppression-check", category="lint", line=10)
+    assert find_regressed_match(sc, [thread]) is None
+
+
+def test_regressed_match_skips_a_thread_that_has_a_verdict() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old)
+    new = _finding("x", line=10)
+    assert find_regressed_match(new, [thread], {fingerprint(old): "dismissed"}) is None
+    assert find_regressed_match(new, [thread], {fingerprint(old): "fixed"}) is None
+    assert find_regressed_match(new, [thread], {}) is thread
+    assert find_regressed_match(new, [thread], {"some-other-fp": "dismissed"}) is thread
+
+
+def test_regressed_match_checks_the_verdict_against_prior_fingerprints_too() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old, prior_fingerprints=frozenset({"x|app.py|10|oldhash"}))
+    assert find_regressed_match(_finding("x", line=10), [thread], {"x|app.py|10|oldhash": "dismissed"}) is None
+
+
+def test_regressed_match_needs_a_four_part_fingerprint_and_trims_the_source() -> None:
+    """A legacy fingerprint with a different shape never matches by its first part."""
+    legacy = _thread(fp="code-reviewer", is_resolved=True, resolved_by_bot=True, line=10)
+    assert find_regressed_match(_finding("x", source="code-reviewer", line=10), [legacy]) is None
+    thread = _bot_resolved(_finding(source="code-reviewer", line=10))
+    assert find_regressed_match(_finding("x", source=" code-reviewer ", line=10), [thread]) is thread

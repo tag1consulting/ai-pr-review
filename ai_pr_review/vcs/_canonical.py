@@ -583,13 +583,17 @@ def find_resolved_match(fp: str, all_threads: Sequence[PriorThread]) -> PriorThr
     return _find_thread_by_fingerprint(candidates, fp)
 
 
-def find_regressed_match(finding: Finding, all_threads: Sequence[PriorThread]) -> PriorThread | None:
-    """Locate a thread *this bot resolved after a push* that a new finding resembles (#1089).
+def find_regressed_match(
+    finding: Finding,
+    all_threads: Sequence[PriorThread],
+    verdicts: Mapping[str, str] | None = None,
+) -> PriorThread | None:
+    """Locate a thread *this bot resolved by itself* that a new finding resembles (#1089).
 
     `resolve_stale()` resolves a bot-owned thread when its finding does not come
     back on a later run, and records no verdict. When a similar finding shows
-    up near that thread later, a push has brought the defect back. Without
-    this, the finding is classified `"new"` and reads as a first report.
+    up near that thread later, the defect may have come back. Without this, the
+    finding is classified `"new"` and reads as a first report.
 
     A separate, opt-in check a caller runs only against its own `"new"`
     results, like `find_resolved_match`. `classify()` stays unaware of it, so
@@ -601,13 +605,38 @@ def find_regressed_match(finding: Finding, all_threads: Sequence[PriorThread]) -
     and a suppression-check finding matches only a thread of its own kind. The
     same source keeps a nearby finding from another agent or analyzer from
     reading as the old one. A rolled-up finding stands for lines far from its
-    own, so it never matches. This is a hint, so the caller words it as
-    "similar", and nothing is reopened or suppressed. The closest line wins,
-    then the newest comment.
+    own, so it never matches. The closest line wins, then the newest comment.
+
+    A thread that has a verdict never matches. The slash commands resolve their
+    thread with the `github-token` input (a personal access token or an App
+    token), so whether such a thread reads as `resolved_by_bot` depends on whose
+    identity that token has. If it is the bot's, a thread that a person closed
+    with `dismiss`, `false-positive`, `wont-fix` or `fixed` would match, and
+    saying a fix may have been undone there would be wrong. Skipping a thread
+    with a verdict is safe in both cases. `verdicts` is checked against the
+    thread's fingerprint and every fingerprint it carried before (#720).
+
+    This is a hint, so the caller words it as "similar" and "resolved earlier".
+    It cannot tell a push from a rescan of one commit in which the model left
+    the finding out once. Nothing is reopened or suppressed.
+
+    Known limit: after a push, GitHub reports an outdated thread with the line
+    of the old file (`originalLine`). A push that moves the code by more than
+    `PROXIMITY_LINES` is not matched, so the hint is missed in that case.
     """
     if not finding.file or finding.line is None or finding.rollup_kind:
         return None
     standalone = is_standalone(finding)
+    source = (finding.source or "").strip()
+    seen = verdicts or {}
+
+    def has_verdict(t: PriorThread) -> bool:
+        return any(fp in seen for fp in (t.fingerprint, *t.prior_fingerprints) if fp)
+
+    def same_source(t: PriorThread) -> bool:
+        parts = split_fingerprint(t.fingerprint) if t.fingerprint is not None else []
+        return len(parts) == 4 and parts[0] == source
+
     candidates = [
         t
         for t in all_threads
@@ -618,8 +647,8 @@ def find_regressed_match(finding: Finding, all_threads: Sequence[PriorThread]) -
         and abs(t.line - finding.line) <= PROXIMITY_LINES
         and categories_compatible(t.category, finding.category)
         and _thread_is_standalone(t) == standalone
-        and t.fingerprint is not None
-        and split_fingerprint(t.fingerprint)[:1] == [finding.source]
+        and same_source(t)
+        and not has_verdict(t)
     ]
     if not candidates:
         return None

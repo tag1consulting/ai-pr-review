@@ -1027,7 +1027,7 @@ class GitHubProvider:
                     "to suppress for good)*"
                 )
             if fingerprint(f) in regressed_fps:
-                loc_note += " *(a similar finding was resolved after an earlier push)*"
+                loc_note += " *(a similar finding here was resolved earlier and is back)*"
             if f.file:
                 url = _blob_link(
                     owner=self.config.owner, repo=self.config.repo,
@@ -1157,8 +1157,8 @@ class GitHubProvider:
             if c.kind == "new"
             and find_resolved_match(fingerprint(c.finding), all_threads) is not None
         }
-        # #1089: a "new" finding near a thread this bot itself resolved after a
-        # push is a defect that came back. find_resolved_match() above skips
+        # #1089: a "new" finding near a thread this bot itself resolved may be a
+        # defect that came back. find_resolved_match() above skips
         # those on purpose (the bot's housekeeping is not a human decision), so
         # this is a separate, hedged hint. Nothing is reopened or suppressed.
         regressed_from: dict[str, PriorThread] = {}
@@ -1166,12 +1166,12 @@ class GitHubProvider:
             fp = fingerprint(c.finding)
             if c.kind != "new" or fp in reincarnated_fps:
                 continue
-            old = find_regressed_match(c.finding, all_threads)
+            old = find_regressed_match(c.finding, all_threads, verdicts)
             if old is not None:
                 regressed_from[fp] = old
                 _log.info(
-                    "github: finding fp=%r resembles thread %s resolved after an "
-                    "earlier push (issue #1089); annotating (file=%s line=%s)",
+                    "github: finding fp=%r resembles thread %s that this bot "
+                    "resolved earlier (issue #1089); annotating (file=%s line=%s)",
                     fp, old.thread_id, c.finding.file, c.finding.line,
                 )
         regressed_fps = set(regressed_from)
@@ -2858,12 +2858,16 @@ _REINCARNATION_NOTE = (
 
 
 def _regression_note(old_finding_id: int | None) -> str:
-    """The inline note for a finding that a push brought back (#1089)."""
+    """The inline note for a finding that may have come back (#1089).
+
+    It does not say a push happened. The match only knows that this review
+    resolved a similar thread earlier, which a rescan of one commit also does.
+    """
     which = f" ([F{old_finding_id}])" if old_finding_id is not None else ""
     return (
-        f"**Note:** a similar finding here{which} was resolved after an earlier "
-        "push, and a similar one is back on this run. Check that the fix was not "
-        "undone."
+        f"**Note:** a similar finding here{which} was resolved earlier by this "
+        "review, when it stopped appearing. A similar one is back on this run. "
+        "Check whether an earlier fix was undone."
     )
 
 
@@ -2913,7 +2917,7 @@ def _build_inline_comment_body(
         being matched against).
     regressed_note:
         The text from `_regression_note`, when `find_regressed_match` found a
-        thread this bot resolved after a push (#1089). Appended after the
+        thread this bot resolved earlier (#1089). Appended after the
         remediation text. Only a first-time render sets it, for the same reason
         as `reincarnated`.
     """
