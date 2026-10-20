@@ -313,15 +313,16 @@ These variables configure the telemetry system. Telemetry is fail-soft. The engi
 | `AI_TELEMETRY_ENABLED` | `false` | Set to `true` to emit a structured JSON event per review run. |
 | `AI_TELEMETRY_SINK` | n/a | Where to send telemetry. Accepts `file:///absolute/path/events.jsonl` (the engine appends one line for each event) or an `http(s)://` endpoint (the engine sends a POST). |
 
-Each event (schema version `"3"`) includes:
+Each event (schema version `"4"`) includes:
 
 - Identity and run context: `correlation_id`, `timestamp`, `repository`, `pr_number`, `telemetry_schema_version`.
 - Outcome: `outcome`, `findings_count`, `findings_by_severity`, `failed_agents`. The `outcome` value is `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` for a completed review. Other values are `dry_run`, `skipped`, `skipped_cost_ceiling_failed`, and `skipped_fail_on_findings_failed`.
 - Per-agent metrics: `token_usage_by_agent`, `agent_latency_ms`, `failed_agent_latency_ms`. Since schema 3, each `token_usage_by_agent` entry also has `thinking_tokens` and `stop_reason`.
+- Agent yield (added in schema 4, #1088): `agent_yield` has one entry for each finding agent that returned an answer. A skipped run has no entries, and neither does a failed agent. `status` says what the output held: `ok` (a `json-findings` array, which can be empty), `no_block`, `truncated_no_block`, `invalid_json`, `truncated_invalid`, `truncated_repaired` (the output stopped at the token cap and the complete findings before the cut were kept), or `not_array`. `emitted` is the number of items in the array, or `null` when no array could be read. `parsed` counts the findings that passed validation. When `emitted` is more than `parsed`, items were dropped while reading (not an object, failed validation, or a self-refuting finding). `below_threshold` counts the parsed findings under `AI_CONFIDENCE_THRESHOLD`, which the merge drops. `output_tokens` is the output token count. Analyzer and SARIF findings are not counted. The same numbers go to the job log as one `AGENT_YIELD` line per agent.
 - Configuration shape (added in schema 2): `provider`, `model_standard`, `model_premium`, `review_mode`, `is_incremental`.
 - Other: `sarif_elapsed_s`, `learning_store_entries_loaded`.
 
-All additions in schemas 2 and 3 are forward-compatible. Consumers that ignore unknown keys continue to work. Consumers that switch on `telemetry_schema_version` must add `"3"` (and `"2"` if they read older events) to their accepted set. Consumers that switch on `outcome` must handle the values listed above.
+All additions in schemas 2, 3, and 4 are forward-compatible. Consumers that ignore unknown keys continue to work. Consumers that switch on `telemetry_schema_version` must add `"4"` (and `"3"` and `"2"` if they read older events) to their accepted set. Consumers that switch on `outcome` must handle the values listed above.
 
 ### Structured logging
 

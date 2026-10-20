@@ -20,7 +20,7 @@ from ai_pr_review.agents.dispatch import (
     run_tier,
 )
 from ai_pr_review.agents.roster import AgentSpec
-from ai_pr_review.findings.extract import extract_findings
+from ai_pr_review.findings.extract import Extraction, extract_with_status
 from ai_pr_review.findings.merge import merge_findings
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.findings.suppress import SuppressionRule, apply_suppressions
@@ -73,6 +73,14 @@ class ReviewResult:
     findings_post: FindingsResult | None
     stale: StaleResult | None
     agent_results: list[AgentResult] = field(default_factory=list)
+    agent_yield: dict[str, dict[str, object]] = field(default_factory=dict)
+    """Per finding agent: what its output held and how many findings it gave
+    (#1088). Keys: ``status`` and ``emitted`` (see ``extract.Extraction``),
+    ``parsed`` (findings read from the output), ``below_threshold`` (parsed
+    findings under the confidence floor, so merge drops them) and
+    ``output_tokens``. ``emitted`` above ``parsed`` means items were dropped
+    while reading the output. Analyzer and SARIF findings are never counted
+    here. A skipped run has no entries, and neither does a failed agent."""
     skipped: bool = False
     skip_reason: str = ""
     context_window_rejected: bool = False
@@ -140,6 +148,35 @@ TokenRenderer = Callable[
 
 
 _PROMPT_TOO_LONG_NOTE = "prompt too long for the model"
+
+
+def _agent_yield(
+    result: AgentResult, extraction: Extraction, confidence_threshold: int
+) -> dict[str, object]:
+    """Count what one agent gave before merge (#1088). See ``ReviewResult.agent_yield``."""
+    parsed = extraction.findings
+    return {
+        "status": extraction.status,
+        "emitted": extraction.emitted,
+        "parsed": len(parsed),
+        "below_threshold": sum(1 for f in parsed if f.confidence < confidence_threshold),
+        "output_tokens": result.token_log.output if result.token_log is not None else 0,
+    }
+
+
+def _log_agent_yield(agent_yield: dict[str, dict[str, object]], confidence_threshold: int) -> None:
+    """Write one always-on ``AGENT_YIELD`` line per agent, like ``COST_ESTIMATE``.
+
+    Without it, "the agent found nothing", "the agent's answer was unreadable"
+    and "the confidence floor dropped its findings" all look the same in the log.
+    """
+    for name, y in agent_yield.items():
+        logger.warning(
+            "AGENT_YIELD agent=%s status=%s emitted=%s parsed=%s below_threshold=%s "
+            "threshold=%d output_tokens=%s",
+            name, y["status"], y["emitted"], y["parsed"], y["below_threshold"],
+            confidence_threshold, y["output_tokens"],
+        )
 
 
 def _failed_agent_label(failure: FailedAgent) -> str:
@@ -329,10 +366,12 @@ async def run_review(
         logger.info("analyzers: injected %d pre-computed finding(s)", len(cfg.extra_findings))
 
     # Phase 2: extract + merge + suppress
+    agent_yield: dict[str, dict[str, object]] = {}
     for s in successes:
-        raw_findings.extend(
-            extract_findings(s.output, agent_name=s.name, truncated=s.truncated)
-        )
+        extraction = extract_with_status(s.output, agent_name=s.name, truncated=s.truncated)
+        agent_yield[s.name] = _agent_yield(s, extraction, cfg.confidence_threshold)
+        raw_findings.extend(extraction.findings)
+    _log_agent_yield(agent_yield, cfg.confidence_threshold)
     merged = merge_findings(raw_findings, confidence_threshold=cfg.confidence_threshold)
     kept, _suppressed_count = apply_suppressions(merged, list(cfg.suppression_rules))
 
@@ -560,6 +599,7 @@ async def run_review(
         findings_post=findings_result,
         stale=stale_result,
         agent_results=successes,
+        agent_yield=agent_yield,
         sarif_elapsed_s=sarif_elapsed_s,
         judge_input_tokens=judge_tokens.input_tokens,
         judge_output_tokens=judge_tokens.output_tokens,

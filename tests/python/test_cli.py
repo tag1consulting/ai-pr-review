@@ -2120,10 +2120,44 @@ class TestEmitTelemetryThinkingTokens:
         lines = sink_path.read_text().splitlines()
         assert len(lines) == 1
         event = json.loads(lines[0])
-        assert event["telemetry_schema_version"] == "3"
+        assert event["telemetry_schema_version"] == "4"
         agent_usage = event["token_usage_by_agent"]["code-reviewer"]
         assert agent_usage["thinking_tokens"] == 16384
         assert agent_usage["stop_reason"] == "max_tokens"
+
+    @pytest.mark.anyio
+    async def test_event_carries_agent_yield_and_survives_a_result_without_it(
+        self, tmp_path: Path,
+    ) -> None:
+        """#1088: schema v4 adds agent_yield. A result that lacks the field (a
+        mock) must still give a serializable event with an empty dict."""
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+
+        with_yield = MagicMock()
+        with_yield.agent_results = []
+        with_yield.failed_agents = []
+        with_yield.findings = []
+        with_yield.outcome.event = "COMMENT"
+        with_yield.agent_yield = {
+            "code-reviewer": {
+                "status": "ok", "parsed": 0, "below_threshold": 0, "output_tokens": 241,
+            },
+        }
+        await _emit_telemetry(with_yield, config, 0)
+
+        without_yield = MagicMock()
+        without_yield.agent_results = []
+        without_yield.failed_agents = []
+        without_yield.findings = []
+        without_yield.outcome.event = "COMMENT"
+        await _emit_telemetry(without_yield, config, 0)
+
+        first, second = (json.loads(x) for x in sink_path.read_text().splitlines())
+        assert first["agent_yield"]["code-reviewer"]["output_tokens"] == 241
+        assert second["agent_yield"] == {}
 
     @pytest.mark.anyio
     async def test_per_agent_dict_thinking_tokens_zero_when_absent(

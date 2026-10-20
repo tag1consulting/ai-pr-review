@@ -696,6 +696,15 @@ async def _emit_telemetry(
         agent_results = result.agent_results if result is not None else []
         failed_agents = result.failed_agents if result is not None else []
         findings = result.findings if result is not None else []
+        # isinstance guard: a skip or dry-run has no result, and a test double
+        # may not carry the field. The event must still serialize.
+        raw_yield = getattr(result, "agent_yield", None)
+        agent_yield = dict(raw_yield) if isinstance(raw_yield, dict) else {}
+        if result is not None and not isinstance(raw_yield, dict):
+            logger.warning(
+                "[ai-pr-review] telemetry: agent_yield is %s, not a dict; sending none",
+                type(raw_yield).__name__,
+            )
 
         for ar in agent_results:
             if isinstance(ar, _AgentResult) and ar.token_log is not None:
@@ -726,7 +735,7 @@ async def _emit_telemetry(
             agent_latency_ms={ar.name: ar.elapsed_ms for ar in agent_results},
             sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
-            telemetry_schema_version="3",
+            telemetry_schema_version="4",
             provider=config.provider,
             model_standard=config.model_standard,
             model_premium=config.model_premium,
@@ -737,6 +746,7 @@ async def _emit_telemetry(
                 for f in failed_agents
                 if isinstance(f, _FailedAgent)
             },
+            agent_yield=agent_yield,
         )
     except Exception as exc:
         logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)

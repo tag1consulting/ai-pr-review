@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from dataclasses import dataclass
 
 from ai_pr_review.findings.models import INTERNAL_ONLY_FIELDS, Finding
 
@@ -45,6 +46,37 @@ def _is_self_refuting(text: str) -> bool:
     return any(p.search(text) for p in _REFUTATION_PATTERNS)
 
 
+@dataclass(frozen=True)
+class Extraction:
+    """What one agent output gave, from a single parse (#1088).
+
+    An empty ``findings`` list can mean the agent found nothing, the answer
+    could not be read, or the findings were dropped. ``status`` and ``emitted``
+    tell these apart. Both come from the same parse that builds ``findings``,
+    so they cannot disagree with it.
+
+    ``status``:
+
+    * ``ok``: a ``json-findings`` block holds a JSON array (it may be empty).
+    * ``no_block``: no ``json-findings`` block.
+    * ``truncated_no_block``: no block, and the output stopped at the token cap.
+    * ``invalid_json``: the block is not valid JSON.
+    * ``truncated_invalid``: the output stopped at the token cap, and the block
+      is not valid JSON and could not be repaired.
+    * ``truncated_repaired``: the output stopped at the token cap, and the
+      complete findings before the cut were recovered.
+    * ``not_array``: the block is JSON, but not an array.
+
+    ``emitted`` is the number of items in the JSON array, or ``None`` when no
+    array could be read. ``emitted`` above ``len(findings)`` means items were
+    dropped inside the parse (not an object, failed validation, or self-refuting).
+    """
+
+    findings: list[Finding]
+    status: str
+    emitted: int | None
+
+
 def extract_findings(
     agent_output: str,
     agent_name: str = "unknown",
@@ -56,6 +88,16 @@ def extract_findings(
     Returns a (possibly empty) list of validated Finding instances.
     Logs warnings to stderr on malformed input.
     """
+    return extract_with_status(agent_output, agent_name, truncated=truncated).findings
+
+
+def extract_with_status(
+    agent_output: str,
+    agent_name: str = "unknown",
+    *,
+    truncated: bool = False,
+) -> Extraction:
+    """Like ``extract_findings``, and also say what the output held (#1088)."""
     match = _FENCE_RE.search(agent_output)
     if not match:
         if truncated:
@@ -68,7 +110,7 @@ def extract_findings(
                 f"WARNING: {agent_name} has no json-findings block; skipping.",
                 file=sys.stderr,
             )
-        return []
+        return Extraction([], "truncated_no_block" if truncated else "no_block", None)
 
     raw = match.group(1).strip()
     return _parse_and_validate(raw, agent_name, truncated=truncated)
@@ -79,7 +121,7 @@ def _parse_and_validate(
     agent_name: str,
     *,
     truncated: bool = False,
-) -> list[Finding]:
+) -> Extraction:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -92,14 +134,14 @@ def _parse_and_validate(
             f"Preview: {raw[:200]}",
             file=sys.stderr,
         )
-        return []
+        return Extraction([], "truncated_invalid" if truncated else "invalid_json", None)
 
     if not isinstance(data, list):
         print(
             f"WARNING: {agent_name} json-findings is not a JSON array; skipping.",
             file=sys.stderr,
         )
-        return []
+        return Extraction([], "not_array", None)
 
     results: list[Finding] = []
     for item in data:
@@ -146,10 +188,10 @@ def _parse_and_validate(
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
 
-    return results
+    return Extraction(results, "ok", len(data))
 
 
-def _try_repair(raw: str, agent_name: str) -> list[Finding] | None:
+def _try_repair(raw: str, agent_name: str) -> Extraction | None:
     """Attempt to salvage truncated JSON by finding the last complete object."""
     lines = raw.splitlines()
     for i in range(len(lines) - 1, -1, -1):
@@ -165,11 +207,11 @@ def _try_repair(raw: str, agent_name: str) -> list[Finding] | None:
             continue
         if not isinstance(data, list):
             continue
-        findings = _parse_and_validate(json.dumps(data), agent_name)
+        findings = _parse_and_validate(json.dumps(data), agent_name).findings
         if findings:
             print(
                 f"NOTE: {agent_name} was truncated; salvaged {len(findings)} finding(s) from partial JSON.",
                 file=sys.stderr,
             )
-            return findings
+            return Extraction(findings, "truncated_repaired", len(data))
     return None
