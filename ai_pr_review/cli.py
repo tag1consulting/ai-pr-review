@@ -700,6 +700,11 @@ async def _emit_telemetry(
         # may not carry the field. The event must still serialize.
         raw_yield = getattr(result, "agent_yield", None)
         agent_yield = dict(raw_yield) if isinstance(raw_yield, dict) else {}
+        if result is not None and not isinstance(raw_yield, dict):
+            logger.warning(
+                "[ai-pr-review] telemetry: agent_yield is %s, not a dict; sending none",
+                type(raw_yield).__name__,
+            )
 
         for ar in agent_results:
             if isinstance(ar, _AgentResult) and ar.token_log is not None:
