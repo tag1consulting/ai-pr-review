@@ -616,6 +616,18 @@ def find_regressed_match(
     with a verdict is safe in both cases. `verdicts` is checked against the
     thread's fingerprint and every fingerprint it carried before (#720).
 
+    Two more guards keep the hint from firing on housekeeping. The thread must
+    be outdated, which means the code it sits on changed after it was posted. An
+    incremental push resolves every bot thread in files it did not touch, and
+    those threads are not outdated, so a later full run does not read the old
+    finding as a regression. A finding that still matches an open thread of its
+    own, an outdated one included, never matches either. `classify()` posts a
+    new thread when a push outdates the old one, and `resolve_stale` then
+    resolves the old one as the bot. The finding never went away in that case.
+
+    `"recurred"` in `verdicts` is a bot-written tombstone and not a human
+    verdict, so it does not count as a verdict here.
+
     This is a hint, so the caller words it as "similar" and "resolved earlier".
     It cannot tell a push from a rescan of one commit in which the model left
     the finding out once. Nothing is reopened or suppressed.
@@ -631,16 +643,25 @@ def find_regressed_match(
     seen = verdicts or {}
 
     def has_verdict(t: PriorThread) -> bool:
-        return any(fp in seen for fp in (t.fingerprint, *t.prior_fingerprints) if fp)
+        return any(
+            seen.get(fp, "recurred") != "recurred"
+            for fp in (t.fingerprint, *t.prior_fingerprints)
+            if fp
+        )
 
     def same_source(t: PriorThread) -> bool:
         parts = split_fingerprint(t.fingerprint) if t.fingerprint is not None else []
         return len(parts) == 4 and parts[0] == source
 
+    open_threads = [t for t in all_threads if not t.is_resolved]
+    if _fuzzy_open_match(finding, open_threads) is not None:
+        return None
+
     candidates = [
         t
         for t in all_threads
         if t.is_resolved
+        and t.is_outdated
         and t.resolved_by_bot is True
         and t.path == finding.file
         and t.line is not None

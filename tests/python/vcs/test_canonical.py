@@ -1442,6 +1442,7 @@ def test_classify_a_dismissed_suppression_check_finding_does_not_hide_an_agent_f
 def _bot_resolved(f: Finding, **kw: object) -> PriorThread:
     kw.setdefault("is_resolved", True)
     kw.setdefault("resolved_by_bot", True)
+    kw.setdefault("is_outdated", True)
     return _thread(fp=fingerprint(f), category=f.category, path=f.file, line=f.line, **kw)  # type: ignore[arg-type]
 
 
@@ -1528,6 +1529,31 @@ def test_regressed_match_skips_a_thread_that_has_a_verdict() -> None:
     assert find_regressed_match(new, [thread], {fingerprint(old): "fixed"}) is None
     assert find_regressed_match(new, [thread], {}) is thread
     assert find_regressed_match(new, [thread], {"some-other-fp": "dismissed"}) is thread
+
+
+def test_regressed_match_ignores_the_recurred_tombstone() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old)
+    new = _finding("x", line=10)
+    assert find_regressed_match(new, [thread], {fingerprint(old): "recurred"}) is thread
+
+
+def test_regressed_match_needs_an_outdated_thread() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old, is_outdated=False)
+    assert find_regressed_match(_finding("x", line=10), [thread]) is None
+
+
+@pytest.mark.parametrize("outdated", [False, True])
+def test_regressed_match_skips_a_finding_that_still_has_an_open_thread(outdated: bool) -> None:
+    old = _finding(line=10)
+    resolved = _bot_resolved(old, thread_id="t1", comment_id=1)
+    open_thread = _thread(
+        thread_id="t2", comment_id=2, fp=fingerprint(old), category=old.category,
+        path=old.file, line=old.line, is_outdated=outdated,
+    )
+    assert find_regressed_match(_finding("x", line=10), [resolved, open_thread]) is None
+    assert find_regressed_match(_finding("x", line=10), [resolved]) is resolved
 
 
 def test_regressed_match_checks_the_verdict_against_prior_fingerprints_too() -> None:

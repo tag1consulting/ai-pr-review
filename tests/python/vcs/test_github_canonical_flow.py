@@ -850,10 +850,15 @@ def _post_with_threads(
             thread_id=f"th{i}", comment_id=i + 1, review_id=10 + i,
             body=_build_inline_comment_body(old, finding_id=fid),
             line=old.line or 5, is_resolved=resolved_by is not None,
-            resolved_by=resolved_by,
+            is_outdated=resolved_by is not None, resolved_by=resolved_by,
         )
         for i, (old, fid, resolved_by) in enumerate(threads, start=1)
     ]
+    return _post_with_nodes(nodes, new, max_inline=max_inline)
+
+
+def _post_with_nodes(nodes: list[dict], new: Finding, *, max_inline: int = 25) -> str:
+    """Post `new` against a PR whose review threads are `nodes`. Return everything posted, as text."""
 
     def handler(req: httpx.Request) -> httpx.Response:
         body = _json.loads(req.content) if req.content else None
@@ -900,7 +905,40 @@ def test_body_level_finding_back_near_a_bot_resolved_thread_gets_the_short_note(
     old = _finding("secret detected", severity="High", line=40, source="trufflehog", category="secret")
     new = _finding("secret detected again", severity="High", line=41, source="trufflehog", category="secret")
     body = _post_with_one_resolved_thread(old, new, resolved_by="github-actions")
-    assert "(a similar finding here was resolved earlier and is back)" in body
+    assert "(a similar finding [F3] here was resolved earlier and is back)" in body
+
+
+def test_a_bot_resolved_thread_that_is_not_outdated_gives_no_regression_note() -> None:
+    """An incremental push resolves threads in files it did not touch. The code
+    under such a thread did not change, so a later full run is not a regression."""
+    old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    nodes = [
+        _thread_node(
+            thread_id="th1", comment_id=1, review_id=11,
+            body=_build_inline_comment_body(old, finding_id=3),
+            line=5, is_resolved=True, is_outdated=False, resolved_by="github-actions",
+        )
+    ]
+    assert "resolved earlier" not in _post_with_nodes(nodes, old)
+
+
+def test_a_finding_with_an_open_outdated_thread_gets_no_regression_note() -> None:
+    """A push outdated the first thread, the finding was posted again as a new
+    thread, and the old thread was resolved as housekeeping. The finding never left."""
+    f = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    nodes = [
+        _thread_node(
+            thread_id="th1", comment_id=1, review_id=11,
+            body=_build_inline_comment_body(f, finding_id=3),
+            line=5, is_resolved=True, is_outdated=True, resolved_by="github-actions",
+        ),
+        _thread_node(
+            thread_id="th2", comment_id=2, review_id=12,
+            body=_build_inline_comment_body(f, finding_id=4),
+            line=5, is_resolved=False, is_outdated=True,
+        ),
+    ]
+    assert "resolved earlier" not in _post_with_nodes(nodes, f)
 
 
 def test_regression_note_without_an_old_finding_id_names_no_id() -> None:
@@ -939,7 +977,7 @@ def test_in_diff_finding_kept_out_of_the_inline_cap_gets_the_short_note() -> Non
     old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
     new = _finding("secret detected again", severity="High", line=6, source="trufflehog", category="secret")
     body = _post_with_threads([(old, 3, "github-actions")], new, max_inline=0)
-    assert "(a similar finding here was resolved earlier and is back)" in body
+    assert "(a similar finding [F3] here was resolved earlier and is back)" in body
     assert "resolved earlier by this review" not in body  # no inline comment was posted
 
 

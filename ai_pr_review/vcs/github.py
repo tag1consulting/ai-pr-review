@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -991,7 +991,7 @@ class GitHubProvider:
         head_sha: str,
         id_map: dict[str, int],
         reincarnated_fps: AbstractSet[str] = frozenset(),
-        regressed_fps: AbstractSet[str] = frozenset(),
+        regressed_from: Mapping[str, PriorThread] | None = None,
     ) -> list[str]:
         """Render one column (in-diff or out-of-diff) of body-level findings.
 
@@ -1026,8 +1026,10 @@ class GitHubProvider:
                     "`/ai-pr-review false-positive`, `wont-fix`, or `dismiss` "
                     "to suppress for good)*"
                 )
-            if fingerprint(f) in regressed_fps:
-                loc_note += " *(a similar finding here was resolved earlier and is back)*"
+            if regressed_from is not None and fingerprint(f) in regressed_from:
+                old_id = regressed_from[fingerprint(f)].finding_id
+                which = f" [F{old_id}]" if old_id is not None else ""
+                loc_note += f" *(a similar finding{which} here was resolved earlier and is back)*"
             if f.file:
                 url = _blob_link(
                     owner=self.config.owner, repo=self.config.repo,
@@ -1174,7 +1176,6 @@ class GitHubProvider:
                     "resolved earlier (issue #1089); annotating (file=%s line=%s)",
                     fp, old.thread_id, c.finding.file, c.finding.line,
                 )
-        regressed_fps = set(regressed_from)
 
         for fp in reincarnated_fps:
             match = next(c for c in classified if fingerprint(c.finding) == fp)
@@ -1314,7 +1315,7 @@ class GitHubProvider:
             head_sha=diff.head_sha,
             id_map=id_map,
             reincarnated_fps=reincarnated_fps,
-            regressed_fps=regressed_fps,
+            regressed_from=regressed_from,
         )
         ood_bullets = self._render_body_bullets(
             ood_body,
@@ -1323,7 +1324,7 @@ class GitHubProvider:
             head_sha=diff.head_sha,
             id_map=id_map,
             reincarnated_fps=reincarnated_fps,
-            regressed_fps=regressed_fps,
+            regressed_from=regressed_from,
         )
 
         # The headline must describe the PR's current state, not just this
