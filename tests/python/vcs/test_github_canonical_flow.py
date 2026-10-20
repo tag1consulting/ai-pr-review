@@ -835,6 +835,79 @@ def test_bot_resolved_stale_thread_does_not_trigger_reincarnation_note() -> None
     assert "previously resolved" not in comments[0]["body"]
 
 
+def _post_with_one_resolved_thread(
+    old: Finding, new: Finding, *, resolved_by: str, resolved: bool = True
+) -> str:
+    """Post `new` against a PR with one thread of `old`. Return everything posted, as text."""
+    old_body = _build_inline_comment_body(old, finding_id=3)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = _json.loads(req.content) if req.content else None
+        url = str(req.url)
+        if req.method == "GET" and url.split("?")[0].endswith("/pulls/1/reviews"):
+            return httpx.Response(200, json=[])
+        if _is_graphql(req, body, "reviewThreads"):
+            return _threads_response(
+                [_thread_node(
+                    thread_id="th1", comment_id=1, review_id=10, body=old_body,
+                    line=old.line or 5, is_resolved=resolved,
+                    resolved_by=resolved_by if resolved else None,
+                )]
+            )
+        if req.method == "POST" and url.endswith("/pulls/1/reviews"):
+            return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
+        return httpx.Response(404, text=f"unrouted: {req.method} {url}")
+
+    prov, rec = _make_provider(handler)
+    result = prov.post_findings(
+        [new], DiffContext(diff_text=_DIFF, head_sha=_VALID_SHA), event="REQUEST_CHANGES"
+    )
+    assert result.ok
+    posts = [c for c in rec.calls if c[0] == "POST" and c[1].endswith("/pulls/1/reviews")]
+    return _json.dumps([c[2] for c in posts], ensure_ascii=False)
+
+
+def test_finding_back_near_a_bot_resolved_thread_says_a_push_brought_it_back() -> None:
+    """#1089: resolve_stale() resolved the thread when the finding went away.
+    The same kind of finding returning is a regression, and the new comment
+    must say so and name the old finding."""
+    old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    new = _finding("secret detected again", severity="High", line=6, source="trufflehog", category="secret")
+    body = _post_with_one_resolved_thread(old, new, resolved_by="github-actions")
+    assert "similar finding here ([F3]) was resolved after an earlier push" in body
+    assert body.count("resolved after an earlier push") == 1
+    assert "previously resolved without a" not in body  # the #779 note is for a human resolve
+
+
+def test_body_level_finding_back_near_a_bot_resolved_thread_gets_the_short_note() -> None:
+    """A finding outside the diff has no inline comment, so the note is a body bullet."""
+    old = _finding("secret detected", severity="High", line=40, source="trufflehog", category="secret")
+    new = _finding("secret detected again", severity="High", line=41, source="trufflehog", category="secret")
+    body = _post_with_one_resolved_thread(old, new, resolved_by="github-actions")
+    assert "(a similar finding was resolved after an earlier push)" in body
+
+
+def test_finding_from_another_source_near_a_bot_resolved_thread_gets_no_regression_note() -> None:
+    old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    new = _finding("hardcoded key", severity="High", line=5, source="security-reviewer", category="secret")
+    body = _post_with_one_resolved_thread(old, new, resolved_by="github-actions")
+    assert "resolved after an earlier push" not in body
+
+
+def test_human_resolved_thread_gets_the_779_note_and_not_the_regression_note() -> None:
+    old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    body = _post_with_one_resolved_thread(old, old, resolved_by="a-human")
+    assert "previously resolved without a" in body
+    assert "resolved after an earlier push" not in body
+
+
+def test_open_thread_gets_no_regression_note() -> None:
+    old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
+    new = _finding("secret detected", severity="High", line=6, source="trufflehog", category="secret")
+    body = _post_with_one_resolved_thread(old, new, resolved_by="github-actions", resolved=False)
+    assert "resolved after an earlier push" not in body
+
+
 def test_dedupe_demoted_finding_still_checked_for_reincarnation() -> None:
     """`reincarnated_fps` (post_findings, github.py) is computed against the
     *post*-`dedupe_thread_claims` classified list. A finding that loses its

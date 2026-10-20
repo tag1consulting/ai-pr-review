@@ -583,6 +583,49 @@ def find_resolved_match(fp: str, all_threads: Sequence[PriorThread]) -> PriorThr
     return _find_thread_by_fingerprint(candidates, fp)
 
 
+def find_regressed_match(finding: Finding, all_threads: Sequence[PriorThread]) -> PriorThread | None:
+    """Locate a thread *this bot resolved after a push* that a new finding resembles (#1089).
+
+    `resolve_stale()` resolves a bot-owned thread when its finding does not come
+    back on a later run, and records no verdict. When a similar finding shows
+    up near that thread later, a push has brought the defect back. Without
+    this, the finding is classified `"new"` and reads as a first report.
+
+    A separate, opt-in check a caller runs only against its own `"new"`
+    results, like `find_resolved_match`. `classify()` stays unaware of it, so
+    GitLab's identical call (`verdicts={}`) is unchanged. It needs
+    `resolved_by_bot is True`, a field only GitHub fills, so it does nothing on
+    other providers.
+
+    The match is `(file, ±PROXIMITY_LINES, compatible category, same source)`,
+    and a suppression-check finding matches only a thread of its own kind. The
+    same source keeps a nearby finding from another agent or analyzer from
+    reading as the old one. A rolled-up finding stands for lines far from its
+    own, so it never matches. This is a hint, so the caller words it as
+    "similar", and nothing is reopened or suppressed. The closest line wins,
+    then the newest comment.
+    """
+    if not finding.file or finding.line is None or finding.rollup_kind:
+        return None
+    standalone = is_standalone(finding)
+    candidates = [
+        t
+        for t in all_threads
+        if t.is_resolved
+        and t.resolved_by_bot is True
+        and t.path == finding.file
+        and t.line is not None
+        and abs(t.line - finding.line) <= PROXIMITY_LINES
+        and categories_compatible(t.category, finding.category)
+        and _thread_is_standalone(t) == standalone
+        and t.fingerprint is not None
+        and split_fingerprint(t.fingerprint)[:1] == [finding.source]
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda t: (abs((t.line or 0) - (finding.line or 0)), -t.comment_id))
+
+
 def _find_thread_by_fingerprint(
     threads: Sequence[PriorThread], fp: str
 ) -> PriorThread | None:

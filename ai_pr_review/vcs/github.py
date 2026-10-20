@@ -991,6 +991,7 @@ class GitHubProvider:
         head_sha: str,
         id_map: dict[str, int],
         reincarnated_fps: AbstractSet[str] = frozenset(),
+        regressed_fps: AbstractSet[str] = frozenset(),
     ) -> list[str]:
         """Render one column (in-diff or out-of-diff) of body-level findings.
 
@@ -1025,6 +1026,8 @@ class GitHubProvider:
                     "`/ai-pr-review false-positive`, `wont-fix`, or `dismiss` "
                     "to suppress for good)*"
                 )
+            if fingerprint(f) in regressed_fps:
+                loc_note += " *(a similar finding was resolved after an earlier push)*"
             if f.file:
                 url = _blob_link(
                     owner=self.config.owner, repo=self.config.repo,
@@ -1107,6 +1110,7 @@ class GitHubProvider:
             classify,
             decide_action,
             dedupe_thread_claims,
+            find_regressed_match,
             find_resolved_match,
         )
         from ai_pr_review.vcs._finding_ids import fingerprint
@@ -1153,6 +1157,25 @@ class GitHubProvider:
             if c.kind == "new"
             and find_resolved_match(fingerprint(c.finding), all_threads) is not None
         }
+        # #1089: a "new" finding near a thread this bot itself resolved after a
+        # push is a defect that came back. find_resolved_match() above skips
+        # those on purpose (the bot's housekeeping is not a human decision), so
+        # this is a separate, hedged hint. Nothing is reopened or suppressed.
+        regressed_from: dict[str, PriorThread] = {}
+        for c in classified:
+            fp = fingerprint(c.finding)
+            if c.kind != "new" or fp in reincarnated_fps:
+                continue
+            old = find_regressed_match(c.finding, all_threads)
+            if old is not None:
+                regressed_from[fp] = old
+                _log.info(
+                    "github: finding fp=%r resembles thread %s resolved after an "
+                    "earlier push (issue #1089); annotating (file=%s line=%s)",
+                    fp, old.thread_id, c.finding.file, c.finding.line,
+                )
+        regressed_fps = set(regressed_from)
+
         for fp in reincarnated_fps:
             match = next(c for c in classified if fingerprint(c.finding) == fp)
             _log.info(
@@ -1226,6 +1249,11 @@ class GitHubProvider:
                 enable_suggestions=enable_suggestions,
                 finding_id=id_map.get(fingerprint(f)),
                 reincarnated=fingerprint(f) in reincarnated_fps,
+                regressed_note=(
+                    _regression_note(regressed_from[fingerprint(f)].finding_id)
+                    if fingerprint(f) in regressed_from
+                    else ""
+                ),
             )
             if payload is not None:
                 inline_comments.append(payload)
@@ -1286,6 +1314,7 @@ class GitHubProvider:
             head_sha=diff.head_sha,
             id_map=id_map,
             reincarnated_fps=reincarnated_fps,
+            regressed_fps=regressed_fps,
         )
         ood_bullets = self._render_body_bullets(
             ood_body,
@@ -1294,6 +1323,7 @@ class GitHubProvider:
             head_sha=diff.head_sha,
             id_map=id_map,
             reincarnated_fps=reincarnated_fps,
+            regressed_fps=regressed_fps,
         )
 
         # The headline must describe the PR's current state, not just this
@@ -2827,6 +2857,16 @@ _REINCARNATION_NOTE = (
 )
 
 
+def _regression_note(old_finding_id: int | None) -> str:
+    """The inline note for a finding that a push brought back (#1089)."""
+    which = f" ([F{old_finding_id}])" if old_finding_id is not None else ""
+    return (
+        f"**Note:** a similar finding here{which} was resolved after an earlier "
+        "push, and a similar one is back on this run. Check that the fix was not "
+        "undone."
+    )
+
+
 def _build_inline_comment_body(
     f: Finding,
     *,
@@ -2834,6 +2874,7 @@ def _build_inline_comment_body(
     include_suggestion_fence: bool = True,
     prior_fingerprints: Sequence[str] = (),
     reincarnated: bool = False,
+    regressed_note: str = "",
 ) -> str:
     """Render the markdown body for a GitHub inline review comment.
 
@@ -2870,6 +2911,11 @@ def _build_inline_comment_body(
         `update`/`escalate` PATCH paths never set it -- there is no "new"
         classification to reincarnate from once a thread is still open and
         being matched against).
+    regressed_note:
+        The text from `_regression_note`, when `find_regressed_match` found a
+        thread this bot resolved after a push (#1089). Appended after the
+        remediation text. Only a first-time render sets it, for the same reason
+        as `reincarnated`.
     """
     from ai_pr_review.vcs._body import (
         also_reported_notes,
@@ -2896,6 +2942,8 @@ def _build_inline_comment_body(
         parts.append(f"\n```{fence}\n{f.suggested_code}\n```")
     if reincarnated:
         parts.append(f"\n{_REINCARNATION_NOTE}")
+    if regressed_note:
+        parts.append(f"\n{regressed_note}")
     body = "".join(parts)
     # Attach inline marker so resolve_stale can identify ownership later,
     # then the per-comment metadata marker (canonical-review reuse, read
@@ -2991,6 +3039,7 @@ def _build_inline_comment_payload(
     enable_suggestions: bool,
     finding_id: int | None = None,
     reincarnated: bool = False,
+    regressed_note: str = "",
 ) -> dict[str, Any] | None:
     """Return a GitHub reviews-API inline-comment dict, or None if ineligible.
 
@@ -3002,7 +3051,9 @@ def _build_inline_comment_payload(
     if not is_inline_eligible(f, eligible_new):
         return None
 
-    body = _build_inline_comment_body(f, finding_id=finding_id, reincarnated=reincarnated)
+    body = _build_inline_comment_body(
+        f, finding_id=finding_id, reincarnated=reincarnated, regressed_note=regressed_note
+    )
     payload: dict[str, Any] = {"path": f.file, "line": f.line, "body": body}
 
     if (

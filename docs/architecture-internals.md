@@ -80,6 +80,13 @@ Both methods share one paginated walk (`GitHubProvider._list_reviews_paginated(*
 3. A fuzzy `(file, ±3 lines, compatible category)` match against an open thread that the bot owns: the finding is `escalate` (PATCH and reply) if the severity went up. Otherwise it is `update` (PATCH). If the match is an *outdated* thread, the finding is `new` instead. GitHub already hides an outdated thread in its UI.
 4. Anything else: the finding is `new`.
 
+`classify()` does not know two hints that `post_findings` adds to a `new` finding:
+
+- A human resolved a thread with no verdict command and the exact finding came back (`find_resolved_match`, issue #779). The new comment gets a note that says so.
+- This bot resolved a thread (`resolve_stale`) because the finding went away, and a similar finding is back (`find_regressed_match`, issue #1089). The match is `(file, ±3 lines, compatible category, same source)` against a thread with `resolved_by_bot is True`. A suppression-check finding matches only a thread of its own kind. A rolled-up finding never matches. The new inline comment, or the body bullet, notes that a similar finding was resolved after an earlier push, and names its `F<n>` when it has one. Nothing is reopened, suppressed, or written to the verdicts marker. Only GitHub fills `resolved_by_bot`, so GitLab and Bitbucket do not show this note.
+
+The two notes never appear together. A finding that matches the exact #779 case does not also get the #1089 note.
+
 If two different findings in one run both fuzzy-match the same open thread, `dedupe_thread_claims()` keeps the claim with the higher severity. It sets the other finding back to `new`. One `PATCH` or reply then cannot absorb two findings.
 
 Thread ownership (`parse_prior_thread`, `resolve_stale`, `_dismiss_stale_reviews`) depends on the per-comment marker and the author login. The code first normalizes the login with `ai_pr_review.vcs._stale.graphql_bot_login()`. The GitHub GraphQL API reports the bot login without the `"[bot]"` suffix of the REST API (verified live against a real thread). A comparison of the raw `self.config.bot_login` value with it rejected every real thread (issue #717). The code normalizes the login and does not pass `bot_login=None`. `ai_pr_review.slash.github_ops` uses `bot_login=None` for GraphQL authors. The team chose that before it confirmed the exact format difference. The normalized check keeps the author check as a real second defense against a forged marker.
