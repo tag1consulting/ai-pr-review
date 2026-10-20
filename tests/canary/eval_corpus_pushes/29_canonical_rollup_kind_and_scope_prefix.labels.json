@@ -2,14 +2,14 @@
   "clean": false,
   "source": "known-fix",
   "evidence": "strong",
-  "verified_by": "history: the push 571ea8f1 on PR #1086 was reviewed by claude[bot] (review comment id 4328061709, 4328061723), the author confirmed each finding, fixed in fae8a63",
+  "verified_by": "history: the push 571ea8f1 on PR #1086 was reviewed by claude[bot] (review comments 4328061709 and 4328061723). The author confirmed both, fixed in fae8a63. For 4328061709 fae8a63 added the same-source check only. claude[bot] then said the same-message half was still open (4328215569), so that half is not labeled. 4328061723 was rated optional by the reviewer",
   "bugs": [
     {
       "file": "ai_pr_review/vcs/_canonical.py",
       "line_start": 720,
       "line_end": 728,
       "category": "edge-case",
-      "summary": "a same message rollup is suppressed by any nearby unrelated dismissal because there is no same source or same message check"
+      "summary": "a same message rollup is suppressed by any nearby unrelated dismissal because the fuzzy dismissal match does not check that the dismissed finding has the same source"
     },
     {
       "file": "ai_pr_review/findings/scope.py",

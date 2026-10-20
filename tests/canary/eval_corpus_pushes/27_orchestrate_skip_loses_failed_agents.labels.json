@@ -2,7 +2,7 @@
   "clean": false,
   "source": "known-fix",
   "evidence": "strong",
-  "verified_by": "history: the push 3c162ae1 on PR #1073 was reviewed by claude[bot] (review comment id 4319609843), the author confirmed each finding, fixed in f90e7c1",
+  "verified_by": "history: the bug was introduced by 3c162ae1 (blame). claude[bot] named it in review comment 4319609843 on PR #1073, posted on the later commit 855c6d42 that holds the same code. The author confirmed it, fixed in f90e7c1",
   "bugs": [
     {
       "file": "ai_pr_review/orchestrate.py",
