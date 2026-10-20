@@ -1,0 +1,23 @@
+{
+  "clean": false,
+  "source": "known-fix",
+  "evidence": "strong",
+  "verified_by": "history: the push 46a767d5 on PR #1083 was reviewed by claude[bot] (review comment id 4321507885, 4321507892), the author confirmed each finding, fixed in 99750fe",
+  "bugs": [
+    {
+      "file": "ai_pr_review/findings/merge.py",
+      "line_start": 183,
+      "line_end": 187,
+      "category": "edge-case",
+      "summary": "an agent finding appended to an analyzer cluster becomes cluster[-1] even when its line is lower, so the proximity check measures from the wrong line and two agents reporting one bug post as two comments"
+    },
+    {
+      "file": "ai_pr_review/findings/merge.py",
+      "line_start": 205,
+      "line_end": 214,
+      "category": "edge-case",
+      "summary": "splitting placement into an analyzer pass and an agent pass breaks proximity chaining through a finding of the other pass, so analyzers at lines 10 and 16 with an agent at 13 post as two comments"
+    }
+  ],
+  "accepted_extra": []
+}

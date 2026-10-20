@@ -1,0 +1,397 @@
+diff --git a/ai_pr_review/agents/dispatch.py b/ai_pr_review/agents/dispatch.py
+index eab8cd0..bb503e1 100644
+--- a/ai_pr_review/agents/dispatch.py
++++ b/ai_pr_review/agents/dispatch.py
+@@ -87,6 +87,7 @@ class FailedAgent:
+     reason: str
+     exit_code: int
+     elapsed_ms: int
++    model: str = ""
+ 
+ 
+ @dataclass(frozen=True)
+@@ -458,6 +459,7 @@ async def _run_single_agent(
+     enrichment: _EnrichmentBlock | None = None,
+ ) -> None:
+     start = time.monotonic()
++    model_id = ""
+     try:
+         # pr-summarizer composes its own prompt + user message (manifest +
+         # commit log + diff) via ai_pr_review.agents.summarizer.*. The generic
+@@ -649,6 +651,7 @@ async def _run_single_agent(
+                             ),
+                             exit_code=fb_exit_code,
+                             elapsed_ms=elapsed,
++                            model=model_id,
+                         ))
+                         return
+                 else:
+@@ -679,7 +682,8 @@ async def _run_single_agent(
+     except BaseException as exc:
+         # Catch BaseException (not Exception) so SystemExit from llm/client.py
+         # — raised on auth failure (exit 1), retry exhaustion (exit 2), or
+-        # content-filter block (exit 3) — is isolated to a single FailedAgent
++        # content-filter block (exit 3), or a provider "prompt too long"
++        # rejection (exit 4), is isolated to a single FailedAgent
+         # instead of cancelling sibling tasks in the anyio task group.
+         # _is_uncatchable() re-raises KeyboardInterrupt (Ctrl-C) and the
+         # async backend's own cancellation exception (#810 review finding
+@@ -695,6 +699,7 @@ async def _run_single_agent(
+             reason=_format_exception_chain(exc),
+             exit_code=exit_code,
+             elapsed_ms=elapsed,
++            model=model_id,
+         ))
+ 
+ 
+diff --git a/ai_pr_review/cli.py b/ai_pr_review/cli.py
+index 05b4b0c..45961e0 100644
+--- a/ai_pr_review/cli.py
++++ b/ai_pr_review/cli.py
+@@ -630,15 +630,30 @@ async def _run_review_async(config: ReviewConfig) -> int:
+     )
+     _emit_post_failure_annotation(result)
+ 
+-    if result.ok:
++    # #1056: a run that posted only the "prompt too long" skip comment did not
++    # review the PR, so it must not satisfy the policy gate. The pre-flight
++    # skip returns before this point for the same reason.
++    if result.ok and result.context_window_rejected is not True:
+         _post_policy_gate_check_run(runtime)
+ 
+     if rc.telemetry_enabled:
++        # Same outcome names as the pre-flight context-window skip above.
++        rejected_outcome = ""
++        if result.context_window_rejected is True:
++            rejected_outcome = (
++                "skipped_context_window_failed" if rc.fail_on_context_window else "skipped"
++            )
+         await _emit_telemetry(result, rc, runtime.feedback_entries_count, runtime.sarif_elapsed_s,
+-                              is_incremental=runtime.is_incremental)
++                              is_incremental=runtime.is_incremental,
++                              outcome_override=rejected_outcome)
+ 
+     if not result.ok:
+         return 1
++    # #1056: the provider rejected every prompt as too long. The skip comment is
++    # posted by now. Same opt-in as the pre-flight context-window skip, so
++    # AI_FAIL_ON_CONTEXT_WINDOW gives exit 2 and the default stays exit 0.
++    if result.context_window_rejected is True and rc.fail_on_context_window:
++        return 2
+     # #858: reads may_approve (the classifier's severity verdict), not
+     # event (what actually got posted), so a configured approval_ceiling
+     # never changes this exit code -- see ReviewOutcome.may_approve's
+diff --git a/ai_pr_review/llm/_http.py b/ai_pr_review/llm/_http.py
+index 89cd51b..38721f8 100644
+--- a/ai_pr_review/llm/_http.py
++++ b/ai_pr_review/llm/_http.py
+@@ -32,6 +32,15 @@ class LLMError(Exception):
+     """Permanent LLM error (bad API key, invalid request, unknown provider)."""
+ 
+ 
++class LLMContextLengthError(LLMError):
++    """The provider rejected the prompt as longer than the model context window.
++
++    A permanent error (a retry sends the same prompt), kept as an `LLMError`
++    subclass so a caller that does not know about it still sees a permanent
++    failure. `llm/client.py` maps it to exit code 4.
++    """
++
++
+ class LLMTransientError(Exception):
+     """Transient LLM error — all retries exhausted on 429/5xx/timeout."""
+ 
+@@ -40,6 +49,24 @@ class LLMContentError(Exception):
+     """Response blocked by provider safety/recitation filter."""
+ 
+ 
++# Provider 400 texts that mean "the prompt is longer than the context window".
++# Matched in lower case against the response body. Only Anthropic is covered:
++# the text "prompt is too long" was observed in a real run (issue #1056, for
++# example "prompt is too long: 4128365 tokens > 1000000 maximum"). The OpenAI,
++# Google and Bedrock texts are not matched, because the provider docs do not
++# state the exact 400 message. A 400 with any other text keeps the permanent
++# `LLMError` behavior. Add a text here only after you see it in a real response.
++_CONTEXT_LENGTH_MARKERS: tuple[str, ...] = ("prompt is too long",)
++
++
++def is_context_length_rejection(status_code: int, body: str) -> bool:
++    """True when a non-2xx response is a verified "prompt too long" 400."""
++    if status_code != 400:
++        return False
++    lowered = body.lower()
++    return any(marker in lowered for marker in _CONTEXT_LENGTH_MARKERS)
++
++
+ async def retry_post(
+     client: httpx.AsyncClient,
+     url: str,
+@@ -53,7 +80,8 @@ async def retry_post(
+     """POST with exponential back-off retry on transient errors.
+ 
+     Returns the successful Response. Raises LLMTransientError if all retries
+-    are exhausted, LLMError on permanent failures.
++    are exhausted, LLMContextLengthError on a verified "prompt too long" 400, and
++    LLMError on other permanent failures.
+     """
+     attempt = 0
+ 
+@@ -110,7 +138,12 @@ async def retry_post(
+                     "could not read error response body: %s; raw bytes: %r",
+                     log_exc, response.content[:200],
+                 )
+-            raise LLMError(
++            error_cls = (
++                LLMContextLengthError
++                if is_context_length_rejection(response.status_code, response.text)
++                else LLMError
++            )
++            raise error_cls(
+                 f"{provider_label} returned HTTP {response.status_code}: {response.text[:500]}"
+             )
+ 
+diff --git a/ai_pr_review/llm/client.py b/ai_pr_review/llm/client.py
+index 263116d..99d4767 100644
+--- a/ai_pr_review/llm/client.py
++++ b/ai_pr_review/llm/client.py
+@@ -11,9 +11,13 @@ from __future__ import annotations
+ import sys
+ 
+ from ._config import resolve_prompt_caching
+-from ._http import LLMContentError, LLMError, LLMTransientError
++from ._http import LLMContentError, LLMContextLengthError, LLMError, LLMTransientError
+ from .base import LLMRequest, LLMResponse
+ 
++# Exit code for a provider "prompt is too long" rejection (#1056). agents/dispatch.py
++# and orchestrate.py read it from FailedAgent.exit_code.
++EXIT_PROMPT_TOO_LONG = 4
++
+ 
+ async def call_llm(req: LLMRequest, provider: str) -> LLMResponse:
+     """Dispatch to the correct provider and return an LLMResponse.
+@@ -22,12 +26,16 @@ async def call_llm(req: LLMRequest, provider: str) -> LLMResponse:
+       SystemExit(1) — permanent error
+       SystemExit(2) — transient (retries exhausted)
+       SystemExit(3) — content filter
++      SystemExit(4) - the provider rejected the prompt as too long (#1056)
+     """
+     try:
+         return await _dispatch(req, provider)
+     except LLMContentError as exc:
+         print(f"ERROR: {exc}", file=sys.stderr)
+         raise SystemExit(3) from exc
++    except LLMContextLengthError as exc:
++        print(f"ERROR: {exc}", file=sys.stderr)
++        raise SystemExit(EXIT_PROMPT_TOO_LONG) from exc
+     except LLMTransientError as exc:
+         print(f"ERROR: {exc}", file=sys.stderr)
+         raise SystemExit(2) from exc
+diff --git a/ai_pr_review/orchestrate.py b/ai_pr_review/orchestrate.py
+index e95d0ff..5a923ce 100644
+--- a/ai_pr_review/orchestrate.py
++++ b/ai_pr_review/orchestrate.py
+@@ -24,6 +24,7 @@ from ai_pr_review.findings.extract import extract_findings
+ from ai_pr_review.findings.merge import merge_findings
+ from ai_pr_review.findings.models import Finding
+ from ai_pr_review.findings.suppress import SuppressionRule, apply_suppressions
++from ai_pr_review.llm.client import EXIT_PROMPT_TOO_LONG
+ from ai_pr_review.review.outcome import (
+     ApprovalCeiling,
+     ReviewMode,
+@@ -74,6 +75,10 @@ class ReviewResult:
+     agent_results: list[AgentResult] = field(default_factory=list)
+     skipped: bool = False
+     skip_reason: str = ""
++    context_window_rejected: bool = False
++    """True when the skip came from a provider "prompt too long" rejection at
++    run time (#1056). cli.py reads it next to `SkipPlan.is_context_window_skip`
++    so `AI_FAIL_ON_CONTEXT_WINDOW` gives exit code 2 for both."""
+     sarif_elapsed_s: float | None = None
+     judge_input_tokens: int = 0
+     judge_output_tokens: int = 0
+@@ -134,6 +139,99 @@ TokenRenderer = Callable[
+ # them would break Bitbucket's accordion-stripping regex).
+ 
+ 
++_PROMPT_TOO_LONG_NOTE = "prompt too long for the model"
++
++
++def _failed_agent_label(failure: FailedAgent) -> str:
++    """Name for the failed-agent note in the review body.
++
++    A provider "prompt too long" rejection gets its cause appended, so the
++    reader can tell it from a crash or a transient outage (#1056).
++    """
++    if failure.exit_code == EXIT_PROMPT_TOO_LONG:
++        return f"{failure.name} ({_PROMPT_TOO_LONG_NOTE})"
++    return failure.name
++
++
++def _prompt_too_long_skip_reason(failures: Sequence[FailedAgent]) -> str:
++    """Skip-comment text for a run where the provider rejected every prompt.
++
++    This is a rejection at run time and not an estimate, so the text says that
++    the provider refused the prompt after the call was made. The text does not
++    use the word "pre-flight", which names the other skip.
++    """
++    first = failures[0]
++    model = f" ({first.model})" if first.model else ""
++    names = ", ".join(f.name for f in failures)
++    return (
++        "The provider rejected the prompt as too long for the model context window. "
++        f"The {first.name} agent{model} received this error. "
++        f"Agents that failed this way: {names}. "
++        "The token estimate made before the run did not predict this rejection. "
++        "Exclude generated files with AI_EXCLUDE_PATTERNS or review a smaller diff."
++    )
++
++
++def _post_skip(
++    *,
++    diff: DiffContext,
++    cfg: OrchestrationConfig,
++    provider: VcsProvider,
++    skip_reason: str,
++    failed_agents: list[FailedAgent] | None = None,
++    context_window_rejected: bool = False,
++) -> ReviewResult:
++    """Post the one skip comment and return the skipped `ReviewResult`.
++
++    Shared by the pre-flight skips (`skip_reason` set by the caller) and the
++    runtime "provider rejected the prompt as too long" skip (#1056).
++    """
++    failed_agents = failed_agents or []
++    kept = list(cfg.extra_findings)
++    if kept:
++        kept = merge_findings(kept, confidence_threshold=cfg.confidence_threshold)
++        kept, _ = apply_suppressions(kept, list(cfg.suppression_rules))
++        if cfg.analyzer_diff_scope != "off":
++            from ai_pr_review.findings.scope import (
++                apply_diff_scope,
++                rollup_repeated_findings,
++            )
++            try:
++                kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
++            except Exception as exc:
++                logger.warning(
++                    "skip path: apply_diff_scope failed (head_sha=%s); "
++                    "proceeding with unscoped findings: %s",
++                    diff.head_sha, exc, exc_info=True,
++                )
++            try:
++                kept = rollup_repeated_findings(kept)
++            except Exception as exc:
++                logger.warning(
++                    "skip path: rollup_repeated_findings failed "
++                    "(head_sha=%s); proceeding without rollup: %s",
++                    diff.head_sha, exc, exc_info=True,
++                )
++    outcome = cap_review_outcome(
++        classify_review_outcome(
++            [_AsFindingLike(f) for f in kept], [], cfg.mode
++        ),
++        cfg.approval_ceiling,
++    )
++    skip_result = provider.post_skip_comment(skip_reason, findings=kept)
++    return ReviewResult(
++        findings=kept,
++        outcome=outcome,
++        failed_agents=failed_agents,
++        summary=skip_result,
++        findings_post=None,
++        stale=None,
++        skipped=True,
++        skip_reason=skip_reason,
++        context_window_rejected=context_window_rejected,
++    )
++
++
+ async def run_review(
+     *,
+     diff: DiffContext,
+@@ -185,47 +283,8 @@ async def run_review(
+         # stale-thread resolution, no formal APPROVE/REQUEST_CHANGES event,
+         # and no dependency on a prior summary comment existing (Bitbucket's
+         # post_findings requires one; post_skip_comment does not).
+-        kept = list(cfg.extra_findings)
+-        if kept:
+-            kept = merge_findings(kept, confidence_threshold=cfg.confidence_threshold)
+-            kept, _ = apply_suppressions(kept, list(cfg.suppression_rules))
+-            if cfg.analyzer_diff_scope != "off":
+-                from ai_pr_review.findings.scope import (
+-                    apply_diff_scope,
+-                    rollup_repeated_findings,
+-                )
+-                try:
+-                    kept = apply_diff_scope(kept, diff.diff_text, mode=cfg.analyzer_diff_scope)
+-                except Exception as exc:
+-                    logger.warning(
+-                        "skip path: apply_diff_scope failed (head_sha=%s); "
+-                        "proceeding with unscoped findings: %s",
+-                        diff.head_sha, exc, exc_info=True,
+-                    )
+-                try:
+-                    kept = rollup_repeated_findings(kept)
+-                except Exception as exc:
+-                    logger.warning(
+-                        "skip path: rollup_repeated_findings failed "
+-                        "(head_sha=%s); proceeding without rollup: %s",
+-                        diff.head_sha, exc, exc_info=True,
+-                    )
+-        outcome = cap_review_outcome(
+-            classify_review_outcome(
+-                [_AsFindingLike(f) for f in kept], [], cfg.mode
+-            ),
+-            cfg.approval_ceiling,
+-        )
+-        skip_result = provider.post_skip_comment(skip_reason, findings=kept)
+-        return ReviewResult(
+-            findings=kept,
+-            outcome=outcome,
+-            failed_agents=[],
+-            summary=skip_result,
+-            findings_post=None,
+-            stale=None,
+-            skipped=True,
+-            skip_reason=skip_reason,
++        return _post_skip(
++            diff=diff, cfg=cfg, provider=provider, skip_reason=skip_reason,
+         )
+ 
+     # Note: feedback addendum is wired by the caller via
+@@ -242,6 +301,26 @@ async def run_review(
+     else:
+         successes, failures = [], []
+ 
++    # #1056: when the provider rejects the prompt of every agent as too long,
++    # no LLM agent produced output. Post the skip comment, as the pre-flight
++    # context-window skip does, and return before the summary, findings,
++    # watermark and stale-thread steps. A run where only some agents were
++    # rejected goes on, and `_failed_agent_label` names the cause in the note.
++    if (
++        agents
++        and not successes
++        and failures
++        and all(f.exit_code == EXIT_PROMPT_TOO_LONG for f in failures)
++    ):
++        return _post_skip(
++            diff=diff,
++            cfg=cfg,
++            provider=provider,
++            skip_reason=_prompt_too_long_skip_reason(failures),
++            failed_agents=failures,
++            context_window_rejected=True,
++        )
++
+     # Phase 1.5: inject pre-computed findings (SARIF, native analyzers) assembled by caller.
+     raw_findings: list[Finding] = []
+     sarif_elapsed_s: float | None = None
+@@ -396,7 +475,7 @@ async def run_review(
+                 kept,
+                 diff,
+                 event=outcome.event,
+-                failed_agents=[f.name for f in failures],
++                failed_agents=[_failed_agent_label(f) for f in failures],
+                 usage_block=usage_block,
+                 usage_warning=usage_warning,
+                 max_inline=cfg.max_inline,

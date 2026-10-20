@@ -1,0 +1,16 @@
+{
+  "clean": false,
+  "source": "known-fix",
+  "evidence": "strong",
+  "verified_by": "history: the push ba9454c1 on PR #1085 was reviewed by claude[bot] (review comment id 4327632811), the author confirmed each finding, fixed in 3d42246",
+  "bugs": [
+    {
+      "file": "ai_pr_review/vcs/_canonical.py",
+      "line_start": 682,
+      "line_end": 688,
+      "category": "edge-case",
+      "summary": "the thread sort key gives a prior fingerprint the same rank as the current fingerprint, so an older thread wins and a duplicate is reposted"
+    }
+  ],
+  "accepted_extra": []
+}

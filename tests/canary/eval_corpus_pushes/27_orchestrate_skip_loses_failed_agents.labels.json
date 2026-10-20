@@ -1,0 +1,16 @@
+{
+  "clean": false,
+  "source": "known-fix",
+  "evidence": "strong",
+  "verified_by": "history: the push 3c162ae1 on PR #1073 was reviewed by claude[bot] (review comment id 4319609843), the author confirmed each finding, fixed in f90e7c1",
+  "bugs": [
+    {
+      "file": "ai_pr_review/orchestrate.py",
+      "line_start": 215,
+      "line_end": 220,
+      "category": "edge-case",
+      "summary": "the runtime prompt-too-long skip classifies the outcome with an empty failed-agents list, so the outcome is approvable and with AI_FAIL_ON_FINDINGS the run exits 0 instead of 2"
+    }
+  ],
+  "accepted_extra": []
+}

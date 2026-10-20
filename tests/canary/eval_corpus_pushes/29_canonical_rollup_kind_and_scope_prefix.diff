@@ -1,0 +1,245 @@
+diff --git a/ai_pr_review/findings/extract.py b/ai_pr_review/findings/extract.py
+index 5f7cd6d..27f15a2 100644
+--- a/ai_pr_review/findings/extract.py
++++ b/ai_pr_review/findings/extract.py
+@@ -10,7 +10,7 @@ import json
+ import re
+ import sys
+ 
+-from ai_pr_review.findings.models import Finding
++from ai_pr_review.findings.models import INTERNAL_ONLY_FIELDS, Finding
+ 
+ _FENCE_RE = re.compile(r"```json-findings\n(.*?)```", re.DOTALL)
+ 
+@@ -120,6 +120,13 @@ def _parse_and_validate(
+         # findings never pass through here).
+         item["source"] = agent_name
+         item.pop("sources", None)
++        # Drop every field that only the pipeline sets (#913, #1074, #1085). An
++        # injected value would fake corroboration or a judge verdict, hide the
++        # finding from the CHANGES_REQUESTED check, keep it out of a cluster, or
++        # skip dismissal matching. A listed set protects a new field by default,
++        # and a test requires every `Finding` field to be classified.
++        for name in INTERNAL_ONLY_FIELDS:
++            item.pop(name, None)
+         try:
+             f = Finding.model_validate(item)
+             # Drop self-refuting findings whose own narrative concludes the
+@@ -135,41 +142,6 @@ def _parse_and_validate(
+                     file=sys.stderr,
+                 )
+                 continue
+-            # Strip out_of_diff: it is set internally by apply_diff_scope, not
+-            # by agents.  An injected "out_of_diff": true in agent JSON would
+-            # otherwise suppress the finding from CHANGES_REQUESTED evaluation.
+-            if f.out_of_diff:
+-                f = f.model_copy(update={"out_of_diff": False})
+-            # Strip demoted_to_body: it is set internally by
+-            # judge._apply_verdicts, not by agents.  An injected
+-            # "demoted_to_body": true in agent JSON would otherwise let a
+-            # prompt-injected or malicious agent force its own finding out of
+-            # inline PR visibility into the collapsed review-body section --
+-            # the same suppression-bypass class the out_of_diff strip above
+-            # defends against, for demoted_to_body's twin field.
+-            if f.demoted_to_body:
+-                f = f.model_copy(update={"demoted_to_body": False})
+-            # Strip corroborated/judge_verdict: both are set internally
+-            # (provenance.py's _collapse_cluster and judge._apply_verdicts,
+-            # respectively), not by agents. An injected "corroborated": true
+-            # would otherwise grant the confidence boost real corroboration
+-            # earns; an injected "judge_verdict" would fake having already
+-            # passed judge review. Same class of injected-internal-state
+-            # bug as out_of_diff/demoted_to_body above.
+-            if f.corroborated:
+-                f = f.model_copy(update={"corroborated": False})
+-            if f.judge_verdict is not None:
+-                f = f.model_copy(update={"judge_verdict": None})
+-            # Strip style_only: only an analyzer sets it. An injected true value
+-            # would keep a security finding out of the cluster of the finding
+-            # that corroborates it (#1074).
+-            if f.style_only:
+-                f = f.model_copy(update={"style_only": False})
+-            # Strip rolled_up: only scope.rollup_repeated_findings sets it. An
+-            # injected true value would skip the fuzzy dismissal match and bring
+-            # back a finding that a maintainer dismissed (#1085).
+-            if f.rolled_up:
+-                f = f.model_copy(update={"rolled_up": False})
+             results.append(f)
+         except Exception as exc:  # noqa: BLE001
+             print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
+diff --git a/ai_pr_review/findings/merge.py b/ai_pr_review/findings/merge.py
+index 1c29056..81cf965 100644
+--- a/ai_pr_review/findings/merge.py
++++ b/ai_pr_review/findings/merge.py
+@@ -18,7 +18,7 @@ import bisect
+ import logging
+ from dataclasses import dataclass, field
+ 
+-from ai_pr_review.findings.models import Finding, Severity, combine_also_reported
++from ai_pr_review.findings.models import Finding, Severity, combine_also_reported, is_standalone
+ from ai_pr_review.findings.provenance import boosted_confidence, is_corroborated_cluster
+ from ai_pr_review.findings.scope import is_analyzer_source
+ 
+@@ -51,16 +51,7 @@ def _is_style(f: Finding) -> bool:
+     return f.category == "docs" or f.style_only
+ 
+ 
+-# A finding from one of these sources never joins a cluster. The
+-# suppression-check finding names a comment that turns off a security rule on
+-# a line. If it clustered with the agent finding for that line, the agent
+-# finding (higher severity) would win the headline and the suppression would
+-# vanish from the review (#1077).
+-_STANDALONE_SOURCES = frozenset({"suppression-check"})
+-
+-
+-def _is_standalone(f: Finding) -> bool:
+-    return any(s in _STANDALONE_SOURCES for s in (f.sources or ([f.source] if f.source else [])))
++_is_standalone = is_standalone
+ 
+ 
+ def merge_findings(
+diff --git a/ai_pr_review/findings/models.py b/ai_pr_review/findings/models.py
+index f3e74ea..4330445 100644
+--- a/ai_pr_review/findings/models.py
++++ b/ai_pr_review/findings/models.py
+@@ -85,6 +85,50 @@ def combine_also_reported(groups: list[list[str]]) -> list[str]:
+     return notes
+ 
+ 
++# The pipeline sets these fields. Agent JSON must never set them: each one
++# changes how a finding is scored, grouped, suppressed, or shown. The extract
++# step drops every name in this set from agent output. A test requires each
++# `Finding` field to be in exactly one of the two sets, so a new field forces a
++# decision here and an agent cannot set it by default (#1085).
++INTERNAL_ONLY_FIELDS: frozenset[str] = frozenset({
++    "out_of_diff",
++    "demoted_to_body",
++    "corroborated",
++    "rolled_up_by_rule",
++    "show_badge",
++    "judge_verdict",
++    "also_reported",
++    "style_only",
++})
++
++# The fields that agent JSON may carry. `source` and `sources` are stamped by
++# the extract step after the agent output is read.
++AGENT_INPUT_FIELDS: frozenset[str] = frozenset({
++    "severity",
++    "confidence",
++    "finding",
++    "source",
++    "sources",
++    "category",
++    "file",
++    "line",
++    "start_line",
++    "remediation",
++    "impact",
++    "trigger",
++    "suggested_code",
++    "agent",
++})
++
++# A finding from one of these sources never joins a cluster, and a thread that
++# carries one never matches a finding of another kind. The suppression-check
++# finding names a comment that turns off a security rule on a line. If it
++# clustered with the agent finding for that line, the agent finding (higher
++# severity) would win the headline and the suppression would vanish from the
++# review (#1077). The merge and the thread matching both use this one set.
++STANDALONE_SOURCES: frozenset[str] = frozenset({"suppression-check"})
++
++
+ class Finding(BaseModel):
+     """A single finding from an agent or static analyzer."""
+ 
+@@ -132,11 +176,14 @@ class Finding(BaseModel):
+     # source — independent corroboration of the same file+line region.
+     # Internal-only: not serialised by to_dict().
+     corroborated: bool = False
+-    # Set by scope.rollup_repeated_findings on the representative of a rolled-up
+-    # group. The representative stands for lines far from its own, so a fuzzy
+-    # match on its line must not read as a match for the whole group (#1073).
++    # Set by scope.rollup_repeated_findings on the representative of a group
++    # that it rolled up by rule id (semgrep). Rule-id groups join hits with
++    # different messages, so the representative stands for lines far from its
++    # own, and a fuzzy dismissal match on its line must not read as a match for
++    # the whole group (#1073). A group of the same message is not marked: a
++    # dismissal of one hit covers the repeats of it.
+     # Internal-only: not serialised by to_dict().
+-    rolled_up: bool = False
++    rolled_up_by_rule: bool = False
+     # Display preference only: when True, the renderers show the evidence label and
+     # score beside the finding. The label is computed from this finding's own fields
+     # when it is rendered (findings/badge.py), so it cannot go stale. The orchestrator
+@@ -240,3 +287,8 @@ class Finding(BaseModel):
+         if self.sources:
+             d["sources"] = self.sources
+         return d
++
++
++def is_standalone(f: Finding) -> bool:
++    """Does `f` come from a source that never joins a cluster?"""
++    return any(s in STANDALONE_SOURCES for s in (f.sources or ([f.source] if f.source else [])))
+diff --git a/ai_pr_review/findings/scope.py b/ai_pr_review/findings/scope.py
+index fbd71e7..100fe05 100644
+--- a/ai_pr_review/findings/scope.py
++++ b/ai_pr_review/findings/scope.py
+@@ -232,7 +232,9 @@ def rollup_repeated_findings(
+         if len(lines) > 10:
+             line_preview += f" ... (+{len(lines) - 10} more)"
+         summary = f" ({len(group)} occurrences in {key[0]}, lines: {line_preview})"
+-        update: dict[str, object] = {"finding": rep.finding + summary, "rolled_up": True}
++        update: dict[str, object] = {"finding": rep.finding + summary}
++        if key[2].startswith("rule:"):
++            update["rolled_up_by_rule"] = True
+         notes = combine_also_reported([g.also_reported for g in group])
+         if notes:
+             update["also_reported"] = notes
+diff --git a/ai_pr_review/vcs/_canonical.py b/ai_pr_review/vcs/_canonical.py
+index c0d1c31..c5ea6f8 100644
+--- a/ai_pr_review/vcs/_canonical.py
++++ b/ai_pr_review/vcs/_canonical.py
+@@ -55,6 +55,7 @@ from dataclasses import dataclass
+ from typing import TYPE_CHECKING, Any, Literal
+ 
+ from ai_pr_review.findings.merge import _SEVERITY_ORDER, PROXIMITY_LINES, categories_compatible
++from ai_pr_review.findings.models import STANDALONE_SOURCES, is_standalone
+ from ai_pr_review.vcs._finding_ids import (
+     _ID_RE,
+     fingerprint,
+@@ -646,15 +647,12 @@ def _fuzzy_dismissed_match(
+     return None
+ 
+ 
+-_STANDALONE_SOURCE = "suppression-check"
+-
+-
+ def _thread_is_standalone(t: PriorThread) -> bool:
+     """Does `t` carry a suppression-check finding, which the merge never clusters?"""
+     if not t.fingerprint:
+         return False
+     parts = split_fingerprint(t.fingerprint)
+-    return len(parts) == 4 and parts[0] == _STANDALONE_SOURCE
++    return len(parts) == 4 and parts[0] in STANDALONE_SOURCES
+ 
+ 
+ def _fuzzy_open_match(
+@@ -665,7 +663,7 @@ def _fuzzy_open_match(
+     # The merge keeps a suppression-check finding apart from every other
+     # finding, so a thread of that kind matches only a finding of that kind.
+     # Otherwise two findings on one line claim one thread on every re-run.
+-    standalone = finding.source == _STANDALONE_SOURCE
++    standalone = is_standalone(finding)
+     candidates = [
+         t
+         for t in open_threads
+@@ -723,7 +721,7 @@ def classify(
+     # A rolled-up representative stands for lines far from its own. A dismissal
+     # near its line says nothing about the other lines, so only an exact
+     # fingerprint verdict above can suppress it.
+-    if not finding.rolled_up and _fuzzy_dismissed_match(finding, verdicts, all_threads) is not None:
++    if not finding.rolled_up_by_rule and _fuzzy_dismissed_match(finding, verdicts, all_threads) is not None:
+         return Classified(finding, "suppressed", None)
+ 
+     if verdicts.get(fp) == "fixed":

@@ -604,3 +604,69 @@ def test_harvest_skips_a_malformed_pr_payload_and_shows_the_stderr(
     assert harvest.harvest_repo("tag1consulting/ai-pr-review", 10) == [{"pr": 3, "outcome": "untouched"}]
     err = capsys.readouterr().err
     assert "KeyError" in err and "API rate limit exceeded" in err
+
+
+# --- push-level recall corpus (#1088) ---
+
+_PUSH_CORPUS = _CANARY / "eval_corpus_pushes"
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def _changed_ranges(diff: str) -> dict[str, list[tuple[int, int]]]:
+    """New-file line ranges of every hunk, by file, so a label can be checked."""
+    out: dict[str, list[tuple[int, int]]] = {}
+    current: str | None = None
+    for line in diff.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            out[current] = []
+        m = _HUNK.match(line)
+        if m and current is not None:
+            start, count = int(m.group(1)), int(m.group(2) or 1)
+            out[current].append((start, start + max(count, 1) - 1))
+    return out
+
+
+def test_push_corpus_loads_and_every_fixture_has_a_verified_bug() -> None:
+    fixtures = pe.load_fixtures(_PUSH_CORPUS)
+    assert len(fixtures) == 9
+    for f in fixtures:
+        assert not f.clean and f.bugs, f.name
+        assert f.source == "known-fix" and f.evidence == "strong", f.name
+        assert "claude[bot]" in f.verified_by and "fixed in" in f.verified_by, f.name
+
+
+def test_every_push_label_overlaps_a_changed_hunk_of_its_diff() -> None:
+    """A label on code the push did not change cannot be found from the diff, so
+    it would count as a miss that the reviewer could never avoid."""
+    for f in pe.load_fixtures(_PUSH_CORPUS):
+        ranges = _changed_ranges(f.diff_path.read_text())
+        for bug in f.bugs:
+            hunks = ranges.get(bug.file, [])
+            assert any(not (bug.line_end < a or bug.line_start > b) for a, b in hunks), (
+                f"{f.name}: {bug.file}:{bug.line_start}-{bug.line_end} is outside {hunks}"
+            )
+
+
+def test_push_fixtures_stay_below_a_size_that_fits_one_agent_call() -> None:
+    assert all(f.diff_path.stat().st_size <= 20_000 for f in pe.load_fixtures(_PUSH_CORPUS))
+
+
+def test_the_default_corpus_does_not_hold_the_push_fixtures() -> None:
+    """They are larger and dearer, so the cheap default run must not pick them up."""
+    default_names = {f.name for f in pe.load_fixtures(pe.CORPUS_DIR)}
+    push_names = {f.name for f in pe.load_fixtures(_PUSH_CORPUS)}
+    assert default_names.isdisjoint(push_names)
+
+
+@pytest.mark.anyio
+async def test_the_push_corpus_estimate_fits_the_run_cap(
+    state: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AI_EVAL_CORPUS_DIR", str(_PUSH_CORPUS))
+    await pe.main(["--dry-run"])
+    line = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("spend guard:")][0]
+    expected = float(re.search(r"expected \$([0-9.]+)", line).group(1))  # type: ignore[union-attr]
+    worst = float(re.search(r"worst case \$([0-9.]+)", line).group(1))  # type: ignore[union-attr]
+    assert expected < 2.0
+    assert worst < 5.0

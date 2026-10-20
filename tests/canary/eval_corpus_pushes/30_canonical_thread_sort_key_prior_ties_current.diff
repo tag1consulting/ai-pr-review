@@ -1,0 +1,303 @@
+diff --git a/ai_pr_review/findings/merge.py b/ai_pr_review/findings/merge.py
+index a22c037..1c29056 100644
+--- a/ai_pr_review/findings/merge.py
++++ b/ai_pr_review/findings/merge.py
+@@ -14,7 +14,9 @@ cross-source duplicates).
+ 
+ from __future__ import annotations
+ 
++import bisect
+ import logging
++from dataclasses import dataclass, field
+ 
+ from ai_pr_review.findings.models import Finding, Severity, combine_also_reported
+ from ai_pr_review.findings.provenance import boosted_confidence, is_corroborated_cluster
+@@ -144,6 +146,67 @@ def _style_flags_agree(m: Finding, f: Finding) -> bool:
+     return _is_style(m) == _is_style(f)
+ 
+ 
++@dataclass
++class _ClusterState:
++    """Per-cluster facts that placement needs, kept so a placement is not linear in the cluster.
++
++    `accepts` gives the same answer as a scan of every member. The scan form
++    is `_cluster_category_compatible`, kept as the reference for the tests.
++    """
++
++    lines: list[int] = field(default_factory=list)
++    categories: set[str] = field(default_factory=set)
++    analyzer_style: set[bool] = field(default_factory=set)
++    has_style: bool = False
++    has_standalone: bool = False
++    established: str | None = None
++
++    @classmethod
++    def of(cls, members: list[Finding]) -> _ClusterState:
++        state = cls()
++        for m in members:
++            state.add(m)
++        return state
++
++    def copy(self) -> _ClusterState:
++        return _ClusterState(
++            list(self.lines),
++            set(self.categories),
++            set(self.analyzer_style),
++            self.has_style,
++            self.has_standalone,
++            self.established,
++        )
++
++    def add(self, m: Finding) -> None:
++        bisect.insort(self.lines, m.line or 0)
++        self.categories.add(m.category)
++        if _analyzer_tools(m) is not None:
++            self.analyzer_style.add(_is_style(m))
++        self.has_style = self.has_style or _is_style(m)
++        self.has_standalone = self.has_standalone or _is_standalone(m)
++        if self.established is None and m.category != "other":
++            self.established = m.category
++
++    def span(self) -> tuple[int, int]:
++        return self.lines[0], self.lines[-1]
++
++    def distance(self, line: int) -> int:
++        """Return the distance from `line` to the nearest member."""
++        i = bisect.bisect_left(self.lines, line)
++        best = abs(self.lines[i] - line) if i < len(self.lines) else PROXIMITY_LINES + 1
++        if i > 0:
++            best = min(best, line - self.lines[i - 1])
++        return best
++
++    def accepts(self, f: Finding) -> bool:
++        if _is_style(f) or self.has_style:
++            if self.categories - {f.category}:
++                return False
++            return not (_analyzer_tools(f) is not None and self.analyzer_style - {_is_style(f)})
++        return categories_compatible(self.established, f.category)
++
++
+ def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
+     """Can `f` join `cluster` without introducing a second, conflicting real category?
+ 
+@@ -153,6 +216,9 @@ def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
+     two incompatible real categories (e.g. secret -> other -> injection all
+     within PROXIMITY_LINES of their neighbor), silently dropping one of them
+     when the cluster collapses.
++
++    This is the scan over every member. `_ClusterState.accepts` is the same
++    rule at constant cost, and the merge uses it.
+     """
+     if _is_style(f) or any(_is_style(m) for m in cluster):
+         # `categories_compatible` is not used here on purpose: it also drives
+@@ -164,14 +230,31 @@ def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
+     return categories_compatible(established, f.category)
+ 
+ 
+-def _line_span(cluster: list[Finding]) -> tuple[int, int]:
+-    lines = [m.line or 0 for m in cluster]
+-    return min(lines), max(lines)
++def _cluster_distance(a: _ClusterState, b: _ClusterState) -> int:
++    """Return the smallest distance between a member of `a` and a member of `b`."""
++    small, large = (a, b) if len(a.lines) <= len(b.lines) else (b, a)
++    return min(large.distance(x) for x in small.lines)
+ 
+ 
+-def _span_gap(a: tuple[int, int], b: tuple[int, int]) -> int:
+-    """Return the distance between two line spans, 0 when they overlap."""
+-    return max(a[0] - b[1], b[0] - a[1], 0)
++def _candidate_pairs(spans: list[tuple[int, int]]) -> list[list[int]]:
++    """For each cluster index, list the later indexes whose span is within PROXIMITY_LINES.
++
++    A sweep over the spans in start order keeps this near linear when the
++    clusters are mostly apart. A pair is listed under its lower index, in
++    ascending order, which is the order that a scan of every pair visits.
++    """
++    order = sorted(range(len(spans)), key=lambda k: spans[k][0])
++    found: list[list[int]] = [[] for _ in spans]
++    for pos, i in enumerate(order):
++        hi = spans[i][1]
++        for nxt in range(pos + 1, len(order)):
++            j = order[nxt]
++            if spans[j][0] - hi > PROXIMITY_LINES:
++                break
++            found[min(i, j)].append(max(i, j))
++    for js in found:
++        js.sort()
++    return found
+ 
+ 
+ def _merge_linked_clusters(clusters: list[list[Finding]]) -> None:
+@@ -183,32 +266,31 @@ def _merge_linked_clusters(clusters: list[list[Finding]]) -> None:
+     line order chained them. Join them here when every finding of one cluster
+     is compatible with the other.
+     """
++    states = [_ClusterState.of(c) for c in clusters]
+     merged = True
+     while merged:
+         merged = False
+-        spans = [_line_span(c) for c in clusters]
+-        for i, a in enumerate(clusters):
+-            for j in range(i + 1, len(clusters)):
++        candidates = _candidate_pairs([st.span() for st in states])
++        for i, js in enumerate(candidates):
++            a = clusters[i]
++            for j in js:
+                 b = clusters[j]
+-                # The gap between the two line spans is a lower bound on the
+-                # distance between any two members, so a wide gap rules the
+-                # pair out without a member scan.
+-                if _span_gap(spans[i], spans[j]) > PROXIMITY_LINES:
++                if states[i].has_standalone or states[j].has_standalone:
+                     continue
+-                if any(_is_standalone(m) for m in a + b):
++                if _cluster_distance(states[i], states[j]) > PROXIMITY_LINES:
+                     continue
+-                if min(abs((x.line or 0) - (y.line or 0)) for x in a for y in b) > PROXIMITY_LINES:
+-                    continue
+-                grown = list(a)
++                grown = states[i].copy()
+                 ok = True
+                 for m in b:
+-                    if not _cluster_category_compatible(grown, m):
++                    if not grown.accepts(m):
+                         ok = False
+                         break
+-                    grown.append(m)
++                    grown.add(m)
+                 if ok:
+                     a.extend(b)
++                    states[i] = grown
+                     del clusters[j]
++                    del states[j]
+                     merged = True
+                     break
+             if merged:
+@@ -221,7 +303,19 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
+     sorted_fs = sorted(findings, key=lambda f: f.line or 0)
+ 
+     clusters: list[list[Finding]] = []
+-    spans: dict[int, tuple[int, int]] = {}
++    states: dict[int, _ClusterState] = {}
++    # Clusters by the line of each member, so a placement looks at the clusters
++    # near the finding and not at every cluster. `order` keeps the earlier
++    # cluster winning a tie, as a scan of the whole list did.
++    by_line: dict[int, list[list[Finding]]] = {}
++    order_of: dict[int, int] = {}
++
++    def nearby_clusters(line: int) -> list[list[Finding]]:
++        seen: dict[int, list[Finding]] = {}
++        for ln in range(line - PROXIMITY_LINES, line + PROXIMITY_LINES + 1):
++            for c in by_line.get(ln, ()):
++                seen[id(c)] = c
++        return sorted(seen.values(), key=lambda c: order_of[id(c)])
+ 
+     def place(f: Finding) -> None:
+         f_line = f.line or 0
+@@ -234,29 +328,28 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
+         best_cluster: list[Finding] | None = None
+         best_rank = (True, PROXIMITY_LINES + 1)
+         if not _is_standalone(f):
+-            for cluster in clusters:
+-                lo, hi = spans[id(cluster)]
+-                if f_line < lo - PROXIMITY_LINES or f_line > hi + PROXIMITY_LINES:
+-                    continue
+-                distance = min(abs((m.line or 0) - f_line) for m in cluster)
++            for cluster in nearby_clusters(f_line):
++                state = states[id(cluster)]
++                distance = state.distance(f_line)
+                 # An agent finding cannot say whether it is style. When a style
+                 # cluster and a defect cluster both accept it, it joins the
+                 # defect cluster, so a style hit cannot corroborate it.
+-                rank = (_analyzer_tools(f) is None and any(_is_style(m) for m in cluster), distance)
++                rank = (_analyzer_tools(f) is None and state.has_style, distance)
+                 if (
+                     distance <= PROXIMITY_LINES
+                     and rank < best_rank
+-                    and not any(_is_standalone(m) for m in cluster)
+-                    and _cluster_category_compatible(cluster, f)
++                    and not state.has_standalone
++                    and state.accepts(f)
+                 ):
+                     best_cluster, best_rank = cluster, rank
+-        if best_cluster is not None:
+-            best_cluster.append(f)
+-            lo, hi = spans[id(best_cluster)]
+-            spans[id(best_cluster)] = (min(lo, f_line), max(hi, f_line))
+-        else:
+-            clusters.append([f])
+-            spans[id(clusters[-1])] = (f_line, f_line)
++        if best_cluster is None:
++            best_cluster = []
++            clusters.append(best_cluster)
++            order_of[id(best_cluster)] = len(clusters)
++            states[id(best_cluster)] = _ClusterState()
++        best_cluster.append(f)
++        states[id(best_cluster)].add(f)
++        by_line.setdefault(f_line, []).append(best_cluster)
+ 
+     # Analyzer findings cluster first, then every other finding joins its
+     # nearest compatible cluster. An agent finding cannot carry `style_only`, so
+diff --git a/ai_pr_review/vcs/_canonical.py b/ai_pr_review/vcs/_canonical.py
+index 58a70a2..ed4b261 100644
+--- a/ai_pr_review/vcs/_canonical.py
++++ b/ai_pr_review/vcs/_canonical.py
+@@ -646,11 +646,26 @@ def _fuzzy_dismissed_match(
+     return None
+ 
+ 
++_STANDALONE_SOURCE = "suppression-check"
++
++
++def _thread_is_standalone(t: PriorThread) -> bool:
++    """Does `t` carry a suppression-check finding, which the merge never clusters?"""
++    if not t.fingerprint:
++        return False
++    parts = split_fingerprint(t.fingerprint)
++    return len(parts) == 4 and parts[0] == _STANDALONE_SOURCE
++
++
+ def _fuzzy_open_match(
+-    finding: Finding, open_threads: Sequence[PriorThread]
++    finding: Finding, open_threads: Sequence[PriorThread], fp: str | None = None
+ ) -> PriorThread | None:
+     if not finding.file or finding.line is None:
+         return None
++    # The merge keeps a suppression-check finding apart from every other
++    # finding, so a thread of that kind matches only a finding of that kind.
++    # Otherwise two findings on one line claim one thread on every re-run.
++    standalone = finding.source == _STANDALONE_SOURCE
+     candidates = [
+         t
+         for t in open_threads
+@@ -658,11 +673,19 @@ def _fuzzy_open_match(
+         and t.line is not None
+         and abs(t.line - finding.line) <= PROXIMITY_LINES
+         and categories_compatible(t.category, finding.category)
++        and _thread_is_standalone(t) == standalone
+     ]
+     if not candidates:
+         return None
+-    # Prefer the closest line match; ties broken by the oldest comment.
+-    candidates.sort(key=lambda t: (abs((t.line or 0) - (finding.line or 0)), t.comment_id))
++    # Prefer the thread that carries this finding's own fingerprint, then the
++    # closest line match. Ties are broken by the oldest comment.
++    candidates.sort(
++        key=lambda t: (
++            not (fp is not None and (t.fingerprint == fp or fp in t.prior_fingerprints)),
++            abs((t.line or 0) - (finding.line or 0)),
++            t.comment_id,
++        )
++    )
+     return candidates[0]
+ 
+ 
+@@ -701,7 +724,7 @@ def classify(
+         thread = _find_thread_by_fingerprint(all_threads, fp)
+         return Classified(finding, "recurred", thread)
+ 
+-    thread = _fuzzy_open_match(finding, open_threads)
++    thread = _fuzzy_open_match(finding, open_threads, fp)
+     if thread is not None:
+         if thread.is_outdated:
+             return Classified(finding, "new", None)
