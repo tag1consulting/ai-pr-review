@@ -1,0 +1,16 @@
+{
+  "clean": false,
+  "source": "known-fix",
+  "evidence": "strong",
+  "verified_by": "history: the push 10696051 on PR #1085 was reviewed by claude[bot] (review comment 4327632801). The author confirmed it, fixed in 3d42246. A second comment on the same push (4327632789, rollup fingerprint) is not labeled: the author declined it as a design trade-off and 3d42246 did not change it",
+  "bugs": [
+    {
+      "file": "ai_pr_review/findings/models.py",
+      "line_start": 134,
+      "line_end": 142,
+      "category": "authz",
+      "summary": "agent JSON can set the internal rolled_up flag because extract does not strip it, so an agent can make its own finding skip dismissal matching"
+    }
+  ],
+  "accepted_extra": []
+}

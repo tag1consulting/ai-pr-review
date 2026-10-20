@@ -1,0 +1,16 @@
+{
+  "clean": false,
+  "source": "known-fix",
+  "evidence": "strong",
+  "verified_by": "history: the push dbabdfd9 on PR #1083 was reviewed by claude[bot] (review comment id 4320736763), the author confirmed each finding, fixed in 46a767d",
+  "bugs": [
+    {
+      "file": "ai_pr_review/findings/merge.py",
+      "line_start": 180,
+      "line_end": 194,
+      "category": "edge-case",
+      "summary": "an agent finding one line above an analyzer defect still lands in the nearby style cluster because placement depends on line order, so the defect posts twice and the style hit falsely corroborates it"
+    }
+  ],
+  "accepted_extra": []
+}

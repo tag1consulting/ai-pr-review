@@ -1,0 +1,45 @@
+diff --git a/ai_pr_review/findings/models.py b/ai_pr_review/findings/models.py
+index 1162371..f3e74ea 100644
+--- a/ai_pr_review/findings/models.py
++++ b/ai_pr_review/findings/models.py
+@@ -132,6 +132,11 @@ class Finding(BaseModel):
+     # source — independent corroboration of the same file+line region.
+     # Internal-only: not serialised by to_dict().
+     corroborated: bool = False
++    # Set by scope.rollup_repeated_findings on the representative of a rolled-up
++    # group. The representative stands for lines far from its own, so a fuzzy
++    # match on its line must not read as a match for the whole group (#1073).
++    # Internal-only: not serialised by to_dict().
++    rolled_up: bool = False
+     # Display preference only: when True, the renderers show the evidence label and
+     # score beside the finding. The label is computed from this finding's own fields
+     # when it is rendered (findings/badge.py), so it cannot go stale. The orchestrator
+diff --git a/ai_pr_review/findings/scope.py b/ai_pr_review/findings/scope.py
+index 36c1cd0..fbd71e7 100644
+--- a/ai_pr_review/findings/scope.py
++++ b/ai_pr_review/findings/scope.py
+@@ -232,7 +232,7 @@ def rollup_repeated_findings(
+         if len(lines) > 10:
+             line_preview += f" ... (+{len(lines) - 10} more)"
+         summary = f" ({len(group)} occurrences in {key[0]}, lines: {line_preview})"
+-        update: dict[str, object] = {"finding": rep.finding + summary}
++        update: dict[str, object] = {"finding": rep.finding + summary, "rolled_up": True}
+         notes = combine_also_reported([g.also_reported for g in group])
+         if notes:
+             update["also_reported"] = notes
+diff --git a/ai_pr_review/vcs/_canonical.py b/ai_pr_review/vcs/_canonical.py
+index ed4b261..d86b55c 100644
+--- a/ai_pr_review/vcs/_canonical.py
++++ b/ai_pr_review/vcs/_canonical.py
+@@ -717,7 +717,10 @@ def classify(
+ 
+     if verdicts.get(fp) == "dismissed":
+         return Classified(finding, "suppressed", None)
+-    if _fuzzy_dismissed_match(finding, verdicts, all_threads) is not None:
++    # A rolled-up representative stands for lines far from its own. A dismissal
++    # near its line says nothing about the other lines, so only an exact
++    # fingerprint verdict above can suppress it.
++    if not finding.rolled_up and _fuzzy_dismissed_match(finding, verdicts, all_threads) is not None:
+         return Classified(finding, "suppressed", None)
+ 
+     if verdicts.get(fp) == "fixed":

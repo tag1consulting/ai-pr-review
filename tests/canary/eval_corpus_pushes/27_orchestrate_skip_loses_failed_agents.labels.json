@@ -1,0 +1,16 @@
+{
+  "clean": false,
+  "source": "known-fix",
+  "evidence": "strong",
+  "verified_by": "history: the bug was introduced by 3c162ae1 (blame). claude[bot] named it in review comment 4319609843 on PR #1073, posted on the later commit 855c6d42 that holds the same code. The author confirmed it, fixed in f90e7c1",
+  "bugs": [
+    {
+      "file": "ai_pr_review/orchestrate.py",
+      "line_start": 215,
+      "line_end": 220,
+      "category": "edge-case",
+      "summary": "the runtime prompt-too-long skip classifies the outcome with an empty failed-agents list, so the outcome is approvable and with AI_FAIL_ON_FINDINGS the run exits 0 instead of 2"
+    }
+  ],
+  "accepted_extra": []
+}

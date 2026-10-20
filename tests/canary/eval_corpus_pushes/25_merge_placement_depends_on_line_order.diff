@@ -1,0 +1,51 @@
+diff --git a/ai_pr_review/findings/merge.py b/ai_pr_review/findings/merge.py
+index f1850ee..f6dadaf 100644
+--- a/ai_pr_review/findings/merge.py
++++ b/ai_pr_review/findings/merge.py
+@@ -171,24 +171,28 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
+ 
+     clusters: list[list[Finding]] = []
+     for f in sorted_fs:
+-        placed = False
+-        for cluster in clusters:
+-            # Compare proximity against the last (nearest) finding in the
+-            # cluster so that a chain of findings within PROXIMITY_LINES all
+-            # merge together, even if the first finding is outside the window.
+-            tail = cluster[-1]
+-            tail_line = tail.line or 0
+-            f_line = f.line or 0
+-            if (
+-                abs(tail_line - f_line) <= PROXIMITY_LINES
+-                and not _is_standalone(f)
+-                and not any(_is_standalone(m) for m in cluster)
+-                and _cluster_category_compatible(cluster, f)
+-            ):
+-                cluster.append(f)
+-                placed = True
+-                break
+-        if not placed:
++        f_line = f.line or 0
++        # Compare proximity against the last (nearest) finding in the cluster
++        # so that a chain of findings within PROXIMITY_LINES all merge
++        # together, even if the first finding is outside the window. Of the
++        # clusters that accept `f`, join the one whose tail is nearest, and the
++        # earlier one on a tie. First-fit let an agent `lint` finding join an
++        # earlier style cluster instead of the analyzer finding on its own
++        # line, because an agent finding cannot carry `style_only`.
++        best_cluster: list[Finding] | None = None
++        best_distance = PROXIMITY_LINES + 1
++        if not _is_standalone(f):
++            for cluster in clusters:
++                distance = abs((cluster[-1].line or 0) - f_line)
++                if (
++                    distance < best_distance
++                    and not any(_is_standalone(m) for m in cluster)
++                    and _cluster_category_compatible(cluster, f)
++                ):
++                    best_cluster, best_distance = cluster, distance
++        if best_cluster is not None:
++            best_cluster.append(f)
++        else:
+             clusters.append([f])
+ 
+     return [_collapse_cluster(c) for c in clusters]
