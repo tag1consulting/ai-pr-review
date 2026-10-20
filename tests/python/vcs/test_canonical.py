@@ -1556,6 +1556,17 @@ def test_regressed_match_skips_a_finding_that_still_has_an_open_thread(outdated:
     assert find_regressed_match(_finding("x", line=10), [resolved]) is resolved
 
 
+@pytest.mark.parametrize(("path", "line"), [("other.py", 10), ("app.py", 30)])
+def test_regressed_match_ignores_an_open_thread_that_is_not_near(path: str, line: int) -> None:
+    old = _finding(line=10)
+    resolved = _bot_resolved(old, thread_id="t1", comment_id=1)
+    elsewhere = _thread(
+        thread_id="t2", comment_id=2, fp=fingerprint(old), category=old.category,
+        path=path, line=line,
+    )
+    assert find_regressed_match(_finding("x", line=10), [resolved, elsewhere]) is resolved
+
+
 def test_regressed_match_checks_the_verdict_against_prior_fingerprints_too() -> None:
     old = _finding(line=10)
     thread = _bot_resolved(old, prior_fingerprints=frozenset({"x|app.py|10|oldhash"}))

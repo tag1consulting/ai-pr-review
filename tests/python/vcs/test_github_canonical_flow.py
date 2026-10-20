@@ -990,14 +990,19 @@ def test_regression_note_does_not_claim_that_a_push_happened() -> None:
     assert "resolved earlier by this review" in note
 
 
-def test_thread_closed_by_a_verdict_command_gets_no_regression_note() -> None:
+@pytest.mark.parametrize(("verdict", "expect_note"), [("dismissed", False), (None, True)])
+def test_thread_closed_by_a_verdict_command_gets_no_regression_note(
+    verdict: str | None, expect_note: bool
+) -> None:
     """A slash command resolves its thread with the bot's own token, so the thread
     reads as bot-resolved. A person dismissed it, and nobody fixed anything."""
     from ai_pr_review.vcs._finding_ids import fingerprint as _fp
 
     old = _finding("secret detected", severity="Low", line=5, source="trufflehog", category="secret")
     new = _finding("secret detected, worse", severity="High", line=6, source="trufflehog", category="secret")
-    canonical_body = _footer_body() + "\n" + build_verdicts_marker({_fp(old): "dismissed"})
+    canonical_body = _footer_body()
+    if verdict is not None:
+        canonical_body += "\n" + build_verdicts_marker({_fp(old): verdict})
     old_body = _build_inline_comment_body(old, finding_id=3)
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -1011,7 +1016,7 @@ def test_thread_closed_by_a_verdict_command_gets_no_regression_note() -> None:
         if _is_graphql(req, body, "reviewThreads"):
             return _threads_response([_thread_node(
                 thread_id="th1", comment_id=1, review_id=10, body=old_body, line=5,
-                is_resolved=True, resolved_by="github-actions",
+                is_resolved=True, is_outdated=True, resolved_by="github-actions",
             )])
         if req.method in ("POST", "PUT") and "/pulls/1/reviews" in url:
             return httpx.Response(201, json={"id": 20, "state": "CHANGES_REQUESTED"})
@@ -1023,8 +1028,10 @@ def test_thread_closed_by_a_verdict_command_gets_no_regression_note() -> None:
     )
     assert result.ok
     sent = _json.dumps([c[2] for c in rec.calls if c[0] in ("POST", "PUT")], ensure_ascii=False)
-    assert "secret detected, worse" in sent  # the escalated finding is still posted
-    assert "resolved earlier by this review" not in sent
+    assert "secret detected, worse" in sent  # the finding is still posted
+    # With no verdict the same setup must emit the note, so the dismissed case
+    # proves the verdict guard and not another guard.
+    assert ("resolved earlier by this review" in sent) is expect_note
 
 
 def test_finding_from_another_source_near_a_bot_resolved_thread_gets_no_regression_note() -> None:
@@ -1038,13 +1045,6 @@ def test_human_resolved_thread_gets_the_779_note_and_not_the_regression_note() -
     old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
     body = _post_with_one_resolved_thread(old, old, resolved_by="a-human")
     assert "previously resolved without a" in body
-    assert "resolved earlier by this review" not in body
-
-
-def test_open_thread_gets_no_regression_note() -> None:
-    old = _finding("secret detected", severity="High", line=5, source="trufflehog", category="secret")
-    new = _finding("secret detected", severity="High", line=6, source="trufflehog", category="secret")
-    body = _post_with_one_resolved_thread(old, new, resolved_by="github-actions", resolved=False)
     assert "resolved earlier by this review" not in body
 
 
