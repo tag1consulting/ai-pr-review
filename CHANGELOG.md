@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.24.1] - 2026-10-21
+
+### Security
+
+- **The PR checkout can no longer shadow the engine's Python modules.** The review starts the Python engine in the checked-out tree of the pull request. `python3 -m` puts the working directory first on `sys.path`, so a file in the pull request, for example `ai_pr_review/__main__.py` or `yaml.py`, could run instead of the installed module. That code would run with the review's API keys in its environment. The image, the container action, the root action and the `parse-command` step of `slash-commands.yml` now set `PYTHONSAFEPATH=1`, which keeps the working directory off `sys.path`. The fix reaches an image user only through the new image tag, so update `image-tag` to `2.24.1` or leave it at `latest`. A user of `container-action` from `main` is covered at once, because the action passes the variable to `docker run`. If you run `python3 -m ai_pr_review review` by hand from a checked-out tree, set `PYTHONSAFEPATH=1` first. The GitLab and Bitbucket example pipelines now do this (#1093).
+
 ## [2.24.0] - 2026-10-19
 
 ### Added

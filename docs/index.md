@@ -68,6 +68,12 @@ jobs:
 
 Reviews start on the next PR.
 
+## What's new in v2.24.1
+
+**Security: the pull request checkout can no longer shadow the engine's Python modules.** A file in a pull request, such as `ai_pr_review/__main__.py` or `yaml.py`, could run instead of the installed module and see the review's API keys. The image and the actions now set `PYTHONSAFEPATH=1`. Update `image-tag` to `2.24.1` or leave it at `latest`. If you run the engine by hand, set `PYTHONSAFEPATH=1` first.
+
+See [Version History → v2.24.1](version-history/v2.24.1) for details.
+
 ## What's new in v2.24.0
 
 **A provider "prompt too long" rejection skips the review.** Before, the provider rejected the prompt, every agent failed, and the comment said "2 failed agents". Now the review stops and says which agent does not fit. Use `exclude-patterns` for generated files.
@@ -89,14 +95,6 @@ See [Version History → v2.24.0](version-history/v2.24.0) for details.
 **Behavior change: the owners file is read from the target branch only.** `AI_POLICY_SOURCE` no longer applies to it, so a pull request cannot add its own author to the list. Merge a changed owners file into the target branch first.
 
 See [Version History → v2.23.2](version-history/v2.23.2) for details.
-
-## What's new in v2.23.1
-
-**Bitbucket finding numbers stay stable across runs.** A finding that an incremental run does not report again keeps its `F<n>`, so a waiting `/ai-pr-review false-positive F<n>` command can still find it. A run with no findings no longer restarts the numbering at F1. GitHub and GitLab are unchanged.
-
-**Bitbucket verdict commands work for a bot account with write access.** The review reads the people who may use `/ai-pr-review` commands from `.bitbucket/CODEOWNERS` (a `*` line). Before, the admin-only permission lookup failed for every commenter. See [Bitbucket setup](bitbucket-setup#dismissing-findings).
-
-See [Version History → v2.23.1](version-history/v2.23.1) for details.
 
 ## Learn more
 

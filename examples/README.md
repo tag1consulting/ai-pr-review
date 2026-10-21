@@ -132,13 +132,13 @@ For reproducible builds, pin the image tag instead of using `latest`:
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: '2.24.0'   # pin to a specific release
+    image-tag: '2.24.1'   # pin to a specific release
     ...
 ```
 
 Or set the `AI_REVIEW_IMAGE_TAG` repo variable to your chosen tag: the canonical `workflows/pr-review.yml` template reads it via `${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}`.
 
-Available tags: `latest`, `dev`, `<major>` (e.g. `2`), `<major.minor>` (e.g. `2.24`), `<major.minor.patch>` (e.g. `2.24.0`).
+Available tags: `latest`, `dev`, `<major>` (e.g. `2`), `<major.minor>` (e.g. `2.24`), `<major.minor.patch>` (e.g. `2.24.1`).
 
 ## Using the non-container action
 

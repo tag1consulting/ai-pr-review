@@ -12,6 +12,7 @@ What changed in each release, newest first. Every release from v2.8.0 onward has
 
 | Version | Highlights |
 |---------|-----------|
+| [v2.24.1](version-history/v2.24.1) | Security: the pull request checkout can no longer shadow the engine's Python modules, `PYTHONSAFEPATH=1` is set in the image and the actions (#1093) |
 | [v2.24.0](version-history/v2.24.0) | A provider "prompt too long" rejection skips the review instead of failing every agent (#1056), the severity icons are different shapes (behavior change, #1037), the Bitbucket `feedback` command works (#933), `COST_ESTIMATE` shows the input and output-cap split (#1055), and the example workflows pass `approval-ceiling` (#1064) |
 | [v2.23.2](version-history/v2.23.2) | Bitbucket verdict owners: an `@nickname` owner line no longer grants and the owners file is read from the target branch only (behavior change, #1071) |
 | [v2.23.1](version-history/v2.23.1) | Bitbucket verdict commands are authorized from `.bitbucket/CODEOWNERS` (#1068), a 403 from the permission lookup gets its own reply, Bitbucket finding numbers are kept across runs, so a waiting verdict command can still name its finding and a run with no findings no longer restarts the numbering at F1 (#1065). Image tool updates (#1061, #1062, #1063). |

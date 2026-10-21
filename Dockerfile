@@ -245,4 +245,10 @@ WORKDIR /workspace
 # to a dist-packages path that does not contain these directories.
 ENV AI_PR_REVIEW_SCRIPT_DIR=/opt/ai-pr-review
 
+# WORKDIR is the PR's checked-out tree. Without this var, `python3 -m` puts that
+# directory first on sys.path, so a file in the PR such as ai_pr_review/__main__.py
+# or yaml.py would run instead of the installed code, with the review's secrets in
+# the environment. The checkout is data, never code.
+ENV PYTHONSAFEPATH=1
+
 ENTRYPOINT ["python3", "-m", "ai_pr_review", "review"]

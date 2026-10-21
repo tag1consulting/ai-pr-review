@@ -593,7 +593,14 @@ runs:
         #     ${VAR:+-e VAR} guard, since an unset override is a no-op either
         #     way. Adding a tenth agent to the roster means adding its var
         #     here too; nothing enforces that this list stays exhaustive.
+        #
+        # PYTHONSAFEPATH=1 keeps the working directory off sys.path. The image
+        # starts in /workspace, which is the PR's checked-out tree, and
+        # `python3 -m` otherwise imports a same-named module from that tree
+        # before the installed one. Set here as well as in the Dockerfile so an
+        # older image tag gets the protection when this action is used from main.
         docker run --rm \
+          -e PYTHONSAFEPATH=1 \
           -e AI_PROVIDER \
           -e AI_REVIEW_MODE \
           -e REVIEW_TARGET \

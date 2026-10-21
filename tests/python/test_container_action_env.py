@@ -76,6 +76,8 @@ _EXPECTED_NON_AI_VARS = frozenset(
         "FORCE_FULL_DIFF", "STANDALONE_DEPTH",
         # Analyzer-specific
         "PHPSTAN_LEVEL", "SEMGREP_RULES",
+        # Interpreter hardening: keeps the PR's checked-out tree off sys.path
+        "PYTHONSAFEPATH",
     }
 )
 

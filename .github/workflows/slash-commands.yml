@@ -526,6 +526,7 @@ jobs:
           SLASH_COMMENT_BODY: ${{ inputs.comment-body }}
         run: |
           docker run --rm \
+            -e PYTHONSAFEPATH=1 \
             -e SLASH_COMMENT_BODY \
             --entrypoint python3 \
             "ghcr.io/tag1consulting/ai-pr-review:${{ inputs.image-tag }}" \

@@ -612,4 +612,8 @@ runs:
         AI_CONTEXT_WINDOW_MARGIN: ${{ inputs.context-window-margin }}
         AI_FAIL_ON_CONTEXT_WINDOW: ${{ inputs.fail-on-context-window }}
         AI_PR_REVIEW_SCRIPT_DIR: ${{ github.action_path }}
+        # This step runs in the PR's checked-out tree. Keep that directory off
+        # sys.path so `python3 -m` cannot import a module from the PR. The package
+        # needs Python 3.11 or later (pyproject.toml), and that version honors this.
+        PYTHONSAFEPATH: "1"
       run: python3 -m ai_pr_review review
