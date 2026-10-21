@@ -57,9 +57,36 @@ def safe_text(text: str) -> str:
     return escape_closing_tags(clean_text(text))
 
 
+# Characters a code line may hide inside a closer. The light strip keeps ZWJ and ZWNJ, so
+# match them (and the other format characters) between every character of the closer.
+_IGNORABLE = "[\\s\u00ad\u200b-\u200f\u2060-\u2064\ufeff]*"
+
+
+def _loose_closer(tags: tuple[str, ...]) -> re.Pattern[str]:
+    def spaced(word: str) -> str:
+        return _IGNORABLE.join(re.escape(c) for c in word)
+
+    return re.compile(
+        "(?i)<" + _IGNORABLE + "/" + _IGNORABLE + "(" + "|".join(spaced(t) for t in tags) + ")"
+    )
+
+
+_LOOSE_BLOCK_CLOSER = _loose_closer(BLOCK_TAGS)
+
+
+def _escape_loose(match: re.Match[str]) -> str:
+    name = re.sub(_IGNORABLE.replace("*", "+"), "", match.group(1))
+    return "&lt;/" + name
+
+
 def safe_code(text: str) -> str:
-    """Light strip, then escape. Use for the diff and for code snippets."""
-    return escape_closing_tags(clean_code(text))
+    """Light strip, then escape. Use for the diff and for code snippets.
+
+    The light strip keeps ZWJ and ZWNJ, which can hide a closer such as ``<ZWJ/pr-context>``.
+    The escape therefore tolerates format characters inside the closer. A legitimate emoji
+    sequence elsewhere in the text is kept.
+    """
+    return _LOOSE_BLOCK_CLOSER.sub(_escape_loose, clean_code(text))
 
 
 def code_fence(snippet: str) -> str:

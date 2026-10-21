@@ -42,11 +42,12 @@ def build_shared_context_block(
     manifest) -- callers should skip adding an empty prefix part rather than
     emit an empty wrapper.
     """
-    # Strip invisible characters and escape closing tags before any truncation, so a
+    # Remove HTML comments first (a comment can hide half of a closer), then strip
+    # invisible characters and escape closing tags before any truncation, so a
     # closer cannot be cut in half and slip past the escape. Do it once, here, so the
     # cached prefix stays the same for every agent.
     title = safe_text(pr_title).strip()
-    body = _HTML_COMMENT_RE.sub("", safe_text(pr_body)).strip()
+    body = safe_text(_HTML_COMMENT_RE.sub("", pr_body)).strip()
     if len(body) > max_body_chars:
         body = body[:max_body_chars].rstrip() + "\n\n_[description truncated]_"
     manifest = safe_text(manifest_text).strip()
