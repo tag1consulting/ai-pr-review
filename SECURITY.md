@@ -47,6 +47,10 @@ This invariant is the load-bearing safety control for consumers that use the act
 
 If the action ever executed working-tree content under `pull_request_target`, a fork PR author could exfiltrate those secrets. Several Tag1 consumer repos intentionally reference `tag1consulting/ai-pr-review/container-action@main` (a mutable ref) as a dogfooding/canary policy. That choice is only safe **because** this invariant holds and is enforced here.
 
+### Fork pull requests
+
+The engine pauses a fork pull request until a maintainer approves the exact head commit. The approval is a commit status in the base repository, created by a trusted workflow after a write-access user adds a label. A new push needs a new approval. The engine fails closed when it cannot read the facts. See [docs/fork-prs.md](docs/fork-prs.md) for the rule, the approval workflow and the limits. This gate does not contain a flaw in the engine itself, because the review still runs in the job that holds the secrets.
+
 ### Regression guard
 
 A canary fixture lives in `tests/security/canary-workspace/` and is enforced by `tests/python/test_security_canary.py` (marked `@pytest.mark.security`) on every PR via the `Lint & Test` CI job. A failure in those tests is a security regression; see CONTRIBUTING.md for the reporting process. Any new code path that reads from `$GITHUB_WORKSPACE` must be verified against the canary tests before merging.

@@ -71,6 +71,8 @@ _EXPECTED_NON_AI_VARS = frozenset(
         "GH_TOKEN", "GITHUB_TOKEN", "GITHUB_ACTIONS", "GITHUB_REPOSITORY",
         "GITHUB_SERVER_URL", "GITHUB_RUN_ID", "GITHUB_API_URL", "GITHUB_BOT_USERNAME",
         "GITHUB_WORKSPACE", "GITHUB_STEP_SUMMARY",
+        # The fork gate (review/fork_gate.py) skips only a plain pull_request run
+        "GITHUB_EVENT_NAME",
         # PR/diff identification
         "PR_NUMBER", "BASE_REF", "HEAD_REF", "HEAD_SHA", "REVIEW_TARGET", "MAX_DIFF_LINES",
         "FORCE_FULL_DIFF", "STANDALONE_DEPTH",

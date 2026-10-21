@@ -51,6 +51,9 @@ class SkipPlan:
     check rather than the diff-too-large/no-changes compute-phase skips.
     cli.py uses this to decide whether AI_FAIL_ON_COST_CEILING should turn
     the otherwise-0 exit code into 2."""
+    is_fork_gate_skip: bool = False
+    """True when the fork gate paused the review (a fork pull request with no approval for its head
+    commit, see ``review/fork_gate.py``). The run exits 0: the skip comment tells a maintainer what to do."""
     is_context_window_skip: bool = False
     """True when this skip came from the #1056 pre-flight context-window
     check. cli.py uses this to decide whether AI_FAIL_ON_CONTEXT_WINDOW should
@@ -222,6 +225,26 @@ def _warn_if_context_enrichment_inert() -> None:
         )
 
 
+def _apply_fork_gate(config: ReviewConfig, provider: VcsProvider) -> tuple[ReviewConfig, SkipPlan | None]:
+    """Block a fork pull request that has no approval for its head commit, and cap the cost of an
+    approved one. A provider without ``get_fork_gate_facts`` (GitLab, Bitbucket) is not gated."""
+    from ai_pr_review.review.fork_gate import APPROVAL_CONTEXT, decide
+
+    getter = getattr(provider, "get_fork_gate_facts", None)
+    if getter is None:
+        return config, None
+    # A plain pull_request run needs no facts (GitHub gives a fork no secrets on that event).
+    facts = None if config.event_name == "pull_request" else getter(config.head_sha, APPROVAL_CONTEXT)
+    decision = decide(config.event_name, config.head_sha, facts)
+    if not decision.allowed:
+        logger.warning("fork gate: review paused (%s)", "facts unavailable" if facts is None else "no approval")
+        return config, SkipPlan(reason=decision.reason, provider=provider, is_fork_gate_skip=True)
+    if decision.gated and config.max_cost_usd == 0 and config.fork_max_cost_usd > 0:
+        logger.info("fork gate: approved fork pull request, default cost ceiling $%.2f", config.fork_max_cost_usd)
+        config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
+    return config, None
+
+
 async def build_review_runtime(
     config: ReviewConfig,
     *,
@@ -252,6 +275,11 @@ async def build_review_runtime(
     provider = _factory()
     if not isinstance(provider, VcsProvider):
         raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
+
+    # 1b. Fork gate: before any git command touches a fork's tree.
+    config, gate_skip = _apply_fork_gate(config, provider)
+    if gate_skip is not None:
+        return gate_skip
 
     # 2. Fetch last-reviewed SHA *before* compute so incremental diff works.
     last_reviewed = provider.get_last_reviewed_sha()

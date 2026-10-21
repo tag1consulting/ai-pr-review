@@ -19,6 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.review.fork_gate import ForkGateFacts
 from ai_pr_review.vcs._body import (
     GITHUB_MAX_BODY_SIZE,
     SLASH_COMMANDS_DOC_URL,
@@ -2431,6 +2432,61 @@ class GitHubProvider:
             return None
         body = data.get("body")
         return title, (body if isinstance(body, str) else "")
+
+    def get_fork_gate_facts(self, head_sha: str, context: str) -> ForkGateFacts | None:
+        """What the fork gate needs (see ``review/fork_gate.py``): the head and base repository
+        names, and the state of the newest status named *context* on *head_sha*.
+
+        The status is read from the BASE repository only, never the fork. Returns ``None`` on any
+        HTTP error or odd response shape, and the gate then fails closed.
+        """
+        if not re.fullmatch(r"[0-9a-f]{40}", head_sha or ""):
+            self._errors.append("get_fork_gate_facts: head sha is not a full commit id")
+            return None
+        try:
+            resp = self.client.request("GET", self._pull_request_url())
+        except httpx.HTTPError as exc:
+            self._errors.append(f"get_fork_gate_facts: pull request request failed: {type(exc).__name__}")
+            return None
+        if resp.status_code >= 400:
+            self._errors.append(f"get_fork_gate_facts: pull request HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        try:
+            pr = resp.json()
+            base_repo = pr["base"]["repo"]["full_name"]
+            head = pr["head"]["repo"]  # null when the fork was deleted
+            head_repo = head["full_name"] if isinstance(head, dict) else ""
+        except (ValueError, KeyError, TypeError):
+            self._errors.append("get_fork_gate_facts: unexpected pull request response shape")
+            return None
+        if not isinstance(base_repo, str) or not isinstance(head_repo, str):
+            self._errors.append("get_fork_gate_facts: repository names are not strings")
+            return None
+        c = self.config
+        try:
+            status_resp = self.client.request(
+                "GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/statuses?per_page=100")
+        except httpx.HTTPError as exc:
+            self._errors.append(f"get_fork_gate_facts: statuses request failed: {type(exc).__name__}")
+            return None
+        if status_resp.status_code >= 400:
+            self._errors.append(f"get_fork_gate_facts: statuses HTTP {status_resp.status_code}: {status_resp.text[:200]}")
+            return None
+        try:
+            statuses = status_resp.json()
+        except ValueError:
+            self._errors.append("get_fork_gate_facts: statuses response is not JSON")
+            return None
+        if not isinstance(statuses, list):
+            self._errors.append("get_fork_gate_facts: statuses response is not a list")
+            return None
+        state = ""
+        for status in statuses:  # newest first
+            if isinstance(status, dict) and status.get("context") == context:
+                raw_state = status.get("state")
+                state = raw_state if isinstance(raw_state, str) else ""
+                break
+        return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state=state)
 
     def submit_approval(self, message: str) -> tuple[bool, int, str]:
         """POST a standalone APPROVE review. Returns (ok, status, body_snippet).

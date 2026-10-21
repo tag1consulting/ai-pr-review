@@ -94,6 +94,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_TOKEN_USAGE_WARN_USD",
         # --- Pre-flight cost ceiling (#24) ---
         "AI_MAX_COST_USD",
+        # --- Fork pull request gate ---
+        "AI_FORK_MAX_COST_USD",
         "AI_FAIL_ON_COST_CEILING",
         "AI_COST_CEILING_UNPRICED",
         "AI_CONTEXT_WINDOW_MARGIN",
@@ -600,6 +602,11 @@ class ReviewConfig(BaseModel):
     # disables the ceiling -- the estimate is still computed and logged via
     # the COST_ESTIMATE line, just never enforced.
     max_cost_usd: float = 0.0
+    # Ceiling applied to an approved fork pull request when max_cost_usd is 0 (see review/fork_gate.py).
+    # 0 turns the default off. A non-zero max_cost_usd always wins.
+    fork_max_cost_usd: float = 2.0
+    # The workflow event (GITHUB_EVENT_NAME). The fork gate skips a plain pull_request run only.
+    event_name: str = ""
     # When the ceiling is exceeded, the run always aborts before any LLM call
     # (a skip comment is posted, same mechanism as the max-diff-lines skip)
     # -- but by default this is NOT treated as a CI failure (exit 0), mirroring
@@ -847,6 +854,19 @@ class ReviewConfig(BaseModel):
             return 0.0
         return v
 
+    @field_validator("fork_max_cost_usd")
+    @classmethod
+    def _fork_max_cost_usd_falls_back(cls, v: float) -> float:
+        # An unusable value must not switch the fork cost ceiling off. Use the default instead.
+        if not math.isfinite(v) or v < 0:
+            print(
+                f"WARNING: AI_FORK_MAX_COST_USD={v} is not a finite, non-negative number; "
+                "using the default of 2.0.",
+                file=sys.stderr,
+            )
+            return 2.0
+        return v
+
     @field_validator("log_format")
     @classmethod
     def _validate_log_format(cls, v: str) -> str:
@@ -966,6 +986,8 @@ class ReviewConfig(BaseModel):
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
             max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
+            fork_max_cost_usd=_float("AI_FORK_MAX_COST_USD", 2.0),
+            event_name=os.environ.get("GITHUB_EVENT_NAME", "").strip(),
             fail_on_cost_ceiling=_bool("AI_FAIL_ON_COST_CEILING"),
             cost_ceiling_unpriced=os.environ.get("AI_COST_CEILING_UNPRICED", "warn").strip() or "warn",
             context_window_margin=_float("AI_CONTEXT_WINDOW_MARGIN", 0.9),

@@ -690,6 +690,8 @@ runs:
           -e AI_DISABLE_GATE_SECURITY \
           -e AI_DISABLE_GATE_EDGE_CASE \
           -e AI_DRY_RUN \
+          -e AI_FORK_MAX_COST_USD \
+          -e GITHUB_EVENT_NAME \
           -e LLM_PROMPT_CACHING \
           -e PHPSTAN_LEVEL \
           -e SEMGREP_RULES \
