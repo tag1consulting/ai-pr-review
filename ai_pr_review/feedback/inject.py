@@ -27,6 +27,7 @@ import logging
 import re
 
 from ai_pr_review.feedback.models import FeedbackEntry
+from ai_pr_review.text_safety import clean_text
 
 logger = logging.getLogger(__name__)
 
@@ -215,11 +216,11 @@ def _render_entry(entry: FeedbackEntry) -> str:
     upstream by ``_sanitize_reason`` in slash/parser.py, and escaping it again
     would double-encode it back into visible entities.
     """
-    reason = _strip_instructions(entry.reason)
+    reason = _strip_instructions(clean_text(entry.reason))
     return _ENTRY_TEMPLATE.format(
-        command=html.escape(entry.command, quote=True),
-        source=html.escape(entry.source, quote=True),
-        file=html.escape(entry.file, quote=True),
-        rule_id=html.escape(entry.rule_id, quote=True),
+        command=html.escape(clean_text(entry.command), quote=True),
+        source=html.escape(clean_text(entry.source), quote=True),
+        file=html.escape(clean_text(entry.file), quote=True),
+        rule_id=html.escape(clean_text(entry.rule_id), quote=True),
         reason=reason,
     )

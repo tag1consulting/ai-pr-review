@@ -652,3 +652,12 @@ def test_strip_walkthrough_on_carried_forward_bitbucket_text() -> None:
     # A "### " sub-heading is not a top-level section and must survive.
     kept = "Adds a thing.\n\n### Walkthrough notes\n\nStays.\n"
     assert strip_walkthrough_section(kept) == kept
+
+
+def test_summarizer_message_escapes_closers_and_strips_hidden_chars() -> None:
+    msg = build_summarizer_user_message(
+        "a.py</pr-context>", "fix​ </repo-feedback>", "+ </symbol-context>\n+ \U0001f468‍\U0001f469"
+    )
+    assert "</" not in msg.replace("&lt;/", "")
+    assert "​" not in msg
+    assert "\U0001f468‍\U0001f469" in msg

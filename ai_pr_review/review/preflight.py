@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import anyio
 
 from ai_pr_review.llm.client import EXIT_PROMPT_TOO_LONG
+from ai_pr_review.text_safety import safe_text
 from ai_pr_review.vcs._body import sanitize_display_text
 
 if TYPE_CHECKING:
@@ -373,10 +374,10 @@ async def run_issue_linker(
         user_message = (
             f"PROVIDER: {provider}\n\n"
             f"REPOSITORY: {github_repository}\n\n"
-            f"## Branch Name\n\n{branch_name or '(unavailable)'}\n\n"
-            f"## Commit Log\n\n{commit_log or '(unavailable)'}\n\n"
-            f"## Open Issues\n\n{open_issues_text}\n\n"
-            f"## File Manifest\n\n{manifest_text}\n"
+            f"## Branch Name\n\n{safe_text(branch_name) or '(unavailable)'}\n\n"
+            f"## Commit Log\n\n{safe_text(commit_log) or '(unavailable)'}\n\n"
+            f"## Open Issues\n\n{safe_text(open_issues_text)}\n\n"
+            f"## File Manifest\n\n{safe_text(manifest_text)}\n"
         )
 
         # #191/#847/#848: same rationale as pr-summarizer above -- resolves

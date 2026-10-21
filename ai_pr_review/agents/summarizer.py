@@ -11,6 +11,7 @@ from typing import Literal, cast
 from ai_pr_review.markdown_sections import SECTION_HEADING as _SECTION_HEADING
 from ai_pr_review.markdown_sections import find_section_span as _find_section_span
 from ai_pr_review.markdown_sections import strip_fenced_code as _strip_fenced_code
+from ai_pr_review.text_safety import safe_code, safe_text
 from ai_pr_review.vcs._body import sanitize_display_text
 
 WalkthroughChange = Literal["Added", "Modified", "Deleted", "Renamed"]
@@ -82,9 +83,9 @@ def build_summarizer_user_message(
 ) -> str:
     """Structured user message combining manifest + commit log + diff."""
     return (
-        f"## Manifest\n\n{manifest}\n\n"
-        f"## Commit log\n\n{commit_log}\n\n"
-        f"## Diff\n\n{diff_text}\n"
+        f"## Manifest\n\n{safe_text(manifest)}\n\n"
+        f"## Commit log\n\n{safe_text(commit_log)}\n\n"
+        f"## Diff\n\n{safe_code(diff_text)}\n"
     )
 
 
