@@ -516,3 +516,19 @@ def test_without_fcntl_the_guard_refuses_instead_of_running_unlocked(
 
 def test_the_lock_timeout_is_long_enough_for_a_busy_ledger() -> None:
     assert sg._LOCK_TIMEOUT_S >= 60
+
+
+def test_worst_case_counts_the_earlier_turns_and_tool_definitions_of_a_tool_loop(tmp_path: Path) -> None:
+    g = _guard(tmp_path)
+    plain = g.worst_case_units(_req(max_tokens=1))
+    big_result = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "y" * 400_000}]}
+    tool = {"name": "grep", "description": "d" * 4000, "input_schema": {"type": "object"}}
+    with_history = g.worst_case_units(LLMRequest(
+        model_id=SONNET, system_prompt="s" * 200, user_message="x" * 400, max_tokens=1, messages=(big_result,)))
+    with_tools = g.worst_case_units(LLMRequest(
+        model_id=SONNET, system_prompt="s" * 200, user_message="x" * 400, max_tokens=1, tools=(tool,)))
+    assert with_history > plain + 20  # about 100,000 more input tokens at $2 per million
+    assert with_tools >= plain
+    # A request with neither field is priced exactly as before.
+    assert g.worst_case_units(LLMRequest(model_id=SONNET, system_prompt="s" * 200, user_message="x" * 400,
+                                         max_tokens=1)) == plain
