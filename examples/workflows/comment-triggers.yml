@@ -76,6 +76,8 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Reads the fork approval status. Only a fork pull request needs it (docs/fork-prs.md).
+  statuses: read
   # Uncomment if .ai-pr-review/policy.yml uses a route's `require`
   # field (see docs/policy.md) and you want /ai-pr-review rescan /
   # review-full to be able to (re-)post the ai-pr-review/policy-gate check

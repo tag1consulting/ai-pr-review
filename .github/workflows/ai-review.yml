@@ -32,6 +32,8 @@ permissions:
   pull-requests: write
   issues: write
   checks: write
+  # Read the fork approval status (docs/fork-prs.md). Only a fork pull request needs it.
+  statuses: read
 
 jobs:
   # Runs SARIF-producing static analyzers against the PR head and uploads the

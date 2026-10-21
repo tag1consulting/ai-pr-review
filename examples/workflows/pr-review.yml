@@ -109,6 +109,8 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Reads the fork approval status. Only a fork pull request needs it (docs/fork-prs.md).
+  statuses: read
   # checks: write is only exercised when a matched .github/ai-pr-review/
   # policy.yml route sets 'require' (see docs/policy.md): the container
   # action posts the ai-pr-review/policy-gate check run in that case.
