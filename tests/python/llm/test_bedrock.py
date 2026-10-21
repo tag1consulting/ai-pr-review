@@ -8,7 +8,8 @@ import httpx
 import pytest
 import respx
 
-from ai_pr_review.llm._http import LLMTransientError
+from ai_pr_review.llm._http import LLMError, LLMTransientError
+from ai_pr_review.llm.base import LLMRequest
 from ai_pr_review.llm.bedrock import _parse_response, call
 
 from .conftest import fixture_text, make_request
@@ -131,3 +132,14 @@ async def test_call_strips_whitespace_from_key_and_url(monkeypatch):
 
     sent_headers = route.calls.last.request.headers
     assert sent_headers["Authorization"] == "Bearer test-key"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_bedrock_refuses_tool_use_instead_of_dropping_the_tool_calls(
+    monkeypatch: pytest.MonkeyPatch, anyio_backend: str) -> None:
+    monkeypatch.setenv("BEDROCK_API_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("BEDROCK_API_KEY", "<secret-redacted>")
+    request = LLMRequest(model_id="m", system_prompt="s", user_message="u", tools=({"name": "grep"},))
+    with pytest.raises(LLMError, match="does not support tool use"):
+        await call(request)

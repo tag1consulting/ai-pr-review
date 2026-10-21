@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import pytest
@@ -38,7 +39,7 @@ class Scripted:
         self.requests: list[LLMRequest] = []
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
-        self.requests.append(request)
+        self.requests.append(copy.deepcopy(request))  # a snapshot, so a later edit of the history shows
         item = self.queue.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -183,3 +184,83 @@ async def test_the_loop_needs_tools_and_sane_limits() -> None:
         await run_tool_loop(Scripted(), _request(tools=()), _session())
     with pytest.raises(ValueError, match="at least 1"):
         await run_tool_loop(Scripted(), _request(), _session(), LoopLimits(max_turns=0))
+
+
+@pytest.mark.anyio
+async def test_a_turn_cut_off_at_max_tokens_is_not_an_answer() -> None:
+    cut = LLMResponse(text="I will check merge.py.", input_tokens=1, output_tokens=1, stop_reason="max_tokens",
+                      content=[{"type": "text", "text": "I will check merge.py."}, _use("t1", pattern="near")])
+    result = await run_tool_loop(Scripted(cut), _request(), _session())
+    assert result.stop == "incomplete:max_tokens" and not result.forced_final
+
+
+@pytest.mark.anyio
+async def test_a_failure_carries_the_usage_of_the_turns_that_finished() -> None:
+    model = Scripted(_tool_turn(_use("t1", pattern="near"), tokens=100), LLMContentError("blocked"))
+    with pytest.raises(LLMContentError) as caught:
+        await run_tool_loop(model, _request(), _session())
+    assert caught.value.loop_usage.calls == 1 and caught.value.loop_usage.input_tokens == 100  # type: ignore[attr-defined]
+    assert caught.value.loop_turns == 2  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+async def test_the_final_note_joins_a_user_turn_that_has_string_content() -> None:
+    history = ({"role": "user", "content": "earlier question"},)
+    model = Scripted(_answer())
+    await run_tool_loop(model, _request(messages=history), _session(), LoopLimits(max_turns=1))
+    content = model.requests[0].messages[-1]["content"]
+    assert content == [{"type": "text", "text": "earlier question"}, {"type": "text", "text": FINAL_NOTE}]
+
+
+@pytest.mark.anyio
+async def test_the_loop_logs_why_the_final_turn_was_forced(caplog: pytest.LogCaptureFixture) -> None:
+    model = Scripted(_tool_turn(_use("t1", pattern="near")), _answer())
+    with caplog.at_level("INFO", logger="ai_pr_review.agents.tool_loop"):
+        await run_tool_loop(model, _request(), _session(max_calls=1))
+    assert "forcing the final turn (budget)" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_no_earlier_turn_is_edited_in_place_across_three_turns() -> None:
+    model = Scripted(_tool_turn(_use("t1", pattern="near")), _tool_turn(_use("t2", pattern="abs")), _answer())
+    await run_tool_loop(model, _request(), _session())
+    third = model.requests[2].messages
+    assert third[0]["content"][0] == {"type": "thinking", "thinking": "", "signature": "SIG-1"}
+    assert third[2]["content"][0] == {"type": "thinking", "thinking": "", "signature": "SIG-1"}
+    assert third[:2] == model.requests[1].messages  # a snapshot of turn 2, equal to the same part of turn 3
+
+
+@pytest.mark.anyio
+async def test_when_the_turn_limit_and_the_budget_both_apply_the_turn_limit_is_reported() -> None:
+    model = Scripted(_tool_turn(_use("t1", pattern="near")), _answer())
+    result = await run_tool_loop(model, _request(), _session(max_calls=1), LoopLimits(max_turns=2))
+    assert result.stop == "forced:turn_limit"
+
+
+@pytest.mark.anyio
+async def test_the_byte_budget_forces_the_final_turn() -> None:
+    model = Scripted(_tool_turn(_use("t1", pattern="near")), _answer())
+    result = await run_tool_loop(model, _request(), _session(max_total_bytes=10))
+    assert result.stop == "forced:budget"
+
+
+@pytest.mark.anyio
+async def test_a_stop_with_no_tool_call_and_a_tool_use_reason_is_an_answer_with_that_text() -> None:
+    odd = LLMResponse(text="", input_tokens=1, output_tokens=1, stop_reason="tool_use",
+                      content=[{"type": "text", "text": "done"}])
+    result = await run_tool_loop(Scripted(odd), _request(), _session())
+    assert result.stop == "answered"
+
+
+@pytest.mark.anyio
+async def test_calls_per_turn_must_be_at_least_one() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        await run_tool_loop(Scripted(), _request(), _session(), LoopLimits(max_calls_per_turn=0))
+
+
+@pytest.mark.anyio
+async def test_a_tool_use_block_without_an_id_ends_the_loop_with_a_named_stop() -> None:
+    bad = LLMResponse(text="", input_tokens=1, output_tokens=1, stop_reason="tool_use",
+                      content=[{"type": "tool_use", "name": "grep", "input": {"pattern": "x"}}])
+    result = await run_tool_loop(Scripted(bad), _request(), _session())
+    assert result.stop == "malformed_tool_use"

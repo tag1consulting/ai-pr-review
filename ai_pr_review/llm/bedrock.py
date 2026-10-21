@@ -26,6 +26,9 @@ async def call(req: LLMRequest) -> LLMResponse:
     if not api_key:
         raise LLMError("BEDROCK_API_KEY is required for AI_PROVIDER=bedrock-proxy")
 
+    if req.tools or req.messages or req.tool_choice:
+        # The response parser below drops tool_use blocks, so a tool loop would read a tool call as an answer.
+        raise LLMError("the bedrock-proxy provider does not support tool use")
     caching = resolve_prompt_caching("bedrock-proxy")
     body = build_body_for_bedrock(req, caching=caching)
 

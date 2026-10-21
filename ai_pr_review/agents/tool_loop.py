@@ -17,13 +17,18 @@ Rules the loop keeps:
 * The last turn is a forced final turn: ``tool_choice`` is ``none``, ``tools`` stay defined
   (the history holds tool blocks), and a short note asks for the final answer. A forced
   ``tool_choice`` of ``any`` or ``tool`` is never used, because newer models reject it.
-* A refusal or any provider error raises out of the loop. The caller decides what to do.
+* A refusal or any provider error raises out of the loop. The caller decides what to do. The
+  exception gets ``loop_usage`` (a ``Usage`` of the calls that finished) and ``loop_turns``, so
+  the spend of the earlier turns is not lost.
+* Only the Anthropic provider supports tools. The other providers ignore the tool fields, and the
+  Bedrock proxy refuses them.
 
 The loop is not wired into the review pipeline and has no default-on switch.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -32,12 +37,16 @@ from typing import Any
 from ai_pr_review.agents.tool_sandbox import ToolSession
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
+_log = logging.getLogger(__name__)
+
 LLMCall = Callable[[LLMRequest], Awaitable[LLMResponse]]
 
 FINAL_NOTE = (
-    "The tool budget is used up. Write your final answer now, including the json-findings block. "
+    "You can not use tools any more. Write your final answer now, including the json-findings block. "
     "Do not call a tool."
 )
+# Stop reasons that end a turn without a cut-off. Anything else (max_tokens, pause_turn) is not an answer.
+_COMPLETE_STOPS = ("end_turn", "stop_sequence", "")
 _OVER_LIMIT = "too many tool calls in one turn. Ask for fewer, or answer with what you have."
 
 
@@ -72,7 +81,7 @@ class LoopResult:
 
     response: LLMResponse
     turns: int
-    stop: str  # answered, forced:turn_limit, forced:budget, forced:time, tool_use_after_final
+    stop: str  # answered, forced:<turn_limit|budget|time>, tool_use_after_final, malformed_tool_use, incomplete:<stop_reason>
     forced_final: bool
     usage: Usage = field(default_factory=Usage)
     messages: tuple[dict[str, Any], ...] = ()
@@ -116,18 +125,38 @@ async def run_tool_loop(
             reason = "budget"
         elif clock() - started > limits.wall_seconds:
             reason = "time"
+        if reason:
+            _log.info("tool loop: forcing the final turn (%s) at turn %d", reason, turn)
         if reason and messages and messages[-1]["role"] == "user":
             # The note goes into the user turn that carries the tool results, after them.
-            messages[-1] = {"role": "user", "content": [*messages[-1]["content"], {"type": "text", "text": FINAL_NOTE}]}
-        response = await llm_call(replace(
-            request, messages=tuple(messages), tool_choice="none" if reason else request.tool_choice))
+            last = messages[-1]["content"]
+            blocks_so_far = [{"type": "text", "text": last}] if isinstance(last, str) else list(last)
+            messages[-1] = {"role": "user", "content": [*blocks_so_far, {"type": "text", "text": FINAL_NOTE}]}
+        try:
+            response = await llm_call(replace(
+                request, messages=tuple(messages), tool_choice="none" if reason else request.tool_choice))
+        except Exception as exc:
+            # The failed call has no response, so only the earlier turns are counted.
+            exc.loop_usage = usage  # type: ignore[attr-defined]
+            exc.loop_turns = turn  # type: ignore[attr-defined]
+            raise
         usage.add(response)
         blocks = response.content or [{"type": "text", "text": response.text}]
         uses = [b for b in blocks if b.get("type") == "tool_use"]
+        if response.stop_reason not in ("tool_use", *_COMPLETE_STOPS):
+            # A cut-off turn has no complete answer and no complete tool call.
+            _log.warning("tool loop: turn %d ended with stop_reason=%s", turn, response.stop_reason)
+            return LoopResult(response, turn, f"incomplete:{response.stop_reason}", bool(reason), usage,
+                              tuple(messages))
         if not uses or response.stop_reason != "tool_use":
             return LoopResult(response, turn, f"forced:{reason}" if reason else "answered", bool(reason), usage,
                               tuple(messages))
+        if any(not isinstance(use.get("id"), str) or not use["id"] for use in uses):
+            # No id means no tool_result can answer it, and the provider rejects a history with an unanswered call.
+            _log.warning("tool loop: a tool_use block has no id")
+            return LoopResult(response, turn, "malformed_tool_use", bool(reason), usage, tuple(messages))
         if reason:
+            _log.warning("tool loop: the model asked for a tool on the forced final turn")
             return LoopResult(response, turn, "tool_use_after_final", True, usage, tuple(messages))
         messages.append({"role": "assistant", "content": blocks})
         results = []

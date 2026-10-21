@@ -33,6 +33,7 @@ import re
 import subprocess
 import threading
 import time
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,12 +60,19 @@ class Limits:
     max_grep_files: int = 5000
     max_grep_scan_bytes: int = 64 * 1024 * 1024
     grep_deadline_seconds: float = 10.0
+    max_index_entries: int = 200_000
+    max_listing_bytes: int = 32 * 1024 * 1024
+    git_deadline_seconds: float = 60.0
 
 
 # --- which paths may exist in the store ------------------------------------
 
-_DENIED_NAMES = frozenset({".netrc", ".npmrc", ".pypirc", ".htpasswd", "credentials.json", "secrets.json"})
-_DENIED_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk")
+_DENIED_NAMES = frozenset({
+    ".netrc", ".npmrc", ".pypirc", ".htpasswd", "credentials.json", "secrets.json", ".git-credentials",
+    ".dockercfg", "kubeconfig", "secrets.yml", "secrets.yaml", "settings.local.php"})
+_DENIED_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk", ".p8", ".asc", ".tfvars")
+# A file name that is only a credential file inside a given directory.
+_DENIED_IN_DIR = {".aws": {"credentials"}, ".docker": {"config.json"}, ".kube": {"config"}}
 _DENIED_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env")
 _DENIED_TOP_DIRS = frozenset({"sarif-results"})
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -79,12 +87,17 @@ def is_denied(path: str) -> bool:
     if ".git" in parts or parts[0] in _DENIED_TOP_DIRS:
         return True
     name = parts[-1]
-    return (name in _DENIED_NAMES or name.endswith(_DENIED_SUFFIXES) or name.startswith(_DENIED_PREFIXES))
+    if len(parts) > 1 and name in _DENIED_IN_DIR.get(parts[-2], ()):
+        return True
+    return (name in _DENIED_NAMES or name.endswith(_DENIED_SUFFIXES) or name.startswith(_DENIED_PREFIXES)
+            or ".tfstate" in name)
 
 
 def valid_store_path(path: str, max_chars: int = Limits.max_path_chars) -> bool:
-    """Can *path* be an index key? No control characters, no backslash, no empty, ``.`` or ``..`` part."""
+    """Can *path* be an index key? No control or invisible characters, no backslash, no empty, ``.`` or ``..`` part."""
     if not path or len(path) > max_chars or path.startswith("/") or "\\" in path or _CONTROL.search(path):
+        return False
+    if clean_text(path) != path:  # the model sees the cleaned name, so it must be the real key
         return False
     return all(part not in ("", ".", "..") for part in path.split("/"))
 
@@ -142,6 +155,7 @@ class MapStore:
     def __init__(self, files: Mapping[str, bytes], limits: Limits | None = None) -> None:
         self._limits = limits or Limits()
         self.stats = IndexStats()
+        self.oversize_paths: set[str] = set()
         self._files: dict[str, bytes] = {}
         for path, data in files.items():
             if not valid_store_path(path, self._limits.max_path_chars):
@@ -150,6 +164,7 @@ class MapStore:
                 self.stats.denied += 1
             elif len(data) > self._limits.max_file_bytes:
                 self.stats.oversize += 1
+                self.oversize_paths.add(path)
             else:
                 self._files[path] = data
                 self.stats.indexed += 1
@@ -203,23 +218,46 @@ class GitTreeStore:
         self._ref = ref
         self._limits = limits or Limits()
         self.stats = IndexStats()
+        self.oversize_paths: set[str] = set()
         self._entries: dict[str, tuple[str, int]] = {}  # path -> (blob sha, size)
         self._lock = threading.Lock()
         self._reader: subprocess.Popen[bytes] | None = None
         self._tree = self._run(_git(self._repo, "rev-parse", "--verify", f"{ref}^{{tree}}")).decode().strip()
-        self._index(self._run(_git(self._repo, "ls-tree", "-r", "-l", "-z", "--full-tree", ref)))
+        self._index(self._run(_git(self._repo, "ls-tree", "-r", "-l", "-z", "--full-tree", ref),
+                              max_bytes=self._limits.max_listing_bytes))
 
-    @staticmethod
-    def _run(cmd: list[str]) -> bytes:
-        done = subprocess.run(cmd, capture_output=True, env=_git_env(), timeout=60, check=False)
-        if done.returncode != 0:
-            raise RuntimeError(f"git failed (exit {done.returncode})")
-        return done.stdout
+    def _run(self, cmd: list[str], max_bytes: int = 1024 * 1024) -> bytes:
+        """Run git and return its stdout. The output size and the run time are capped, and a stop is an error."""
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_git_env())
+        timer = threading.Timer(self._limits.git_deadline_seconds, proc.kill)
+        timer.start()
+        try:
+            assert proc.stdout is not None and proc.stderr is not None
+            out = proc.stdout.read(max_bytes + 1)
+            if len(out) > max_bytes:
+                proc.kill()
+                raise RuntimeError(f"git output is larger than {max_bytes} bytes: the tree is too big to index")
+            err = proc.stderr.read(2000)
+            code = proc.wait()
+        finally:
+            timer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+        if code != 0:
+            _log.error("git failed (exit %s): %s", code, err.decode("utf-8", "replace").strip()[-300:])
+            raise RuntimeError(f"git failed (exit {code})")
+        return out
 
     def _index(self, listing: bytes) -> None:
         for record in listing.split(b"\0"):
             if not record:
                 continue
+            if self.stats.indexed >= self._limits.max_index_entries:
+                raise RuntimeError(f"the tree has more than {self._limits.max_index_entries} files: too big to index")
             meta, _, raw_path = record.partition(b"\t")
             fields = meta.split(None, 3)
             if len(fields) != 4:
@@ -246,6 +284,7 @@ class GitTreeStore:
                 self.stats.denied += 1
             elif not size_text.isdigit() or int(size_text) > self._limits.max_file_bytes:
                 self.stats.oversize += 1
+                self.oversize_paths.add(path)
             else:
                 self._entries[path] = (sha, int(size_text))
                 self.stats.indexed += 1
@@ -272,14 +311,23 @@ class GitTreeStore:
                     stderr=subprocess.DEVNULL, env=_git_env())
             reader = self._reader
             assert reader.stdin is not None and reader.stdout is not None
-            reader.stdin.write(sha.encode("ascii") + b"\n")
-            reader.stdin.flush()
-            header = reader.stdout.readline().split()
-            if len(header) != 3 or header[1] != b"blob" or int(header[2]) != size:
+            watchdog = threading.Timer(self._limits.git_deadline_seconds, reader.kill)
+            watchdog.start()
+            try:
+                reader.stdin.write(sha.encode("ascii") + b"\n")
+                reader.stdin.flush()
+                header = reader.stdout.readline().split()
+                if len(header) != 3 or header[1] != b"blob" or int(header[2]) != size:
+                    raise RuntimeError("git returned an unexpected object")
+                data = reader.stdout.read(size)
+                if len(data) != size or reader.stdout.read(1) != b"\n":  # git ends the content with a newline
+                    raise RuntimeError("git returned a short object")
+            except (OSError, ValueError, RuntimeError) as exc:
                 self._kill()
-                raise RuntimeError("git returned an unexpected object")
-            data = reader.stdout.read(size)
-            reader.stdout.read(1)  # the newline git adds after the content
+                _log.error("git cat-file failed for one object: %s", exc)
+                raise RuntimeError("the file store could not read a file") from exc
+            finally:
+                watchdog.cancel()
             return data
 
     def _kill(self) -> None:
@@ -292,7 +340,11 @@ class GitTreeStore:
         with self._lock:
             if self._reader is not None and self._reader.stdin is not None:
                 self._reader.stdin.close()
-                self._reader.wait(timeout=10)
+                try:
+                    self._reader.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._reader.kill()
+                    self._reader.wait()
                 self._reader = None
 
     def __enter__(self) -> GitTreeStore:
@@ -304,13 +356,14 @@ class GitTreeStore:
 
 # --- result formatting -----------------------------------------------------
 
-_STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]")
+_STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\U000e0000-\U000e007f]")
 _CLOSING_TAG = re.compile(r"(?i)<\s*/\s*tool-result")
 
 
 def clean_text(text: str) -> str:
-    """Drop control and direction-override characters. Tab and newline stay."""
-    return _STRIP.sub("", text)
+    """Drop control characters and every invisible format character (zero-width, direction marks, tag
+    characters). Tab and newline stay. The same rule decides which paths can be index keys."""
+    return "".join(c for c in _STRIP.sub("", text) if unicodedata.category(c) != "Cf")
 
 
 KNOWN_TOOLS = ("read_file", "grep")
@@ -394,6 +447,7 @@ class ToolSession:
     calls: int = 0
     bytes_returned: int = 0
     denied_or_missing: int = 0
+    store_errors: int = 0
     per_tool: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -419,6 +473,11 @@ class ToolSession:
                 raise ToolError("unknown tool")
         except ToolError as exc:
             return self._error(name, str(exc))
+        except (RuntimeError, OSError) as exc:
+            # A store failure is not a missing file. Say so, and keep the loop alive for its final answer.
+            self.store_errors += 1
+            _log.error("tool %s failed in the file store: %s", name, exc)
+            return self._error(name, "the repository could not be read for this call")
         self.bytes_returned += len(result.text.encode("utf-8"))
         _log.debug("tool call %s ok, %d bytes (%d calls, %d bytes total)", name, len(result.text), self.calls,
                    self.bytes_returned)
@@ -455,12 +514,14 @@ class ToolSession:
         start = self._int(arguments, "start_line", 1, 1, 10**9)
         count = self._int(arguments, "max_lines", self.limits.max_read_lines, 1, self.limits.max_read_lines)
         if not path or self.store.size(path) is None:
+            if path in getattr(self.store, "oversize_paths", ()):
+                raise ToolError(f"the file is larger than {self.limits.max_file_bytes} bytes and is not available")
             self.denied_or_missing += 1
             raise ToolError("no such file")
         text = self._text_of(path)
         if text is None:
             self.denied_or_missing += 1
-            raise ToolError("no such file")
+            raise ToolError("the file is binary and is not available")
         lines = text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()
@@ -529,7 +590,9 @@ class ToolSession:
             if matches >= limits.max_grep_matches:
                 stopped = stopped or "match limit"
                 break
-        header = f"{matches} match(es) for {pattern!r}"
+        if not scanned_files and not stopped:
+            raise ToolError("no indexed file matches that path and glob")
+        header = f"{matches} match(es) for {pattern!r} in {scanned_files} file(s)"
         if stopped:
             header += f" (search stopped early: {stopped})"
         body = header + ("\n--\n" + "\n--\n".join(blocks) if blocks else "")
@@ -540,7 +603,8 @@ class ToolSession:
     def summary(self) -> dict[str, Any]:
         """Counts for telemetry. No paths and no content."""
         return {"calls": self.calls, "bytes": self.bytes_returned, "per_tool": dict(self.per_tool),
-                "denied_or_missing": self.denied_or_missing, "tree_hash": self.store.tree_hash()}
+                "denied_or_missing": self.denied_or_missing, "store_errors": self.store_errors,
+                "tree_hash": self.store.tree_hash()}
 
 
 def snapshot_from_paths(store: FileStore, paths: Iterable[str]) -> dict[str, bytes]:
