@@ -15,6 +15,7 @@ The engine checks the pull request before it runs any git command in the checked
 - A plain `pull_request` run is never paused. GitHub gives a fork no secrets on that event.
 - Any other event is paused when the head repository is not the base repository. This includes `pull_request_target`, `issue_comment`, and an unknown event. A deleted fork counts as a fork.
 - A paused run posts a skip comment and exits 0. The comment names the commit and the label to add.
+- The checked-out tree must be the approved commit. The engine compares `git rev-parse HEAD` of the workspace with the approved commit and pauses on any difference. Your workflow must check out `github.event.pull_request.head.sha`, never a branch name.
 - If the engine cannot read the pull request or the statuses, the run stays paused. The gate fails closed.
 - The gate applies to GitHub only. GitLab and Bitbucket runs are not gated.
 

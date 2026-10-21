@@ -15,8 +15,12 @@ from ai_pr_review.review.fork_gate import (
     APPROVAL_CONTEXT,
     DEFAULT_FORK_MAX_COST_USD,
     ForkGateFacts,
+    checkout_mismatch_reason,
     decide,
     is_fork,
+)
+from ai_pr_review.review.fork_gate import (
+    workspace_head as _real_workspace_head,  # before the fixture patches it
 )
 from ai_pr_review.review.runtime import SkipPlan, _apply_fork_gate, build_review_runtime
 
@@ -26,6 +30,14 @@ from .vcs.test_github_summary import _make_provider
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 FORK = ForkGateFacts(head_repo="mallory/r", base_repo="o/r", approval_state="")
+_CHECKED_OUT: dict[str, str | None] = {"sha": None}  # None: the workspace is at the asked commit
+
+
+@pytest.fixture(autouse=True)
+def _workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    _CHECKED_OUT["sha"] = None
+    monkeypatch.setattr(
+        "ai_pr_review.review.fork_gate.workspace_head", lambda workspace=".": _CHECKED_OUT["sha"] or SHA_A)
 
 
 def _facts(**kw: str) -> ForkGateFacts:
@@ -229,7 +241,10 @@ class _GitHub:
         return httpx.Response(200, json=self.statuses.get(sha, []))
 
 
-async def _run(gh: _GitHub, sha: str, event: str = "pull_request_target") -> tuple[Any, list[str]]:
+async def _run(
+    gh: _GitHub, sha: str, event: str = "pull_request_target", checked_out: str | None = None,
+) -> tuple[Any, list[str]]:
+    _CHECKED_OUT["sha"] = checked_out or sha  # the workflow checked out the commit it ran for
     provider = _github(gh.handler)
     computed: list[str] = []
 
@@ -309,3 +324,38 @@ def test_this_repository_uses_the_same_approval_workflow_as_the_example() -> Non
 
     for script in re.findall(r"run: \|\n((?:\s{10}.*\n|\n)+)", own):
         assert "${{" not in script
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_an_approved_commit_does_not_cover_a_workspace_at_another_commit(anyio_backend: str) -> None:
+    gh = _GitHub()
+    gh.approve(SHA_A)
+    # The workflow checked out a branch name, and the author pushed commit B after the approval.
+    result, computed = await _run(gh, SHA_A, checked_out=SHA_B)
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and computed == []
+    assert "bbbbbbb" in result.reason and "aaaaaaa" in result.reason and "head.sha" in result.reason
+
+
+def test_the_mismatch_text_is_empty_only_for_the_same_commit() -> None:
+    assert checkout_mismatch_reason(SHA_A, SHA_A) == ""
+    assert "unknown commit" in checkout_mismatch_reason(SHA_A, None)
+    assert checkout_mismatch_reason(SHA_A, SHA_B)
+
+
+def test_workspace_head_reads_the_checked_out_commit_and_fails_to_none(tmp_path: Any) -> None:
+    import subprocess
+
+    real = _real_workspace_head
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"PATH": __import__("os").environ["PATH"], "HOME": str(tmp_path), "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@e.x"}
+    for cmd in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(["git", "-c", "commit.gpgsign=false", "-C", str(repo), *cmd], env=env, check=True)
+    expected = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+    assert real(str(repo)) == expected
+    assert real(str(tmp_path / "missing")) is None
+    assert real(str(tmp_path)) is None  # not a repository

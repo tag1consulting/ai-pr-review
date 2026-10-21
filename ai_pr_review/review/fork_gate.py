@@ -16,6 +16,9 @@ The rule, kept deliberately small:
   creates that status after a maintainer approves (see ``examples/workflows/fork-approval.yml``).
   A push gives a new commit, and the new commit has no status, so an approval never carries
   over to code the maintainer did not see.
+* The checked-out tree must be the approved commit. The approval names ``HEAD_SHA``, but the
+  analyzers read the working tree, so ``git rev-parse HEAD`` of the workspace must equal it.
+  A workflow that checks out a branch name could otherwise review code newer than the approval.
 * If the facts cannot be read, the run is blocked. The gate fails closed.
 
 The status is read from the **base** repository only. A fork owner controls statuses in the
@@ -26,6 +29,9 @@ Pure logic. The GitHub calls are in ``GitHubProvider.get_fork_gate_facts``.
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 from dataclasses import dataclass
 
 APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
@@ -48,6 +54,27 @@ class GateDecision:
     gated: bool  # the pull request is a fork under a gated event
     allowed: bool
     reason: str = ""  # shown to maintainers when the run is blocked
+
+
+def workspace_head(workspace: str = ".") -> str | None:
+    """The commit the workspace has checked out, or ``None`` when git cannot say.
+
+    ``rev-parse HEAD`` runs no hook and no filter. The environment is minimal, so no user or
+    system config applies. ``safe.directory`` is set on the command line because the container
+    runs as another user than the one who owns the checkout.
+    """
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent",
+        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+    }
+    try:
+        done = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", workspace, "rev-parse", "HEAD"],
+            capture_output=True, text=True, env=env, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sha = done.stdout.strip()
+    return sha if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
 
 def is_fork(facts: ForkGateFacts) -> bool:
@@ -82,3 +109,14 @@ def decide(event_name: str, head_sha: str, facts: ForkGateFacts | None) -> GateD
     if facts.approval_state == "success":
         return GateDecision(gated=True, allowed=True)
     return GateDecision(gated=True, allowed=False, reason=_blocked_text(head_sha, facts.head_repo, facts.approval_state))
+
+
+def checkout_mismatch_reason(head_sha: str, checked_out: str | None) -> str:
+    """The skip text when the workspace is not at the approved commit. Empty when it matches."""
+    if checked_out == head_sha:
+        return ""
+    found = checked_out[:7] if checked_out else "an unknown commit"
+    return (
+        f"This fork pull request was approved at commit `{head_sha[:7]}`, but the workspace holds {found}. "
+        "The review is paused. Check out `github.event.pull_request.head.sha` in the workflow, "
+        "never a branch name.")

@@ -228,7 +228,12 @@ def _warn_if_context_enrichment_inert() -> None:
 def _apply_fork_gate(config: ReviewConfig, provider: VcsProvider) -> tuple[ReviewConfig, SkipPlan | None]:
     """Block a fork pull request that has no approval for its head commit, and cap the cost of an
     approved one. A provider without ``get_fork_gate_facts`` (GitLab, Bitbucket) is not gated."""
-    from ai_pr_review.review.fork_gate import APPROVAL_CONTEXT, decide
+    from ai_pr_review.review.fork_gate import (
+        APPROVAL_CONTEXT,
+        checkout_mismatch_reason,
+        decide,
+        workspace_head,
+    )
 
     getter = getattr(provider, "get_fork_gate_facts", None)
     if getter is None:
@@ -239,6 +244,11 @@ def _apply_fork_gate(config: ReviewConfig, provider: VcsProvider) -> tuple[Revie
     if not decision.allowed:
         logger.warning("fork gate: review paused (%s)", "facts unavailable" if facts is None else "no approval")
         return config, SkipPlan(reason=decision.reason, provider=provider, is_fork_gate_skip=True)
+    if decision.gated:
+        mismatch = checkout_mismatch_reason(config.head_sha, workspace_head("."))
+        if mismatch:
+            logger.warning("fork gate: the workspace is not at the approved commit")
+            return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True)
     if decision.gated and config.max_cost_usd == 0 and config.fork_max_cost_usd > 0:
         logger.info("fork gate: approved fork pull request, default cost ceiling $%.2f", config.fork_max_cost_usd)
         config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
