@@ -342,7 +342,7 @@ Secret masking is always active. The engine redacts API keys, tokens, and other 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GITHUB_BOT_USERNAME` | `github-actions[bot]` | The login that owns the prior reviews and comments of this bot. The engine uses it for the review-selection filter and for thread-ownership checks. Set this variable if your reviews post under a different identity than the default GitHub Actions bot. Examples are a custom GitHub App and (as in the e2e test harness of this project) an account that uses a personal access token. It matches `GITLAB_BOT_USERNAME` below. |
+| `GITHUB_BOT_USERNAME` | `github-actions[bot]` | The login that owns the prior reviews and comments of this bot. The engine uses it for the review-selection filter and for thread-ownership checks. Set this variable if your reviews post under a different identity than the default GitHub Actions bot. Examples are a custom GitHub App and (as in the e2e test harness of this project) an account that uses a personal access token. The engine ignores summary and skip comments from any other login, so a custom bot identity must set this variable. It matches `GITLAB_BOT_USERNAME` below. |
 
 ### Bitbucket-specific variables
 

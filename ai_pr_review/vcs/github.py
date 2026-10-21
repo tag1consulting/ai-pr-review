@@ -472,6 +472,15 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     # Summary comment find helpers
     # ------------------------------------------------------------------
+    def _is_bot_authored(self, item: dict[str, Any]) -> bool:
+        """True only when the comment author login equals the configured bot login.
+
+        Fails closed: a null or missing user, or a missing login, is rejected.
+        This stops a forged watermark or skip marker from another commenter.
+        """
+        login = (item.get("user") or {}).get("login")
+        return isinstance(login, str) and login == self.config.bot_login
+
     def _list_summary_comments(self) -> list[dict[str, Any]]:
         """Return all issue comments containing the summary marker prefix."""
         results: list[dict[str, Any]] = []
@@ -487,7 +496,7 @@ class GitHubProvider:
             page = resp.json() or []
             for item in page:
                 body = item.get("body") or ""
-                if SUMMARY_MARKER_PREFIX in body:
+                if SUMMARY_MARKER_PREFIX in body and self._is_bot_authored(item):
                     results.append(item)
             # httpx returns the next link via headers
             next_url = _parse_next_link(resp.headers.get("link", ""))
@@ -668,7 +677,7 @@ class GitHubProvider:
             page = resp.json() or []
             for item in page:
                 body = item.get("body") or ""
-                if has_skip_marker(body):
+                if has_skip_marker(body) and self._is_bot_authored(item):
                     results.append(item)
             next_url = _parse_next_link(resp.headers.get("link", ""))
             url = next_url
