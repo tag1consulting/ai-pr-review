@@ -396,9 +396,14 @@ class ToolSession:
     denied_or_missing: int = 0
     per_tool: dict[str, int] = field(default_factory=dict)
 
+    @property
+    def exhausted(self) -> bool:
+        """True when the call or byte budget is used up, so the next call would only return an error."""
+        return self.calls >= self.limits.max_calls or self.bytes_returned >= self.limits.max_total_bytes
+
     def execute(self, name: str, arguments: object) -> ToolResult:
         """Run one tool call. Never raises for a bad request: the model gets an error result."""
-        if self.calls >= self.limits.max_calls or self.bytes_returned >= self.limits.max_total_bytes:
+        if self.exhausted:
             return self._error(name, "tool budget used up. Answer with what you have.")
         self.calls += 1
         label = name if name in KNOWN_TOOLS else "unknown"

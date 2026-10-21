@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -47,6 +48,14 @@ class LLMRequest:
     # introduction. dispatch.py is the only current populator; it builds
     # both fields from the same underlying parts list.
     cache_blocks: tuple[str, ...] = ()
+    # Tool use (#1088). Providers that do not support tools ignore all three, and an empty value
+    # changes nothing in any request. ``messages`` are the turns AFTER the first user turn
+    # (``user_message``), in the provider's block form: assistant turns carry the previous response's
+    # ``content`` blocks unchanged, and user turns carry ``tool_result`` blocks. ``tool_choice`` is
+    # "" (omit), "auto", or "none". Forced choices are not allowed, because newer models reject them.
+    messages: tuple[dict[str, Any], ...] = ()
+    tools: tuple[dict[str, Any], ...] = ()
+    tool_choice: str = ""
 
 
 @dataclass
@@ -58,6 +67,9 @@ class LLMResponse:
     cache_read_tokens: int = 0
     stop_reason: str = ""
     thinking_tokens: int = 0
+    # The provider's content blocks, unchanged, for providers that return them (Anthropic). A tool
+    # loop must pass an assistant turn back exactly as it came, so this is kept whole.
+    content: list[dict[str, Any]] = field(default_factory=list)
     # Raw request body captured when AI_PR_REVIEW_RECORD_DIR is set.
     _request_body: str = field(default="", repr=False)
     _response_body: str = field(default="", repr=False)
