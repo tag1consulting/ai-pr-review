@@ -533,3 +533,27 @@ def test_a_hung_cat_file_reader_is_killed_by_the_watchdog(
         monkeypatch.undo()
         store.close()
     assert time.monotonic() - started < 10
+
+
+@pytest.mark.parametrize("raw", ["", ".", "./", "./.", "/".join(["."])])
+def test_every_spelling_of_the_root_is_the_root(raw: str) -> None:
+    assert normalize_request_path(raw) == ""
+    session = ToolSession(MapStore({"a.py": b"NEEDLE\n"}))
+    assert "1 match(es)" in session.execute("grep", {"pattern": "NEEDLE", "path": raw}).text
+
+
+def test_an_unexpected_cat_file_header_is_logged_without_content(
+    hostile_repo: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    with GitTreeStore(hostile_repo) as store:
+        sha, size = store._entries["src/app.py"]
+        store._entries["src/app.py"] = (sha, size + 1)
+        with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError):
+            store.read("src/app.py")
+    assert "unexpected header" in caplog.text and "PROXIMITY_LINES" not in caplog.text
+
+
+@pytest.mark.parametrize("raw", ["/", "//", " / ", "/etc/passwd", ".//etc", "./../x", ".."])
+def test_an_absolute_or_escaping_path_is_still_refused(raw: str) -> None:
+    with pytest.raises(ToolError):
+        normalize_request_path(raw)

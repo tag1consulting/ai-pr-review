@@ -45,8 +45,9 @@ FINAL_NOTE = (
     "You can not use tools any more. Write your final answer now, including the json-findings block. "
     "Do not call a tool."
 )
-# Stop reasons that end a turn without a cut-off. Anything else (max_tokens, pause_turn) is not an answer.
-_COMPLETE_STOPS = ("end_turn", "stop_sequence", "")
+# Stop reasons that end a turn without a cut-off, as each provider spells it (Anthropic, OpenAI, Google).
+# Anything else (max_tokens, pause_turn, length, MAX_TOKENS) is not an answer.
+_COMPLETE_STOPS = ("end_turn", "stop_sequence", "stop", "STOP", "")
 _OVER_LIMIT = "too many tool calls in one turn. Ask for fewer, or answer with what you have."
 
 
@@ -135,10 +136,10 @@ async def run_tool_loop(
         try:
             response = await llm_call(replace(
                 request, messages=tuple(messages), tool_choice="none" if reason else request.tool_choice))
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:  # call_llm turns a provider error into SystemExit
             # The failed call has no response, so only the earlier turns are counted.
-            exc.loop_usage = usage  # type: ignore[attr-defined]
-            exc.loop_turns = turn  # type: ignore[attr-defined]
+            exc.loop_usage = usage  # type: ignore[union-attr]
+            exc.loop_turns = turn  # type: ignore[union-attr]
             raise
         usage.add(response)
         blocks = response.content or [{"type": "text", "text": response.text}]
@@ -162,8 +163,12 @@ async def run_tool_loop(
         results = []
         for index, use in enumerate(uses):
             if index >= limits.max_calls_per_turn:
+                session.over_limit += 1
                 results.append(_tool_result(use, _OVER_LIMIT, True))
                 continue
             outcome = session.execute(str(use.get("name", "")), use.get("input"))
             results.append(_tool_result(use, outcome.text, outcome.is_error))
+        if len(uses) > limits.max_calls_per_turn:
+            _log.warning("tool loop: turn %d asked for %d calls, the limit is %d", turn, len(uses),
+                         limits.max_calls_per_turn)
         messages.append({"role": "user", "content": results})

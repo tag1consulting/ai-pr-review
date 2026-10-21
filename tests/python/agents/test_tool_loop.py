@@ -34,14 +34,14 @@ def _answer(text: str = _FINAL, tokens: int = 10) -> LLMResponse:
 class Scripted:
     """A model that returns the queued responses in order and records every request."""
 
-    def __init__(self, *responses: LLMResponse | Exception) -> None:
+    def __init__(self, *responses: LLMResponse | BaseException) -> None:
         self.queue = list(responses)
         self.requests: list[LLMRequest] = []
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         self.requests.append(copy.deepcopy(request))  # a snapshot, so a later edit of the history shows
         item = self.queue.pop(0)
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             raise item
         return item
 
@@ -264,3 +264,30 @@ async def test_a_tool_use_block_without_an_id_ends_the_loop_with_a_named_stop() 
                       content=[{"type": "tool_use", "name": "grep", "input": {"pattern": "x"}}])
     result = await run_tool_loop(Scripted(bad), _request(), _session())
     assert result.stop == "malformed_tool_use"
+
+
+@pytest.mark.anyio
+async def test_a_system_exit_from_call_llm_also_carries_the_usage() -> None:
+    model = Scripted(_tool_turn(_use("t1", pattern="near"), tokens=100), SystemExit(3))
+    with pytest.raises(SystemExit) as caught:
+        await run_tool_loop(model, _request(), _session())
+    assert caught.value.loop_usage.input_tokens == 100 and caught.value.loop_turns == 2  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stop", ["stop", "STOP"])
+async def test_the_normal_finish_reason_of_other_providers_is_an_answer(stop: str) -> None:
+    reply = LLMResponse(text=_FINAL, input_tokens=1, output_tokens=1, stop_reason=stop)
+    assert (await run_tool_loop(Scripted(reply), _request(), _session())).stop == "answered"
+    cut = LLMResponse(text=_FINAL, input_tokens=1, output_tokens=1, stop_reason="length")
+    assert (await run_tool_loop(Scripted(cut), _request(), _session())).stop == "incomplete:length"
+
+
+@pytest.mark.anyio
+async def test_refused_over_limit_calls_are_counted_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    model = Scripted(_tool_turn(*[_use(f"t{i}", pattern="near") for i in range(5)]), _answer())
+    session = _session()
+    with caplog.at_level("WARNING", logger="ai_pr_review.agents.tool_loop"):
+        await run_tool_loop(model, _request(), session, LoopLimits(max_calls_per_turn=2))
+    assert session.over_limit == 3 and session.summary()["over_limit"] == 3
+    assert "asked for 5 calls, the limit is 2" in caplog.text

@@ -115,11 +115,13 @@ def normalize_request_path(raw: object, max_chars: int = Limits.max_path_chars) 
     if not isinstance(raw, str):
         raise ToolError("path must be a string")
     path = raw.strip()
-    if path in ("", "."):
-        return ""
+    if path.startswith("/"):
+        raise ToolError("path is not a plain relative path")
     if path.startswith("./"):
         path = path[2:]
     path = path.rstrip("/")
+    if path in ("", "."):
+        return ""
     if not valid_store_path(path, max_chars):
         raise ToolError("path is not a plain relative path")
     return path
@@ -318,6 +320,9 @@ class GitTreeStore:
                 reader.stdin.flush()
                 header = reader.stdout.readline().split()
                 if len(header) != 3 or header[1] != b"blob" or int(header[2]) != size:
+                    # The header is "<sha> <type> <size>" or "<sha> missing". It holds no file content.
+                    _log.error("git cat-file gave an unexpected header: %r (wanted a blob of %d bytes)",
+                               b" ".join(header)[:200], size)
                     raise RuntimeError("git returned an unexpected object")
                 data = reader.stdout.read(size)
                 if len(data) != size or reader.stdout.read(1) != b"\n":  # git ends the content with a newline
@@ -448,6 +453,7 @@ class ToolSession:
     bytes_returned: int = 0
     denied_or_missing: int = 0
     store_errors: int = 0
+    over_limit: int = 0  # calls refused because a turn asked for too many
     per_tool: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -603,7 +609,7 @@ class ToolSession:
     def summary(self) -> dict[str, Any]:
         """Counts for telemetry. No paths and no content."""
         return {"calls": self.calls, "bytes": self.bytes_returned, "per_tool": dict(self.per_tool),
-                "denied_or_missing": self.denied_or_missing, "store_errors": self.store_errors,
+                "denied_or_missing": self.denied_or_missing, "store_errors": self.store_errors, "over_limit": self.over_limit,
                 "tree_hash": self.store.tree_hash()}
 
 
