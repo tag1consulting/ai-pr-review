@@ -295,3 +295,17 @@ async def test_a_failed_approval_after_a_success_blocks_again(anyio_backend: str
     gh.statuses[SHA_A].insert(0, {"context": APPROVAL_CONTEXT, "state": "failure"})  # a revocation
     result, computed = await _run(gh, SHA_A)
     assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and computed == []
+
+
+def test_this_repository_uses_the_same_approval_workflow_as_the_example() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    own = (root / ".github" / "workflows" / "fork-approval.yml").read_text()
+    assert own == (root / "examples" / "workflows" / "fork-approval.yml").read_text()
+    # The approval job must stay free of a checkout and of any expression inside a run script.
+    assert "actions/checkout" not in own
+    import re
+
+    for script in re.findall(r"run: \|\n((?:\s{10}.*\n|\n)+)", own):
+        assert "${{" not in script
