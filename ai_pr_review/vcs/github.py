@@ -2433,23 +2433,32 @@ class GitHubProvider:
         body = data.get("body")
         return title, (body if isinstance(body, str) else "")
 
+    def _gate_error(self, message: str) -> None:
+        """Record why the fork gate could not read the facts. It is logged too, because a paused run
+        has no other place that shows the cause."""
+        self._errors.append(f"get_fork_gate_facts: {message}")
+        _log.warning("fork gate: %s", message)
+
     def get_fork_gate_facts(self, head_sha: str, context: str) -> ForkGateFacts | None:
         """What the fork gate needs (see ``review/fork_gate.py``): the head and base repository
-        names, and the state of the newest status named *context* on *head_sha*.
+        names, and the state of the status named *context* on *head_sha*.
 
-        The status is read from the BASE repository only, never the fork. Returns ``None`` on any
-        HTTP error or odd response shape, and the gate then fails closed.
+        The status is read from the BASE repository only, never the fork, and only for a fork (a
+        same-repository pull request needs no approval, so its run does not depend on the
+        ``statuses: read`` permission). The combined-status endpoint returns the newest status for
+        each context. Returns ``None`` on any HTTP error or odd response shape, and the gate then
+        fails closed.
         """
         if not re.fullmatch(r"[0-9a-f]{40}", head_sha or ""):
-            self._errors.append("get_fork_gate_facts: head sha is not a full commit id")
+            self._gate_error("head sha is not a full commit id")
             return None
         try:
             resp = self.client.request("GET", self._pull_request_url())
         except httpx.HTTPError as exc:
-            self._errors.append(f"get_fork_gate_facts: pull request request failed: {type(exc).__name__}")
+            self._gate_error(f"pull request request failed: {type(exc).__name__}")
             return None
         if resp.status_code >= 400:
-            self._errors.append(f"get_fork_gate_facts: pull request HTTP {resp.status_code}: {resp.text[:200]}")
+            self._gate_error(f"pull request HTTP {resp.status_code}: {resp.text[:200]}")
             return None
         try:
             pr = resp.json()
@@ -2457,31 +2466,34 @@ class GitHubProvider:
             head = pr["head"]["repo"]  # null when the fork was deleted
             head_repo = head["full_name"] if isinstance(head, dict) else ""
         except (ValueError, KeyError, TypeError):
-            self._errors.append("get_fork_gate_facts: unexpected pull request response shape")
+            self._gate_error("unexpected pull request response shape")
             return None
         if not isinstance(base_repo, str) or not isinstance(head_repo, str):
-            self._errors.append("get_fork_gate_facts: repository names are not strings")
+            self._gate_error("repository names are not strings")
             return None
+        if head_repo and head_repo.casefold() == base_repo.casefold():
+            return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state="")
         c = self.config
         try:
-            status_resp = self.client.request(
-                "GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/statuses?per_page=100")
+            status_resp = self.client.request("GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/status")
         except httpx.HTTPError as exc:
-            self._errors.append(f"get_fork_gate_facts: statuses request failed: {type(exc).__name__}")
+            self._gate_error(f"statuses request failed: {type(exc).__name__}")
             return None
         if status_resp.status_code >= 400:
-            self._errors.append(f"get_fork_gate_facts: statuses HTTP {status_resp.status_code}: {status_resp.text[:200]}")
+            self._gate_error(
+                f"statuses HTTP {status_resp.status_code} (a fork pull request needs the "
+                f"statuses: read permission): {status_resp.text[:200]}")
             return None
         try:
-            statuses = status_resp.json()
-        except ValueError:
-            self._errors.append("get_fork_gate_facts: statuses response is not JSON")
+            statuses = status_resp.json()["statuses"]
+        except (ValueError, KeyError, TypeError):
+            self._gate_error("unexpected statuses response shape")
             return None
         if not isinstance(statuses, list):
-            self._errors.append("get_fork_gate_facts: statuses response is not a list")
+            self._gate_error("statuses response is not a list")
             return None
         state = ""
-        for status in statuses:  # newest first
+        for status in statuses:
             if isinstance(status, dict) and status.get("context") == context:
                 raw_state = status.get("state")
                 state = raw_state if isinstance(raw_state, str) else ""

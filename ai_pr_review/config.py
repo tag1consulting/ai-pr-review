@@ -96,6 +96,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_MAX_COST_USD",
         # --- Fork pull request gate ---
         "AI_FORK_MAX_COST_USD",
+        "AI_FAIL_ON_FORK_GATE",
         "AI_FAIL_ON_COST_CEILING",
         "AI_COST_CEILING_UNPRICED",
         "AI_CONTEXT_WINDOW_MARGIN",
@@ -605,6 +606,9 @@ class ReviewConfig(BaseModel):
     # Ceiling applied to an approved fork pull request when max_cost_usd is 0 (see review/fork_gate.py).
     # 0 turns the default off. A non-zero max_cost_usd always wins.
     fork_max_cost_usd: float = 2.0
+    # Exit 2 when the fork gate pauses a run, so a required check does not turn green with no review.
+    # Off by default, like fail_on_cost_ceiling.
+    fail_on_fork_gate: bool = False
     # The workflow event (GITHUB_EVENT_NAME). The fork gate skips a plain pull_request run only.
     event_name: str = ""
     # When the ceiling is exceeded, the run always aborts before any LLM call
@@ -987,6 +991,7 @@ class ReviewConfig(BaseModel):
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
             max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
             fork_max_cost_usd=_float("AI_FORK_MAX_COST_USD", 2.0),
+            fail_on_fork_gate=_bool("AI_FAIL_ON_FORK_GATE"),
             event_name=os.environ.get("GITHUB_EVENT_NAME", "").strip(),
             fail_on_cost_ceiling=_bool("AI_FAIL_ON_COST_CEILING"),
             cost_ceiling_unpriced=os.environ.get("AI_COST_CEILING_UNPRICED", "warn").strip() or "warn",

@@ -351,6 +351,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         context_window_failed = (
             runtime.is_context_window_skip and resolved_cfg.fail_on_context_window and result.ok
         )
+        # A fork-gate pause has its own opt-in, so a required check can refuse an unapproved fork.
+        fork_gate_failed = runtime.is_fork_gate_skip and resolved_cfg.fail_on_fork_gate and result.ok
         # #896: a skip can now carry real findings (analyzer/SARIF, computed
         # before the ceiling check). AI_FAIL_ON_FINDINGS applies to them the
         # same way it does on a normal run -- reads the classifier's
@@ -367,12 +369,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
                 outcome_override = "skipped_cost_ceiling_failed"
             elif context_window_failed:
                 outcome_override = "skipped_context_window_failed"
+            elif fork_gate_failed:
+                outcome_override = "skipped_fork_gate_failed"
             elif fail_on_findings_failed:
                 outcome_override = "skipped_fail_on_findings_failed"
             else:
                 outcome_override = "skipped"
             await _emit_telemetry(result, resolved_cfg, 0, outcome_override=outcome_override)
-        if cost_ceiling_failed or context_window_failed or fail_on_findings_failed:
+        if cost_ceiling_failed or context_window_failed or fork_gate_failed or fail_on_findings_failed:
             return 2
         return 0 if result.ok else 1
 

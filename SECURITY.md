@@ -49,7 +49,7 @@ If the action ever executed working-tree content under `pull_request_target`, a 
 
 ### Fork pull requests
 
-The engine pauses a fork pull request until a maintainer approves the exact head commit. The approval is a commit status in the base repository, created by a trusted workflow after a write-access user adds a label. A new push needs a new approval. The engine fails closed when it cannot read the facts. See [docs/fork-prs.md](docs/fork-prs.md) for the rule, the approval workflow and the limits. This gate does not contain a flaw in the engine itself, because the review still runs in the job that holds the secrets.
+The engine pauses a fork pull request until a maintainer approves one exact head commit, and it requires the checked-out tree to be that commit. The approval is a commit status in the base repository, created by a trusted workflow after a write-access user adds a label. A new push needs a new approval. The engine fails closed when it cannot read the facts. See [docs/fork-prs.md](docs/fork-prs.md) for the rule, the approval workflow and the limits. This gate does not contain a flaw in the engine itself, because the review still runs in the job that holds the secrets.
 
 ### Regression guard
 

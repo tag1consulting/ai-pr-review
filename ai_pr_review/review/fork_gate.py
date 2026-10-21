@@ -7,8 +7,10 @@ fork pull request may be reviewed at all.
 
 The rule, kept deliberately small:
 
-* A plain ``pull_request`` run is never gated here. GitHub withholds the secrets from a fork
-  on that event, so there is nothing to protect.
+* A plain ``pull_request`` run is gated only when an LLM key is present in the environment.
+  GitHub withholds secrets from a fork on that event by default, so no key means nothing to
+  protect and the run could not call a model anyway. A private repository can turn on "send
+  secrets to workflows from fork pull requests", and then a key is present and the gate applies.
 * Any other event (``pull_request_target``, ``issue_comment``, an unknown event) is gated when
   the head repository is not the base repository. A deleted head repository counts as a fork.
 * A gated pull request is reviewed only when the base repository holds a successful commit
@@ -38,6 +40,7 @@ APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
 APPROVAL_LABEL = "ai-review-approve-fork"
 DEFAULT_FORK_MAX_COST_USD = 2.0
 UNGATED_EVENTS = frozenset({"pull_request"})
+LLM_KEY_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "BEDROCK_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,11 @@ class GateDecision:
     gated: bool  # the pull request is a fork under a gated event
     allowed: bool
     reason: str = ""  # shown to maintainers when the run is blocked
+
+
+def llm_key_present() -> bool:
+    """True when the environment holds any LLM key. Only a name check, the value is never read out."""
+    return any(os.environ.get(name, "").strip() for name in LLM_KEY_VARS)
 
 
 def workspace_head(workspace: str = ".") -> str | None:
@@ -81,6 +89,11 @@ def is_fork(facts: ForkGateFacts) -> bool:
     return not facts.head_repo or facts.head_repo.casefold() != facts.base_repo.casefold()
 
 
+def needs_facts(event_name: str, key_present: bool) -> bool:
+    """False only for a plain ``pull_request`` run that holds no key, which needs no API call."""
+    return not (event_name in UNGATED_EVENTS and not key_present)
+
+
 def _blocked_text(head_sha: str, head_repo: str, state: str) -> str:
     short = head_sha[:7] or "this commit"
     source = f"the fork `{head_repo}`" if head_repo else "a fork whose repository is gone"
@@ -90,14 +103,15 @@ def _blocked_text(head_sha: str, head_repo: str, state: str) -> str:
     )
     return (
         f"This pull request comes from {source}, so the review is paused. A maintainer with write access "
-        f"must approve commit `{short}` by adding the `{APPROVAL_LABEL}` label. The approval covers that "
-        f"commit only. A new push needs a new approval.{state_note}"
+        f"must read the full pull request diff (Files changed) at commit `{short}` and then add the "
+        f"`{APPROVAL_LABEL}` label. The approval covers commit `{short}` only. A new push needs a new "
+        f"approval.{state_note}"
     )
 
 
-def decide(event_name: str, head_sha: str, facts: ForkGateFacts | None) -> GateDecision:
+def decide(event_name: str, head_sha: str, facts: ForkGateFacts | None, *, key_present: bool) -> GateDecision:
     """Decide whether the review may run. ``facts`` is ``None`` when the VCS could not be read."""
-    if event_name in UNGATED_EVENTS:
+    if not needs_facts(event_name, key_present):
         return GateDecision(gated=False, allowed=True)
     if facts is None:
         return GateDecision(

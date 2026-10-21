@@ -232,15 +232,18 @@ def _apply_fork_gate(config: ReviewConfig, provider: VcsProvider) -> tuple[Revie
         APPROVAL_CONTEXT,
         checkout_mismatch_reason,
         decide,
+        llm_key_present,
+        needs_facts,
         workspace_head,
     )
 
     getter = getattr(provider, "get_fork_gate_facts", None)
     if getter is None:
         return config, None
-    # A plain pull_request run needs no facts (GitHub gives a fork no secrets on that event).
-    facts = None if config.event_name == "pull_request" else getter(config.head_sha, APPROVAL_CONTEXT)
-    decision = decide(config.event_name, config.head_sha, facts)
+    # A plain pull_request run that holds no LLM key needs no facts: GitHub gave a fork no secrets.
+    key_present = llm_key_present()
+    facts = getter(config.head_sha, APPROVAL_CONTEXT) if needs_facts(config.event_name, key_present) else None
+    decision = decide(config.event_name, config.head_sha, facts, key_present=key_present)
     if not decision.allowed:
         logger.warning("fork gate: review paused (%s)", "facts unavailable" if facts is None else "no approval")
         return config, SkipPlan(reason=decision.reason, provider=provider, is_fork_gate_skip=True)

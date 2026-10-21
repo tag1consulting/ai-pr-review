@@ -14,10 +14,13 @@ from ai_pr_review.config import ReviewConfig
 from ai_pr_review.review.fork_gate import (
     APPROVAL_CONTEXT,
     DEFAULT_FORK_MAX_COST_USD,
+    LLM_KEY_VARS,
     ForkGateFacts,
     checkout_mismatch_reason,
     decide,
     is_fork,
+    llm_key_present,
+    needs_facts,
 )
 from ai_pr_review.review.fork_gate import (
     workspace_head as _real_workspace_head,  # before the fixture patches it
@@ -36,6 +39,8 @@ _CHECKED_OUT: dict[str, str | None] = {"sha": None}  # None: the workspace is at
 @pytest.fixture(autouse=True)
 def _workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     _CHECKED_OUT["sha"] = None
+    for var in LLM_KEY_VARS:  # a key in the test environment must not decide what a test means
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(
         "ai_pr_review.review.fork_gate.workspace_head", lambda workspace=".": _CHECKED_OUT["sha"] or SHA_A)
 
@@ -54,41 +59,65 @@ def test_is_fork(head: str, base: str, expected: bool) -> None:
     assert is_fork(ForkGateFacts(head_repo=head, base_repo=base, approval_state="")) is expected
 
 
-def test_a_plain_pull_request_event_is_never_gated_and_needs_no_facts() -> None:
-    assert decide("pull_request", SHA_A, None) == decide("pull_request", SHA_A, FORK)
-    assert decide("pull_request", SHA_A, None).allowed and not decide("pull_request", SHA_A, None).gated
+def test_a_plain_pull_request_event_without_a_key_is_not_gated_and_needs_no_facts() -> None:
+    for facts in (None, FORK):
+        decision = decide("pull_request", SHA_A, facts, key_present=False)
+        assert decision.allowed and not decision.gated
+    assert not needs_facts("pull_request", key_present=False)
+
+
+def test_a_plain_pull_request_event_with_a_key_is_gated_like_any_other() -> None:
+    # A private repository can send secrets to fork pull requests. A key in the environment shows that it did.
+    assert needs_facts("pull_request", key_present=True)
+    assert not decide("pull_request", SHA_A, FORK, key_present=True).allowed
+    assert decide("pull_request", SHA_A, None, key_present=True).gated
+
+
+@pytest.mark.parametrize(("name", "value", "present"), [
+    ("ANTHROPIC_API_KEY", "x", True), ("OPENAI_API_KEY", " ", False), ("GOOGLE_API_KEY", "", False),
+    ("BEDROCK_API_KEY", "x", True),
+])
+def test_llm_key_present_sees_each_provider_key(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str, present: bool,
+) -> None:
+    for var in LLM_KEY_VARS:
+        monkeypatch.delenv(var, raising=False)
+    assert not llm_key_present()
+    monkeypatch.setenv(name, value)
+    assert llm_key_present() is present
 
 
 @pytest.mark.parametrize("event", ["pull_request_target", "issue_comment", "workflow_run", ""])
 def test_a_fork_with_no_approval_is_blocked_on_every_other_event_including_an_unknown_one(event: str) -> None:
-    decision = decide(event, SHA_A, FORK)
+    decision = decide(event, SHA_A, FORK, key_present=True)
     assert decision.gated and not decision.allowed
     assert "mallory/r" in decision.reason and "aaaaaaa" in decision.reason and "ai-review-approve-fork" in decision.reason
+    assert "full pull request diff" in decision.reason  # not just the top commit
 
 
 def test_an_approved_fork_is_allowed_but_stays_gated_for_the_cost_default() -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(approval_state="success"))
+    decision = decide("pull_request_target", SHA_A, _facts(approval_state="success"), key_present=True)
     assert decision.gated and decision.allowed
 
 
 @pytest.mark.parametrize("state", ["pending", "failure", "error"])
 def test_an_approval_that_is_not_successful_does_not_count(state: str) -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(approval_state=state))
+    decision = decide("pull_request_target", SHA_A, _facts(approval_state=state), key_present=True)
     assert not decision.allowed and "not in a successful state" in decision.reason
 
 
 def test_a_same_repository_pull_request_is_not_gated() -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(head_repo="o/r"))
+    decision = decide("pull_request_target", SHA_A, _facts(head_repo="o/r"), key_present=True)
     assert decision.allowed and not decision.gated
 
 
 def test_a_deleted_fork_is_gated_and_named_without_a_repo_name() -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(head_repo=""))
+    decision = decide("pull_request_target", SHA_A, _facts(head_repo=""), key_present=True)
     assert not decision.allowed and "gone" in decision.reason
 
 
 def test_unreadable_facts_fail_closed() -> None:
-    decision = decide("pull_request_target", SHA_A, None)
+    decision = decide("pull_request_target", SHA_A, None, key_present=True)
     assert decision.gated and not decision.allowed and "could not be checked" in decision.reason
 
 
@@ -111,22 +140,21 @@ def test_the_facts_read_the_base_repository_statuses_and_take_the_newest_for_the
         paths.append(req.url.raw_path.decode())
         if req.url.path == "/repos/o/r/pulls/7":
             return httpx.Response(200, json=_pr("mallory/r"))
-        return httpx.Response(200, json=[
+        return httpx.Response(200, json={"state": "failure", "statuses": [
             {"context": "ci/other", "state": "success"},
-            {"context": APPROVAL_CONTEXT, "state": "failure"},  # newest for our context
-            {"context": APPROVAL_CONTEXT, "state": "success"},  # older, superseded
-        ])
+            {"context": APPROVAL_CONTEXT, "state": "failure"},  # the combined endpoint gives one per context
+        ]})
 
     facts = _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT)
     assert facts == ForkGateFacts(head_repo="mallory/r", base_repo="o/r", approval_state="failure")
     # The statuses come from the base repository. A status in the fork is never asked for.
-    assert paths[1].startswith(f"/repos/o/r/commits/{SHA_A}/statuses")
+    assert paths[1] == f"/repos/o/r/commits/{SHA_A}/status"
     assert all("mallory" not in p for p in paths)
 
 
 def test_the_facts_for_a_deleted_fork_and_no_status() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_pr(None) if "pulls" in req.url.path else [])
+        return httpx.Response(200, json=_pr(None) if "pulls" in req.url.path else {"statuses": []})
 
     assert _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT) == ForkGateFacts("", "o/r", "")
 
@@ -137,7 +165,7 @@ def test_a_head_sha_that_is_not_a_full_commit_id_gives_no_facts_and_no_request(b
 
     def handler(req: httpx.Request) -> httpx.Response:
         calls.append(req.url.path)
-        return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"statuses": []})
 
     provider = _github(handler)
     assert provider.get_fork_gate_facts(bad, APPROVAL_CONTEXT) is None
@@ -154,7 +182,7 @@ def test_any_bad_response_gives_none(which: str, response: httpx.Response) -> No
         is_pr = req.url.path.endswith("/pulls/7")
         if (which == "pr") == is_pr:
             return response
-        return httpx.Response(200, json=_pr("mallory/r") if is_pr else [])
+        return httpx.Response(200, json=_pr("mallory/r") if is_pr else {"statuses": []})
 
     assert _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT) is None
 
@@ -222,7 +250,6 @@ class _GitHub:
     """A stateful stand-in for the three GitHub calls the gate makes."""
 
     def __init__(self) -> None:
-        self.head_sha = SHA_A
         self.head_repo: str | None = "mallory/r"
         self.statuses: dict[str, list[dict[str, str]]] = {}  # sha -> statuses, newest first
         self.fail = False
@@ -237,8 +264,10 @@ class _GitHub:
             return httpx.Response(503, text="down")
         if req.url.path == "/repos/o/r/pulls/7":
             return httpx.Response(200, json=_pr(self.head_repo))
-        sha = req.url.path.split("/")[-2]
-        return httpx.Response(200, json=self.statuses.get(sha, []))
+        if req.url.path.endswith("/status"):
+            sha = req.url.path.split("/")[-2]
+            return httpx.Response(200, json={"statuses": self.statuses.get(sha, [])})
+        return httpx.Response(200, json=[])  # comments, reviews: nothing yet
 
 
 async def _run(
@@ -270,7 +299,6 @@ async def test_label_push_run_the_new_commit_is_never_reviewed(anyio_backend: st
     result, computed = await _run(gh, SHA_A)
     assert computed == [SHA_A] and not result.is_fork_gate_skip  # the review proceeds
     # 3. The author pushes new code. The new commit has no approval.
-    gh.head_sha = SHA_B
     result, computed = await _run(gh, SHA_B)
     assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and computed == []
     # 4. The old approval still exists, but it is bound to the old commit.
@@ -359,3 +387,108 @@ def test_workspace_head_reads_the_checked_out_commit_and_fails_to_none(tmp_path:
     assert real(str(repo)) == expected
     assert real(str(tmp_path / "missing")) is None
     assert real(str(tmp_path)) is None  # not a repository
+
+
+# --- review round: permissions, logging, moved pull request, exit code ---------
+
+
+def test_a_same_repository_pull_request_never_asks_for_statuses() -> None:
+    paths: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        paths.append(req.url.path)
+        if req.url.path == "/repos/o/r/pulls/7":
+            return httpx.Response(200, json=_pr("o/r"))
+        return httpx.Response(403, text="Resource not accessible by integration")  # no statuses: read
+
+    facts = _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT)
+    assert facts == ForkGateFacts("o/r", "o/r", "") and paths == ["/repos/o/r/pulls/7"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_same_repository_pull_request_still_runs_when_statuses_are_forbidden(anyio_backend: str) -> None:
+    gh = _GitHub()
+    gh.head_repo = "o/r"
+    original = gh.handler
+
+    def forbidding(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="no") if req.url.path.endswith("/status") else original(req)
+
+    gh.handler = forbidding  # type: ignore[method-assign]
+    _, computed = await _run(gh, SHA_A)
+    assert computed == [SHA_A]
+
+
+def test_a_forbidden_statuses_read_on_a_fork_is_logged_with_the_permission_hint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/repos/o/r/pulls/7":
+            return httpx.Response(200, json=_pr("mallory/r"))
+        return httpx.Response(403, text="Resource not accessible by integration")
+
+    with caplog.at_level("WARNING"):
+        assert _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT) is None
+    assert "statuses HTTP 403" in caplog.text and "statuses: read" in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_pull_request_that_moved_on_still_reviews_the_approved_commit_it_checked_out(
+    anyio_backend: str,
+) -> None:
+    # Approved A, the author pushed B, an old job for A is re-run with the workspace at A: the approved
+    # code is what is reviewed, so it runs. The workspace check is what blocks a mismatched tree.
+    gh = _GitHub()
+    gh.approve(SHA_A)
+    result, computed = await _run(gh, SHA_A, checked_out=SHA_A)
+    assert computed == [SHA_A] and not result.is_fork_gate_skip
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_pull_request_event_with_a_key_present_is_gated_for_a_fork(
+    anyio_backend: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gh = _GitHub()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    result, computed = await _run(gh, SHA_A, event="pull_request")
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and computed == []
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    for var in LLM_KEY_VARS:
+        monkeypatch.delenv(var, raising=False)
+    gh.paths = []
+    _, computed = await _run(gh, SHA_A, event="pull_request")
+    assert computed == [SHA_A] and gh.paths == [p for p in gh.paths if "/pulls/7" not in p]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize(("opt_in", "code", "outcome"), [(False, 0, "skipped"), (True, 2, "skipped_fork_gate_failed")])
+async def test_a_fork_gate_pause_exits_zero_unless_the_operator_opts_in(
+    tmp_path: Any, anyio_backend: str, opt_in: bool, code: int, outcome: str,
+) -> None:
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ai_pr_review.cli import _run_review_async
+    from ai_pr_review.vcs.protocol import SummaryResult, VcsProvider
+
+    from .test_cli import _make_config as cli_config
+
+    sink = tmp_path / "telemetry.jsonl"
+    config = cli_config(fail_on_fork_gate=opt_in, telemetry_enabled=True, telemetry_sink=f"file://{sink}")
+    provider = MagicMock(spec=VcsProvider)
+    provider.post_skip_comment.return_value = SummaryResult(comment_id=1, created=True, updated=False)
+    plan = SkipPlan(reason="This pull request comes from a fork", provider=provider, is_fork_gate_skip=True)
+    with patch("ai_pr_review.review.runtime.build_review_runtime", new=AsyncMock(return_value=plan)):
+        assert await _run_review_async(config) == code
+    assert provider.post_skip_comment.call_args.args[0] == "This pull request comes from a fork"
+    assert json.loads(sink.read_text().splitlines()[0])["outcome"] == outcome
+
+
+def test_the_fail_on_fork_gate_setting_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert not ReviewConfig.from_env().fail_on_fork_gate
+    monkeypatch.setenv("AI_FAIL_ON_FORK_GATE", "true")
+    assert ReviewConfig.from_env().fail_on_fork_gate
