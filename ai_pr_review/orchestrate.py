@@ -20,7 +20,7 @@ from ai_pr_review.agents.dispatch import (
     run_tier,
 )
 from ai_pr_review.agents.roster import AgentSpec
-from ai_pr_review.findings.extract import Extraction, extract_with_status
+from ai_pr_review.findings.extract import Extraction, extract_with_status, is_unreadable
 from ai_pr_review.findings.merge import merge_findings
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.findings.suppress import SuppressionRule, apply_suppressions
@@ -148,6 +148,10 @@ TokenRenderer = Callable[
 
 
 _PROMPT_TOO_LONG_NOTE = "prompt too long for the model"
+_UNREADABLE_NOTE = "unparseable output"
+# Exit code for an agent that ran but gave no readable findings list. It is
+# not EXIT_PROMPT_TOO_LONG (4), so the prompt-too-long skip path ignores it.
+EXIT_UNREADABLE_OUTPUT = 5
 
 
 def _agent_yield(
@@ -187,6 +191,8 @@ def _failed_agent_label(failure: FailedAgent) -> str:
     """
     if failure.exit_code == EXIT_PROMPT_TOO_LONG:
         return f"{failure.name} ({_PROMPT_TOO_LONG_NOTE})"
+    if failure.exit_code == EXIT_UNREADABLE_OUTPUT:
+        return f"{failure.name} ({_UNREADABLE_NOTE})"
     return failure.name
 
 
@@ -370,6 +376,19 @@ async def run_review(
     for s in successes:
         extraction = extract_with_status(s.output, agent_name=s.name, truncated=s.truncated)
         agent_yield[s.name] = _agent_yield(s, extraction, cfg.confidence_threshold)
+        if is_unreadable(extraction.status):
+            # An unreadable answer must not count as "no findings" (CAP-5). The
+            # agent stays in `successes` for the token table and agent_yield,
+            # and also joins `failures` so the outcome is COMMENT, incomplete.
+            failures.append(
+                FailedAgent(
+                    name=s.name,
+                    reason=f"unreadable agent output ({extraction.status})",
+                    exit_code=EXIT_UNREADABLE_OUTPUT,
+                    elapsed_ms=s.elapsed_ms,
+                    model=s.token_log.model if s.token_log else "",
+                )
+            )
         raw_findings.extend(extraction.findings)
     _log_agent_yield(agent_yield, cfg.confidence_threshold)
     merged = merge_findings(raw_findings, confidence_threshold=cfg.confidence_threshold)

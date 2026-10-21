@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from ai_pr_review.findings.models import INTERNAL_ONLY_FIELDS, Finding
 
-_FENCE_RE = re.compile(r"```json-findings\n(.*?)```", re.DOTALL)
+_FENCE_RE = re.compile(r"```json-findings[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 # Phrases that indicate the finding's own narrative refutes itself.
 # Defense-in-depth backstop for the prompt directive in _governance.md
@@ -89,6 +89,20 @@ def extract_findings(
     Logs warnings to stderr on malformed input.
     """
     return extract_with_status(agent_output, agent_name, truncated=truncated).findings
+
+
+# Statuses where the agent's answer could not be read as a findings list (CAP-5).
+# `truncated_repaired` is deliberately not listed: the repair kept at least one
+# complete finding, so the agent did give a readable answer, only a short one.
+# An `ok` block holding `[]` is an honest empty result and is not listed either.
+UNREADABLE_STATUSES = frozenset(
+    {"no_block", "truncated_no_block", "invalid_json", "truncated_invalid", "not_array"}
+)
+
+
+def is_unreadable(status: str) -> bool:
+    """True when the agent output gave no readable findings list."""
+    return status in UNREADABLE_STATUSES
 
 
 def extract_with_status(
