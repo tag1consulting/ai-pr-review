@@ -342,3 +342,41 @@ class TestSetupLoggingIdempotency:
         assert len(lines) == 1, f"Expected 1 line, got {len(lines)}: {stderr!r}"
         # Verify the second call's correlation ID is active, not the first's.
         assert json.loads(lines[0])["correlation_id"] == "idem0002"
+
+
+# ---------------------------------------------------------------------------
+# Workflow-command neutralizing (story 17-12, CAP-5)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowCommandNeutralizing:
+    def test_embedded_newline_cannot_start_a_workflow_command_line(self, capsys):
+        stderr = _emit_and_capture(
+            capsys, log_format="human", message="model said\n::error::forged\n::add-mask::x"
+        )
+        lines = stderr.splitlines()
+        assert len(lines) == 1
+        assert not any(line.lstrip().startswith("::") for line in lines)
+
+    def test_all_line_break_characters_are_collapsed(self):
+        from ai_pr_review.logging import neutralize_log_text
+
+        out = neutralize_log_text("a\r\n::b\rc d e\x85f\x0bg\x0ch")
+        assert out.splitlines() == [out]
+
+    def test_leading_double_colon_is_broken(self):
+        from ai_pr_review.logging import neutralize_log_text
+
+        assert neutralize_log_text("::error::x") == ": :error::x"
+        assert neutralize_log_text("  ::warning::x").lstrip().startswith(": :")
+
+    def test_plain_text_is_unchanged(self):
+        from ai_pr_review.logging import neutralize_log_text
+
+        assert neutralize_log_text("a: b :: c") == "a: b :: c"
+
+    def test_safe_log_text_masks_a_token_prefix(self):
+        from ai_pr_review.logging import safe_log_text
+
+        token = "ghp_" + "CanaryTokenValue0123456789abcdef"
+        assert token not in safe_log_text(f"x\n::error::{token}")

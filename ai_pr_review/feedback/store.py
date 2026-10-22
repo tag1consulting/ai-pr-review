@@ -34,7 +34,7 @@ import httpx
 
 from ai_pr_review.feedback.models import FeedbackEntry
 from ai_pr_review.feedback.retention import _parse_ts, apply_retention
-from ai_pr_review.vcs.http import RecordingClient, TapeRecorder
+from ai_pr_review.vcs.http import RecordingClient, TapeRecorder, scrub_outbound_text
 
 logger = logging.getLogger(__name__)
 
@@ -487,7 +487,9 @@ class _GitHubContentsBackend:
         return raw.decode("utf-8", errors="replace"), sha
 
     def write(self, content: str, version: object | None) -> None:
-        new_b64 = base64.b64encode(content.encode()).decode()
+        # This backend uses a bare httpx.Client, so it skips RecordingClient's
+        # outbound scrub. Scrub the text before it is base64-encoded (17-12).
+        new_b64 = base64.b64encode(scrub_outbound_text(content).encode()).decode()
 
         payload: dict[str, object] = {
             "message": "chore: update AI review feedback store",
