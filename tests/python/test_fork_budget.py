@@ -47,6 +47,7 @@ class Backend:
         self.maintainer: list[tuple[int, str]] = []
         self.fail_read = self.fail_create = self.fail_update = self.fail_delete = False
         self.before_create: Callable[[], None] | None = None
+        self.after_create: Callable[[], None] | None = None
         self.lock = threading.Lock()
 
     def add(self, runs: int = 1, cents: int = 0, allowance: int = 0, rescan_id: int | None = None) -> int:
@@ -70,7 +71,11 @@ class Backend:
         with self.lock:
             self.next_id += 1
             self.bot[self.next_id] = body
-            return self.next_id
+            new_id = self.next_id
+        if self.after_create is not None:
+            hook, self.after_create = self.after_create, None
+            hook()
+        return new_id
 
     def update_budget_entry(self, comment_id: int, body: str) -> None:
         if self.fail_update:
@@ -838,3 +843,26 @@ def test_with_an_unknown_author_nobody_is_credited() -> None:
     prov._pr_author_login = ""
     _ledger, maintainer = prov.list_budget_comments()
     assert maintainer == []
+
+
+def test_a_failed_reread_after_the_write_releases_the_own_entry() -> None:
+    backend = Backend()
+    backend.after_create = lambda: setattr(backend, "fail_read", True)
+    with pytest.raises(LedgerError):
+        _budget(backend).reserve(10)
+    backend.fail_read = False
+    assert backend.bot == {}
+
+
+def test_a_failed_reread_and_a_failed_release_stay_charged_and_pause() -> None:
+    backend = Backend()
+
+    def flap() -> None:
+        backend.fail_read = True
+        backend.fail_delete = True
+
+    backend.after_create = flap
+    with pytest.raises(LedgerError):
+        _budget(backend).reserve(10)
+    backend.fail_read = backend.fail_delete = False
+    assert len(backend.bot) == 1

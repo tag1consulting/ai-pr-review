@@ -14,6 +14,9 @@ own entry and pause when the run does not fit. Admission is ordered by comment I
 A run that does not fit appends nothing. A run that never settles (cancelled) stays charged at its
 estimate. Trusted authors and non-fork runs never reach this module.
 
+The shared admission steps are in ``_ledger_admission.py``, which also documents how this ledger
+differs from the per-PR one.
+
 Every failure to read or write pauses the run (``LedgerError``). The GitHub calls are in
 ``GitHubProvider``. This module is pure logic over the ``SpendBackend`` protocol.
 """
@@ -27,7 +30,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from ai_pr_review.review.fork_budget import ForkBudgetPause, LedgerError, format_usd
+from ai_pr_review.review._ledger_admission import (
+    LedgerError,
+    append_and_reread,
+    release_quietly,
+)
+from ai_pr_review.review.fork_budget import ForkBudgetPause, format_usd
 
 logger = logging.getLogger(__name__)
 
@@ -206,35 +214,24 @@ class ForkSpend:
         if used >= pool or used + estimate_cents > pool:  # no cent left, or the estimate does not fit
             raise ForkBudgetPause(CAP_DAILY, daily_pause_text(self._tier, used, self._caps))
         body = render_spend_entry(self._tier, self._run, self._pr, estimate_cents, STATE_RESERVED, now)
-        try:
-            own_id = self._backend.create_spend_entry(body)
-        except Exception as exc:  # noqa: BLE001 - any write failure must pause the run
-            raise LedgerError(f"could not write the spend ledger ({type(exc).__name__})") from exc
-        try:
-            entries, _ = self._scan()
-        except LedgerError:
-            self._release_quietly(own_id)
-            raise
-        if not any(e.comment_id == own_id for e in entries):
-            raise LedgerError("the own spend entry is gone, so admission cannot be checked")
+        own_id, entries = append_and_reread(
+            lambda: self._create(body),
+            lambda: self._scan()[0],
+            self._backend.delete_spend_entry,
+            lambda e: e.comment_id,
+            label="fork spend",
+        )
         through = _tier_sum(entries, self._tier, through_id=own_id)
         if through > pool:
-            try:
-                self._backend.delete_spend_entry(own_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("fork spend: could not delete the losing entry (%s). It stays charged.",
-                               type(exc).__name__)
+            release_quietly(self._backend.delete_spend_entry, own_id, label="fork spend", why="of the losing run")
             raise ForkBudgetPause(CAP_DAILY, daily_pause_text(self._tier, through - estimate_cents, self._caps))
         return SpendReservation(own_id, estimate_cents, now)
 
-    def _release_quietly(self, own_id: int) -> None:
-        """Best-effort delete of the own entry when admission could not be checked, so a flapping
-        API does not leave an estimate charged for 24 hours."""
+    def _create(self, body: str) -> int:
         try:
-            self._backend.delete_spend_entry(own_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("fork spend: could not delete the own entry (%s). It stays charged.",
-                           type(exc).__name__)
+            return self._backend.create_spend_entry(body)
+        except Exception as exc:  # noqa: BLE001 - any write failure must pause the run
+            raise LedgerError(f"could not write the spend ledger ({type(exc).__name__})") from exc
 
     def settle(self, reservation: SpendReservation, actual_cents: int) -> None:
         """Replace the estimate in the own entry with the actual cost. Raises ``LedgerError`` on failure.
@@ -248,10 +245,8 @@ class ForkSpend:
 
     def release(self, reservation: SpendReservation) -> None:
         """Delete the own entry of a run that will not start. Best effort: a failed delete stays charged."""
-        try:
-            self._backend.delete_spend_entry(reservation.comment_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("fork spend: could not release the entry (%s). It stays charged.", type(exc).__name__)
+        release_quietly(self._backend.delete_spend_entry, reservation.comment_id,
+                        label="fork spend", why="of a run that will not start")
 
 
 def author_pause_text(author: str, open_count: int) -> str:
