@@ -111,8 +111,10 @@ def workspace_head(workspace: str = ".") -> str | None:
     return sha if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
 
-_CREDENTIAL_KEYS = r"^(http\..*\.extraheader|credential\..*|includeif\..*)$"
+_CREDENTIAL_KEYS = r"^(http\.(.*\.)?extraheader|credential\..*|includeif\..*)$"
 _REMOTE_URL_KEYS = r"^remote\..*\.(push)?url$"
+_INSTEADOF_KEYS = r"^url\..*\.(push)?insteadof$"
+_KEY_WITH_USERINFO = re.compile(r"://[^/\s@]+@")
 _URL_WITH_USERINFO = re.compile(r"^https?://[^/?#\s]*@", re.IGNORECASE)
 
 
@@ -148,7 +150,7 @@ def persisted_credential_reason(workspace: str = ".") -> str:
     code, out = _git_config_regexp(workspace, _CREDENTIAL_KEYS)
     if code == 0:
         keys = sorted({line.split(None, 1)[0] for line in out.splitlines() if line.strip()})
-        shown = ", ".join(f"`{k[:80]}`" for k in keys[:5])
+        shown = ", ".join(f"`{_redact_key(k)}`" for k in keys[:5])
         return f"The workspace git config holds a persisted credential setting ({shown}), so the review is paused.{fix}"
     if code != 1:
         return "The review is paused because the workspace git config could not be checked for a persisted credential."
@@ -157,10 +159,23 @@ def persisted_credential_reason(workspace: str = ".") -> str:
         for line in out.splitlines():
             parts = line.split(None, 1)
             if len(parts) == 2 and _URL_WITH_USERINFO.match(parts[1].strip()):
-                return f"A remote URL in the workspace git config carries credentials (`{parts[0][:80]}`), so the review is paused.{fix}"
+                return f"A remote URL in the workspace git config carries credentials (`{_redact_key(parts[0])}`), so the review is paused.{fix}"
+    elif code != 1:
+        return "The review is paused because the workspace git config could not be checked for a persisted credential."
+    code, out = _git_config_regexp(workspace, _INSTEADOF_KEYS)
+    if code == 0:
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if parts and _KEY_WITH_USERINFO.search(parts[0]):
+                return f"A URL rewrite in the workspace git config carries credentials (`{_redact_key(parts[0])}`), so the review is paused.{fix}"
     elif code != 1:
         return "The review is paused because the workspace git config could not be checked for a persisted credential."
     return ""
+
+
+def _redact_key(key: str) -> str:
+    """A config key can hold ``user:token@host`` in its URL part, so hide user info."""
+    return re.sub(r"://[^/\s@]+@", "://<redacted>@", key)[:80]
 
 
 def parse_trusted_associations(raw: str | None) -> tuple[str, ...]:

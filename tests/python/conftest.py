@@ -33,3 +33,15 @@ def _reset_pkg_logger() -> Generator[None, None, None]:
     pkg.handlers[:] = original_handlers
     pkg.setLevel(original_level)
     pkg.propagate = original_propagate
+
+
+@pytest.fixture(autouse=True)
+def _reset_fork_isolation_state():
+    """Fork isolation and passthrough are run-wide module state: never let one test leak it."""
+    from ai_pr_review.analyzers import _env
+
+    _env.configure_fork_isolation(False)
+    _env.configure_passthrough((), allow_passthrough=True)
+    yield
+    _env.configure_fork_isolation(False)
+    _env.configure_passthrough((), allow_passthrough=True)

@@ -457,3 +457,40 @@ def test_no_production_module_imports_the_tool_loop() -> None:
             if any(n.endswith(("tool_loop", "tool_sandbox")) for n in names):
                 offenders.append(str(path.relative_to(root)))
     assert offenders == []
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("http.extraheader", "AUTHORIZATION: basic ZHVtbXk="),
+        ("url.https://user:pw@github.com/.insteadOf", "https://github.com/"),
+    ],
+)
+def test_global_extraheader_and_credentialed_url_rewrite_pause(tmp_path: Path, key: str, value: str) -> None:
+    ws = _repo(tmp_path / "ws")
+    _git(ws, "config", "--local", key, value)
+    reason = _REAL_PERSISTED(str(ws))
+    assert reason
+    assert "ZHVtbXk" not in reason
+    assert "pw@" not in reason.split("(", 1)[-1] or "url." in reason
+
+
+def test_phpcs_ignores_the_repo_ruleset_on_a_fork_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_pr_review.analyzers import _env
+    from ai_pr_review.analyzers.native import phpcs
+
+    called: list[bool] = []
+    monkeypatch.setattr(phpcs, "_installed_standards", lambda: {"PSR12": "/x"})
+    monkeypatch.setattr(phpcs, "_find_repo_ruleset", lambda: called.append(True) or None)
+    monkeypatch.setattr(_env, "_fork_isolated", True, raising=False)
+    monkeypatch.setattr(phpcs, "fork_isolated", lambda: True)
+    phpcs._plan_standard(["a.php"])
+    assert called == []
+
+
+def test_pause_text_hides_user_info_in_a_config_key(tmp_path: Path) -> None:
+    ws = _repo(tmp_path / "ws")
+    _git(ws, "config", "--local", "url.https://user:tok123@github.com/.insteadOf", "https://github.com/")
+    reason = _REAL_PERSISTED(str(ws))
+    assert reason
+    assert "tok123" not in reason

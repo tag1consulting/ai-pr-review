@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ai_pr_review.analyzers._env import tool_env
+from ai_pr_review.analyzers._env import fork_isolated, tool_env
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.analyzers.native._phpcs_patterns import (
     _relative_pattern_matches,  # noqa: F401 (re-export, tests import it here)
@@ -265,7 +265,8 @@ def _looks_like_drupal(php_files: list[str]) -> bool:
 def _plan_standard(php_files: list[str]) -> _Plan | None:
     """Choose what to run. None when the repo ruleset puts every changed file out of scope."""
     installed = _installed_standards()
-    ruleset_path = _find_repo_ruleset()
+    # A fork run ignores the repo ruleset: its exclude patterns come from the fork tree.
+    ruleset_path = None if fork_isolated() else _find_repo_ruleset()
     if ruleset_path is not None:
         ruleset = _parse_repo_ruleset(ruleset_path, installed)
         if ruleset is None:
