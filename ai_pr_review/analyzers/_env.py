@@ -25,7 +25,6 @@ import shutil
 import tempfile
 import threading
 from collections.abc import Iterable, Mapping
-from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +56,15 @@ _passthrough: tuple[str, ...] = ()
 _allow_passthrough = True
 
 
-def _carries_no_credentials(value: str) -> bool:
-    """False for a proxy URL with a user name or password in it. Such a value is a secret."""
-    try:
-        parts = urlsplit(value)
-        return parts.username is None and parts.password is None
-    except ValueError:
-        return False
+def _carries_no_credentials(name: str, value: str) -> bool:
+    """False for a proxy value that may hold a user name or password.
+
+    A schemeless value such as ``user:pw@host:3128`` defeats URL parsing, so any ``@`` in a
+    proxy variable counts as a credential and the value is dropped.
+    """
+    if name.upper() == "NO_PROXY" or not name.upper().endswith("_PROXY"):
+        return True
+    return "@" not in value
 
 
 def is_blocked_name(name: str) -> bool:
@@ -124,7 +125,7 @@ def tool_env(
     names = _passthrough if passthrough is None else tuple(passthrough)
     if allow:
         for net in _NETWORK_NAMES:
-            if net in os.environ and _carries_no_credentials(os.environ[net]):
+            if net in os.environ and _carries_no_credentials(net, os.environ[net]):
                 env[net] = os.environ[net]
         for name in names:
             if not _NAME_RE.fullmatch(name):

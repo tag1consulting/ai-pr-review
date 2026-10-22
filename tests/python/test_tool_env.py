@@ -384,3 +384,12 @@ def test_proxy_with_credentials_is_not_forwarded_and_fork_runs_get_no_network_se
     assert "HTTPS_PROXY" not in _env.tool_env()
     assert _env.tool_env()["NO_PROXY"] == "localhost"
     assert "NO_PROXY" not in _env.tool_env(allow_passthrough=False)
+
+
+def test_schemeless_proxy_with_credentials_is_not_forwarded(monkeypatch) -> None:
+    from ai_pr_review.analyzers import _env
+
+    monkeypatch.setenv("HTTPS_PROXY", "user:pw@proxy:3128")
+    monkeypatch.setenv("http_proxy", "user@proxy:3128")
+    assert "HTTPS_PROXY" not in _env.tool_env()
+    assert "http_proxy" not in _env.tool_env()
