@@ -40,6 +40,14 @@ _BAKED_COMPOSER_AUTOLOAD = Path("/opt/composer/vendor/autoload.php")
 _BAKED_PHPSTAN_DRUPAL = Path("/opt/composer/vendor/mglaman/phpstan-drupal")
 
 
+def _remove_dir(path: str) -> None:
+    """Remove a temp directory. A failure is logged, never raised, because the run is over."""
+    try:
+        shutil.rmtree(path)
+    except OSError as exc:
+        logger.warning("phpstan: could not remove the temp directory %s (%s)", path, type(exc).__name__)
+
+
 def _severity_for_level(level: str) -> Literal["High", "Medium", "Low"]:
     """Map PHPSTAN_LEVEL (0-9) to a finding severity.
 
@@ -109,7 +117,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                 trusted_config_path = trusted_config.name
     except OSError as exc:
         if fork_dir:
-            shutil.rmtree(fork_dir, ignore_errors=True)
+            _remove_dir(fork_dir)
         logger.warning("[ai-pr-review] WARNING: could not create trusted phpstan config: %s; skipping.", exc)
         return []
 
@@ -148,7 +156,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             return []
     finally:
         if fork_dir:
-            shutil.rmtree(fork_dir, ignore_errors=True)
+            _remove_dir(fork_dir)
         else:
             with contextlib.suppress(OSError):
                 os.unlink(trusted_config_path)

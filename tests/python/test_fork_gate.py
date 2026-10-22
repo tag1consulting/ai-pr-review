@@ -25,6 +25,9 @@ from ai_pr_review.review.fork_gate import (
     parse_trusted_associations,
 )
 from ai_pr_review.review.fork_gate import (
+    workspace_head as _REAL_WORKSPACE_HEAD,  # before any fixture patches it
+)
+from ai_pr_review.review.fork_gate import (
     workspace_head as _real_workspace_head,  # before the fixture patches it
 )
 from ai_pr_review.review.runtime import SkipPlan, _apply_fork_gate, build_review_runtime
@@ -152,7 +155,7 @@ def test_the_facts_read_the_base_repository_statuses_and_take_the_newest_for_the
     facts = _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT)
     assert facts == ForkGateFacts(head_repo="mallory/r", base_repo="o/r", approval_state="failure")
     # The statuses come from the base repository. A status in the fork is never asked for.
-    assert paths[1] == f"/repos/o/r/commits/{SHA_A}/status"
+    assert paths[1] == f"/repos/o/r/commits/{SHA_A}/status?per_page=100"
     assert all("mallory" not in p for p in paths)
 
 
@@ -750,3 +753,12 @@ async def test_auto_keeps_the_workspace_head_check_and_hands_the_profile_to_the_
         result = await build_review_runtime(cfg, provider_factory=lambda: provider)
     assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and "bbbbbbb" in result.reason
     assert not any(p.endswith("/status") for p in gh.paths)  # no statuses request under auto
+
+
+def test_workspace_head_logs_why_it_gave_no_commit(tmp_path, caplog) -> None:
+    import logging
+
+
+    with caplog.at_level(logging.WARNING):
+        assert _REAL_WORKSPACE_HEAD(str(tmp_path)) is None  # not a git repository
+    assert "git rev-parse HEAD gave exit code" in caplog.text

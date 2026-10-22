@@ -40,6 +40,7 @@ Pure logic. The GitHub calls are in ``GitHubProvider.get_fork_gate_facts``.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -94,6 +95,8 @@ def llm_key_present() -> bool:
     """True when the environment holds any LLM key. Only a name check, the value is never read out."""
     return any(os.environ.get(name, "").strip() for name in LLM_KEY_VARS)
 
+logger = logging.getLogger(__name__)
+
 
 def workspace_head(workspace: str = ".") -> str | None:
     """The commit the workspace has checked out, or ``None`` when git cannot say.
@@ -110,10 +113,17 @@ def workspace_head(workspace: str = ".") -> str | None:
         done = subprocess.run(
             ["git", "-c", "safe.directory=*", "-C", workspace, "rev-parse", "HEAD"],
             capture_output=True, text=True, env=env, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("fork gate: could not read the workspace commit (%s)", type(exc).__name__)
         return None
     sha = done.stdout.strip()
-    return sha if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
+    if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha):
+        return sha
+    # The git error text names a path at most, never a secret, and is cut short.
+    logger.warning(
+        "fork gate: git rev-parse HEAD gave exit code %s: %s", done.returncode, (done.stderr or "").strip()[:200]
+    )
+    return None
 
 
 _CREDENTIAL_KEYS = r"^(http\.(.*\.)?extraheader|credential\..*|includeif\..*)$"

@@ -2765,7 +2765,9 @@ class GitHubProvider:
             return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state="", **who)
         c = self.config
         try:
-            status_resp = self.client.request("GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/status")
+            status_resp = self.client.request(
+                "GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/status", params={"per_page": 100}
+            )
         except httpx.HTTPError as exc:
             self._gate_error(f"statuses request failed: {type(exc).__name__}")
             return None

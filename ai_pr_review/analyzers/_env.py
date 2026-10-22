@@ -149,6 +149,10 @@ def tool_env(
                 logger.warning(
                     "AI_ANALYZER_ENV_PASSTHROUGH: refusing to pass secret variable %s", name
                 )
+            elif name in os.environ and not _carries_no_credentials(name, os.environ[name]):
+                logger.warning(
+                    "AI_ANALYZER_ENV_PASSTHROUGH: refusing %s, its value may hold credentials", name
+                )
             elif name in os.environ:
                 env[name] = os.environ[name]
     if extra:

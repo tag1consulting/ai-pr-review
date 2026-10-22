@@ -395,3 +395,13 @@ def test_schemeless_proxy_with_credentials_is_not_forwarded(monkeypatch) -> None
     monkeypatch.setenv("http_proxy", "user@proxy:3128")
     assert "HTTPS_PROXY" not in _env.tool_env()
     assert "http_proxy" not in _env.tool_env()
+
+
+def test_a_credentialed_proxy_named_in_the_passthrough_list_is_refused(monkeypatch) -> None:
+    from ai_pr_review.analyzers import _env
+
+    monkeypatch.setenv("ALL_PROXY", "http://user:pw@proxy:3128")
+    monkeypatch.setenv("FTP_PROXY", "http://proxy:3128")
+    env = _env.tool_env(passthrough=("ALL_PROXY", "FTP_PROXY"), allow_passthrough=True)
+    assert "ALL_PROXY" not in env
+    assert env["FTP_PROXY"] == "http://proxy:3128"
