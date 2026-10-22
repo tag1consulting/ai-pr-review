@@ -31,7 +31,7 @@ FROM hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bf
 # hadolint ignore=DL3029
 FROM ghcr.io/stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f916643f54ca291ac38cf7d01ef591ff3f9 AS kube-linter
 # hadolint ignore=DL3029
-FROM ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c45a6ea8b58655fd66433d4ca3b1bc631c574a48d120bd19f AS tflint
+FROM ghcr.io/terraform-linters/tflint:v0.65.0@sha256:2788f4d4fc663c0e953b011b01bf443fe5bfce7587ee916e588e6057b85d6359 AS tflint
 # hadolint ignore=DL3029
 FROM ghcr.io/astral-sh/ruff:0.17.1@sha256:eae3102808b46de58204237a3433001cae4d45d832f31be1c8121f7145a62661 AS ruff
 
