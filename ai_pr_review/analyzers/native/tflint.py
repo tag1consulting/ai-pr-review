@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -67,10 +68,9 @@ def _run_tflint(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         logger.warning("[ai-pr-review] WARNING: could not create trusted tflint config: %s; skipping.", exc)
         return []
 
-    env = dict(os.environ)
     try:
         with tempfile.TemporaryDirectory(prefix="tflint-plugins-") as empty_plugin_dir:
-            env["TFLINT_PLUGIN_DIR"] = empty_plugin_dir
+            env = tool_env(extra={"TFLINT_PLUGIN_DIR": empty_plugin_dir})
 
             all_findings: list[Finding] = []
             for d in dirs:

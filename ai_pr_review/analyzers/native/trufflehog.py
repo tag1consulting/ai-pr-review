@@ -16,6 +16,7 @@ from pathlib import Path
 
 import yaml
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -130,6 +131,7 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECS,
+            env=tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         logger.warning("[ai-pr-review] WARNING: trufflehog timed out after %ss; skipping.", exc.timeout)

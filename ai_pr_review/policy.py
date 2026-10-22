@@ -60,6 +60,8 @@ from dataclasses import dataclass
 
 import yaml
 
+from ai_pr_review.analyzers._env import GIT_SAFE_ARGS, git_env
+
 _POLICY_PATH = ".ai-pr-review/policy.yml"
 _POLICY_PATH_LEGACY = ".github/ai-pr-review/policy.yml"
 # First match wins. The two are never merged. See the module docstring.
@@ -251,11 +253,12 @@ def _read_policy_from_base_ref(workspace: str, base_ref: str) -> tuple[str | Non
 def _git_show_policy_path(workspace: str, base_ref: str, path: str) -> str | None:
     try:
         proc = subprocess.run(
-            ["git", "show", f"origin/{base_ref}:{path}"],
+            ["git", *GIT_SAFE_ARGS, "show", f"origin/{base_ref}:{path}"],
             cwd=workspace or ".",
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECS,
+            env=git_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(

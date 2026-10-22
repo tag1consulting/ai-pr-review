@@ -274,12 +274,17 @@ async def build_review_runtime(
     """
     from ai_pr_review.agents.gates import evaluate_gates, filter_agents
     from ai_pr_review.agents.roster import AGENTS, agent_allowed
+    from ai_pr_review.analyzers._env import configure_passthrough
     from ai_pr_review.findings.models import Finding as _Finding
 
     _factory = provider_factory if provider_factory is not None else provider_from_env
 
     # Resolve provider model defaults before any downstream use.
     config = config.resolve_models()
+
+    # Set the scrubbed-environment passthrough once, before any git or analyzer launch.
+    # allow_passthrough is True for now. Story 17-9 passes False for a fork run.
+    configure_passthrough(config.analyzer_env_passthrough, allow_passthrough=True)
 
     if config.enable_context_enrichment:
         _warn_if_context_enrichment_inert()
