@@ -27,7 +27,7 @@ import logging
 import re
 
 from ai_pr_review.feedback.models import FeedbackEntry
-from ai_pr_review.text_safety import clean_text
+from ai_pr_review.text_safety import clean_text, escape_closing_tags
 
 logger = logging.getLogger(__name__)
 
@@ -212,11 +212,12 @@ def _render_entry(entry: FeedbackEntry) -> str:
     render time (rather than only at write time) also retroactively defends
     any entry already sitting in the append-only store.
 
-    ``reason`` is deliberately NOT escaped here — it is already HTML-escaped
-    upstream by ``_sanitize_reason`` in slash/parser.py, and escaping it again
-    would double-encode it back into visible entities.
+    ``reason`` is not HTML-escaped again here, because ``_sanitize_reason`` in
+    slash/parser.py already did that and a second pass would double-encode it.
+    It does get the block-tag escape, which defends entries written before that
+    parser escape existed or written straight to the store.
     """
-    reason = _strip_instructions(clean_text(entry.reason))
+    reason = _strip_instructions(escape_closing_tags(clean_text(entry.reason)))
     return _ENTRY_TEMPLATE.format(
         command=html.escape(clean_text(entry.command), quote=True),
         source=html.escape(clean_text(entry.source), quote=True),
