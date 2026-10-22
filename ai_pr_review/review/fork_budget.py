@@ -43,9 +43,14 @@ DEFAULT_RUN_CENTS = 200
 MAINTAINER_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 CAP_RUNS, CAP_USD = "runs", "usd"
 
+ENTRY_TRAILER = "Fork review budget entry. The bot keeps this comment. Do not edit it."
+# An entry is a bot comment whose body IS the marker (plus the rescan line for a credit) and the fixed
+# trailer, from the first character to the last. A bot comment that only quotes the tag, such as a
+# summary with text taken from the fork, is not an entry and never raises. Anchoring is reusable:
+# a later spend-entry marker can follow the same shape (story 17-7).
 _ENTRY_RE = re.compile(
-    rf"<!--\s*{LEDGER_TAG}\s+runs=(\d{{1,6}})\s+usd=(\d{{1,6}})\.(\d{{2}})\s+allowance=(\d{{1,6}})\s*-->")
-_RESCAN_RE = re.compile(rf"<!--\s*{RESCAN_TAG}\s+comment=(\d{{1,20}})\s*-->")
+    rf"\A<!-- {LEDGER_TAG} runs=(\d{{1,6}}) usd=(\d{{1,6}})\.(\d{{2}}) allowance=(\d{{1,6}}) -->\n"
+    rf"(?:<!-- {RESCAN_TAG} comment=(\d{{1,20}}) -->\n)?{re.escape(ENTRY_TRAILER)}\Z")
 
 LEDGER_ERROR_TEXT = (
     "The review of this fork pull request is paused. The review budget for this pull request could not "
@@ -119,26 +124,42 @@ def format_usd(cents: int) -> str:
 
 
 def render_entry(runs: int, cents: int, allowance: int, rescan_id: int | None = None) -> str:
-    marker = f"<!-- {LEDGER_TAG} runs={runs} usd={format_usd(cents)} allowance={allowance} -->"
+    marker = f"<!-- {LEDGER_TAG} runs={runs} usd={format_usd(cents)} allowance={allowance} -->\n"
     if rescan_id is not None:
-        marker += f"\n<!-- {RESCAN_TAG} comment={rescan_id} -->"
-    return f"{marker}\nFork review budget entry. The bot keeps this comment. Do not edit it."
+        marker += f"<!-- {RESCAN_TAG} comment={rescan_id} -->\n"
+    return marker + ENTRY_TRAILER
+
+
+def try_parse_entry(comment_id: int, body: str) -> Entry | None:
+    """Parse a bot-authored comment as a ledger entry, or return ``None`` when it is not one.
+
+    Not an entry: a body that is not exactly the marker and trailer, an allowance above 0 without a
+    rescan ID, or a rescan credit that is not exactly one allowance with no run and no cost.
+    """
+    match = _ENTRY_RE.match(body)
+    if match is None:
+        return None
+    runs, cents = int(match.group(1)), int(match.group(2)) * 100 + int(match.group(3))
+    allowance = int(match.group(4))
+    rescan_id = int(match.group(5)) if match.group(5) else None
+    if rescan_id is None:
+        if allowance != 0:
+            return None
+    elif (runs, cents, allowance) != (0, 0, 1):
+        return None
+    return Entry(comment_id=comment_id, runs=runs, cents=cents, allowance=allowance, rescan_id=rescan_id)
 
 
 def parse_entry(comment_id: int, body: str) -> Entry:
-    """Parse a bot-authored ledger comment. A body that holds the tag but not a valid marker is a
-    ``LedgerError``, because skipping it would undercount."""
-    match = _ENTRY_RE.search(body)
-    if match is None:
-        raise LedgerError(f"comment {comment_id} holds the ledger tag but no valid marker")
-    rescan = _RESCAN_RE.search(body)
-    return Entry(
-        comment_id=comment_id,
-        runs=int(match.group(1)),
-        cents=int(match.group(2)) * 100 + int(match.group(3)),
-        allowance=int(match.group(4)),
-        rescan_id=int(rescan.group(1)) if rescan else None,
-    )
+    """Like ``try_parse_entry`` but a body that is not an entry is a ``LedgerError``."""
+    entry = try_parse_entry(comment_id, body)
+    if entry is None:
+        raise LedgerError(f"comment {comment_id} is not a valid ledger entry")
+    return entry
+
+
+def is_entry_body(body: str) -> bool:
+    return try_parse_entry(0, body) is not None
 
 
 def allowance_of(entries: list[Entry]) -> int:
@@ -198,7 +219,7 @@ def not_admitted(entries: list[Entry], caps: Caps, own_id: int) -> str | None:
 def pause_text(cap: str, entries: list[Entry], caps: Caps, *, estimate_cents: int = 0) -> str:
     max_runs, max_cents = caps.effective(allowance_of(entries))
     used_runs, used_cents = sum(e.runs for e in entries), sum(e.cents for e in entries)
-    resume = "A maintainer with write access can comment `/ai-pr-review rescan` to allow one more review run."
+    resume = "An owner, member or collaborator of the repository can comment `/ai-pr-review rescan` to allow one more review run."
     if cap == CAP_RUNS:
         return (
             "The review of this fork pull request is paused. It reached the cap of "
@@ -222,7 +243,8 @@ class ForkBudget:
             ledger, maintainer = self._backend.list_budget_comments()
         except Exception as exc:  # noqa: BLE001 - any read failure must pause the run
             raise LedgerError(f"could not read the ledger ({type(exc).__name__})") from exc
-        entries = sorted((parse_entry(cid, body) for cid, body in ledger), key=lambda e: e.comment_id)
+        parsed = (try_parse_entry(cid, body) for cid, body in ledger)
+        entries = sorted((e for e in parsed if e is not None), key=lambda e: e.comment_id)
         return entries, maintainer
 
     def _create(self, body: str) -> int:
@@ -239,7 +261,12 @@ class ForkBudget:
         """
         entries, maintainer = self._scan()
         credited = {e.rescan_id for e in entries if e.rescan_id is not None}
+        # A rescan comment older than the first reservation has nothing to resume, so it earns no credit.
+        reserved = [e.comment_id for e in entries if e.rescan_id is None]
+        first_reserved = min(reserved) if reserved else None
         for comment_id, body in maintainer:
+            if first_reserved is None or comment_id <= first_reserved:
+                continue
             if comment_id in credited or not is_rescan_comment(body):
                 continue
             new_id = self._create(render_entry(0, 0, 1, comment_id))
@@ -257,6 +284,9 @@ class ForkBudget:
         A run that does not fit appends nothing. A run that loses the ordering deletes its own entry.
         If that delete fails, the entry stays charged, which is the safe direction.
         """
+        # Assumption: GitHub comment lists are read-after-write consistent, so the re-read below shows
+        # every entry created before the own entry. A missing own entry is caught (LedgerError). A stale
+        # list that omits a lower-ID entry is not detectable here and is not handled.
         entries, _ = self._scan()
         cap = cannot_fit(entries, self._caps, estimate_cents)
         if cap is not None:

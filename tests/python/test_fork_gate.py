@@ -201,7 +201,7 @@ def test_the_event_name_and_the_fork_ceiling_come_from_the_environment(monkeypat
     assert ReviewConfig.from_env().fork_max_cost_usd == DEFAULT_FORK_MAX_COST_USD
 
 
-@pytest.mark.parametrize("bad", ["-1", "nan", "inf"])
+@pytest.mark.parametrize("bad", ["-1", "nan", "inf", "0", "0.0"])
 def test_an_unusable_fork_ceiling_falls_back_to_the_default_and_never_switches_it_off(
     monkeypatch: pytest.MonkeyPatch, bad: str,
 ) -> None:
@@ -232,7 +232,7 @@ def test_an_approved_fork_gets_the_default_cost_ceiling_and_an_explicit_ceiling_
     config, _ = _gate("pull_request_target", _facts(approval_state="success"), max_cost_usd=9.0)
     assert config.max_cost_usd == 9.0
     config, _ = _gate("pull_request_target", _facts(approval_state="success"), fork_max_cost_usd=0.0)
-    assert config.max_cost_usd == 0.0  # 0 switches the default off
+    assert config.max_cost_usd == DEFAULT_FORK_MAX_COST_USD  # 0 is not a way to switch the ceiling off
     config, _ = _gate("pull_request_target", _facts(head_repo="o/r"))
     assert config.max_cost_usd == 0.0  # a same-repository pull request keeps its own setting
 

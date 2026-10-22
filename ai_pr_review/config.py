@@ -881,9 +881,9 @@ class ReviewConfig(BaseModel):
     @classmethod
     def _fork_max_cost_usd_falls_back(cls, v: float) -> float:
         # An unusable value must not switch the fork cost ceiling off. Use the default instead.
-        if not math.isfinite(v) or v < 0:
+        if not math.isfinite(v) or v <= 0:
             print(
-                f"WARNING: AI_FORK_MAX_COST_USD={v} is not a finite, non-negative number; "
+                f"WARNING: AI_FORK_MAX_COST_USD={v} is not a finite number above 0; "
                 "using the default of 2.0.",
                 file=sys.stderr,
             )

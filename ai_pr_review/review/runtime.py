@@ -9,6 +9,7 @@ pure orchestration. `orchestrate.run_review()` receives only the assembled
 from __future__ import annotations
 
 import logging
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,7 +28,6 @@ from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
 from ai_pr_review.review.cost_ceiling import ContextWindowExceeded, CostCeilingExceeded
 from ai_pr_review.review.fork_budget import (
-    DEFAULT_RUN_CENTS,
     ESTIMATE_ERROR_TEXT,
     LEDGER_ERROR_TEXT,
     Caps,
@@ -37,7 +37,7 @@ from ai_pr_review.review.fork_budget import (
     Reservation,
     cents_from_units,
 )
-from ai_pr_review.review.fork_gate import ForkProfile
+from ai_pr_review.review.fork_gate import DEFAULT_FORK_MAX_COST_USD, ForkProfile
 from ai_pr_review.review.fork_spend import (
     DailyCaps,
     ForkSpend,
@@ -296,15 +296,23 @@ def _apply_fork_gate(
             return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True), None
     if decision.gated:
         logger.info("fork gate: fork pull request allowed (policy %s, mode %s)", config.fork_policy, decision.mode)
-    if decision.profile is not None and config.fork_max_cost_usd > 0:
+    ceiling = _fork_ceiling(config)
+    if decision.profile is not None:
         # A stranger's run never gets more than the fork ceiling, even when AI_MAX_COST_USD is larger.
-        if config.max_cost_usd == 0 or config.max_cost_usd > config.fork_max_cost_usd:
-            logger.info("fork gate: fork profile run, cost ceiling $%.2f", config.fork_max_cost_usd)
-            config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
-    elif decision.gated and config.max_cost_usd == 0 and config.fork_max_cost_usd > 0:
-        logger.info("fork gate: allowed fork pull request, default cost ceiling $%.2f", config.fork_max_cost_usd)
-        config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
+        if config.max_cost_usd == 0 or config.max_cost_usd > ceiling:
+            logger.info("fork gate: fork profile run, cost ceiling $%.2f", ceiling)
+            config = config.model_copy(update={"max_cost_usd": ceiling})
+    elif decision.gated and config.max_cost_usd == 0:
+        logger.info("fork gate: allowed fork pull request, default cost ceiling $%.2f", ceiling)
+        config = config.model_copy(update={"max_cost_usd": ceiling})
     return config, None, decision.profile
+
+
+def _fork_ceiling(config: ReviewConfig) -> float:
+    """The per-run fork ceiling. A value that is not above 0 or not finite means the default, so a
+    zero (or a config built without validation) never removes the ceiling."""
+    value = config.fork_max_cost_usd
+    return value if math.isfinite(value) and value > 0 else DEFAULT_FORK_MAX_COST_USD
 
 
 def _fork_pause(provider: VcsProvider, reason: str) -> SkipPlan:
@@ -316,7 +324,7 @@ def _open_fork_budget(config: ReviewConfig, provider: VcsProvider) -> ForkBudget
     needed = ("list_budget_comments", "create_budget_entry", "update_budget_entry", "delete_budget_entry")
     if not all(callable(getattr(provider, name, None)) for name in needed):
         return None
-    run_cents = round(config.fork_max_cost_usd * 100) if config.fork_max_cost_usd > 0 else DEFAULT_RUN_CENTS
+    run_cents = round(_fork_ceiling(config) * 100)
     return ForkBudget(provider, Caps(run_cents=run_cents))  # type: ignore[arg-type]
 
 
