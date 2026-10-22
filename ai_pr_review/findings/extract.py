@@ -12,6 +12,7 @@ import sys
 from dataclasses import dataclass
 
 from ai_pr_review.findings.models import INTERNAL_ONLY_FIELDS, Finding
+from ai_pr_review.logging import safe_log_text
 
 _FENCE_RE = re.compile(r"```json-findings[ \t]*\r?\n(.*?)```", re.DOTALL)
 
@@ -145,7 +146,7 @@ def _parse_and_validate(
                 return salvaged
         print(
             f"WARNING: {agent_name} produced invalid json-findings JSON; skipping. "
-            f"Preview: {raw[:200]}",
+            f"Preview: {safe_log_text(raw[:200])}",
             file=sys.stderr,
         )
         return Extraction([], "truncated_invalid" if truncated else "invalid_json", None)
@@ -191,7 +192,7 @@ def _parse_and_validate(
             # rule 1; the prompt is the primary control.
             combined = f"{f.finding}\n{f.remediation}"
             if _is_self_refuting(combined):
-                preview = f.finding[:120].replace("\n", " ")
+                preview = safe_log_text(f.finding[:120])
                 print(
                     f"WARNING: {agent_name} dropped self-refuting finding "
                     f"({f.severity}): {preview}",
@@ -200,7 +201,10 @@ def _parse_and_validate(
                 continue
             results.append(f)
         except Exception as exc:  # noqa: BLE001
-            print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
+            print(
+                f"WARNING: {agent_name} dropped malformed finding: {safe_log_text(str(exc))}",
+                file=sys.stderr,
+            )
 
     return Extraction(results, "ok", len(data))
 

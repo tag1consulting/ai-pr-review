@@ -13,6 +13,7 @@ via `respx` without ever reaching the network.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import re
@@ -20,11 +21,15 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 import httpx
 
+from ai_pr_review.logging import _mask_secrets, get_secret_literals
+
 T = TypeVar("T")
+
+_log = logging.getLogger(__name__)
 
 _TRANSIENT_STATUS = frozenset({429, 502, 503, 504})
 _TRANSIENT_ERR_PATTERNS = re.compile(
@@ -41,6 +46,82 @@ _TOKEN_VALUE_RE = re.compile(
     r"|glpat-[A-Za-z0-9_-]{10,}|glcbt-[A-Za-z0-9_-]{10,}"
     r"|sk-[A-Za-z0-9]{10,})"
 )
+
+
+# ---------------------------------------------------------------------------
+# Outbound scrub (story 17-12, CAP-5)
+# ---------------------------------------------------------------------------
+
+# Backstop cap for one posted string. It must stay above every provider's own
+# truncation limit (GitHub 65,536 bytes, GitLab 250,000, Bitbucket 32,000), so
+# the provider logic runs first and this cap fires only if that logic is bypassed.
+MAX_OUTBOUND_STRING_BYTES: Final[int] = 262_144
+
+_CAP_NOTICE: Final[str] = "\n\n---\n*ai-pr-review: output cut at the outbound size limit.*"
+
+# Spans that do not count toward the cap: the machine-readable markers (HTML
+# comment form and the Bitbucket reference-link form) and suggestion fences.
+_CAP_EXEMPT_RE = re.compile(
+    r"<!-- ai-pr-review[^\n]*?-->"
+    r"|\[//\]: # \(ai-pr-review[^\n)]*\)"
+    r"|```suggestion[^\n]*\n.*?\n[ \t]*```",
+    re.DOTALL,
+)
+
+
+def scrub_outbound_text(text: str) -> str:
+    """Remove secret literals and token prefixes from a string the engine posts.
+
+    Reuses ``logging._mask_secrets`` without its env-assignment layer, which
+    would rewrite quoted code such as ``password = hash(x)`` in a review.
+    """
+    return _mask_secrets(text, secret_literals=get_secret_literals(), env_assignments=False)
+
+
+def cap_outbound_text(text: str, limit: int = MAX_OUTBOUND_STRING_BYTES) -> str:
+    """Cut ``text`` to ``limit`` UTF-8 bytes, not counting exempt spans.
+
+    Markers and suggestion fences stay whole, also after the cut.
+    """
+    out: list[str] = []
+    used = 0
+    cut = False
+
+    def take(chunk: str) -> None:
+        nonlocal used, cut
+        if cut or not chunk:
+            return
+        encoded = chunk.encode("utf-8")
+        if used + len(encoded) <= limit:
+            out.append(chunk)
+            used += len(encoded)
+            return
+        room = max(0, limit - used)
+        out.append(encoded[:room].decode("utf-8", errors="ignore") + _CAP_NOTICE)
+        used = limit
+        cut = True
+
+    pos = 0
+    for m in _CAP_EXEMPT_RE.finditer(text):
+        take(text[pos : m.start()])
+        out.append(m.group())
+        pos = m.end()
+    take(text[pos:])
+    if cut:
+        _log.warning("outbound string cut at %d bytes", limit)
+    return "".join(out)
+
+
+def sanitize_outbound(value: Any, *, cap: bool = True) -> Any:
+    """Scrub (and cap) every string inside a JSON-like request body."""
+    if isinstance(value, str):
+        scrubbed = scrub_outbound_text(value)
+        return cap_outbound_text(scrubbed) if cap else scrubbed
+    if isinstance(value, dict):
+        return {k: sanitize_outbound(v, cap=cap) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_outbound(v, cap=cap) for v in value]
+    return value
 
 
 class RetryExhaustedError(httpx.HTTPError):
@@ -225,6 +306,10 @@ class RecordingClient:
         params: Mapping[str, Any] | None = None,
         json_body: Any = None,
     ) -> httpx.Response:
+        # Every string the engine posts passes through here (story 17-12).
+        if json_body is not None:
+            json_body = sanitize_outbound(json_body)
+
         def _call() -> httpx.Response:
             return self.http.request(
                 method, url, headers=headers, params=params, json=json_body
@@ -278,6 +363,9 @@ class RecordingClient:
             url if url.startswith("http")
             else f"{str(self.http.base_url).rstrip('/')}{url}"
         )
+        # Scrub only: feedback-store file content is bounded by its retention
+        # logic, and a cap would corrupt it.
+        fields = {k: scrub_outbound_text(v) for k, v in fields.items()}
         request = httpx.Request(
             method,
             full_url,

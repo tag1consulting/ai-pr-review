@@ -7,6 +7,8 @@ from collections.abc import Generator
 
 import pytest
 
+import ai_pr_review.logging as _logging_module
+
 
 @pytest.fixture(autouse=True)
 def _reset_pkg_logger() -> Generator[None, None, None]:
@@ -22,7 +24,9 @@ def _reset_pkg_logger() -> Generator[None, None, None]:
     original_handlers = pkg.handlers[:]
     original_level = pkg.level
     original_propagate = pkg.propagate
+    original_literals = _logging_module._active_secret_literals
     yield
+    _logging_module._active_secret_literals = original_literals
     for h in pkg.handlers:
         if getattr(h, "_ai_pr_review_managed", False) and h not in original_handlers:
             h.close()
