@@ -13,6 +13,8 @@ import sys
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from ai_pr_review.review.fork_gate import parse_trusted_associations
+
 
 class ConfigError(ValueError):
     """Raised when an unknown AI_* variable is detected in the environment."""
@@ -96,6 +98,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_MAX_COST_USD",
         # --- Fork pull request gate ---
         "AI_FORK_MAX_COST_USD",
+        "AI_FORK_POLICY",
+        "AI_FORK_TRUSTED_ASSOCIATIONS",
         "AI_FAIL_ON_FORK_GATE",
         "AI_FAIL_ON_COST_CEILING",
         "AI_COST_CEILING_UNPRICED",
@@ -606,6 +610,11 @@ class ReviewConfig(BaseModel):
     # Ceiling applied to an approved fork pull request when max_cost_usd is 0 (see review/fork_gate.py).
     # 0 turns the default off. A non-zero max_cost_usd always wins.
     fork_max_cost_usd: float = 2.0
+    # What the engine does with a fork pull request: auto, label (maintainer approval status) or
+    # block. The default flips to auto in story 17-13. An unknown value falls back to label.
+    fork_policy: str = "label"
+    # author_association values that skip the fork profile under the auto policy.
+    fork_trusted_associations: tuple[str, ...] = ("OWNER", "COLLABORATOR")
     # Exit 2 when the fork gate pauses a run, so a required check does not turn green with no review.
     # Off by default, like fail_on_cost_ceiling.
     fail_on_fork_gate: bool = False
@@ -871,6 +880,19 @@ class ReviewConfig(BaseModel):
             return 2.0
         return v
 
+    @field_validator("fork_policy")
+    @classmethod
+    def _fork_policy_falls_back(cls, v: str) -> str:
+        # An unknown value must not open the gate. label pauses a fork until a maintainer approves.
+        value = v.strip().lower()
+        if value not in ("auto", "label", "block"):
+            print(
+                f"WARNING: AI_FORK_POLICY={v!r} is not one of auto, label, block; using 'label'.",
+                file=sys.stderr,
+            )
+            return "label"
+        return value
+
     @field_validator("log_format")
     @classmethod
     def _validate_log_format(cls, v: str) -> str:
@@ -991,6 +1013,8 @@ class ReviewConfig(BaseModel):
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
             max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
             fork_max_cost_usd=_float("AI_FORK_MAX_COST_USD", 2.0),
+            fork_policy=os.environ.get("AI_FORK_POLICY", "label"),
+            fork_trusted_associations=parse_trusted_associations(os.environ.get("AI_FORK_TRUSTED_ASSOCIATIONS")),
             fail_on_fork_gate=_bool("AI_FAIL_ON_FORK_GATE"),
             event_name=os.environ.get("GITHUB_EVENT_NAME", "").strip(),
             fail_on_cost_ceiling=_bool("AI_FAIL_ON_COST_CEILING"),

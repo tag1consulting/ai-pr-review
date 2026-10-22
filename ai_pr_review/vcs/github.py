@@ -2459,7 +2459,9 @@ class GitHubProvider:
         self._errors.append(f"get_fork_gate_facts: {message}")
         _log.warning("fork gate: %s", message)
 
-    def get_fork_gate_facts(self, head_sha: str, context: str) -> ForkGateFacts | None:
+    def get_fork_gate_facts(
+        self, head_sha: str, context: str, *, read_approval: bool = True,
+    ) -> ForkGateFacts | None:
         """What the fork gate needs (see ``review/fork_gate.py``): the head and base repository
         names, and the state of the status named *context* on *head_sha*.
 
@@ -2468,6 +2470,10 @@ class GitHubProvider:
         ``statuses: read`` permission). The combined-status endpoint returns the newest status for
         each context. Returns ``None`` on any HTTP error or odd response shape, and the gate then
         fails closed.
+
+        The facts also carry the author login and ``author_association`` of the pull request (an
+        empty string when the response lacks them, which is never trusted). With
+        ``read_approval=False`` (policies ``auto`` and ``block``) the statuses are not read.
         """
         if not re.fullmatch(r"[0-9a-f]{40}", head_sha or ""):
             self._gate_error("head sha is not a full commit id")
@@ -2491,8 +2497,15 @@ class GitHubProvider:
         if not isinstance(base_repo, str) or not isinstance(head_repo, str):
             self._gate_error("repository names are not strings")
             return None
-        if head_repo and head_repo.casefold() == base_repo.casefold():
-            return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state="")
+        author = pr.get("user")
+        login = author.get("login") if isinstance(author, dict) else ""
+        association = pr.get("author_association")
+        who = {
+            "author_login": login if isinstance(login, str) else "",
+            "author_association": association if isinstance(association, str) else "",
+        }
+        if (head_repo and head_repo.casefold() == base_repo.casefold()) or not read_approval:
+            return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state="", **who)
         c = self.config
         try:
             status_resp = self.client.request("GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/status")
@@ -2518,7 +2531,7 @@ class GitHubProvider:
                 raw_state = status.get("state")
                 state = raw_state if isinstance(raw_state, str) else ""
                 break
-        return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state=state)
+        return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state=state, **who)
 
     def submit_approval(self, message: str) -> tuple[bool, int, str]:
         """POST a standalone APPROVE review. Returns (ok, status, body_snippet).

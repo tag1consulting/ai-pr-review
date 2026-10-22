@@ -26,6 +26,7 @@ from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
 from ai_pr_review.review.cost_ceiling import ContextWindowExceeded, CostCeilingExceeded
+from ai_pr_review.review.fork_gate import ForkProfile
 from ai_pr_review.review.not_reviewed import build_not_reviewed_notice
 from ai_pr_review.review.pr_context import build_shared_context_block
 from ai_pr_review.vcs import provider_from_env
@@ -133,6 +134,9 @@ class ReviewRuntime:
     # gate did not fire, incremental scope). cli.py shows it in the posted
     # comment through the same warning segment as policy_ignored_reason.
     not_reviewed_notice: str = ""
+    # Set when AI_FORK_POLICY=auto and the author of a fork pull request is not trusted. Later
+    # stories apply the caps, the environment scrub, the dropped text and the output clamp from it.
+    fork_profile: ForkProfile | None = None
 
 
 def _merge_allowlist(
@@ -225,9 +229,14 @@ def _warn_if_context_enrichment_inert() -> None:
         )
 
 
-def _apply_fork_gate(config: ReviewConfig, provider: VcsProvider) -> tuple[ReviewConfig, SkipPlan | None]:
-    """Block a fork pull request that has no approval for its head commit, and cap the cost of an
-    approved one. A provider without ``get_fork_gate_facts`` (GitLab, Bitbucket) is not gated."""
+def _apply_fork_gate(
+    config: ReviewConfig, provider: VcsProvider,
+) -> tuple[ReviewConfig, SkipPlan | None, ForkProfile | None]:
+    """Apply ``AI_FORK_POLICY`` to a fork pull request and cap the cost of an allowed one.
+
+    Returns the config, a skip plan when the run is paused, and the fork profile when the policy is
+    ``auto`` and the author is not trusted (``None`` otherwise). A provider without
+    ``get_fork_gate_facts`` (GitLab, Bitbucket) is not gated."""
     from ai_pr_review.review.fork_gate import (
         APPROVAL_CONTEXT,
         checkout_mismatch_reason,
@@ -239,23 +248,33 @@ def _apply_fork_gate(config: ReviewConfig, provider: VcsProvider) -> tuple[Revie
 
     getter = getattr(provider, "get_fork_gate_facts", None)
     if getter is None:
-        return config, None
+        return config, None, None
     # A plain pull_request run that holds no LLM key needs no facts: GitHub gave a fork no secrets.
     key_present = llm_key_present()
-    facts = getter(config.head_sha, APPROVAL_CONTEXT) if needs_facts(config.event_name, key_present) else None
-    decision = decide(config.event_name, config.head_sha, facts, key_present=key_present)
+    # Only the label policy reads the approval status, so auto and block need no statuses: read.
+    facts = (
+        getter(config.head_sha, APPROVAL_CONTEXT, read_approval=config.fork_policy == "label")
+        if needs_facts(config.event_name, key_present) else None
+    )
+    decision = decide(
+        config.event_name, config.head_sha, facts, key_present=key_present,
+        policy=config.fork_policy, trusted=config.fork_trusted_associations)
     if not decision.allowed:
-        logger.warning("fork gate: review paused (%s)", "facts unavailable" if facts is None else "no approval")
-        return config, SkipPlan(reason=decision.reason, provider=provider, is_fork_gate_skip=True)
+        logger.warning(
+            "fork gate: review paused (%s, policy %s)",
+            "facts unavailable" if facts is None else "fork not allowed", config.fork_policy)
+        return config, SkipPlan(reason=decision.reason, provider=provider, is_fork_gate_skip=True), None
     if decision.gated:
         mismatch = checkout_mismatch_reason(config.head_sha, workspace_head("."))
         if mismatch:
             logger.warning("fork gate: the workspace is not at the approved commit")
-            return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True)
+            return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True), None
+    if decision.gated:
+        logger.info("fork gate: fork pull request allowed (policy %s, mode %s)", config.fork_policy, decision.mode)
     if decision.gated and config.max_cost_usd == 0 and config.fork_max_cost_usd > 0:
-        logger.info("fork gate: approved fork pull request, default cost ceiling $%.2f", config.fork_max_cost_usd)
+        logger.info("fork gate: allowed fork pull request, default cost ceiling $%.2f", config.fork_max_cost_usd)
         config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
-    return config, None
+    return config, None, decision.profile
 
 
 async def build_review_runtime(
@@ -290,7 +309,7 @@ async def build_review_runtime(
         raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
 
     # 1b. Fork gate: before any git command touches a fork's tree.
-    config, gate_skip = _apply_fork_gate(config, provider)
+    config, gate_skip, fork_profile = _apply_fork_gate(config, provider)
     if gate_skip is not None:
         return gate_skip
 
@@ -858,6 +877,7 @@ async def build_review_runtime(
         cost_ceiling_pricing_missing=cost_ceiling_pricing_missing,
         cost_ceiling_check_failed=cost_ceiling_check_failed,
         policy_ignored_reason=policy_ignored_reason,
+        fork_profile=fork_profile,
         not_reviewed_notice=build_not_reviewed_notice(
             # Only the patterns the user added. The built-in lockfile and vendor
             # excludes are the same on every run, so listing them is noise.
