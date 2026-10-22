@@ -3030,6 +3030,7 @@ def _build_inline_comment_body(
         format_source_tag,
         sanitize_bullet_text,
         severity_icon,
+        suggestion_code,
     )
     from ai_pr_review.vcs._finding_ids import fingerprint
     from ai_pr_review.vcs.marker import build_inline_meta_marker
@@ -3043,9 +3044,10 @@ def _build_inline_comment_body(
     if f.remediation:
         parts.append(f"\n**Remediation:** {sanitize_bullet_text(f.remediation)}")
     parts.extend(f"\n**Also reported by:** {note}" for note in also_reported_notes(f))
-    if f.suggested_code and "```" not in f.suggested_code:
+    code = suggestion_code(f)
+    if code and "```" not in code:
         fence = "suggestion" if include_suggestion_fence else ""
-        parts.append(f"\n```{fence}\n{f.suggested_code}\n```")
+        parts.append(f"\n```{fence}\n{code}\n```")
     if reincarnated:
         parts.append(f"\n{_REINCARNATION_NOTE}")
     if regressed_note:

@@ -26,6 +26,7 @@ from typing import Any, Final, TypeVar
 import httpx
 
 from ai_pr_review.logging import _mask_secrets, get_secret_literals
+from ai_pr_review.output_clamp import clamp_request_body
 
 T = TypeVar("T")
 
@@ -335,6 +336,10 @@ class RecordingClient:
     ) -> httpx.Response:
         # Every string the engine posts passes through here (story 17-12).
         if json_body is not None:
+            # Fork output clamp first (story 17-11): the banner, the strict pass and the event cap.
+            # The scrub then sees the final text. No change outside a fork run's clamp scope.
+            if method.upper() in ("POST", "PATCH", "PUT"):
+                json_body = clamp_request_body(json_body)
             json_body = sanitize_outbound(json_body)
 
         def _call() -> httpx.Response:

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Final
 
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.output_clamp import clamp_active
 
 MAX_SUGGESTION_RANGE: Final[int] = 100
 
@@ -26,7 +27,11 @@ def is_inline_eligible(
 
 
 def is_suggestion_safe(finding: Finding) -> bool:
-    """Reject suggestions containing triple-backticks (fence-escape attack)."""
+    """Reject suggestions containing triple-backticks (fence-escape attack).
+
+    Inside a fork run's output clamp every suggestion is rejected (story 17-11)."""
+    if clamp_active():
+        return False
     return bool(finding.suggested_code) and "```" not in finding.suggested_code
 
 
