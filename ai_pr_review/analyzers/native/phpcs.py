@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.analyzers.native._phpcs_patterns import (
     _relative_pattern_matches,  # noqa: F401 (re-export, tests import it here)
@@ -161,6 +162,7 @@ def _installed_standards() -> set[str]:
                 text=True,
                 timeout=10,
                 cwd=cwd,
+                env=tool_env(),
             )
     except subprocess.TimeoutExpired:
         logger.warning("[ai-pr-review] WARNING: phpcs -i timed out detecting standard; falling back to PSR12.")
@@ -377,6 +379,7 @@ def _invoke_phpcs(plan: _Plan) -> subprocess.CompletedProcess[str] | None:
                 text=True,
                 timeout=_TIMEOUT_SECS,
                 cwd=cwd,
+                env=tool_env(),
             )
     except subprocess.TimeoutExpired as exc:
         logger.warning("[ai-pr-review] WARNING: phpcs timed out after %ss; skipping.", exc.timeout)

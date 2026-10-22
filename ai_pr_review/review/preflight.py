@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import anyio
 
+from ai_pr_review.analyzers._env import GIT_SAFE_ARGS, gh_env, git_env
 from ai_pr_review.llm.client import EXIT_PROMPT_TOO_LONG
 from ai_pr_review.text_safety import safe_text
 from ai_pr_review.vcs._body import sanitize_display_text
@@ -154,12 +155,12 @@ async def run_summarizer(
         system_prompt = build_summarizer_system_prompt(prompt_path)
 
         commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
+        _git_cmd = ["git", *GIT_SAFE_ARGS, "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
         proc: subprocess.CompletedProcess[str] | None = None
         try:
             proc = await anyio.to_thread.run_sync(
                 lambda: subprocess.run(
-                    _git_cmd, capture_output=True, text=True, timeout=15,
+                    _git_cmd, capture_output=True, text=True, timeout=15, env=git_env(),
                 )
             )
         except subprocess.TimeoutExpired:
@@ -244,7 +245,11 @@ def fetch_open_issues(github_repository: str) -> str:
         "--json", "number,title,labels",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15,
+            # gh needs the token. Everything else secret stays out of its env.
+            env=gh_env(),
+        )
     except FileNotFoundError:
         logger.warning("issue-linker: gh CLI not found; open-issue list unavailable")
         return "(unavailable)"
@@ -319,11 +324,13 @@ async def run_issue_linker(
         system_prompt = prompt_path.read_text()
 
         commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
+        _git_cmd = ["git", *GIT_SAFE_ARGS, "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
 
         def _run_git_log() -> subprocess.CompletedProcess[str] | None:
             try:
-                return subprocess.run(_git_cmd, capture_output=True, text=True, timeout=15)
+                return subprocess.run(
+                    _git_cmd, capture_output=True, text=True, timeout=15, env=git_env()
+                )
             except subprocess.TimeoutExpired:
                 return None
 
@@ -344,8 +351,8 @@ async def run_issue_linker(
         def _run_git_branch() -> subprocess.CompletedProcess[str] | None:
             try:
                 return subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    capture_output=True, text=True, timeout=10,
+                    ["git", *GIT_SAFE_ARGS, "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True, text=True, timeout=10, env=git_env(),
                 )
             except subprocess.TimeoutExpired:
                 return None

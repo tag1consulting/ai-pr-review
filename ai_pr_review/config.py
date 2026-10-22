@@ -75,6 +75,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Analyzer diff scope and concurrency ---
         "AI_ANALYZER_DIFF_SCOPE",
         "AI_ANALYZER_CONCURRENCY",
+        "AI_ANALYZER_ENV_PASSTHROUGH",
         # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
@@ -551,6 +552,9 @@ class ReviewConfig(BaseModel):
     # "drop" -- remove out-of-diff analyzer findings entirely.
     # "off"  -- pass through unchanged (full-file linting behaviour).
     analyzer_diff_scope: str = "cap"
+    # Extra environment variable names for analyzer, git and rg launches (non-fork runs only).
+    # Secret names are refused at launch time (see analyzers/_env.py).
+    analyzer_env_passthrough: tuple[str, ...] = ()
 
     # --- Summary ---
     # When true, the pr-summarizer's `## Walkthrough` table is left out of the
@@ -1004,6 +1008,11 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
+            analyzer_env_passthrough=tuple(
+                p.strip()
+                for p in os.environ.get("AI_ANALYZER_ENV_PASSTHROUGH", "").split(",")
+                if p.strip()
+            ),
             suppress_walkthrough=_bool("AI_SUPPRESS_WALKTHROUGH"),
             enable_judge_pass=_bool("AI_JUDGE_PASS", True),
             finding_badges=_bool("AI_FINDING_BADGES", True),

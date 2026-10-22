@@ -655,6 +655,7 @@ runs:
           -e AI_AGENTS \
           -e AI_EXCLUDE_AGENTS \
           -e AI_ANALYZER_DIFF_SCOPE \
+          -e AI_ANALYZER_ENV_PASSTHROUGH \
           ${FORCE_FULL_DIFF:+-e FORCE_FULL_DIFF} \
           ${STANDALONE_DEPTH:+-e STANDALONE_DEPTH} \
           ${LLM_RETRY_COUNT:+-e LLM_RETRY_COUNT} \

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 
+from ai_pr_review.analyzers._env import GIT_SAFE_ARGS, git_env
 from ai_pr_review.diff.parse import safe_decode_git_path
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,14 @@ def _raise_on_git_diff_error(result: subprocess.CompletedProcess[str], range_spe
 # it: core.quotePath quotes non-ASCII paths, diff.mnemonicPrefix and diff.noprefix change the
 # a/ and b/ prefixes, and diff.relative changes the paths. The diff parser (diff/parse.py) and
 # the changed-file list must see the same paths, so all three variants use the same pins.
+def _git_base(workspace: str) -> list[str]:
+    """The git argv prefix: no repo hook runs and any checkout owner is trusted.
+
+    Every launch also passes ``env=git_env()``, an allowlist-only environment.
+    """
+    return ["git", *GIT_SAFE_ARGS, "-C", workspace]
+
+
 _GIT_FORMAT_CONFIG = [
     "-c", "core.quotePath=false",
     "-c", "diff.mnemonicPrefix=false",
@@ -119,6 +128,7 @@ def _diff_variants(
         git + ["diff", *_DIFF_FORMAT_OPTIONS, "--name-only", range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
+        env=git_env(),
     )
     _raise_on_git_diff_error(changed_result, range_spec)
     # core.quotePath=false still quotes a path that holds a quote, a backslash, or a control character.
@@ -128,6 +138,7 @@ def _diff_variants(
         git + ["diff", *_DIFF_FORMAT_OPTIONS, "--stat", range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
+        env=git_env(),
     )
     _raise_on_git_diff_error(stat_result, range_spec)
     diff_stat = stat_result.stdout.strip().splitlines()[-1] if stat_result.stdout.strip() else ""
@@ -136,6 +147,7 @@ def _diff_variants(
         git + ["diff", *_DIFF_FORMAT_OPTIONS, range_spec] + ["--"] + excludes,
         capture_output=True,
         text=True,
+        env=git_env(),
     )
     _raise_on_git_diff_error(diff_result, range_spec)
     return changed_files, diff_stat, diff_result.stdout
@@ -167,13 +179,14 @@ def _filtered_diff(
     """
     if exclude_patterns is None:
         exclude_patterns = list(_EXCLUDE_PATTERNS)
-    git = ["git", "-C", workspace]
+    git = _git_base(workspace)
 
     # 1. List merge commits in range
     merges_result = subprocess.run(
         git + ["rev-list", "--merges", f"{diff_base}..{head_sha}"],
         capture_output=True,
         text=True,
+        env=git_env(),
     )
     merges = [m for m in merges_result.stdout.splitlines() if m]
     if not merges:
@@ -187,6 +200,7 @@ def _filtered_diff(
             git + ["rev-parse", f"{m}^2"],
             capture_output=True,
             text=True,
+            env=git_env(),
         )
         if p2_result.returncode != 0:
             continue
@@ -194,6 +208,7 @@ def _filtered_diff(
         is_ancestor = subprocess.run(
             git + ["merge-base", "--is-ancestor", p2, origin_base],
             capture_output=True,
+            env=git_env(),
         ).returncode == 0
         if is_ancestor:
             qualifying.append(m)
@@ -217,6 +232,7 @@ def _filtered_diff(
         ],
         capture_output=True,
         text=True,
+        env=git_env(),
     )
     commits = [c for c in non_merges_result.stdout.splitlines() if c]
 
@@ -225,6 +241,7 @@ def _filtered_diff(
         add_wt = subprocess.run(
             git + ["worktree", "add", "--quiet", "--detach", tmpdir, diff_base],
             capture_output=True,
+            env=git_env(),
         )
         if add_wt.returncode != 0:
             reason = "could not create git worktree for merge-commit filtering"
@@ -232,16 +249,18 @@ def _filtered_diff(
             return (None, "", "", reason)
 
         try:
-            wt_git = ["git", "-C", tmpdir]
+            wt_git = _git_base(tmpdir)
             for c in commits:
                 pick = subprocess.run(
                     wt_git + ["cherry-pick", "--no-commit", c],
                     capture_output=True,
+                    env=git_env(),
                 )
                 if pick.returncode != 0:
                     subprocess.run(
                         wt_git + ["cherry-pick", "--abort"],
                         capture_output=True,
+                        env=git_env(),
                     )
                     reason = "cherry-pick conflict during merge-commit filtering"
                     logger.warning("Merge-commit filter: %s", reason)
@@ -253,6 +272,7 @@ def _filtered_diff(
                         "commit", "--no-edit", "--allow-empty", "-C", c,
                     ],
                     capture_output=True,
+                    env=git_env(),
                 )
                 if commit_r.returncode != 0:
                     reason = "cherry-pick commit failed during merge-commit filtering"
@@ -266,6 +286,7 @@ def _filtered_diff(
                 wt_git + ["rev-parse", "HEAD"],
                 capture_output=True,
                 text=True,
+                env=git_env(),
             )
             synthetic_tip = tip_result.stdout.strip()
             if not synthetic_tip or synthetic_tip == diff_base:
@@ -286,6 +307,7 @@ def _filtered_diff(
             subprocess.run(
                 git + ["worktree", "remove", "--force", tmpdir],
                 capture_output=True,
+                env=git_env(),
             )
 
 
@@ -326,7 +348,7 @@ def compute_diff(
             as an empty, "no changed files" diff.
     """
     excludes = _resolve_excludes(exclude_patterns, exclude_patterns_mode)
-    git = ["git", "-C", workspace]
+    git = _git_base(workspace)
 
     # Determine diff base
     incremental = False
@@ -335,6 +357,7 @@ def compute_diff(
             subprocess.run(
                 git + ["cat-file", "-e", f"{last_reviewed_sha}^{{commit}}"],
                 capture_output=True,
+                env=git_env(),
             ).returncode
             == 0
         )
@@ -342,6 +365,7 @@ def compute_diff(
             subprocess.run(
                 git + ["merge-base", "--is-ancestor", last_reviewed_sha, head_sha],
                 capture_output=True,
+                env=git_env(),
             ).returncode
             == 0
         )
