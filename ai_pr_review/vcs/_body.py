@@ -18,7 +18,6 @@ from ai_pr_review.findings.models import MAX_ALSO_REPORTED, Finding, split_also_
 from ai_pr_review.output_clamp import (
     clamp_active,
     clamp_repo,
-    neutralize_references,
     strict_text,
 )
 from ai_pr_review.vcs.marker import HIDDEN_MARKER_OPENER_RE
@@ -240,11 +239,11 @@ def sanitize_display_text(text: str, *, strict: bool | None = None) -> str:
     """Neutralize structure-breaking HTML (and this repo's own comment-marker
     syntax) in LLM-derived display text.
 
-    Story 17-11 (CAP-5): on every run it also breaks ``@mention`` and
-    ``owner/repo#N`` references with a zero-width space. With ``strict`` true
-    (the default inside a fork run's ``output_clamp`` scope) it also removes
-    images, links to anywhere but this repository, raw HTML that links or
-    loads, and autolinked URLs, and drops invisible characters.
+    Story 17-11 (CAP-5): with ``strict`` true (the default inside a fork
+    run's ``output_clamp`` scope) it also removes images, links to anywhere
+    but this repository, raw HTML that links or loads, and autolinked URLs,
+    breaks ``@mention`` and ``owner/repo#N`` references, and drops invisible
+    characters. Outside a fork run the output is as it was before.
 
     Applied to ``finding`` and ``remediation`` strings (which can be steered by
     prompt injection in PR content) before they are interpolated into a posted
@@ -286,7 +285,7 @@ def sanitize_display_text(text: str, *, strict: bool | None = None) -> str:
     text = HIDDEN_MARKER_OPENER_RE.sub(
         lambda m: m.group(0)[:-1] + "​" + m.group(0)[-1], text
     )
-    return neutralize_references(text)
+    return text
 
 
 def suggestion_code(finding: Finding) -> str:

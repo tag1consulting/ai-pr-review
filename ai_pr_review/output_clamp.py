@@ -112,8 +112,10 @@ def neutralize_references(text: str) -> str:
 _IMAGE_RE: Final[re.Pattern[str]] = re.compile(r"!\[([^\]\n]*)\]\(([^)\n]*)\)")
 _LINK_RE: Final[re.Pattern[str]] = re.compile(r"\[((?:[^\[\]\n]|\[[^\[\]\n]*\])*)\]\(([^)\n]*)\)")
 # Reference definitions. The Bitbucket hidden marker form ``[//]: # (...)`` is not one.
+# A definition can sit inside a quote or a list item, so allow container prefixes before the bracket.
 _REF_DEF_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?m)^[ ]{0,3}\[(?![ \t]*//[ \t]*\][ \t]*:[ \t]*#)[^\]\n]+\]:[ \t]*\S.*$"
+    r"(?m)^(?P<prefix>[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*)"
+    r"\[(?![ \t]*//[ \t]*\][ \t]*:[ \t]*#)[^\]\n]+\]:[ \t]*\S.*$"
 )
 _BARE_URL_RE: Final[re.Pattern[str]] = re.compile(r"(?i)\b(https?|ftp)://[^\s<>\"'\])]+")
 _WWW_RE: Final[re.Pattern[str]] = re.compile(r"(?i)(?<![\w/.@-])www\.(?=[\w-])")
@@ -122,9 +124,10 @@ _RAW_TAG_RE: Final[re.Pattern[str]] = re.compile(
     r"|link|style|script|base|meta|area|map|math|use|frame|frameset|applet|portal)(?=[\s/>]|$)"
 )
 _SCHEME_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-# Machine-readable markers. Their text is not display text, so the strict pass skips them.
+# The exact marker forms the engine writes (single line, ``ai-pr-review`` first). The strict pass
+# skips them. Any other comment span is display text and gets the strict pass.
 _MARKER_SPAN_RE: Final[re.Pattern[str]] = re.compile(
-    r"<!--.*?-->|\[//\]:[ \t]*#[ \t]*\([^\n)]*\)", re.DOTALL
+    r"<!-- ai-pr-review[^\n]*?-->|\[//\]: # \(ai-pr-review[^\n)]*\)"
 )
 
 
@@ -156,7 +159,9 @@ def _allowed_destination(dest: str, repo: str) -> bool:
         dest = dest.split()[0] if dest.split() else ""
     if not dest or dest.startswith("#"):
         return True
-    if "\\" in dest or dest.startswith("//"):
+    # An entity can spell a scheme (``&#104;ttps:``), a slash or a colon. A root-relative path leaves
+    # the repository for the site root. A parenthesis means the destination was cut short.
+    if "&" in dest or "(" in dest or "\\" in dest or dest.startswith("/"):
         return False
     if _SCHEME_RE.match(dest):
         return _allowed_url(dest, repo)
@@ -186,13 +191,19 @@ def _strip_links(text: str, repo: str) -> str:
 
 def _defang_bare_url(m: re.Match[str], repo: str) -> str:
     url = m.group(0)
-    if _allowed_url(url, repo):
+    end = m.end()
+    # Keep a URL only when it stops at whitespace or the end. An autolinker may extend a URL that is
+    # followed by other characters.
+    # A destination inside a link that the link pass already kept (``](url)``) is not autolinked.
+    if _allowed_url(url, repo) and (
+        end == len(m.string) or m.string[end].isspace() or m.string[max(0, m.start() - 2) : m.start()] == "]("
+    ):
         return url
     return f"{m.group(1)}:{_ZWSP}//{url[len(m.group(1)) + 3:]}"
 
 
 def _strict_segment(text: str, repo: str) -> str:
-    text = _REF_DEF_RE.sub("[reference removed]", text)
+    text = _REF_DEF_RE.sub(lambda m: m.group("prefix") + "[reference removed]", text)
     text = _strip_links(text, repo)
     text = _RAW_TAG_RE.sub(lambda m: "<" + _ZWSP + m.group(1) + m.group(2), text)
     text = _BARE_URL_RE.sub(lambda m: _defang_bare_url(m, repo), text)
@@ -262,6 +273,8 @@ def _walk(value: Any, repo: str) -> Any:
         for key, item in value.items():
             if key == "body" and isinstance(item, str):
                 out[key] = with_banner(strict_body(item, repo))
+            elif key == "output" and isinstance(item, dict):
+                out[key] = _clamp_check_output(item, repo)
             elif key == "event" and isinstance(item, str) and item in _CAPPED_EVENTS:
                 out[key] = "COMMENT"
             else:
@@ -270,3 +283,14 @@ def _walk(value: Any, repo: str) -> Any:
     if isinstance(value, list):
         return [_walk(v, repo) for v in value]
     return value
+
+
+def _clamp_check_output(output: dict[Any, Any], repo: str) -> dict[Any, Any]:
+    """Clamp a check-run ``output`` object. The summary gets the banner, the title and text do not."""
+    out = dict(output)
+    for key in ("title", "summary", "text"):
+        value = out.get(key)
+        if isinstance(value, str):
+            clean = strict_body(value, repo)
+            out[key] = with_banner(clean) if key == "summary" else clean
+    return out

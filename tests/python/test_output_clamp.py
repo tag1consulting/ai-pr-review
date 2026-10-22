@@ -196,20 +196,27 @@ def test_strict_text_without_scope_still_works_when_called_directly() -> None:
 
 
 @pytest.mark.parametrize("text", ["ping @team please", "ping @octocat", "(@octocat)", "@org/team-name now"])
-def test_a_mention_is_neutralized_on_every_run(text: str) -> None:
-    out = sanitize_display_text(text)  # no clamp scope
+def test_a_mention_is_neutralized_in_a_fork_run(text: str) -> None:
+    out = strict(text)
     assert "@" + ZW in out
     assert out.replace(ZW, "") == text  # reads the same
 
 
 @pytest.mark.parametrize("text", ["owner/repo#1", "see other/project#123 now", "x/y@abcdef1234567"])
-def test_a_cross_reference_is_neutralized_on_every_run(text: str) -> None:
-    out = sanitize_display_text(text)
+def test_a_cross_reference_is_neutralized_in_a_fork_run(text: str) -> None:
+    out = strict(text)
     assert ZW in out and out.replace(ZW, "") == text
 
 
 @pytest.mark.parametrize("text", ["user@example.com", "see #12", "a#b", "path/to/file.py", "x/y@main"])
 def test_text_that_is_not_a_reference_is_unchanged(text: str) -> None:
+    assert strict(text) == text
+
+
+@pytest.mark.parametrize(
+    "text", ["@Override", "node_modules/@types/node", "src/a#12", "ping @team", "owner/repo#1", "x/y@abcdef1234567"]
+)
+def test_a_same_repository_run_does_not_touch_mentions_or_paths(text: str) -> None:
     assert sanitize_display_text(text) == text
 
 
@@ -217,9 +224,11 @@ def test_references_are_neutralized_inside_a_code_span_too() -> None:
     assert neutralize_references("`@team`") == "`@" + ZW + "team`"
 
 
-def test_a_mention_in_a_finding_bullet_is_neutralized_without_the_clamp() -> None:
+def test_a_mention_in_a_finding_bullet_is_neutralized_only_in_a_fork_run() -> None:
     f = Finding(severity="High", confidence=90, finding="Ask @team about other/repo#9", source="x")
-    bullet = format_body_finding(f)
+    assert "@team" in format_body_finding(f)
+    with output_clamp(True, REPO):
+        bullet = format_body_finding(f)
     assert "@team" not in bullet and "other/repo#9" not in bullet
 
 
@@ -266,9 +275,11 @@ def test_the_agent_prompt_runs_every_string_through_the_sanitizer() -> None:
     )
     prompt = build_agent_prompt([f])
     assert "</details><!--" not in prompt.split("```json", 1)[1]
-    assert "@team" not in prompt and "o/r#1" not in prompt and "<!--" not in prompt.split("```json", 1)[1]
+    assert "<!--" not in prompt.split("```json", 1)[1]
+    assert "@team" in prompt and "o/r#1" in prompt  # same-repository output keeps paths and mentions
     with output_clamp(True, REPO):
-        assert "evil.example" not in build_agent_prompt([f])
+        clamped = build_agent_prompt([f])
+    assert "evil.example" not in clamped and "@team" not in clamped and "o/r#1" not in clamped
 
 
 def test_a_triple_backtick_cannot_close_the_agent_prompt_fence() -> None:
@@ -488,7 +499,7 @@ def test_the_step_summary_runs_error_strings_through_the_sanitizer(
     out.write_text("", encoding="utf-8")
     write_step_summary(result, runtime, f"## Summary\n{_HOSTILE}")  # type: ignore[arg-type]
     plain = out.read_text(encoding="utf-8")
-    assert "https://evil.example/login" in plain and "@team" not in plain
+    assert "https://evil.example/login" in plain and "@team" in plain
 
 
 # ---------------------------------------------------------------------------
@@ -550,3 +561,116 @@ def test_a_fork_skip_posts_with_the_comment_ceiling(monkeypatch: pytest.MonkeyPa
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# Review findings on the first version
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [
+        "&#104;ttps://evil.example/p",
+        "https&colon;//evil.example",
+        "&#x68;ttps://evil.example",
+        "https://github.com/o/r/blob/a&amp;b",
+        "/evil/repo/pull/1",
+        "/",
+        "https://github.com/o/r/blob/a(b",
+    ],
+)
+def test_an_encoded_or_root_relative_destination_is_removed(dest: str) -> None:
+    out = strict_body(f"[x]({dest})", REPO)
+    assert out == "x (link removed)", out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> [1]: //evil.example/x",
+        "- [1]: //evil.example/x",
+        "1. [1]: //evil.example/x",
+        "> - > [1]: //evil.example/x",
+        "   [1]: https://evil.example/x",
+        "\t[1]: //evil.example/x",
+    ],
+)
+def test_a_nested_reference_definition_is_removed(text: str) -> None:
+    out = strict_body(text, REPO)
+    assert "evil.example" not in out and "[reference removed]" in out
+
+
+def test_a_nested_definition_keeps_its_container_prefix() -> None:
+    assert strict_body("> [1]: //evil.example/x", REPO) == "> [reference removed]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://github.com/o/r/blob/a.py)evil",
+        "https://github.com/o/r/blob/a.py]x",
+        'https://github.com/o/r/blob/a.py"x',
+        "https://github.com/o/r/a<script>",
+        "(https://evil.example/x)",
+        "x](https://evil.example/x)",
+    ],
+)
+def test_a_bare_url_followed_by_extra_characters_is_defanged(text: str) -> None:
+    out = strict_body(text, REPO)
+    assert "https://" not in out and "http" in out
+
+
+def test_a_bare_url_that_ends_at_whitespace_or_the_end_stays_when_allowed() -> None:
+    for text in ("see https://github.com/o/r/blob/a.py now", "see https://github.com/o/r/blob/a.py"):
+        assert strict_body(text, REPO) == text
+
+
+def test_a_kept_link_is_not_broken_by_the_bare_url_pass() -> None:
+    text = "[f](https://github.com/o/r/blob/a.py#L3) and [g](https://github.com/o/r/pull/7#discussion_r1)"
+    assert strict_body(text, REPO) == text
+
+
+def test_a_comment_span_that_is_not_an_engine_marker_gets_the_strict_pass() -> None:
+    out = strict_body("<!-- [x](https://evil.example/login) @team -->", REPO)
+    assert "](" not in out and "@team" not in out
+    out = strict_body("<!-- not-ai-pr-review [a](https://evil.example) -->", REPO)
+    assert "evil.example)" not in out
+    out = strict_body("<!--\n[a](https://evil.example)\n-->", REPO)
+    assert "](" not in out
+
+
+def test_only_the_exact_engine_marker_forms_are_preserved() -> None:
+    forms = [
+        "<!-- ai-pr-review-summary sha=abc -->",
+        "<!-- ai-pr-review-skip -->",
+        '<!-- ai-pr-review-verdicts: {"o/r#1": "dismissed"} -->',
+        "[//]: # (ai-pr-review-verdicts:QUJD)",
+    ]
+    for form in forms:
+        assert strict_body(form, REPO) == form
+
+
+def test_a_check_run_output_gets_the_banner_and_the_strict_pass() -> None:
+    payload = {
+        "name": "ai-pr-review/policy-gate",
+        "output": {"title": f"T {_HOSTILE}", "summary": f"S {_HOSTILE}", "text": f"X {_HOSTILE}"},
+    }
+    with output_clamp(True, REPO):
+        out = clamp_request_body(payload)
+    assert out["output"]["summary"].startswith(BANNER_BLOCK)
+    assert not out["output"]["title"].startswith(">") and FORK_BANNER not in out["output"]["text"]
+    for key in ("title", "summary", "text"):
+        _assert_clean(out["output"][key])
+
+
+def test_a_fork_profile_can_only_occur_on_a_provider_that_reads_fork_facts() -> None:
+    """Only GitHub has ``get_fork_gate_facts``, so only GitHub bodies need the clamp (body and check
+    output). GitLab and Bitbucket never get a ``ForkProfile``. If one gains the method this fails, so
+    the clamp keys must then be reviewed for that provider."""
+    from ai_pr_review.vcs.bitbucket import BitbucketProvider
+    from ai_pr_review.vcs.gitlab import GitLabProvider
+
+    assert hasattr(GitHubProvider, "get_fork_gate_facts")
+    assert not hasattr(GitLabProvider, "get_fork_gate_facts")
+    assert not hasattr(BitbucketProvider, "get_fork_gate_facts")
