@@ -809,3 +809,15 @@ def test_every_fork_pause_text_keeps_its_meaning_under_the_clamp_and_gets_the_ba
             out = clamp_request_body({"body": text})["body"]
             assert out.startswith(BANNER_BLOCK)
             assert "paused" in out.lower() or "not reviewed" in out.lower() or "AI_FORK_POLICY" in out
+
+
+def test_the_persisted_credential_key_is_the_same_with_and_without_the_clamp() -> None:
+    from ai_pr_review.output_clamp import clamp_request_body, output_clamp
+    from ai_pr_review.review.fork_gate import _redact_key
+
+    text = f"The checkout keeps a credential (`{_redact_key('http.https://github.com/.extraheader')}`)."
+    assert "<" not in text
+    with output_clamp(True, repo="o/r"):
+        out = clamp_request_body({"body": text})["body"]
+    assert "`http.URL.extraheader`" in out
+    assert "&lt;" not in out
