@@ -596,3 +596,19 @@ def test_custom_bot_login_is_accepted() -> None:
         client=prov.client,
     )
     assert custom.get_last_reviewed_sha() == _VALID_SHA
+
+
+def test_bot_login_comparison_ignores_case() -> None:
+    provider, _ = _make_provider(
+        lambda request: httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "body": "<!-- ai-pr-review-summary sha=abc -->",
+                    "user": {"login": "GitHub-Actions[bot]"},
+                }
+            ],
+        )
+    )
+    assert len(provider._list_summary_comments()) == 1

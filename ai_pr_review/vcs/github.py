@@ -479,11 +479,12 @@ class GitHubProvider:
         This stops a forged watermark or skip marker from another commenter.
         """
         login = (item.get("user") or {}).get("login")
-        return isinstance(login, str) and login == self.config.bot_login
+        return isinstance(login, str) and login.casefold() == self.config.bot_login.casefold()
 
     def _list_summary_comments(self) -> list[dict[str, Any]]:
         """Return all issue comments containing the summary marker prefix."""
         results: list[dict[str, Any]] = []
+        rejected = 0
         url: str | None = self._issue_comments_url()
         params: dict[str, Any] | None = {"per_page": 100}
         while url:
@@ -496,12 +497,22 @@ class GitHubProvider:
             page = resp.json() or []
             for item in page:
                 body = item.get("body") or ""
-                if SUMMARY_MARKER_PREFIX in body and self._is_bot_authored(item):
-                    results.append(item)
+                if SUMMARY_MARKER_PREFIX in body:
+                    if self._is_bot_authored(item):
+                        results.append(item)
+                    else:
+                        rejected += 1
             # httpx returns the next link via headers
             next_url = _parse_next_link(resp.headers.get("link", ""))
             url = next_url
             params = None  # params are embedded in the next link URL
+        if rejected and not results:
+            _log.warning(
+                "Ignored %d summary comment(s) not authored by %s. If the bot posts under a "
+                "different login, set GITHUB_BOT_USERNAME.",
+                rejected,
+                self.config.bot_login,
+            )
         return results
 
     # ------------------------------------------------------------------
