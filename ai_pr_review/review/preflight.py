@@ -25,6 +25,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Posted in place of the walkthrough on the first review of a fork run (story 17-10). The summary
+# comment must not be empty, because an empty summary is how the engine recognizes an incremental
+# run, and the summary comment also carries the SHA watermark. The text names no fork-controlled value.
+FORK_SUMMARY_NOTICE = (
+    "_This pull request comes from a fork. The pull request description, the commit messages "
+    "and the open issue titles are not sent to the model, so this review has no walkthrough._"
+)
+
 _SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"
 
 
@@ -47,8 +55,12 @@ def should_run_summarizer(
     is_incremental: bool,
     agents: frozenset[str] | tuple[str, ...],
     exclude_agents: frozenset[str] | tuple[str, ...],
+    fork_run: bool = False,
 ) -> bool:
     """Whether pr-summarizer will actually run this review.
+
+    A fork run (``fork_run`` true, story 17-10) never runs it, because its input is the commit
+    log, which the fork author controls and which has little value for a review.
 
     The single source of truth for this gate (#848 item 2): both cli.py's
     real dispatch and review/runtime.py's pre-flight cost estimate must
@@ -57,7 +69,7 @@ def should_run_summarizer(
     """
     from ai_pr_review.agents.roster import agent_allowed
 
-    return not is_incremental and agent_allowed("pr-summarizer", agents, exclude_agents)
+    return not fork_run and not is_incremental and agent_allowed("pr-summarizer", agents, exclude_agents)
 
 
 def should_run_issue_linker(
@@ -67,13 +79,15 @@ def should_run_issue_linker(
     vcs_provider: str,
     agents: frozenset[str] | tuple[str, ...],
     exclude_agents: frozenset[str] | tuple[str, ...],
+    fork_run: bool = False,
 ) -> bool:
     """Whether issue-linker will actually run this review. See
-    ``should_run_summarizer``'s docstring for why this exists."""
+    ``should_run_summarizer``'s docstring for why this exists and for ``fork_run``."""
     from ai_pr_review.agents.roster import agent_allowed
 
     return (
-        not is_incremental
+        not fork_run
+        and not is_incremental
         and review_mode == "full"
         and vcs_provider == "github"
         and agent_allowed("issue-linker", agents, exclude_agents)

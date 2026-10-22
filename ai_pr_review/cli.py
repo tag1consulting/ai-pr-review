@@ -26,6 +26,7 @@ from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
 from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.review.compute import run_compute
+from ai_pr_review.review.preflight import FORK_SUMMARY_NOTICE
 from ai_pr_review.review.preflight import run_issue_linker as _run_issue_linker
 from ai_pr_review.review.preflight import run_summarizer as _run_summarizer
 from ai_pr_review.review.reporting import (
@@ -439,8 +440,16 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # with review/runtime.py's pre-flight cost estimate so the two can never
     # silently disagree about whether this agent will actually run.
     summary_text = runtime.summary_prefix
+    # A fork run (a fork profile is present) runs neither agent: their input is the commit log,
+    # the branch name and the open-issue titles, which the fork author controls (story 17-10).
+    fork_run = runtime.fork_profile is not None
+    if fork_run and not runtime.is_incremental:
+        # Keep the summary comment non-empty. An empty one reads as an incremental run and
+        # leaves the SHA watermark with no comment to live in.
+        summary_text += FORK_SUMMARY_NOTICE
     if should_run_summarizer(
         is_incremental=runtime.is_incremental, agents=rc.agents, exclude_agents=rc.exclude_agents,
+        fork_run=fork_run,
     ):
         summary_text += await _run_summarizer(
             diff_text=runtime.diff.diff_text,
@@ -469,6 +478,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
         vcs_provider=rc.vcs_provider,
         agents=rc.agents,
         exclude_agents=rc.exclude_agents,
+        fork_run=fork_run,
     ):
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,

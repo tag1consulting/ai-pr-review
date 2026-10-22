@@ -505,6 +505,9 @@ async def build_review_runtime(
         and isinstance(pr_description[1], str)
     ):
         pr_title, pr_body = pr_description
+        if fork_profile is not None:
+            # Story 17-10: a fork run sends the title only. The body is written by the fork author.
+            pr_body = ""
         shared_context_block = build_shared_context_block(
             manifest_text=manifest_text, pr_title=pr_title, pr_body=pr_body,
         )
@@ -865,6 +868,7 @@ async def build_review_runtime(
             is_incremental=is_incremental,
             agents=config.agents,
             exclude_agents=config.exclude_agents,
+            fork_run=fork_profile is not None,
         ):
             preflight_parts.append(
                 estimate_preflight_agent_cost(
@@ -881,6 +885,7 @@ async def build_review_runtime(
             vcs_provider=config.vcs_provider,
             agents=config.agents,
             exclude_agents=config.exclude_agents,
+            fork_run=fork_profile is not None,
         ):
             preflight_parts.append(
                 estimate_preflight_agent_cost(
