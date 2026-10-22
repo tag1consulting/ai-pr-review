@@ -56,7 +56,7 @@ A paused run exits 0, so a required review check can turn green without a review
 
 ## Cost ceiling
 
-An approved fork pull request gets a default cost ceiling of 2 USD when you set none. Set `max-cost-usd` to use your own ceiling for all pull requests. Set `AI_FORK_MAX_COST_USD` to change the default for forks, or to `0` to switch the default off. An unusable value falls back to 2 USD and never switches the ceiling off. The ceiling does not bound a model that has no price entry (see `AI_COST_CEILING_UNPRICED`).
+An approved fork pull request gets a default cost ceiling of 2 USD when you set none. Set `max-cost-usd` to use your own ceiling for all pull requests. Set `AI_FORK_MAX_COST_USD` to change the default for forks. A zero, negative or non-finite value falls back to 2 USD with a warning, so no value switches the ceiling off. The ceiling does not bound a model that has no price entry (see `AI_COST_CEILING_UNPRICED`).
 
 ## Budget for one fork pull request
 

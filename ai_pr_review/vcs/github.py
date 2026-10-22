@@ -702,12 +702,12 @@ class GitHubProvider:
     def list_budget_comments(self) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
         """Return ``(ledger, maintainer)`` comments of the pull request, as ``(id, body)`` lists.
 
-        ``ledger`` holds bot-authored comments with the ledger tag. A comment from anyone else
-        that holds the tag is ignored. ``maintainer`` holds non-bot comments whose
+        ``ledger`` holds bot-authored comments whose body is a valid ledger entry. Any other comment
+        is ignored, even one that holds the tag. ``maintainer`` holds non-bot comments whose
         ``author_association`` is OWNER, MEMBER or COLLABORATOR. Raises ``RuntimeError`` on an
         HTTP error, a bad page or a bad comment on any page.
         """
-        from ai_pr_review.review.fork_budget import LEDGER_TAG, MAINTAINER_ASSOCIATIONS
+        from ai_pr_review.review.fork_budget import MAINTAINER_ASSOCIATIONS, is_entry_body
 
         ledger: list[tuple[int, str]] = []
         maintainer: list[tuple[int, str]] = []
@@ -729,7 +729,7 @@ class GitHubProvider:
                 body = item.get("body")
                 body = body if isinstance(body, str) else ""
                 if self._is_bot_authored(item):
-                    if LEDGER_TAG in body:
+                    if is_entry_body(body):
                         ledger.append((item["id"], body))
                 elif str(item.get("author_association") or "").upper() in MAINTAINER_ASSOCIATIONS:
                     maintainer.append((item["id"], body))
