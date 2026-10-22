@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Behavior change: `AI_FAIL_ON_FINDINGS=true` also exits with code 2 when an agent returns output that the engine cannot read.** Before, unreadable output counted as no findings. Now it counts as a failed agent, so the run posts COMMENT and names the agent.
+- **Behavior change: an agent that returns output the engine cannot read counts as a failed agent on every run.** Before, unreadable output counted as no findings, so a pull request could get APPROVE. Now the run posts COMMENT and names the agent. With `AI_FAIL_ON_FINDINGS=true` the run also exits with code 2.
 - **Behavior change: every analyzer and git subprocess gets a scrubbed environment, on every run.** The environment holds `PATH`, a temporary `HOME`, `LC_ALL`, `PYTHONSAFEPATH=1`, a few per-tool variables and the standard proxy and certificate variables. No LLM key or token reaches a subprocess. A proxy value that holds credentials (an `@` in the value) is dropped. An analyzer that needs another variable must get it through `AI_ANALYZER_ENV_PASSTHROUGH`.
 - **Behavior change: the engine reads the SHA watermark and the skip comments only from comments that the bot wrote.** A custom bot identity must set `GITHUB_BOT_USERNAME`, or the engine ignores its own summary and skip comments.
 - **The engine scrubs secret literals from every posted string, caps a string at 262,144 bytes, and neutralizes a log line that starts with `::`.** It also strips invisible characters from untrusted prompt text and escapes a closing tag that could end an untrusted block. This applies to every run. The `@mention` and `owner/repo#N` neutralizing applies to fork runs only.
@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The `slash-commands.yml` workflow checks out with `persist-credentials: false` and passes `AI_FORK_POLICY` and `AI_FORK_TRUSTED_ASSOCIATIONS` to a rescan.** The settings come from the repository variables of the calling repository. A repository that sets either to a non-default value must also set it as a repository variable.
 - **The container action passes the fork settings, `AI_ANALYZER_ENV_PASSTHROUGH` and `GITHUB_EVENT_NAME` to the container.**
 - **The example workflows explain the fork settings, and `examples/workflows/fork-approval.yml` is new.** The `statuses: read` permission is needed only under `AI_FORK_POLICY=label`.
-- **Dependency updates (Renovate):** the image now has ruff 0.17.2, tflint 0.65.0 and trufflehog 3.99.4. The CI workflows have newer pins of three GitHub Actions and Ruby.
+- **Dependency updates (Renovate):** the image now has ruff 0.17.2, tflint 0.65.0 and trufflehog 3.99.4. The CI workflows have newer pins of two GitHub Actions and Ruby.
 
 ### Internal
 

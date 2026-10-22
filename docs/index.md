@@ -72,7 +72,7 @@ Reviews start on the next PR.
 
 **Fork pull requests are reviewed automatically (behavior change).** `AI_FORK_POLICY` now defaults to `auto`. A fork pull request gets a review at once, with a scrubbed environment, fewer analyzers, no PR body in the prompts, a COMMENT-only output and spend caps. Set `AI_FORK_POLICY=label` to require a maintainer approval, or `block` to switch fork review off. See [Fork pull requests](fork-prs).
 
-**Upgrade warnings.** `AI_FAIL_ON_FINDINGS=true` now also exits with code 2 when an agent returns unreadable output. A custom GitHub bot identity must set `GITHUB_BOT_USERNAME`. The checkout step must set `persist-credentials: false` for a fork review. A proxy value with credentials does not reach analyzers. The `@mention` neutralizing applies to fork runs only.
+**Upgrade warnings.** An agent that returns unreadable output now counts as a failed agent on every run, so the review posts COMMENT and not APPROVE. With `AI_FAIL_ON_FINDINGS=true` it also exits with code 2. A custom GitHub bot identity must set `GITHUB_BOT_USERNAME`. The checkout step must set `persist-credentials: false` for a fork review. A proxy value with credentials does not reach analyzers. The `@mention` neutralizing applies to fork runs only.
 
 **A review says when a resolved finding is back.** If a later run finds a similar finding where this review resolved one, the comment says so. GitHub only.
 

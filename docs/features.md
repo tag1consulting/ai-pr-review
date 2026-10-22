@@ -49,7 +49,7 @@ To force a full-PR diff for one run, add the **`ai-review-rescan`** label to the
 
 ### A finding that comes back after a fix (GitHub)
 
-When a later run no longer reports a finding, the review resolves its thread. If a similar finding then appears in the same code, the new comment says that a similar finding here was resolved earlier and is back. A finding counts as similar when it has the same file, a line within 3 lines, a compatible category, and the same source. The note only appears when the code at that place changed, because a thread of unchanged code is not resolved by a push. It does not claim that a push or a fix happened. A human resolution with no verdict gets a different note. A finding never gets both notes.
+When a later run no longer reports a finding, the review resolves its thread. If a similar finding then appears in the same code, the new comment says that a similar finding here was resolved earlier and is back. A finding counts as similar when it has the same file, a line within 3 lines, a compatible category, and the same source. The note only appears when the code at that place changed, because a thread of unchanged code is not resolved by a push. It does not claim that a push or a fix happened. A human resolution with no verdict gets a different note. A finding never gets both notes. A push that moves the code by more than 3 lines hides the match, so the note does not appear then.
 
 ## Quiet reruns (GitHub)
 
