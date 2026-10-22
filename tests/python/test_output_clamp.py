@@ -1122,3 +1122,9 @@ def test_the_event_cap_ignores_case(event: str) -> None:
 def test_a_comment_event_and_other_events_are_left_alone() -> None:
     assert _send({"body": "x", "event": "COMMENT"})["event"] == "COMMENT"
     assert _send({"message": "m", "event": "DISMISS"})["event"] == "DISMISS"
+
+
+def test_bitbucket_annotation_summary_and_details_are_clamped() -> None:
+    got = _send({"annotations": [{"summary": f"s {_HOSTILE}", "details": f"d {_HOSTILE}"}], "summary": f"s {_HOSTILE}", "details": f"d {_HOSTILE}"})
+    for text in (got["summary"], got["details"]):
+        _assert_clean(text)

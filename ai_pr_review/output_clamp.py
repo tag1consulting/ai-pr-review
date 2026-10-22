@@ -293,7 +293,9 @@ def clamp_request_body(value: Any) -> Any:
 # GitLab, ``raw`` is Bitbucket ``content.raw``. Those get the banner. The others get the strict pass
 # only, because a banner would not fit a commit message or a short title.
 _BANNER_KEYS: Final[frozenset[str]] = frozenset({"body", "note", "raw"})
-_STRICT_KEYS: Final[frozenset[str]] = frozenset({"message", "title", "text", "raw_details", "description"})
+_STRICT_KEYS: Final[frozenset[str]] = frozenset(
+    {"message", "title", "text", "raw_details", "description", "summary", "details"}
+)
 
 
 def _walk(value: Any, repo: str) -> Any:

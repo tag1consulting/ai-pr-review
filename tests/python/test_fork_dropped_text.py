@@ -31,6 +31,8 @@ from ai_pr_review.review.preflight import (
     should_run_summarizer,
 )
 from ai_pr_review.vcs.protocol import FindingsResult, StaleResult, SummaryResult
+from tests.python.test_fork_budget import Backend as _BudgetBackend
+from tests.python.test_fork_spend import SpendMem as _SpendBackend
 
 PROFILE = ForkProfile("mallory/r", "mallory", "NONE")
 TITLE = "CANARY-TITLE add a widget"
@@ -63,10 +65,12 @@ def _diff(is_incremental: bool = False) -> DiffResult:
     )
 
 
-class _Provider:
-    """A VcsProvider fake. It records what it posts."""
+class _Provider(_BudgetBackend, _SpendBackend):
+    """A VcsProvider fake with in-memory ledgers. It records what it posts."""
 
     def __init__(self) -> None:
+        _BudgetBackend.__init__(self)
+        _SpendBackend.__init__(self)
         self.summaries: list[str] = []
 
     def get_last_reviewed_sha(self) -> str | None:

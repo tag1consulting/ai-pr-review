@@ -38,6 +38,8 @@ from ai_pr_review.review.runtime import (
     build_review_runtime,
 )
 
+from .test_fork_budget import Backend as _BudgetBackend
+from .test_fork_spend import SpendMem as _SpendBackend
 from .test_runtime import _FakeProvider, _make_config, _make_diff_result
 
 SHA = "a" * 40
@@ -317,10 +319,15 @@ def test_the_check_runs_with_a_minimal_environment(monkeypatch: pytest.MonkeyPat
     assert seen and all("GH_TOKEN" not in e and "ANTHROPIC_API_KEY" not in e for e in seen)
 
 
-class _P(_FakeProvider):
-    """A provider fake with fork facts."""
+class _P(_FakeProvider, _BudgetBackend, _SpendBackend):
+    """A provider fake with fork facts and in-memory ledgers."""
 
     facts: ForkGateFacts | None = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        _FakeProvider.__init__(self, *args, **kwargs)
+        _BudgetBackend.__init__(self)
+        _SpendBackend.__init__(self)
 
     def get_fork_gate_facts(self, head_sha: str, context: str, *, read_approval: bool = True) -> ForkGateFacts | None:
         return self.facts
