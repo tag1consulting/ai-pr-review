@@ -494,3 +494,4 @@ def test_pause_text_hides_user_info_in_a_config_key(tmp_path: Path) -> None:
     reason = _REAL_PERSISTED(str(ws))
     assert reason
     assert "tok123" not in reason
+    assert "url.<url>.insteadof" in reason.lower()
