@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ai_pr_review.analyzers._env import run_home, tool_env
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -84,6 +85,8 @@ def _run_golangci_lint(changed_files: ChangedFiles, diff_file: Path) -> list[Fin
                 text=True,
                 timeout=_TIMEOUT_SECS,
                 cwd=str(module_root),
+                # Go writes its build cache under HOME by default. Keep it in the temp HOME.
+                env=tool_env(extra={"GOCACHE": str(Path(run_home()) / "go-build")}),
             )
         except subprocess.TimeoutExpired as exc:
             logger.warning("[ai-pr-review] WARNING: golangci-lint timed out after %ss; skipping.", exc.timeout)

@@ -1,0 +1,83 @@
+# Approve one commit of a fork pull request for review (see docs/fork-prs.md).
+#
+# Use this workflow ONLY with AI_FORK_POLICY=label. The default policy, auto, reviews a fork
+# pull request at once and does not read the approval status, so it needs no approval workflow.
+# Also add `statuses: read` to the permissions of your review workflow when you use `label`.
+#
+# The engine pauses a fork pull request until the base repository has a successful commit status
+# named "ai-pr-review/fork-approval" on the exact head commit. This workflow creates that status
+# when a maintainer with write access adds the "ai-review-approve-fork" label. A new push removes
+# the label, and a new commit has no status, so an approval covers one commit and nothing later.
+#
+# Limit: the status names the head commit that the label event carried. A push while the
+# maintainer was still reading, before the label was added, is approved with the new head. The
+# maintainer must read the full pull request diff at the commit that the skip comment names, and
+# check the head commit again just before labeling.
+#
+# This workflow runs on pull_request_target and checks out NOTHING. Keep it that way. It must
+# never run code from the pull request. It reads no file from the fork and runs no script from it.
+name: Approve fork PR review
+
+on:
+  pull_request_target:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+  statuses: write
+  pull-requests: write
+
+jobs:
+  approve:
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ai-review-approve-fork' &&
+      github.event.sender.type == 'User'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve the commit the label was added to
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTOR: ${{ github.event.sender.login }}
+          LABELED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          remove_label() {
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/ai-review-approve-fork" >/dev/null 2>&1 || true
+          }
+          # Only a user with write access counts. A triage user can add a label, so check the actor.
+          permission=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)
+          case "$permission" in
+            admin|write) ;;
+            *)
+              echo "::error::$ACTOR has '$permission' access. Only write access can approve."
+              remove_label
+              exit 1
+              ;;
+          esac
+          # The pull request must still be at the commit the label event saw.
+          current=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          if [ "$current" != "$LABELED_SHA" ]; then
+            echo "::error::The pull request moved after the label was added. Review the new commit and label again."
+            remove_label
+            exit 1
+          fi
+          gh api -X POST "repos/$REPO/statuses/$LABELED_SHA" \
+            -f state=success \
+            -f context=ai-pr-review/fork-approval \
+            -f description="Approved by $ACTOR"
+          echo "Approved ${LABELED_SHA:0:7} for review."
+
+  revoke:
+    if: github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove the approval label after a push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api -X DELETE "repos/$REPO/issues/$PR/labels/ai-review-approve-fork" >/dev/null 2>&1 || true

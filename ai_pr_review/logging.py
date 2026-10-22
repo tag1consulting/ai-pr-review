@@ -53,22 +53,68 @@ def generate_correlation_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
-def _mask_secrets(text: str, *, secret_literals: re.Pattern[str] | None = None) -> str:
+# Literal secret values registered by setup_logging (Layer 3). The outbound
+# scrub in vcs/http.py reads this registry so a posted string is cleaned with
+# the same values the log formatter masks (story 17-12).
+_active_secret_literals: re.Pattern[str] | None = None
+
+
+def get_secret_literals() -> re.Pattern[str] | None:
+    """Return the compiled Layer 3 pattern from the last ``setup_logging`` call."""
+    return _active_secret_literals
+
+
+def _mask_secrets(
+    text: str,
+    *,
+    secret_literals: re.Pattern[str] | None = None,
+    env_assignments: bool = True,
+) -> str:
     """Redact known secret patterns from a string.
 
     Three layers applied in order:
     1. Env-var name=value patterns (ANTHROPIC_API_KEY=abc → ANTHROPIC_API_KEY=<redacted>)
     2. Provider token prefixes (sk-ant-xxx → <redacted>)
     3. Literal secret values compiled at setup time (Layer 3 pattern passed in)
+
+    ``env_assignments=False`` skips Layer 1. The outbound scrub uses that,
+    because review text legitimately quotes code such as ``password = hash(x)``.
     """
     # Layer 1 — preserve the original separator (= or :) so TOKEN: value → TOKEN: <redacted>
-    text = _ENV_VAR_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", text)
+    if env_assignments:
+        text = _ENV_VAR_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", text)
     # Layer 2
     text = _TOKEN_PREFIX_RE.sub("<redacted>", text)
     # Layer 3
     if secret_literals is not None:
         text = secret_literals.sub("<redacted>", text)
     return text
+
+
+# Every character a log reader or the Actions runner may treat as a line break.
+_LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\x0b\x0c\x85\u2028\u2029]")
+# A GitHub workflow command starts a line with "::" (leading blanks included).
+_LEADING_COMMAND_RE = re.compile(r"^(\s*):(?=:)")
+
+
+def neutralize_log_text(text: str) -> str:
+    """Make untrusted text safe to write as one log line (story 17-12, CAP-5).
+
+    Every line break becomes a literal ``\\n``, so the text cannot start a new
+    log line. A leading ``::`` (a GitHub workflow command such as
+    ``::error`` or ``::add-mask::``) gets a space between the colons.
+    """
+    text = _LINE_BREAK_RE.sub(lambda _m: "\\n", text)
+    return _LEADING_COMMAND_RE.sub(r"\1: ", text)
+
+
+def safe_log_text(text: str) -> str:
+    """Mask secrets and neutralize workflow commands in untrusted text.
+
+    For raw model text that reaches the log through ``print`` and so skips
+    ``SecretMaskingFormatter``.
+    """
+    return neutralize_log_text(_mask_secrets(text, secret_literals=_active_secret_literals))
 
 
 class CorrelationFilter(logging.Filter):
@@ -103,7 +149,10 @@ class SecretMaskingFormatter(logging.Formatter):
         if self._json_format:
             return self._format_json(record)
         rendered = super().format(record)
-        return _mask_secrets(rendered, secret_literals=self._secret_literals)
+        masked = _mask_secrets(rendered, secret_literals=self._secret_literals)
+        # One record is one log line: a model-derived message must not be able
+        # to start a second line that holds a workflow command (story 17-12).
+        return neutralize_log_text(masked)
 
     def _format_json(self, record: logging.LogRecord) -> str:
         # Work on a shallow copy so this formatter's mutations (exc_text clearing,
@@ -195,6 +244,8 @@ def setup_logging(
         secrets: Optional frozenset of literal secret values to redact (Layer 3).
                  Values shorter than 8 characters are ignored to avoid false positives.
     """
+    global _active_secret_literals
+
     # Store correlation ID in ContextVar so CorrelationFilter can read it.
     _correlation_id_var.set(correlation_id)
 
@@ -205,6 +256,7 @@ def setup_logging(
         if long_secrets:
             pattern = "|".join(re.escape(s) for s in sorted(long_secrets, key=len, reverse=True))
             secret_literals = re.compile(pattern)
+    _active_secret_literals = secret_literals
 
     # Build formatter.
     if log_format == "json":

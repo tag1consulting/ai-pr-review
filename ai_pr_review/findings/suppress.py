@@ -57,10 +57,20 @@ class SuppressionRule:
 def load_rules(
     script_dir: str,
     workspace: str = "",
+    *,
+    base_ref: str = "",
+    local_source: str = "workspace",
 ) -> list[SuppressionRule]:
-    """Load global + optional local suppression rules."""
+    """Load global + optional local suppression rules.
+
+    ``local_source`` is ``"workspace"`` (the checked-out tree, the default) or ``"base-ref"``
+    (``git show origin/{base_ref}:{path}``, so a pull request cannot change the rules). A fork run
+    uses ``"base-ref"``. With no *base_ref* that source yields no local rules. A rule that fails to
+    parse (a bad regex or a wrong shape) is dropped alone and the others stay.
+    """
     global_path = Path(script_dir) / "config" / "suppressions.json"
-    local_path = _find_local_suppressions_path(workspace) if workspace else None
+    use_base = local_source == "base-ref"
+    local_path = _find_local_suppressions_path(workspace) if workspace and not use_base else None
 
     rules_data: list[dict[str, Any]] = []
     if global_path.is_file():
@@ -69,31 +79,70 @@ def load_rules(
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: Could not load suppressions.json: {exc}", file=sys.stderr)
 
-    if local_path is not None:
+    if use_base:
+        rules_data.extend(_base_ref_local_rules(workspace or ".", base_ref))
+    elif local_path is not None:
         rel_path = local_path.relative_to(workspace) if workspace else local_path
         try:
             local_data = json.loads(local_path.read_text())
+            rules_data.extend(_accept_local_rules(local_data, str(rel_path)))
             if isinstance(local_data, list):
-                # The local file lives in the checked-out tree, which on a
-                # contributor PR is attacker-controlled. A rule with an empty
-                # (or no) `match` object matches every finding — a catch-all
-                # that would silence the entire review. Reject such rules from
-                # the local file; they remain valid only in the trusted global
-                # config shipped with the action.
-                accepted = [r for r in local_data if isinstance(r, dict) and _has_match_constraint(r)]
-                dropped = len(local_data) - len(accepted)
-                if dropped:
-                    print(
-                        f"WARNING: dropped {dropped} local suppression rule(s) with no match "
-                        f"constraint (catch-all rules are not allowed in {rel_path}).",
-                        file=sys.stderr,
-                    )
-                rules_data.extend(accepted)
                 print(f"Loaded local suppressions from {rel_path}", file=sys.stderr)
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: Could not load local suppressions: {exc}", file=sys.stderr)
 
-    return [_parse_rule(r) for r in rules_data if isinstance(r, dict)]
+    parsed: list[SuppressionRule] = []
+    for raw in rules_data:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            parsed.append(_parse_rule(raw))
+        except (re.error, TypeError, AttributeError, ValueError) as exc:
+            rule_id = str(raw.get("id", ""))[:60]
+            print(
+                f"WARNING: dropped suppression rule {rule_id!r}: {type(exc).__name__}. "
+                "The other rules stay.",
+                file=sys.stderr,
+            )
+    return parsed
+
+
+def _accept_local_rules(local_data: Any, rel_path: str) -> list[dict[str, Any]]:
+    """The local rules that narrow what they match.
+
+    The local file is pull-request content on a contributor PR. A rule with an empty (or no)
+    ``match`` object matches every finding, a catch-all that would silence the whole review. Such
+    rules stay valid only in the trusted global config shipped with the action.
+    """
+    if not isinstance(local_data, list):
+        return []
+    accepted = [r for r in local_data if isinstance(r, dict) and _has_match_constraint(r)]
+    dropped = len(local_data) - len(accepted)
+    if dropped:
+        print(
+            f"WARNING: dropped {dropped} local suppression rule(s) with no match "
+            f"constraint (catch-all rules are not allowed in {rel_path}).",
+            file=sys.stderr,
+        )
+    return accepted
+
+
+def _base_ref_local_rules(workspace: str, base_ref: str) -> list[dict[str, Any]]:
+    """Local rules read from ``origin/{base_ref}``. First candidate path that exists wins."""
+    from ai_pr_review.policy import read_repo_file
+
+    for parts in _LOCAL_SUPPRESSIONS_CANDIDATES:
+        text = read_repo_file("/".join(parts), workspace=workspace, base_ref=base_ref)
+        if text is None:
+            continue
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            print(f"WARNING: Could not load local suppressions from the base ref: {exc}", file=sys.stderr)
+            return []
+        print("Loaded local suppressions from the base ref", file=sys.stderr)
+        return _accept_local_rules(data, "the base ref")
+    return []
 
 
 def _find_local_suppressions_path(workspace: str) -> Path | None:

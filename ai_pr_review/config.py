@@ -13,6 +13,13 @@ import sys
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from ai_pr_review.review.fork_gate import (
+    DEFAULT_FORK_POLICY,
+    FORK_POLICIES,
+    SAFEST_FORK_POLICY,
+    parse_trusted_associations,
+)
+
 
 class ConfigError(ValueError):
     """Raised when an unknown AI_* variable is detected in the environment."""
@@ -73,6 +80,7 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         # --- Analyzer diff scope and concurrency ---
         "AI_ANALYZER_DIFF_SCOPE",
         "AI_ANALYZER_CONCURRENCY",
+        "AI_ANALYZER_ENV_PASSTHROUGH",
         # --- Slash commands + feedback loop ---
         "AI_FEEDBACK_LOOP",
         "AI_FEEDBACK_BRANCH",
@@ -94,6 +102,13 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_TOKEN_USAGE_WARN_USD",
         # --- Pre-flight cost ceiling (#24) ---
         "AI_MAX_COST_USD",
+        # --- Fork pull request gate ---
+        "AI_FORK_MAX_COST_USD",
+        "AI_FORK_DAILY_MAX_COST_USD",
+        "AI_FORK_DAILY_RESERVED_SHARE",
+        "AI_FORK_POLICY",
+        "AI_FORK_TRUSTED_ASSOCIATIONS",
+        "AI_FAIL_ON_FORK_GATE",
         "AI_FAIL_ON_COST_CEILING",
         "AI_COST_CEILING_UNPRICED",
         "AI_CONTEXT_WINDOW_MARGIN",
@@ -544,6 +559,9 @@ class ReviewConfig(BaseModel):
     # "drop" -- remove out-of-diff analyzer findings entirely.
     # "off"  -- pass through unchanged (full-file linting behaviour).
     analyzer_diff_scope: str = "cap"
+    # Extra environment variable names for analyzer, git and rg launches (non-fork runs only).
+    # Secret names are refused at launch time (see analyzers/_env.py).
+    analyzer_env_passthrough: tuple[str, ...] = ()
 
     # --- Summary ---
     # When true, the pr-summarizer's `## Walkthrough` table is left out of the
@@ -600,6 +618,24 @@ class ReviewConfig(BaseModel):
     # disables the ceiling -- the estimate is still computed and logged via
     # the COST_ESTIMATE line, just never enforced.
     max_cost_usd: float = 0.0
+    # Ceiling applied to an approved fork pull request when max_cost_usd is 0 (see review/fork_gate.py).
+    # 0 turns the default off. A non-zero max_cost_usd always wins.
+    fork_max_cost_usd: float = 2.0
+    # Daily spend cap (USD per rolling 24 hours) for fork runs by non-trusted authors, and the share of
+    # it that only CONTRIBUTOR authors use (story 17-7). 0 pauses every such run.
+    fork_daily_max_cost_usd: float = 50.0
+    fork_daily_reserved_share: float = 0.7
+    # What the engine does with a fork pull request: auto, label (maintainer approval status) or
+    # block. The default is auto. An unknown value falls back to label, the safest policy, and not
+    # to the auto default.
+    fork_policy: str = DEFAULT_FORK_POLICY
+    # author_association values that skip the fork profile under the auto policy.
+    fork_trusted_associations: tuple[str, ...] = ("OWNER", "COLLABORATOR")
+    # Exit 2 when the fork gate pauses a run, so a required check does not turn green with no review.
+    # Off by default, like fail_on_cost_ceiling.
+    fail_on_fork_gate: bool = False
+    # The workflow event (GITHUB_EVENT_NAME). The fork gate skips a plain pull_request run only.
+    event_name: str = ""
     # When the ceiling is exceeded, the run always aborts before any LLM call
     # (a skip comment is posted, same mechanism as the max-diff-lines skip)
     # -- but by default this is NOT treated as a CI failure (exit 0), mirroring
@@ -847,6 +883,59 @@ class ReviewConfig(BaseModel):
             return 0.0
         return v
 
+    @field_validator("fork_max_cost_usd")
+    @classmethod
+    def _fork_max_cost_usd_falls_back(cls, v: float) -> float:
+        # An unusable value must not switch the fork cost ceiling off. Use the default instead.
+        if not math.isfinite(v) or v <= 0:
+            print(
+                f"WARNING: AI_FORK_MAX_COST_USD={v} is not a finite number above 0; "
+                "using the default of 2.0.",
+                file=sys.stderr,
+            )
+            return 2.0
+        return v
+
+    @field_validator("fork_daily_max_cost_usd")
+    @classmethod
+    def _fork_daily_max_cost_usd_falls_back(cls, v: float) -> float:
+        # An unusable value must not lift the daily cap. Use the default instead. 0 is valid and pauses all.
+        if not math.isfinite(v) or v < 0:
+            print(
+                f"WARNING: AI_FORK_DAILY_MAX_COST_USD={v} is not a finite, non-negative number; "
+                "using the default of 50.0.",
+                file=sys.stderr,
+            )
+            return 50.0
+        return v
+
+    @field_validator("fork_daily_reserved_share")
+    @classmethod
+    def _fork_daily_reserved_share_falls_back(cls, v: float) -> float:
+        if not math.isfinite(v) or v < 0 or v > 1:
+            print(
+                f"WARNING: AI_FORK_DAILY_RESERVED_SHARE={v} is not a number from 0 to 1; "
+                "using the default of 0.7.",
+                file=sys.stderr,
+            )
+            return 0.7
+        return v
+
+    @field_validator("fork_policy")
+    @classmethod
+    def _fork_policy_falls_back(cls, v: str) -> str:
+        # An unknown value must not open the gate. The default is auto, but an unknown value falls
+        # back to the SAFEST policy (label pauses a fork until a maintainer approves), never to auto.
+        value = v.strip().lower()
+        if value not in FORK_POLICIES:
+            print(
+                f"WARNING: AI_FORK_POLICY={v!r} is not one of auto, label, block; "
+                f"using {SAFEST_FORK_POLICY!r}.",
+                file=sys.stderr,
+            )
+            return SAFEST_FORK_POLICY
+        return value
+
     @field_validator("log_format")
     @classmethod
     def _validate_log_format(cls, v: str) -> str:
@@ -958,6 +1047,11 @@ class ReviewConfig(BaseModel):
                 if p.strip()
             ),
             analyzer_diff_scope=os.environ.get("AI_ANALYZER_DIFF_SCOPE", "cap"),
+            analyzer_env_passthrough=tuple(
+                p.strip()
+                for p in os.environ.get("AI_ANALYZER_ENV_PASSTHROUGH", "").split(",")
+                if p.strip()
+            ),
             suppress_walkthrough=_bool("AI_SUPPRESS_WALKTHROUGH"),
             enable_judge_pass=_bool("AI_JUDGE_PASS", True),
             finding_badges=_bool("AI_FINDING_BADGES", True),
@@ -966,6 +1060,14 @@ class ReviewConfig(BaseModel):
             token_usage_display=os.environ.get("AI_TOKEN_USAGE_DISPLAY", "compact").strip() or "compact",
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
             max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
+            fork_max_cost_usd=_float("AI_FORK_MAX_COST_USD", 2.0),
+            fork_daily_max_cost_usd=_float("AI_FORK_DAILY_MAX_COST_USD", 50.0),
+            fork_daily_reserved_share=_float("AI_FORK_DAILY_RESERVED_SHARE", 0.7),
+            # An unset or empty value (a workflow that forwards an unset variable) gets the default.
+            fork_policy=os.environ.get("AI_FORK_POLICY", "").strip() or DEFAULT_FORK_POLICY,
+            fork_trusted_associations=parse_trusted_associations(os.environ.get("AI_FORK_TRUSTED_ASSOCIATIONS")),
+            fail_on_fork_gate=_bool("AI_FAIL_ON_FORK_GATE"),
+            event_name=os.environ.get("GITHUB_EVENT_NAME", "").strip(),
             fail_on_cost_ceiling=_bool("AI_FAIL_ON_COST_CEILING"),
             cost_ceiling_unpriced=os.environ.get("AI_COST_CEILING_UNPRICED", "warn").strip() or "warn",
             context_window_margin=_float("AI_CONTEXT_WINDOW_MARGIN", 0.9),

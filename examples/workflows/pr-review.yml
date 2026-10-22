@@ -69,6 +69,12 @@
 # shown in the commented block below.  Running pull_request_target without
 # hardening exposes your secrets to PR authors.
 #
+# With the hardening in place, the engine reviews a fork PR at once by default
+# (AI_FORK_POLICY=auto) and limits the run: a scrubbed environment, fewer analyzers, no PR
+# body in the prompts, a COMMENT-only output and spend caps. See docs/fork-prs.md. The
+# checkout must set persist-credentials: false, or the fork review pauses. The
+# fork-approval.yml example is for AI_FORK_POLICY=label only.
+#
 # To opt in:
 #   1. Replace the "on: pull_request:" block with "on: pull_request_target:".
 #   2. Replace the simple checkout step and container-action step in the review
@@ -109,6 +115,10 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Reads the fork approval status. Only AI_FORK_POLICY=label needs it, and only for a fork
+  # pull request (docs/fork-prs.md). The default policy, auto, does not read it, so you can
+  # remove this line unless you set AI_FORK_POLICY=label.
+  statuses: read
   # checks: write is only exercised when a matched .github/ai-pr-review/
   # policy.yml route sets 'require' (see docs/policy.md): the container
   # action posts the ai-pr-review/policy-gate check run in that case.
@@ -136,6 +146,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          # Do not leave the token in .git/config. A fork review pauses when it finds one.
+          persist-credentials: false
 
       - name: Run AI review
         uses: tag1consulting/ai-pr-review/container-action@main

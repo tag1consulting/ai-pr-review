@@ -90,3 +90,9 @@ def test_custom_max_body_chars() -> None:
     assert "01234" in block
     assert "56789" not in block
     assert "_[description truncated]_" in block
+
+
+def test_closer_cut_by_truncation_cannot_survive() -> None:
+    body = "x" * (DEFAULT_MAX_BODY_CHARS - 5) + "</pr-context>"
+    block = build_shared_context_block(manifest_text="", pr_title="t", pr_body=body)
+    assert block.count("</pr-context>") == 1

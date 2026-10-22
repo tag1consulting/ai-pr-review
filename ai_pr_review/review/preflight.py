@@ -15,13 +15,23 @@ from typing import TYPE_CHECKING
 
 import anyio
 
+from ai_pr_review.analyzers._env import GIT_SAFE_ARGS, gh_env, git_env
 from ai_pr_review.llm.client import EXIT_PROMPT_TOO_LONG
+from ai_pr_review.text_safety import safe_text
 from ai_pr_review.vcs._body import sanitize_display_text
 
 if TYPE_CHECKING:
     from ai_pr_review.llm.base import LLMRequest, LLMResponse
 
 logger = logging.getLogger(__name__)
+
+# Posted in place of the walkthrough on the first review of a fork run (story 17-10). The summary
+# comment must not be empty, because an empty summary is how the engine recognizes an incremental
+# run, and the summary comment also carries the SHA watermark. The text names no fork-controlled value.
+FORK_SUMMARY_NOTICE = (
+    "_This pull request comes from a fork. The pull request description, the commit messages "
+    "and the open issue titles are not sent to the model, so this review has no walkthrough._"
+)
 
 _SUMMARIZER_FAILURE_NOTICE = "> ⚠️ PR summary generation failed — see CI logs.\n\n"
 
@@ -45,8 +55,12 @@ def should_run_summarizer(
     is_incremental: bool,
     agents: frozenset[str] | tuple[str, ...],
     exclude_agents: frozenset[str] | tuple[str, ...],
+    fork_run: bool = False,
 ) -> bool:
     """Whether pr-summarizer will actually run this review.
+
+    A fork run (``fork_run`` true, story 17-10) never runs it, because its input is the commit
+    log, which the fork author controls and which has little value for a review.
 
     The single source of truth for this gate (#848 item 2): both cli.py's
     real dispatch and review/runtime.py's pre-flight cost estimate must
@@ -55,7 +69,7 @@ def should_run_summarizer(
     """
     from ai_pr_review.agents.roster import agent_allowed
 
-    return not is_incremental and agent_allowed("pr-summarizer", agents, exclude_agents)
+    return not fork_run and not is_incremental and agent_allowed("pr-summarizer", agents, exclude_agents)
 
 
 def should_run_issue_linker(
@@ -65,13 +79,15 @@ def should_run_issue_linker(
     vcs_provider: str,
     agents: frozenset[str] | tuple[str, ...],
     exclude_agents: frozenset[str] | tuple[str, ...],
+    fork_run: bool = False,
 ) -> bool:
     """Whether issue-linker will actually run this review. See
-    ``should_run_summarizer``'s docstring for why this exists."""
+    ``should_run_summarizer``'s docstring for why this exists and for ``fork_run``."""
     from ai_pr_review.agents.roster import agent_allowed
 
     return (
-        not is_incremental
+        not fork_run
+        and not is_incremental
         and review_mode == "full"
         and vcs_provider == "github"
         and agent_allowed("issue-linker", agents, exclude_agents)
@@ -153,12 +169,12 @@ async def run_summarizer(
         system_prompt = build_summarizer_system_prompt(prompt_path)
 
         commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
+        _git_cmd = ["git", *GIT_SAFE_ARGS, "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
         proc: subprocess.CompletedProcess[str] | None = None
         try:
             proc = await anyio.to_thread.run_sync(
                 lambda: subprocess.run(
-                    _git_cmd, capture_output=True, text=True, timeout=15,
+                    _git_cmd, capture_output=True, text=True, timeout=15, env=git_env(),
                 )
             )
         except subprocess.TimeoutExpired:
@@ -243,7 +259,11 @@ def fetch_open_issues(github_repository: str) -> str:
         "--json", "number,title,labels",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15,
+            # gh needs the token. Everything else secret stays out of its env.
+            env=gh_env(),
+        )
     except FileNotFoundError:
         logger.warning("issue-linker: gh CLI not found; open-issue list unavailable")
         return "(unavailable)"
@@ -318,11 +338,13 @@ async def run_issue_linker(
         system_prompt = prompt_path.read_text()
 
         commit_log = ""
-        _git_cmd = ["git", "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
+        _git_cmd = ["git", *GIT_SAFE_ARGS, "log", "--format=%h %s%n%b", "--max-count=20", f"origin/{base_ref}..HEAD"]
 
         def _run_git_log() -> subprocess.CompletedProcess[str] | None:
             try:
-                return subprocess.run(_git_cmd, capture_output=True, text=True, timeout=15)
+                return subprocess.run(
+                    _git_cmd, capture_output=True, text=True, timeout=15, env=git_env()
+                )
             except subprocess.TimeoutExpired:
                 return None
 
@@ -343,8 +365,8 @@ async def run_issue_linker(
         def _run_git_branch() -> subprocess.CompletedProcess[str] | None:
             try:
                 return subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    capture_output=True, text=True, timeout=10,
+                    ["git", *GIT_SAFE_ARGS, "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True, text=True, timeout=10, env=git_env(),
                 )
             except subprocess.TimeoutExpired:
                 return None
@@ -373,10 +395,10 @@ async def run_issue_linker(
         user_message = (
             f"PROVIDER: {provider}\n\n"
             f"REPOSITORY: {github_repository}\n\n"
-            f"## Branch Name\n\n{branch_name or '(unavailable)'}\n\n"
-            f"## Commit Log\n\n{commit_log or '(unavailable)'}\n\n"
-            f"## Open Issues\n\n{open_issues_text}\n\n"
-            f"## File Manifest\n\n{manifest_text}\n"
+            f"## Branch Name\n\n{safe_text(branch_name) or '(unavailable)'}\n\n"
+            f"## Commit Log\n\n{safe_text(commit_log) or '(unavailable)'}\n\n"
+            f"## Open Issues\n\n{safe_text(open_issues_text)}\n\n"
+            f"## File Manifest\n\n{safe_text(manifest_text)}\n"
         )
 
         # #191/#847/#848: same rationale as pr-summarizer above -- resolves

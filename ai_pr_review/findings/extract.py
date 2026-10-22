@@ -12,8 +12,9 @@ import sys
 from dataclasses import dataclass
 
 from ai_pr_review.findings.models import INTERNAL_ONLY_FIELDS, Finding
+from ai_pr_review.logging import safe_log_text
 
-_FENCE_RE = re.compile(r"```json-findings\n(.*?)```", re.DOTALL)
+_FENCE_RE = re.compile(r"```json-findings[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 # Phrases that indicate the finding's own narrative refutes itself.
 # Defense-in-depth backstop for the prompt directive in _governance.md
@@ -91,6 +92,20 @@ def extract_findings(
     return extract_with_status(agent_output, agent_name, truncated=truncated).findings
 
 
+# Statuses where the agent's answer could not be read as a findings list (CAP-5).
+# `truncated_repaired` is deliberately not listed: the repair kept at least one
+# complete finding, so the agent did give a readable answer, only a short one.
+# An `ok` block holding `[]` is an honest empty result and is not listed either.
+UNREADABLE_STATUSES = frozenset(
+    {"no_block", "truncated_no_block", "invalid_json", "truncated_invalid", "not_array"}
+)
+
+
+def is_unreadable(status: str) -> bool:
+    """True when the agent output gave no readable findings list."""
+    return status in UNREADABLE_STATUSES
+
+
 def extract_with_status(
     agent_output: str,
     agent_name: str = "unknown",
@@ -131,7 +146,7 @@ def _parse_and_validate(
                 return salvaged
         print(
             f"WARNING: {agent_name} produced invalid json-findings JSON; skipping. "
-            f"Preview: {raw[:200]}",
+            f"Preview: {safe_log_text(raw[:200])}",
             file=sys.stderr,
         )
         return Extraction([], "truncated_invalid" if truncated else "invalid_json", None)
@@ -177,7 +192,7 @@ def _parse_and_validate(
             # rule 1; the prompt is the primary control.
             combined = f"{f.finding}\n{f.remediation}"
             if _is_self_refuting(combined):
-                preview = f.finding[:120].replace("\n", " ")
+                preview = safe_log_text(f.finding[:120])
                 print(
                     f"WARNING: {agent_name} dropped self-refuting finding "
                     f"({f.severity}): {preview}",
@@ -186,7 +201,10 @@ def _parse_and_validate(
                 continue
             results.append(f)
         except Exception as exc:  # noqa: BLE001
-            print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
+            print(
+                f"WARNING: {agent_name} dropped malformed finding: {safe_log_text(str(exc))}",
+                file=sys.stderr,
+            )
 
     return Extraction(results, "ok", len(data))
 

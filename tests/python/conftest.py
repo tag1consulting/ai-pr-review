@@ -7,6 +7,8 @@ from collections.abc import Generator
 
 import pytest
 
+import ai_pr_review.logging as _logging_module
+
 
 @pytest.fixture(autouse=True)
 def _reset_pkg_logger() -> Generator[None, None, None]:
@@ -22,10 +24,35 @@ def _reset_pkg_logger() -> Generator[None, None, None]:
     original_handlers = pkg.handlers[:]
     original_level = pkg.level
     original_propagate = pkg.propagate
+    original_literals = _logging_module._active_secret_literals
     yield
+    _logging_module._active_secret_literals = original_literals
     for h in pkg.handlers:
         if getattr(h, "_ai_pr_review_managed", False) and h not in original_handlers:
             h.close()
     pkg.handlers[:] = original_handlers
     pkg.setLevel(original_level)
     pkg.propagate = original_propagate
+
+
+@pytest.fixture(autouse=True)
+def _reset_fork_isolation_state():
+    """Fork isolation and passthrough are run-wide module state: never let one test leak it."""
+    from ai_pr_review.analyzers import _env
+
+    _env.configure_fork_isolation(False)
+    _env.configure_passthrough((), allow_passthrough=True)
+    yield
+    _env.configure_fork_isolation(False)
+    _env.configure_passthrough((), allow_passthrough=True)
+
+
+@pytest.fixture(autouse=True)
+def _no_persisted_credential_in_the_test_workspace(monkeypatch: pytest.MonkeyPatch):
+    """CI checks the repository out with a stored credential in .git/config, which the fork gate
+    (rightly) pauses on. Tests that are not about that check must not depend on the checkout.
+    A test that wants the real check imports ``fork_gate.persisted_credential_reason`` itself."""
+    from ai_pr_review.review import fork_gate
+
+    monkeypatch.setattr(fork_gate, "persisted_credential_reason", lambda workspace=".": "")
+    yield

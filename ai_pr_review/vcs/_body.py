@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from typing import Final
 
 from ai_pr_review.findings.models import MAX_ALSO_REPORTED, Finding, split_also_reported
+from ai_pr_review.output_clamp import (
+    clamp_active,
+    clamp_repo,
+    strict_text,
+)
 from ai_pr_review.vcs.marker import HIDDEN_MARKER_OPENER_RE
 
 # GitHub's body size limit (bytes). GitLab/Bitbucket have similar but slightly
@@ -230,9 +235,15 @@ _CASE_INSENSITIVE_NEEDLES: Final[frozenset[str]] = frozenset(
 )
 
 
-def sanitize_display_text(text: str) -> str:
+def sanitize_display_text(text: str, *, strict: bool | None = None) -> str:
     """Neutralize structure-breaking HTML (and this repo's own comment-marker
     syntax) in LLM-derived display text.
+
+    Story 17-11 (CAP-5): with ``strict`` true (the default inside a fork
+    run's ``output_clamp`` scope) it also removes images, links to anywhere
+    but this repository, raw HTML that links or loads, and autolinked URLs,
+    breaks ``@mention`` and ``owner/repo#N`` references, and drops invisible
+    characters. Outside a fork run the output is as it was before.
 
     Applied to ``finding`` and ``remediation`` strings (which can be steered by
     prompt injection in PR content) before they are interpolated into a posted
@@ -244,6 +255,11 @@ def sanitize_display_text(text: str) -> str:
     """
     if not text:
         return text
+    if strict is None:
+        strict = clamp_active()
+    if strict:
+        # First, so an invisible character cannot hide a marker or a tag from the passes below.
+        text = strict_text(text, clamp_repo())
     for needle, replacement in _DEFANG_SEQUENCES:
         if needle in _CASE_INSENSITIVE_NEEDLES:
             # Case-insensitive replace (e.g. <DETAILS>, <Details>, **[f2]**).
@@ -270,6 +286,15 @@ def sanitize_display_text(text: str) -> str:
         lambda m: m.group(0)[:-1] + "​" + m.group(0)[-1], text
     )
     return text
+
+
+def suggestion_code(finding: Finding) -> str:
+    """The finding's suggested code, or an empty string inside a fork run.
+
+    A fork run drops the code and does not rewrite it. A rewritten suggestion could still be
+    applied with one click, and the author of the fork controls what the model saw.
+    """
+    return "" if clamp_active() else finding.suggested_code
 
 
 _LINE_BREAK_RE: Final[re.Pattern[str]] = re.compile(
@@ -436,8 +461,9 @@ def format_body_finding(
     if include_remediation:
         for note in also_reported_notes(finding):
             out += f"\n  - **Also reported by:** {note}"
-    if include_suggestion and finding.suggested_code:
-        fence_body = finding.suggested_code.replace("```", "``​`")
+    code = suggestion_code(finding)
+    if include_suggestion and code:
+        fence_body = code.replace("```", "``​`")
         out += f"\n  ```\n  {fence_body}\n  ```"
     return out
 
@@ -471,11 +497,21 @@ def truncate_body(body: str, limit: int = GITHUB_MAX_BODY_SIZE) -> str:
     return head + trailer
 
 
+def _prompt_text(text: str) -> str:
+    """Make one string safe inside the agent-prompt JSON block.
+
+    Run it through ``sanitize_display_text``, and break a triple backtick that would close the fence
+    around the JSON (``json.dumps`` does not escape backticks).
+    """
+    return sanitize_display_text(text).replace("```", "``\u200b`")
+
+
 def build_agent_prompt(findings: Sequence[Finding]) -> str:
     """Render the collapsible "Prompt for AI agents" block from findings.
 
     Placed at the end of the review body so users can copy-paste into an AI
-    tool to remediate.
+    tool to remediate. Every string goes through ``_prompt_text`` (story 17-11):
+    the finding text is model output that the author of the pull request can steer.
     """
     if not findings:
         return ""
@@ -488,16 +524,16 @@ def build_agent_prompt(findings: Sequence[Finding]) -> str:
                 location = f"{f.file}:{f.line}"
         entry: dict[str, object] = {
             "severity": f.severity,
-            "finding": f.finding,
+            "finding": _prompt_text(f.finding),
         }
         if location:
-            entry["location"] = location
+            entry["location"] = _prompt_text(location)
         if f.impact:
-            entry["impact"] = f.impact
+            entry["impact"] = _prompt_text(f.impact)
         if f.trigger:
-            entry["trigger"] = f.trigger
+            entry["trigger"] = _prompt_text(f.trigger)
         if f.remediation:
-            entry["remediation"] = f.remediation
+            entry["remediation"] = _prompt_text(f.remediation)
         items.append(entry)
     payload = json.dumps(items, indent=2)
     return (

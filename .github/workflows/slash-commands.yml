@@ -642,6 +642,9 @@ jobs:
           ref: refs/pull/${{ inputs.issue-number }}/head
           fetch-depth: 0
           token: ${{ secrets.actions-token || github.token }}
+          # Do not leave the token in .git/config. The engine pauses a fork run that finds one
+          # there (docs/fork-prs.md), and fetch-depth 0 already fetched every branch.
+          persist-credentials: false
 
       - name: Get PR metadata
         if: |
@@ -688,6 +691,12 @@ jobs:
         uses: tag1consulting/ai-pr-review/container-action@main
         env:
           FORCE_FULL_DIFF: 'true'
+          # Fork pull request settings (docs/fork-prs.md), read from the repository variables
+          # of the calling repository. An unset variable is an empty string, which gives the
+          # engine default (auto). AI_FORK_TRUSTED_ASSOCIATIONS needs a fallback because an
+          # empty value there means trust nobody.
+          AI_FORK_POLICY: ${{ vars.AI_FORK_POLICY }}
+          AI_FORK_TRUSTED_ASSOCIATIONS: ${{ vars.AI_FORK_TRUSTED_ASSOCIATIONS || 'OWNER,COLLABORATOR' }}
         with:
           image-tag: ${{ inputs.image-tag }}
           provider: ${{ inputs.provider }}

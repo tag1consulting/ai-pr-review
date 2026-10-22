@@ -31,6 +31,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.context.treesitter import _attr_or_call
 from ai_pr_review.findings.models import Finding
@@ -460,6 +461,7 @@ def _run_ruff_isolated(py_files: list[str], select: str) -> list[dict[str, objec
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECS,
+            env=tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         logger.warning("[ai-pr-review] WARNING: ruff timed out after %ss; skipping.", exc.timeout)

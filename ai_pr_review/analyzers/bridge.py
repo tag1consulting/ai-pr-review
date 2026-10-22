@@ -80,6 +80,15 @@ _ANALYZERS: list[AnalyzerSpec] = [
 # Public canonical set — used by config validation for the analyzers allowlist/denylist inputs.
 ANALYZER_NAMES: frozenset[str] = frozenset(spec.name for spec in _ANALYZERS)
 
+# Story 17-9: on a fork run only analyzers with a trusted or isolated config run. The skipped
+# analyzers read a config from the pull request tree (or run its rules). Restoring one is a
+# follow-up that gives it a trusted config. ruff runs with --isolated and trufflehog runs without
+# repo config (both check ``_env.fork_isolated()``). A new analyzer must be put in one set.
+FORK_SKIPPED_ANALYZERS: frozenset[str] = frozenset(
+    {"eslint", "golangci-lint", "semgrep", "shellcheck", "hadolint", "kube-linter"}
+)
+FORK_RUN_ANALYZERS: frozenset[str] = ANALYZER_NAMES - FORK_SKIPPED_ANALYZERS
+
 # #353: Native analyzer names that can be skipped when equivalent SARIF is supplied.
 # Keyed by analyzer name (as in AnalyzerSpec.name). The caller derives which names
 # are covered by inspecting the sarif_paths configuration and passes them here.
@@ -132,6 +141,7 @@ async def run_analyzers(
     concurrency: int = 4,
     sarif_skip: frozenset[str] = frozenset(),
     disabled: frozenset[str] = frozenset(),
+    fork_run: bool = False,
 ) -> list[Finding]:
     """Run eligible analyzers concurrently and return Finding instances.
 
@@ -145,7 +155,10 @@ async def run_analyzers(
             Derive with _analyzer_skip_names(config.analyzers, config.exclude_analyzers).
             Kept separate from sarif_skip so the SARIF substitution log message stays
             truthful.
+        fork_run: True on a fork run. Adds ``FORK_SKIPPED_ANALYZERS`` to *disabled*.
     """
+    if fork_run:
+        disabled = disabled | FORK_SKIPPED_ANALYZERS
     # Pre-select eligible specs.
     eligible = [
         spec for spec in _ANALYZERS
@@ -200,6 +213,22 @@ async def run_analyzers(
     for slot in slots:
         results.extend(slot)
     return results
+
+
+def fork_skipped_eligible(
+    changed_files: ChangedFiles, already_off: frozenset[str] = frozenset()
+) -> list[str]:
+    """Names of fork-skipped analyzers that had eligible files and were not already off.
+
+    *already_off* holds names turned off by allow/deny lists or SARIF. The result is the real
+    coverage gap of a fork run, sorted, for the posted notice.
+    """
+    return sorted(
+        spec.name for spec in _ANALYZERS
+        if spec.name in FORK_SKIPPED_ANALYZERS
+        and spec.name not in already_off
+        and _is_eligible(spec, changed_files)
+    )
 
 
 def _is_eligible(spec: AnalyzerSpec, cf: ChangedFiles) -> bool:

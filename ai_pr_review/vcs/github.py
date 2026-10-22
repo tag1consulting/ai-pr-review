@@ -19,6 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from ai_pr_review.findings.models import Finding
+from ai_pr_review.review.fork_gate import ForkGateFacts
 from ai_pr_review.vcs._body import (
     GITHUB_MAX_BODY_SIZE,
     SLASH_COMMANDS_DOC_URL,
@@ -415,6 +416,8 @@ class GitHubProvider:
     # falls back to `client`, matching pre-#734 behavior.
     elevated_client: RecordingClient | None = None
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
+    # Number of the fork spend issue once this run has found or created it (story 17-7).
+    _spend_issue: int | None = field(default=None, init=False, repr=False)
     # Thread ids post_findings PATCHed (update/escalate) or successfully
     # reopened (recurred) during its most recent call, in this same process.
     # resolve_stale consults this so it doesn't immediately re-resolve a
@@ -471,9 +474,19 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     # Summary comment find helpers
     # ------------------------------------------------------------------
+    def _is_bot_authored(self, item: dict[str, Any]) -> bool:
+        """True only when the comment author login equals the configured bot login.
+
+        Fails closed: a null or missing user, or a missing login, is rejected.
+        This stops a forged watermark or skip marker from another commenter.
+        """
+        login = (item.get("user") or {}).get("login")
+        return isinstance(login, str) and login.casefold() == self.config.bot_login.casefold()
+
     def _list_summary_comments(self) -> list[dict[str, Any]]:
         """Return all issue comments containing the summary marker prefix."""
         results: list[dict[str, Any]] = []
+        rejected = 0
         url: str | None = self._issue_comments_url()
         params: dict[str, Any] | None = {"per_page": 100}
         while url:
@@ -487,11 +500,21 @@ class GitHubProvider:
             for item in page:
                 body = item.get("body") or ""
                 if SUMMARY_MARKER_PREFIX in body:
-                    results.append(item)
+                    if self._is_bot_authored(item):
+                        results.append(item)
+                    else:
+                        rejected += 1
             # httpx returns the next link via headers
             next_url = _parse_next_link(resp.headers.get("link", ""))
             url = next_url
             params = None  # params are embedded in the next link URL
+        if rejected and not results:
+            _log.warning(
+                "Ignored %d summary comment(s) not authored by %s. If the bot posts under a "
+                "different login, set GITHUB_BOT_USERNAME.",
+                rejected,
+                self.config.bot_login,
+            )
         return results
 
     # ------------------------------------------------------------------
@@ -667,12 +690,285 @@ class GitHubProvider:
             page = resp.json() or []
             for item in page:
                 body = item.get("body") or ""
-                if has_skip_marker(body):
+                if has_skip_marker(body) and self._is_bot_authored(item):
                     results.append(item)
             next_url = _parse_next_link(resp.headers.get("link", ""))
             url = next_url
             params = None
         return results
+
+    # ------------------------------------------------------------------
+    # Fork budget ledger (CAP-2, story 17-6). Every method raises on any failure: a partial
+    # list would undercount spend, so unlike the summary helpers nothing goes to self._errors.
+    # ------------------------------------------------------------------
+    def _pr_author(self) -> str:
+        """The login of the pull request author, read once. An empty string means unknown, and
+        then nobody is credited for a rescan. ``get_fork_gate_facts`` sets it as a side effect when
+        it runs first, so the common path makes no extra request."""
+        known = getattr(self, "_pr_author_login", "")
+        if known:
+            return str(known)
+        c = self.config
+        try:
+            resp = self.client.request("GET", f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}")
+            user = resp.json().get("user") if resp.status_code < 400 else None
+            login = user.get("login") if isinstance(user, dict) else ""
+        except (httpx.HTTPError, ValueError, AttributeError):
+            login = ""
+        self._pr_author_login = login if isinstance(login, str) else ""
+        if not self._pr_author_login:
+            _log.warning("fork budget: the pull request author is unknown, so no rescan is credited")
+        return self._pr_author_login
+
+    def list_budget_comments(self) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+        """Return ``(ledger, maintainer)`` comments of the pull request, as ``(id, body)`` lists.
+
+        ``ledger`` holds bot-authored comments whose body is a valid ledger entry. Any other comment
+        is ignored, even one that holds the tag. ``maintainer`` holds non-bot comments whose
+        ``author_association`` is OWNER, MEMBER or COLLABORATOR. Raises ``RuntimeError`` on an
+        HTTP error, a bad page or a bad comment on any page.
+        """
+        from ai_pr_review.review.fork_budget import MAINTAINER_ASSOCIATIONS, is_entry_body
+
+        ledger: list[tuple[int, str]] = []
+        maintainer: list[tuple[int, str]] = []
+        url: str | None = self._issue_comments_url()
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"list comments: HTTP {resp.status_code}")
+            try:
+                page = resp.json()
+            except ValueError as exc:
+                raise RuntimeError("list comments: response is not JSON") from exc
+            if not isinstance(page, list):
+                raise RuntimeError("list comments: response is not a list")
+            for item in page:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), int):
+                    raise RuntimeError("list comments: a comment has no integer id")
+                body = item.get("body")
+                body = body if isinstance(body, str) else ""
+                if self._is_bot_authored(item):
+                    if is_entry_body(body):
+                        ledger.append((item["id"], body))
+                elif str(item.get("author_association") or "").upper() in MAINTAINER_ASSOCIATIONS:
+                    # The pull request author cannot lift their own cap, and with an unknown author
+                    # nobody is credited. A rescan from another maintainer is the only way to resume.
+                    commenter = (item.get("user") or {}).get("login") if isinstance(item.get("user"), dict) else None
+                    pr_author = self._pr_author()
+                    if (
+                        pr_author
+                        and isinstance(commenter, str)
+                        and commenter.casefold() != pr_author.casefold()
+                    ):
+                        maintainer.append((item["id"], body))
+            url = _parse_next_link(resp.headers.get("link", ""))
+            params = None
+        return ledger, maintainer
+
+    def create_budget_entry(self, body: str) -> int:
+        resp = self.client.request("POST", self._issue_comments_url(), json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"create budget entry: HTTP {resp.status_code}")
+        try:
+            comment_id = resp.json()["id"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError("create budget entry: no comment id in the response") from exc
+        if not isinstance(comment_id, int):
+            raise RuntimeError("create budget entry: the comment id is not an integer")
+        return comment_id
+
+    def update_budget_entry(self, comment_id: int, body: str) -> None:
+        resp = self.client.request("PATCH", self._issue_comment_url(comment_id), json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"update budget entry: HTTP {resp.status_code}")
+
+    def delete_budget_entry(self, comment_id: int) -> None:
+        resp = self.client.request("DELETE", self._issue_comment_url(comment_id))
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise RuntimeError(f"delete budget entry: HTTP {resp.status_code}")
+
+    # ------------------------------------------------------------------
+    # Fork author cap and daily spend ledger (CAP-2, story 17-7). Same rule as above: every
+    # method raises on any failure, because a partial list would undercount.
+    # ------------------------------------------------------------------
+    _MAX_PAGES = 100
+
+    def _get_pages(
+        self, url: str, params: dict[str, Any], label: str, *, truncate: bool = False
+    ) -> list[dict[str, Any]]:
+        """Every item of a paged list endpoint. Raises ``RuntimeError`` on any HTTP error, bad page,
+        non-object item, or more than ``_MAX_PAGES`` pages. With ``truncate``, the page cap is not an
+        error: a warning is logged and the items seen so far are returned."""
+        items: list[dict[str, Any]] = []
+        next_url: str | None = url
+        next_params: dict[str, Any] | None = params
+        for _ in range(self._MAX_PAGES):
+            if not next_url:
+                return items
+            resp = self.client.request("GET", next_url, params=next_params)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"{label}: HTTP {resp.status_code}")
+            try:
+                page = resp.json()
+            except ValueError as exc:
+                raise RuntimeError(f"{label}: response is not JSON") from exc
+            if not isinstance(page, list) or not all(isinstance(i, dict) for i in page):
+                raise RuntimeError(f"{label}: response is not a list of objects")
+            items.extend(page)
+            next_url = _parse_next_link(resp.headers.get("link", ""))
+            next_params = None
+        if next_url:
+            if truncate:
+                _log.warning("%s: more than %d pages, using the items seen so far.", label, self._MAX_PAGES)
+                return items
+            raise RuntimeError(f"{label}: more than {self._MAX_PAGES} pages")
+        return items
+
+    def list_open_pulls(self) -> list[tuple[int, str, str]]:
+        """Open pull requests as ``(number, author login, head repository full name)``."""
+        c = self.config
+        pulls = self._get_pages(
+            f"/repos/{c.owner}/{c.repo}/pulls", {"state": "open", "per_page": 100}, "list pulls")
+        result: list[tuple[int, str, str]] = []
+        for item in pulls:
+            number = item.get("number")
+            if not isinstance(number, int):
+                raise RuntimeError("list pulls: a pull request has no integer number")
+            login = (item.get("user") or {}).get("login")
+            head = (item.get("head") or {}).get("repo")
+            repo_name = head.get("full_name") if isinstance(head, dict) else ""
+            result.append((number, login if isinstance(login, str) else "",
+                           repo_name if isinstance(repo_name, str) else ""))
+        return result
+
+    def _is_spend_issue(self, item: dict[str, Any]) -> bool:
+        """A look-alike never passes: it must not be a pull request, must be bot-authored and must
+        carry the exact title."""
+        from ai_pr_review.review.fork_spend import SPEND_ISSUE_TITLE
+
+        return (
+            "pull_request" not in item and isinstance(item.get("number"), int)
+            and self._is_bot_authored(item) and item.get("title") == SPEND_ISSUE_TITLE)
+
+    _SEARCH_MAX_PAGES = 10  # GitHub search returns at most 1000 results
+
+    def _search_spend_issue(self) -> list[int]:
+        """Numbers of spend issue candidates from a bounded GitHub search (never a full listing scan).
+
+        The query is ``repo:o/r is:issue in:title "<title>" author:app/<name>`` for a ``[bot]``
+        login and ``author:<login>`` otherwise. Every hit is still checked with ``_is_spend_issue``.
+        """
+        from ai_pr_review.review.fork_spend import SPEND_ISSUE_TITLE
+
+        c = self.config
+        login = c.bot_login
+        author = f"app/{login[:-5]}" if login.lower().endswith("[bot]") else login
+        query = f'repo:{c.owner}/{c.repo} is:issue in:title "{SPEND_ISSUE_TITLE}" author:{author}'
+        found: list[int] = []
+        for page in range(1, self._SEARCH_MAX_PAGES + 1):
+            resp = self.client.request(
+                "GET", "/search/issues", params={"q": query, "per_page": 100, "page": page})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"search spend issue: HTTP {resp.status_code}")
+            try:
+                items = resp.json().get("items")
+            except (ValueError, AttributeError) as exc:
+                raise RuntimeError("search spend issue: bad response") from exc
+            if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                raise RuntimeError("search spend issue: bad response")
+            found += [int(i["number"]) for i in items if self._is_spend_issue(i)]
+            if len(items) < 100:
+                break
+        return found
+
+    def _find_spend_issue(self) -> int | None:
+        """The lowest-numbered bot-created spend issue, open or closed. ``None`` when there is none.
+
+        The ``creator`` listing is bounded by the bot's own issues and runs first. When it finds
+        nothing, a bounded search confirms before the caller creates an issue, so a filter that does
+        not match a bot login cannot cause one new issue per run. The listing of all issues and pull
+        requests is never scanned: a repository can hold more than ``_MAX_PAGES`` pages of them. A
+        search that fails is a warning and counts as not found, so the issue is created.
+        """
+        c = self.config
+        url = f"/repos/{c.owner}/{c.repo}/issues"
+        params = {"state": "all", "per_page": 100, "creator": c.bot_login}
+        found = [
+            int(i["number"]) for i in self._get_pages(url, params, "list issues", truncate=True)
+            if self._is_spend_issue(i)]
+        if not found:
+            # A search that fails is not "not found". Creating a second issue then would split the
+            # spend entries and undercount, so the error propagates and the fork run pauses.
+            found = self._search_spend_issue()
+        return min(found) if found else None
+
+    def _spend_issue_number(self, *, create: bool) -> int | None:
+        if self._spend_issue is not None:
+            return self._spend_issue
+        number = self._find_spend_issue()
+        if number is None and create:
+            from ai_pr_review.review.fork_spend import SPEND_ISSUE_TITLE
+
+            c = self.config
+            body = ("This issue holds the daily spend entries of automatic fork pull request reviews. "
+                    "The bot adds and edits the comments. Do not close, lock or edit this issue.")
+            resp = self.client.request(
+                "POST", f"/repos/{c.owner}/{c.repo}/issues", json_body={"title": SPEND_ISSUE_TITLE, "body": body})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"create spend issue: HTTP {resp.status_code}")
+            number = self._find_spend_issue()  # two first runs converge on the lowest number
+            if number is None:
+                raise RuntimeError("create spend issue: the new issue is not in the listing")
+        self._spend_issue = number
+        return number
+
+    def list_spend_entries(self, since: str) -> list[tuple[int, str]]:
+        """Bot-authored comments with the spend tag, updated at or after *since*. A comment from
+        anyone else that holds the tag is ignored. No spend issue gives an empty list."""
+        from ai_pr_review.review.fork_spend import SPEND_TAG
+
+        number = self._spend_issue_number(create=False)
+        if number is None:
+            return []
+        c = self.config
+        comments = self._get_pages(
+            f"/repos/{c.owner}/{c.repo}/issues/{number}/comments",
+            {"since": since, "per_page": 100}, "list spend entries")
+        result: list[tuple[int, str]] = []
+        for item in comments:
+            if not isinstance(item.get("id"), int):
+                raise RuntimeError("list spend entries: a comment has no integer id")
+            body = item.get("body")
+            if self._is_bot_authored(item) and isinstance(body, str) and SPEND_TAG in body:
+                result.append((item["id"], body))
+        return result
+
+    def create_spend_entry(self, body: str) -> int:
+        number = self._spend_issue_number(create=True)
+        c = self.config
+        resp = self.client.request(
+            "POST", f"/repos/{c.owner}/{c.repo}/issues/{number}/comments", json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"create spend entry: HTTP {resp.status_code}")
+        try:
+            comment_id = resp.json()["id"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError("create spend entry: no comment id in the response") from exc
+        if not isinstance(comment_id, int):
+            raise RuntimeError("create spend entry: the comment id is not an integer")
+        return comment_id
+
+    def update_spend_entry(self, comment_id: int, body: str) -> None:
+        resp = self.client.request("PATCH", self._issue_comment_url(comment_id), json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"update spend entry: HTTP {resp.status_code}")
+
+    def delete_spend_entry(self, comment_id: int) -> None:
+        resp = self.client.request("DELETE", self._issue_comment_url(comment_id))
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise RuntimeError(f"delete spend entry: HTTP {resp.status_code}")
 
     # ------------------------------------------------------------------
     # post_skip_comment — upsert skip comment (mirrors post_summary)
@@ -2432,6 +2728,89 @@ class GitHubProvider:
         body = data.get("body")
         return title, (body if isinstance(body, str) else "")
 
+    def _gate_error(self, message: str) -> None:
+        """Record why the fork gate could not read the facts. It is logged too, because a paused run
+        has no other place that shows the cause."""
+        self._errors.append(f"get_fork_gate_facts: {message}")
+        _log.warning("fork gate: %s", message)
+
+    def get_fork_gate_facts(
+        self, head_sha: str, context: str, *, read_approval: bool = True,
+    ) -> ForkGateFacts | None:
+        """What the fork gate needs (see ``review/fork_gate.py``): the head and base repository
+        names, and the state of the status named *context* on *head_sha*.
+
+        The status is read from the BASE repository only, never the fork, and only for a fork (a
+        same-repository pull request needs no approval, so its run does not depend on the
+        ``statuses: read`` permission). The combined-status endpoint returns the newest status for
+        each context. Returns ``None`` on any HTTP error or odd response shape, and the gate then
+        fails closed.
+
+        The facts also carry the author login and ``author_association`` of the pull request (an
+        empty string when the response lacks them, which is never trusted). With
+        ``read_approval=False`` (policies ``auto`` and ``block``) the statuses are not read.
+        """
+        if not re.fullmatch(r"[0-9a-f]{40}", head_sha or ""):
+            self._gate_error("head sha is not a full commit id")
+            return None
+        try:
+            resp = self.client.request("GET", self._pull_request_url())
+        except httpx.HTTPError as exc:
+            self._gate_error(f"pull request request failed: {type(exc).__name__}")
+            return None
+        if resp.status_code >= 400:
+            self._gate_error(f"pull request HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        try:
+            pr = resp.json()
+            base_repo = pr["base"]["repo"]["full_name"]
+            head = pr["head"]["repo"]  # null when the fork was deleted
+            head_repo = head["full_name"] if isinstance(head, dict) else ""
+        except (ValueError, KeyError, TypeError):
+            self._gate_error("unexpected pull request response shape")
+            return None
+        if not isinstance(base_repo, str) or not isinstance(head_repo, str):
+            self._gate_error("repository names are not strings")
+            return None
+        author = pr.get("user")
+        login = author.get("login") if isinstance(author, dict) else ""
+        self._pr_author_login = login if isinstance(login, str) else ""
+        association = pr.get("author_association")
+        who = {
+            "author_login": login if isinstance(login, str) else "",
+            "author_association": association if isinstance(association, str) else "",
+        }
+        if (head_repo and head_repo.casefold() == base_repo.casefold()) or not read_approval:
+            return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state="", **who)
+        c = self.config
+        try:
+            status_resp = self.client.request(
+                "GET", f"/repos/{c.owner}/{c.repo}/commits/{head_sha}/status", params={"per_page": 100}
+            )
+        except httpx.HTTPError as exc:
+            self._gate_error(f"statuses request failed: {type(exc).__name__}")
+            return None
+        if status_resp.status_code >= 400:
+            self._gate_error(
+                f"statuses HTTP {status_resp.status_code} (a fork pull request needs the "
+                f"statuses: read permission): {status_resp.text[:200]}")
+            return None
+        try:
+            statuses = status_resp.json()["statuses"]
+        except (ValueError, KeyError, TypeError):
+            self._gate_error("unexpected statuses response shape")
+            return None
+        if not isinstance(statuses, list):
+            self._gate_error("statuses response is not a list")
+            return None
+        state = ""
+        for status in statuses:
+            if isinstance(status, dict) and status.get("context") == context:
+                raw_state = status.get("state")
+                state = raw_state if isinstance(raw_state, str) else ""
+                break
+        return ForkGateFacts(head_repo=head_repo, base_repo=base_repo, approval_state=state, **who)
+
     def submit_approval(self, message: str) -> tuple[bool, int, str]:
         """POST a standalone APPROVE review. Returns (ok, status, body_snippet).
 
@@ -2929,6 +3308,7 @@ def _build_inline_comment_body(
         format_source_tag,
         sanitize_bullet_text,
         severity_icon,
+        suggestion_code,
     )
     from ai_pr_review.vcs._finding_ids import fingerprint
     from ai_pr_review.vcs.marker import build_inline_meta_marker
@@ -2942,9 +3322,10 @@ def _build_inline_comment_body(
     if f.remediation:
         parts.append(f"\n**Remediation:** {sanitize_bullet_text(f.remediation)}")
     parts.extend(f"\n**Also reported by:** {note}" for note in also_reported_notes(f))
-    if f.suggested_code and "```" not in f.suggested_code:
+    code = suggestion_code(f)
+    if code and "```" not in code:
         fence = "suggestion" if include_suggestion_fence else ""
-        parts.append(f"\n```{fence}\n{f.suggested_code}\n```")
+        parts.append(f"\n```{fence}\n{code}\n```")
     if reincarnated:
         parts.append(f"\n{_REINCARNATION_NOTE}")
     if regressed_note:

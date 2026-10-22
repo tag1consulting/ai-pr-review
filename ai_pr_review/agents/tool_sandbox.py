@@ -33,11 +33,12 @@ import re
 import subprocess
 import threading
 import time
-import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+from ai_pr_review.text_safety import clean_text
 
 _log = logging.getLogger(__name__)
 
@@ -361,14 +362,7 @@ class GitTreeStore:
 
 # --- result formatting -----------------------------------------------------
 
-_STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\U000e0000-\U000e007f]")
 _CLOSING_TAG = re.compile(r"(?i)<\s*/\s*tool-result")
-
-
-def clean_text(text: str) -> str:
-    """Drop control characters and every invisible format character (zero-width, direction marks, tag
-    characters). Tab and newline stay. The same rule decides which paths can be index keys."""
-    return "".join(c for c in _STRIP.sub("", text) if unicodedata.category(c) != "Cf")
 
 
 KNOWN_TOOLS = ("read_file", "grep")

@@ -27,6 +27,7 @@ _GOOD = {"severity": "High", "confidence": 90, "finding": "solid", "file": "a.py
         ("```json-findings\n[{oops\n```", False, "invalid_json", None, 0),
         ("```json-findings\n[{oops\n```", True, "truncated_invalid", None, 0),
         ('```json-findings\n{"a": 1}\n```', False, "not_array", None, 0),
+        ("```json-findings\n  \n```", False, "invalid_json", None, 0),
     ],
 )
 def test_status_emitted_and_parsed(
@@ -63,3 +64,29 @@ def test_items_dropped_inside_the_parse_show_as_emitted_above_parsed() -> None:
 def test_extract_findings_returns_the_same_findings() -> None:
     out = _block([_GOOD])
     assert extract_findings(out, "agent") == extract_with_status(out, "agent").findings
+
+
+@pytest.mark.parametrize(
+    ("status", "unreadable"),
+    [
+        ("ok", False),
+        ("truncated_repaired", False),
+        ("no_block", True),
+        ("truncated_no_block", True),
+        ("invalid_json", True),
+        ("truncated_invalid", True),
+        ("not_array", True),
+    ],
+)
+def test_is_unreadable(status: str, unreadable: bool) -> None:
+    from ai_pr_review.findings.extract import is_unreadable
+
+    assert is_unreadable(status) is unreadable
+
+
+@pytest.mark.parametrize(
+    "block",
+    ["```json-findings\r\n[]\r\n```", "```json-findings \n[]\n```"],
+)
+def test_fence_tolerates_crlf_and_trailing_space(block: str) -> None:
+    assert extract_with_status(block).status == "ok"

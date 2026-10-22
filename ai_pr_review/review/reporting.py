@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from ai_pr_review.vcs._body import strip_leading_summary_heading
+from ai_pr_review.vcs._body import sanitize_display_text, strip_leading_summary_heading
 
 if TYPE_CHECKING:
     from ai_pr_review.orchestrate import ReviewResult
@@ -567,7 +567,7 @@ def write_step_summary(
         n_findings = len(result.findings)
         n_failed = len(result.failed_agents)
         failed_line = (
-            f"\n**Failed agents:** {', '.join(f.name for f in result.failed_agents)}"
+            f"\n**Failed agents:** {sanitize_display_text(', '.join(f.name for f in result.failed_agents))}"
             if result.failed_agents else ""
         )
 
@@ -618,13 +618,13 @@ def write_step_summary(
                 "",
             ]
             if result.summary is not None and not result.summary.ok and result.summary.error:
-                lines += [f"**Summary post error:** {result.summary.error}", ""]
+                lines += [f"**Summary post error:** {sanitize_display_text(result.summary.error)}", ""]
             if (
                 result.findings_post is not None
                 and not result.findings_post.ok
                 and result.findings_post.error
             ):
-                lines += [f"**Findings post error:** {result.findings_post.error}", ""]
+                lines += [f"**Findings post error:** {sanitize_display_text(result.findings_post.error)}", ""]
             if result.findings:
                 lines += [
                     join_findings(format_body_finding(f) for f in result.findings),
@@ -677,7 +677,10 @@ def write_step_summary(
         if token_section:
             lines.append(token_section)
         if summary_text.strip():
-            lines += ["### Summary", "", strip_leading_summary_heading(summary_text.strip()), ""]
+            lines += [
+                "### Summary", "",
+                sanitize_display_text(strip_leading_summary_heading(summary_text.strip())), "",
+            ]
 
         content = "\n".join(lines)
         with open(step_summary_path, "a", encoding="utf-8") as fh:

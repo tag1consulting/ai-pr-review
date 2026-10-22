@@ -22,6 +22,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.context.treesitter import SymbolRef
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,7 @@ def lookup_definitions(
                 text=True,
                 timeout=timeout_s,
                 cwd=str(repo_root),
+                env=tool_env(),
             )
         except subprocess.TimeoutExpired:
             logger.warning(
