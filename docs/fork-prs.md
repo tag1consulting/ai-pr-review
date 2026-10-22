@@ -68,6 +68,16 @@ A maintainer resumes a paused pull request with `/ai-pr-review rescan`. The engi
 
 For a non-trusted fork run, the per-run ceiling is the smaller of `AI_MAX_COST_USD` and `AI_FORK_MAX_COST_USD`.
 
+## Caps for one author and for one day
+
+With `AI_FORK_POLICY=auto`, two more caps apply to fork pull requests by non-trusted authors.
+
+The engine reviews only the 2 open fork pull requests with the lowest numbers for one author. A later pull request is paused, and the skip comment names the cap. The review starts when an earlier pull request of that author is closed or merged. The engine counts by author login, so a second account counts as a second author.
+
+The engine also keeps a daily budget of 50 USD per rolling 24 hours (`AI_FORK_DAILY_MAX_COST_USD`). Authors with the `CONTRIBUTOR` association have 70 percent of it (`AI_FORK_DAILY_RESERVED_SHARE`). Every other non-trusted author shares the remaining 30 percent. A full shared pool does not use the `CONTRIBUTOR` pool. The engine keeps one bot comment per run on an issue titled `ai-pr-review fork spend (do not close)`. It creates the issue on the first run, and the workflow needs `issues: write` for this. Do not close, lock or edit the issue. Comments from other users are ignored. A paused run adds no entry. A run that is over the budget removes its own entry and pauses, and the comment says that the pause clears as the 24 hour window moves on. A rescan does not change the author cap or the daily budget. If the engine cannot read or write the issue or the pull request list, the run is paused.
+
+Trusted authors and same-repository pull requests do not count against either cap. A user with write access can edit or delete the spend comments. Enough accounts can use up the daily budget and pause fork reviews until the window moves on.
+
 ## What this does not do
 
 - **The gate covers the engine only.** Every other step in your workflow runs on every fork push, whatever the approval state is. This includes `actions/checkout` of the fork head, any step that runs analyzers on the fork tree, and a `uses: ./container-action` that is not restored from the base branch. Keep those steps free of secrets, or give them the same gate.
