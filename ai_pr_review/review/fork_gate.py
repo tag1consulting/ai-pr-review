@@ -112,6 +112,75 @@ def workspace_head(workspace: str = ".") -> str | None:
     return sha if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
 
+_CREDENTIAL_KEYS = r"^(http\.(.*\.)?extraheader|credential\..*|includeif\..*)$"
+_REMOTE_URL_KEYS = r"^remote\..*\.(push)?url$"
+_INSTEADOF_KEYS = r"^url\..*\.(push)?insteadof$"
+_KEY_WITH_USERINFO = re.compile(r"://[^/\s@]+@")
+_URL_WITH_USERINFO = re.compile(r"^https?://[^/?#\s]*@", re.IGNORECASE)
+
+
+def _git_config_regexp(workspace: str, key_regexp: str) -> tuple[int, str]:
+    """Run ``git config --local --includes --get-regexp`` in a minimal environment.
+
+    Returns the exit code and stdout. An error or a timeout gives code ``-1``. The environment is
+    the one ``workspace_head`` uses, so no user or system config applies and no secret is in reach.
+    """
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent",
+        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+    }
+    try:
+        done = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", workspace, "config", "--local", "--includes",
+             "--get-regexp", key_regexp],
+            capture_output=True, text=True, env=env, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return -1, ""
+    return done.returncode, done.stdout
+
+
+def persisted_credential_reason(workspace: str = ".") -> str:
+    """Why a fork run must pause because ``.git/config`` holds a credential, or ``""`` when clean.
+
+    A checkout step that keeps its token in the repository config (an ``http.*.extraheader``, a
+    ``credential.*`` helper, an ``includeIf`` that points at a credential file, or a token in a
+    remote URL) hands that token to every tool that runs git in the fork's tree. The check fails
+    closed: when git cannot answer, the run pauses. The text names keys only, never a value.
+    """
+    fix = " Set `persist-credentials: false` on the checkout step."
+    code, out = _git_config_regexp(workspace, _CREDENTIAL_KEYS)
+    if code == 0:
+        keys = sorted({line.split(None, 1)[0] for line in out.splitlines() if line.strip()})
+        shown = ", ".join(f"`{_redact_key(k)}`" for k in keys[:5])
+        return f"The workspace git config holds a persisted credential setting ({shown}), so the review is paused.{fix}"
+    if code != 1:
+        return "The review is paused because the workspace git config could not be checked for a persisted credential."
+    code, out = _git_config_regexp(workspace, _REMOTE_URL_KEYS)
+    if code == 0:
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2 and _URL_WITH_USERINFO.match(parts[1].strip()):
+                return f"A remote URL in the workspace git config carries credentials (`{_redact_key(parts[0])}`), so the review is paused.{fix}"
+    elif code != 1:
+        return "The review is paused because the workspace git config could not be checked for a persisted credential."
+    code, out = _git_config_regexp(workspace, _INSTEADOF_KEYS)
+    if code == 0:
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if parts and _KEY_WITH_USERINFO.search(parts[0]):
+                return f"A URL rewrite in the workspace git config carries credentials (`{_redact_key(parts[0])}`), so the review is paused.{fix}"
+    elif code != 1:
+        return "The review is paused because the workspace git config could not be checked for a persisted credential."
+    return ""
+
+
+def _redact_key(key: str) -> str:
+    """Name a config key without echoing its URL part, which can hold ``user:token@host``."""
+    if "://" not in key and "@" not in key:
+        return key[:80]
+    return f"{key.split('.', 1)[0]}.<url>.{key.rsplit('.', 1)[-1]}"[:80]
+
+
 def parse_trusted_associations(raw: str | None) -> tuple[str, ...]:
     """Parse ``AI_FORK_TRUSTED_ASSOCIATIONS``. ``None`` (unset) gives the default. An empty value
     trusts nobody."""

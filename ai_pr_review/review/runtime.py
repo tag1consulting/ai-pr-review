@@ -37,7 +37,7 @@ from ai_pr_review.review.fork_budget import (
     Reservation,
     cents_from_units,
 )
-from ai_pr_review.review.fork_gate import DEFAULT_FORK_MAX_COST_USD, ForkProfile
+from ai_pr_review.review.fork_gate import DEFAULT_FORK_MAX_COST_USD, MODE_FORK, ForkProfile
 from ai_pr_review.review.fork_spend import (
     DailyCaps,
     ForkSpend,
@@ -268,6 +268,7 @@ def _apply_fork_gate(
         decide,
         llm_key_present,
         needs_facts,
+        persisted_credential_reason,
         workspace_head,
     )
 
@@ -294,6 +295,11 @@ def _apply_fork_gate(
         if mismatch:
             logger.warning("fork gate: the workspace is not at the approved commit")
             return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True), None
+    if decision.mode == MODE_FORK:
+        credential = persisted_credential_reason(".")
+        if credential:
+            logger.warning("fork gate: the workspace git config holds a persisted credential")
+            return config, SkipPlan(reason=credential, provider=provider, is_fork_gate_skip=True), None
     if decision.gated:
         logger.info("fork gate: fork pull request allowed (policy %s, mode %s)", config.fork_policy, decision.mode)
     ceiling = _fork_ceiling(config)
@@ -360,7 +366,7 @@ async def build_review_runtime(
     """
     from ai_pr_review.agents.gates import evaluate_gates, filter_agents
     from ai_pr_review.agents.roster import AGENTS, agent_allowed
-    from ai_pr_review.analyzers._env import configure_passthrough
+    from ai_pr_review.analyzers._env import configure_fork_isolation, configure_passthrough
     from ai_pr_review.findings.models import Finding as _Finding
 
     _factory = provider_factory if provider_factory is not None else provider_from_env
@@ -369,8 +375,10 @@ async def build_review_runtime(
     config = config.resolve_models()
 
     # Set the scrubbed-environment passthrough once, before any git or analyzer launch.
-    # allow_passthrough is True for now. Story 17-9 passes False for a fork run.
-    configure_passthrough(config.analyzer_env_passthrough, allow_passthrough=True)
+    # Closed until the fork gate decides: a launch before the profile is known gets no passthrough
+    # and the isolated analyzer config. The final state is set right after the gate.
+    configure_passthrough(config.analyzer_env_passthrough, allow_passthrough=False)
+    configure_fork_isolation(True)
 
     if config.enable_context_enrichment:
         _warn_if_context_enrichment_inert()
@@ -384,6 +392,9 @@ async def build_review_runtime(
     config, gate_skip, fork_profile = _apply_fork_gate(config, provider)
     if gate_skip is not None:
         return gate_skip
+    # A fork run ignores AI_ANALYZER_ENV_PASSTHROUGH and runs only fork-safe analyzers.
+    configure_passthrough(config.analyzer_env_passthrough, allow_passthrough=fork_profile is None)
+    configure_fork_isolation(fork_profile is not None)
 
     # 1c. Per-PR ledger (CAP-2, story 17-6): a fork-profile run pauses at a cap before any analyzer
     # or git command touches the fork tree. A dry run posts nothing, so it is not charged.
@@ -706,11 +717,13 @@ async def build_review_runtime(
     # (rather than only computing them) is a further follow-up, still tracked
     # at #848 -- this PR only fixes the ordering.
     analyzer_findings: list[_Finding] = []
+    _fork_skipped_analyzers: list[str] = []
     try:
         from ai_pr_review.analyzers.bridge import (
             ANALYZER_NAMES,
             _analyzer_skip_names,
             _sarif_covered_names,
+            fork_skipped_eligible,
             run_analyzers,
         )
         _disabled = _analyzer_skip_names(config.analyzers, config.exclude_analyzers)
@@ -719,12 +732,16 @@ async def build_review_runtime(
                 "analyzers: allow/deny configuration disables all known analyzers; "
                 "no static analysis will run"
             )
+        if fork_profile is not None:
+            _fork_skipped_analyzers = fork_skipped_eligible(
+                cf, _disabled | _sarif_covered_names(config.sarif_paths))
         analyzer_findings = await run_analyzers(
             cf,
             diff_file=str(diff_path),
             concurrency=config.analyzer_concurrency,
             sarif_skip=_sarif_covered_names(config.sarif_paths),
             disabled=_disabled,
+            fork_run=fork_profile is not None,
         )
         if analyzer_findings:
             logger.info(
@@ -772,7 +789,12 @@ async def build_review_runtime(
     from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
     try:
         suppression_rules = tuple(
-            _load_suppression_rules(str(script_dir), workspace=".")
+            _load_suppression_rules(
+                str(script_dir), workspace=".",
+                # A fork tree is attacker content. A fork run reads local rules from the base ref.
+                base_ref=base_ref,
+                local_source="base-ref" if fork_profile is not None else "workspace",
+            )
         )
     except Exception as exc:
         logger.warning(
@@ -1019,5 +1041,6 @@ async def build_review_runtime(
             excluded_patterns=config.exclude_patterns,
             skipped_agents=[a.name for a in mode_filtered if a not in agents],
             is_incremental=is_incremental,
+            skipped_analyzers=_fork_skipped_analyzers,
         ),
     )

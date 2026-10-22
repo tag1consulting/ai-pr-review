@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from ai_pr_review.analyzers._env import tool_env
+from ai_pr_review.analyzers._env import fork_isolated, tool_env
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -116,10 +116,12 @@ def _run_trufflehog(changed_files: ChangedFiles, diff_file: Path) -> list[Findin
         return []
 
     workspace = diff_file.parent
-    allowlist = _load_allowlist(workspace)
+    # A fork run trusts no config from the pull request: no allowlist and no --config.
+    isolated = fork_isolated()
+    allowlist = set() if isolated else _load_allowlist(workspace)
 
     config_args: list[str] = []
-    if (workspace / ".trufflehog.yml").is_file():
+    if not isolated and (workspace / ".trufflehog.yml").is_file():
         config_args = ["--config", str(workspace / ".trufflehog.yml")]
 
     # `--` stops option parsing so a changed-file path beginning with a dash is

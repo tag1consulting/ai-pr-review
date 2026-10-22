@@ -28,8 +28,10 @@ _SECRETS = {
 @pytest.fixture(autouse=True)
 def _reset_env_state() -> Any:
     _env.configure_passthrough((), allow_passthrough=True)
+    _env.configure_fork_isolation(False)
     yield
     _env.configure_passthrough((), allow_passthrough=True)
+    _env.configure_fork_isolation(False)
 
 
 @pytest.fixture
