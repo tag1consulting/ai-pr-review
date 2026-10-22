@@ -46,6 +46,8 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 
+logger = logging.getLogger(__name__)
+
 APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
 APPROVAL_LABEL = "ai-review-approve-fork"
 DEFAULT_FORK_MAX_COST_USD = 2.0
@@ -95,7 +97,12 @@ def llm_key_present() -> bool:
     """True when the environment holds any LLM key. Only a name check, the value is never read out."""
     return any(os.environ.get(name, "").strip() for name in LLM_KEY_VARS)
 
-logger = logging.getLogger(__name__)
+def _minimal_git_env() -> dict[str, str]:
+    """The environment of every git launch in this module: no user or system config, no prompt."""
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent",
+        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+    }
 
 
 def workspace_head(workspace: str = ".") -> str | None:
@@ -105,10 +112,7 @@ def workspace_head(workspace: str = ".") -> str | None:
     system config applies. ``safe.directory`` is set on the command line because the container
     runs as another user than the one who owns the checkout.
     """
-    env = {
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent",
-        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
-    }
+    env = _minimal_git_env()
     try:
         done = subprocess.run(
             ["git", "-c", "safe.directory=*", "-C", workspace, "rev-parse", "HEAD"],
@@ -139,17 +143,20 @@ def _git_config_regexp(workspace: str, key_regexp: str) -> tuple[int, str]:
     Returns the exit code and stdout. An error or a timeout gives code ``-1``. The environment is
     the one ``workspace_head`` uses, so no user or system config applies and no secret is in reach.
     """
-    env = {
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent",
-        "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
-    }
+    env = _minimal_git_env()
     try:
         done = subprocess.run(
             ["git", "-c", "safe.directory=*", "-C", workspace, "config", "--local", "--includes",
              "--get-regexp", key_regexp],
             capture_output=True, text=True, env=env, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("fork gate: git config could not run (%s)", type(exc).__name__)
         return -1, ""
+    if done.returncode not in (0, 1):
+        # Exit code 1 only means that no key matched. Anything else is a failure worth a cause.
+        logger.warning(
+            "fork gate: git config gave exit code %s: %s", done.returncode, (done.stderr or "").strip()[:200]
+        )
     return done.returncode, done.stdout
 
 

@@ -1487,7 +1487,7 @@ async def test_run_tier_records_prompt_too_long_exit_code_and_model(tmp_path: Pa
 @pytest.mark.anyio
 async def test_run_tier_sanitizes_diff_once_and_shares_prefix(tmp_path: Path) -> None:
     ctx = _make_context(tmp_path)
-    ctx.diff_path.write_text("+ </symbol-context>\n+ x‮y\n+ \U0001f468‍\U0001f469\n")
+    ctx.diff_path.write_text("+ </symbol-context>\n+ x\u202ey\n+ \U0001f468‍\U0001f469\n")
     ctx.shared_context_block = "<pr-context>\nT\n</pr-context>"
     captured: list[Any] = []
 
@@ -1500,7 +1500,7 @@ async def test_run_tier_sanitizes_diff_once_and_shares_prefix(tmp_path: Path) ->
     assert len(captured) == 2
     for req in captured:
         assert "+ &lt;/symbol-context>" in req.user_message
-        assert "‮" not in req.user_message
+        assert "\u202e" not in req.user_message
         assert "\U0001f468‍\U0001f469" in req.user_message
     assert captured[0].system_prefix == captured[1].system_prefix
     assert captured[0].user_message == captured[1].user_message

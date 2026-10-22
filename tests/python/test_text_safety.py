@@ -80,9 +80,9 @@ def test_clean_code_keeps_zwj_zwnj_marks_and_shows_overrides() -> None:
     assert clean_code(keep) == keep
     assert clean_text(keep) != keep
     # Bidi overrides and tag characters stay visible, so a reviewer can flag a Trojan Source line.
-    assert clean_code("a‮b⁦c⁩d") == "a<U+202E>b<U+2066>c<U+2069>d"
+    assert clean_code("a\u202eb\u2066c\u2069d") == "a<U+202E>b<U+2066>c<U+2069>d"
     assert clean_code(f"a{TAGCHAR}b\x00c") == f"a<U+{ord(TAGCHAR):04X}>bc"
-    assert clean_code(clean_code("a‮b")) == clean_code("a‮b")  # idempotent
+    assert clean_code(clean_code("a\u202eb")) == clean_code("a\u202eb")  # idempotent
 
 
 def test_symbol_snippet_name_and_file_escaped_and_fence_grows() -> None:
@@ -186,5 +186,5 @@ def test_the_cost_estimate_sees_the_sanitized_diff(monkeypatch: pytest.MonkeyPat
     source = inspect.getsource(runtime)
     assert "estimate_diff_text = safe_code(diff_text)" in source
     assert source.count("diff_text=estimate_diff_text,") == 3
-    grown = safe_code("‮" * 100)
+    grown = safe_code("\u202e" * 100)
     assert len(grown) == 100 * len("<U+202E>")

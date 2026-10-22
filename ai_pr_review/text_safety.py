@@ -25,7 +25,7 @@ _CODE_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 # Bidi overrides and isolates (Trojan Source) and the tag block (hidden instructions) are not deleted
 # from code. A reviewer must still be able to see that they are there, so each becomes a visible
 # ``<U+XXXX>`` marker.
-_CODE_VISIBLE = re.compile("[\U000e0000-\U000e007f‪-‮⁦-⁩]")
+_CODE_VISIBLE = re.compile("[\U000e0000-\U000e007f\u202a-\u202e\u2066-\u2069]")
 
 # Closers of the blocks the engine builds around untrusted text.
 BLOCK_TAGS = ("pr-context", "symbol-context", "repo-feedback")

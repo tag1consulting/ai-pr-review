@@ -701,6 +701,25 @@ class GitHubProvider:
     # Fork budget ledger (CAP-2, story 17-6). Every method raises on any failure: a partial
     # list would undercount spend, so unlike the summary helpers nothing goes to self._errors.
     # ------------------------------------------------------------------
+    def _pr_author(self) -> str:
+        """The login of the pull request author, read once. An empty string means unknown, and
+        then nobody is credited for a rescan. ``get_fork_gate_facts`` sets it as a side effect when
+        it runs first, so the common path makes no extra request."""
+        known = getattr(self, "_pr_author_login", "")
+        if known:
+            return str(known)
+        c = self.config
+        try:
+            resp = self.client.request("GET", f"/repos/{c.owner}/{c.repo}/pulls/{c.pr_number}")
+            user = resp.json().get("user") if resp.status_code < 400 else None
+            login = user.get("login") if isinstance(user, dict) else ""
+        except (httpx.HTTPError, ValueError, AttributeError):
+            login = ""
+        self._pr_author_login = login if isinstance(login, str) else ""
+        if not self._pr_author_login:
+            _log.warning("fork budget: the pull request author is unknown, so no rescan is credited")
+        return self._pr_author_login
+
     def list_budget_comments(self) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
         """Return ``(ledger, maintainer)`` comments of the pull request, as ``(id, body)`` lists.
 
@@ -737,7 +756,7 @@ class GitHubProvider:
                     # The pull request author cannot lift their own cap, and with an unknown author
                     # nobody is credited. A rescan from another maintainer is the only way to resume.
                     commenter = (item.get("user") or {}).get("login") if isinstance(item.get("user"), dict) else None
-                    pr_author = getattr(self, "_pr_author_login", "")
+                    pr_author = self._pr_author()
                     if (
                         pr_author
                         and isinstance(commenter, str)

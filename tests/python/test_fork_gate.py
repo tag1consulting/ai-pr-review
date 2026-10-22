@@ -25,9 +25,6 @@ from ai_pr_review.review.fork_gate import (
     parse_trusted_associations,
 )
 from ai_pr_review.review.fork_gate import (
-    workspace_head as _REAL_WORKSPACE_HEAD,  # before any fixture patches it
-)
-from ai_pr_review.review.fork_gate import (
     workspace_head as _real_workspace_head,  # before the fixture patches it
 )
 from ai_pr_review.review.runtime import SkipPlan, _apply_fork_gate, build_review_runtime
@@ -760,5 +757,28 @@ def test_workspace_head_logs_why_it_gave_no_commit(tmp_path, caplog) -> None:
 
 
     with caplog.at_level(logging.WARNING):
-        assert _REAL_WORKSPACE_HEAD(str(tmp_path)) is None  # not a git repository
+        assert _real_workspace_head(str(tmp_path)) is None  # not a git repository
     assert "git rev-parse HEAD gave exit code" in caplog.text
+
+
+def test_the_pr_author_is_fetched_when_the_facts_call_did_not_run_first() -> None:
+    import httpx
+
+    from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
+    from ai_pr_review.vcs.http import RecordingClient, RetryPolicy, TapeRecorder
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/repos/o/r/pulls/7":
+            return httpx.Response(200, json={"user": {"login": "the-author"}})
+        return httpx.Response(200, json=[
+            {"id": 1, "user": {"login": "the-author"}, "author_association": "MEMBER", "body": "/ai-pr-review rescan"},
+            {"id": 2, "user": {"login": "maintainer"}, "author_association": "MEMBER", "body": "/ai-pr-review rescan"},
+        ])
+
+    http = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    client = RecordingClient(
+        http=http, recorder=TapeRecorder(record_dir=None),
+        retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None))
+    prov = GitHubProvider(config=GitHubConfig(owner="o", repo="r", pr_number=7, token="t"), client=client)
+    _ledger, maintainer = prov.list_budget_comments()
+    assert [cid for cid, _ in maintainer] == [2]
