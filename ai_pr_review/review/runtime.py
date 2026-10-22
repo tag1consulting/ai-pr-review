@@ -93,6 +93,9 @@ class SkipPlan:
     analyzer_diff_scope: str = "cap"
     """Mirrors ``OrchestrationConfig.analyzer_diff_scope`` ("cap"/"drop"/"off")."""
     is_incremental: bool = False
+    fork_output_clamp: bool = False
+    """True when the run has a fork profile (story 17-11). The CLI posts the skip comment inside the
+    fork output clamp, and the review event stays capped at COMMENT."""
 
 
 @dataclass(frozen=True)
@@ -311,6 +314,10 @@ def _apply_fork_gate(
     elif decision.gated and config.max_cost_usd == 0:
         logger.info("fork gate: allowed fork pull request, default cost ceiling $%.2f", ceiling)
         config = config.model_copy(update={"max_cost_usd": ceiling})
+    if decision.profile is not None:
+        # Output clamp (story 17-11): a fork run never approves or requests changes, and offers no
+        # suggestions. The CLI adds the banner and the strict text pass through ``output_clamp``.
+        config = config.model_copy(update={"approval_ceiling": "comment", "enable_suggestions": False})
     return config, None, decision.profile
 
 
@@ -430,7 +437,7 @@ async def build_review_runtime(
     payload = run_compute(config, last_reviewed_sha=last_reviewed)
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
-        return SkipPlan(reason=reason, provider=provider)
+        return SkipPlan(reason=reason, provider=provider, fork_output_clamp=fork_profile is not None)
 
     diff_text = str(payload.get("diff") or "")
     head_sha = str(payload.get("head") or config.head_sha)
@@ -928,6 +935,7 @@ async def build_review_runtime(
             reason=str(exc),
             provider=provider,
             is_context_window_skip=True,
+            fork_output_clamp=fork_profile is not None,
             extra_findings=extra_findings,
             diff_text=diff_text,
             head_sha=head_sha,
@@ -944,6 +952,7 @@ async def build_review_runtime(
             reason=str(exc),
             provider=provider,
             is_cost_ceiling_skip=True,
+            fork_output_clamp=fork_profile is not None,
             extra_findings=extra_findings,
             diff_text=diff_text,
             head_sha=head_sha,

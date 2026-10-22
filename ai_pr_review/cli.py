@@ -319,11 +319,22 @@ def _settle_fork_budget(runtime: ReviewRuntime, totals: Any) -> None:
 
 async def _run_review_async(config: ReviewConfig) -> int:
     """Execute the review pipeline; return CLI exit code."""
-    from ai_pr_review.llm.client import call_llm
-    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.output_clamp import output_clamp
     from ai_pr_review.review.runtime import SkipPlan, build_review_runtime
 
     runtime = await build_review_runtime(config)
+    # A fork run posts inside the output clamp (story 17-11): the banner, the strict text pass and
+    # the COMMENT cap apply to everything it posts or writes to the step summary.
+    clamped = runtime.fork_output_clamp if isinstance(runtime, SkipPlan) else runtime.fork_profile is not None
+    with output_clamp(clamped, repo=config.github_repository):
+        return await _run_review_with_runtime(config, runtime)
+
+
+async def _run_review_with_runtime(config: ReviewConfig, runtime: ReviewRuntime | SkipPlan) -> int:
+    """Post the review (or the skip comment) for a prepared runtime; return CLI exit code."""
+    from ai_pr_review.llm.client import call_llm
+    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.review.runtime import SkipPlan
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
@@ -843,7 +854,7 @@ async def _orchestrate_skip(
         provider=plan.provider,
         config=OrchestrationConfig(
             mode=config.review_mode,  # type: ignore[arg-type]
-            approval_ceiling=config.approval_ceiling,  # type: ignore[arg-type]
+            approval_ceiling="comment" if plan.fork_output_clamp else config.approval_ceiling,  # type: ignore[arg-type]
             suppression_rules=plan.suppression_rules,
             extra_findings=plan.extra_findings,
             analyzer_diff_scope=plan.analyzer_diff_scope,

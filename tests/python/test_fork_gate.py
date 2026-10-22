@@ -674,6 +674,22 @@ def test_a_trusted_author_under_auto_has_no_profile_but_keeps_the_ceiling() -> N
     assert skip is None and profile is None and config.max_cost_usd == DEFAULT_FORK_MAX_COST_USD
 
 
+def test_a_fork_profile_run_gets_the_comment_ceiling_and_no_suggestions() -> None:
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto")
+    assert cfg.approval_ceiling == "approve" and cfg.enable_suggestions is True
+    config, skip, profile = _apply_fork_gate(cfg, _Facts(_author("CONTRIBUTOR")))  # type: ignore[arg-type]
+    assert skip is None and profile is not None
+    assert config.approval_ceiling == "comment" and config.enable_suggestions is False
+
+
+def test_a_run_without_a_fork_profile_keeps_the_configured_ceiling_and_suggestions() -> None:
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto")
+    config, _skip, profile = _apply_fork_gate(cfg, _Facts(_author("OWNER")))  # type: ignore[arg-type]
+    assert profile is None and config.approval_ceiling == "approve" and config.enable_suggestions is True
+    config, _skip, profile = _apply_fork_gate(cfg, _Facts(_facts(head_repo="o/r")))  # type: ignore[arg-type]
+    assert profile is None and config.approval_ceiling == "approve" and config.enable_suggestions is True
+
+
 def test_the_runtime_passes_the_configured_trusted_list() -> None:
     cfg = _make_config(
         event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto", fork_trusted_associations=("MEMBER",))
