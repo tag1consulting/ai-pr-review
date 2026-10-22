@@ -127,8 +127,18 @@ GIT_SAFE_ARGS = ("-c", "core.hooksPath=/dev/null", "-c", "safe.directory=*")
 
 
 def gh_env() -> dict[str, str]:
-    """Environment for ``gh``: the basics plus the token (``gh`` needs it)."""
+    """Environment for ``gh``: the basics plus the token (``gh`` needs it).
+
+    ``gh`` gets its own empty HOME and config directory, apart from the HOME the analyzers
+    share. An analyzer that runs repository-controlled code cannot then plant a ``gh`` or
+    git config that the token-holding launch would read.
+    """
     env = tool_env()
+    home = tempfile.mkdtemp(prefix="ai-pr-review-gh-")
+    atexit.register(shutil.rmtree, home, True)
+    env["HOME"] = home
+    env["GH_CONFIG_DIR"] = home
+    env["XDG_CONFIG_HOME"] = home
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
         env["GH_TOKEN"] = token

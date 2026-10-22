@@ -333,3 +333,13 @@ def test_run_review_configures_passthrough() -> None:
     from ai_pr_review.review import runtime
 
     assert "configure_passthrough(config.analyzer_env_passthrough" in inspect.getsource(runtime)
+
+
+def test_gh_env_uses_its_own_home_apart_from_the_analyzer_home(monkeypatch) -> None:
+    from ai_pr_review.analyzers import _env
+
+    monkeypatch.setenv("GH_TOKEN", "tok")
+    env = _env.gh_env()
+    assert env["HOME"] != _env.run_home()
+    assert env["GH_CONFIG_DIR"] == env["HOME"]
+    assert env["GH_TOKEN"] == "tok"
