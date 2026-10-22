@@ -691,6 +691,8 @@ runs:
           -e AI_DISABLE_GATE_EDGE_CASE \
           -e AI_DRY_RUN \
           -e AI_FORK_MAX_COST_USD \
+          -e AI_FORK_POLICY \
+          -e AI_FORK_TRUSTED_ASSOCIATIONS \
           -e AI_FAIL_ON_FORK_GATE \
           -e GITHUB_EVENT_NAME \
           -e LLM_PROMPT_CACHING \

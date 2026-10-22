@@ -16,11 +16,13 @@ from ai_pr_review.review.fork_gate import (
     DEFAULT_FORK_MAX_COST_USD,
     LLM_KEY_VARS,
     ForkGateFacts,
+    ForkProfile,
     checkout_mismatch_reason,
     decide,
     is_fork,
     llm_key_present,
     needs_facts,
+    parse_trusted_associations,
 )
 from ai_pr_review.review.fork_gate import (
     workspace_head as _real_workspace_head,  # before the fixture patches it
@@ -210,14 +212,18 @@ def test_an_unusable_fork_ceiling_falls_back_to_the_default_and_never_switches_i
 class _Facts:
     def __init__(self, facts: ForkGateFacts | None) -> None:
         self.facts, self.asked = facts, []
+        self.read_approval: list[bool] = []
 
-    def get_fork_gate_facts(self, head_sha: str, context: str) -> ForkGateFacts | None:
+    def get_fork_gate_facts(self, head_sha: str, context: str, *, read_approval: bool = True) -> ForkGateFacts | None:
         self.asked.append((head_sha, context))
+        self.read_approval.append(read_approval)
         return self.facts
 
 
 def _gate(event: str, facts: ForkGateFacts | None, **cfg: object) -> tuple[ReviewConfig, SkipPlan | None]:
-    return _apply_fork_gate(_make_config(event_name=event, head_sha=SHA_A, **cfg), _Facts(facts))  # type: ignore[arg-type]
+    config, skip, _profile = _apply_fork_gate(
+        _make_config(event_name=event, head_sha=SHA_A, **cfg), _Facts(facts))  # type: ignore[arg-type]
+    return config, skip
 
 
 def test_an_approved_fork_gets_the_default_cost_ceiling_and_an_explicit_ceiling_wins() -> None:
@@ -234,13 +240,13 @@ def test_an_approved_fork_gets_the_default_cost_ceiling_and_an_explicit_ceiling_
 def test_a_pull_request_event_makes_no_facts_request() -> None:
     provider = _Facts(FORK)
     config = _make_config(event_name="pull_request", head_sha=SHA_A)
-    assert _apply_fork_gate(config, provider) == (config, None)  # type: ignore[arg-type]
+    assert _apply_fork_gate(config, provider) == (config, None, None)  # type: ignore[arg-type]
     assert provider.asked == []
 
 
 def test_a_provider_without_the_method_is_not_gated() -> None:
     config = _make_config(event_name="pull_request_target", head_sha=SHA_A)
-    assert _apply_fork_gate(config, object()) == (config, None)  # type: ignore[arg-type]
+    assert _apply_fork_gate(config, object()) == (config, None, None)  # type: ignore[arg-type]
 
 
 # --- the hostile sequence: label, push, run --------------------------------
@@ -492,3 +498,215 @@ def test_the_fail_on_fork_gate_setting_reads_the_environment(monkeypatch: pytest
     assert not ReviewConfig.from_env().fail_on_fork_gate
     monkeypatch.setenv("AI_FAIL_ON_FORK_GATE", "true")
     assert ReviewConfig.from_env().fail_on_fork_gate
+
+
+# --- story 17-5: policy modes, author facts, trusted authors ------------------
+
+
+def _author(association: str, login: str = "mallory") -> ForkGateFacts:
+    return _facts(author_login=login, author_association=association)
+
+
+@pytest.mark.parametrize("association", ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", "MEMBER", ""])
+def test_auto_gives_a_non_trusted_fork_the_fork_profile(association: str) -> None:
+    decision = decide("pull_request_target", SHA_A, _author(association), key_present=True, policy="auto")
+    assert decision.allowed and decision.gated and decision.mode == "fork"
+    assert decision.profile == ForkProfile("mallory/r", "mallory", association)
+
+
+@pytest.mark.parametrize("association", ["OWNER", "COLLABORATOR", "owner", "Collaborator", " OWNER "])
+def test_auto_exempts_a_trusted_author_from_the_fork_profile_but_keeps_the_gate(association: str) -> None:
+    decision = decide("pull_request_target", SHA_A, _author(association), key_present=True, policy="auto")
+    assert decision.allowed and decision.gated and decision.mode == "trusted" and decision.profile is None
+
+
+def test_the_trusted_list_is_configurable_and_an_empty_list_trusts_nobody() -> None:
+    kw: dict[str, Any] = {"key_present": True, "policy": "auto"}
+    member = decide("pull_request_target", SHA_A, _author("MEMBER"), trusted=("MEMBER",), **kw)
+    assert member.mode == "trusted"
+    owner = decide("pull_request_target", SHA_A, _author("OWNER"), trusted=("MEMBER",), **kw)
+    assert owner.mode == "fork"
+    nobody = decide("pull_request_target", SHA_A, _author("OWNER"), trusted=(), **kw)
+    assert nobody.mode == "fork"
+
+
+def test_parse_trusted_associations() -> None:
+    assert parse_trusted_associations(None) == ("OWNER", "COLLABORATOR")
+    assert parse_trusted_associations("") == ()
+    assert parse_trusted_associations(" member , owner,,MEMBER ") == ("MEMBER", "OWNER")
+
+
+@pytest.mark.parametrize("association", ["OWNER", "CONTRIBUTOR", ""])
+@pytest.mark.parametrize("state", ["", "success"])
+def test_block_pauses_every_fork_whoever_wrote_it_and_whatever_the_status(association: str, state: str) -> None:
+    facts = _facts(author_association=association, approval_state=state)
+    decision = decide("pull_request_target", SHA_A, facts, key_present=True, policy="block")
+    assert decision.gated and not decision.allowed and "AI_FORK_POLICY=block" in decision.reason
+    assert "mallory/r" in decision.reason
+
+
+def test_label_is_the_old_approval_behavior_and_ignores_the_trusted_list() -> None:
+    kw: dict[str, Any] = {"key_present": True, "policy": "label"}
+    paused = decide("pull_request_target", SHA_A, _author("OWNER"), **kw)
+    assert not paused.allowed and "ai-review-approve-fork" in paused.reason
+    facts = _facts(approval_state="success", author_association="CONTRIBUTOR")
+    approved = decide("pull_request_target", SHA_A, facts, **kw)
+    assert approved.allowed and approved.gated and approved.mode == "approved" and approved.profile is None
+
+
+def test_the_default_policy_is_label() -> None:
+    assert not decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True).allowed
+    assert ReviewConfig.from_env().fork_policy == "label"
+
+
+@pytest.mark.parametrize("policy", ["auto", "label", "block"])
+def test_unreadable_facts_pause_under_every_policy(policy: str) -> None:
+    decision = decide("pull_request_target", SHA_A, None, key_present=True, policy=policy)
+    assert decision.gated and not decision.allowed and "could not be checked" in decision.reason
+
+
+@pytest.mark.parametrize("policy", ["auto", "label", "block"])
+def test_a_same_repository_pull_request_and_a_keyless_pull_request_event_are_normal_under_every_policy(
+    policy: str,
+) -> None:
+    same = decide("pull_request_target", SHA_A, _facts(head_repo="o/r"), key_present=True, policy=policy)
+    assert same.allowed and not same.gated and same.mode == "normal" and same.profile is None
+    plain = decide("pull_request", SHA_A, None, key_present=False, policy=policy)
+    assert plain.allowed and not plain.gated and plain.mode == "normal"
+
+
+def test_a_deleted_fork_under_auto_gets_the_fork_profile() -> None:
+    decision = decide("pull_request_target", SHA_A, _facts(head_repo=""), key_present=True, policy="auto")
+    assert decision.mode == "fork" and decision.profile is not None and decision.profile.head_repo == ""
+
+
+def test_an_unknown_policy_value_acts_as_label() -> None:
+    decision = decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True, policy="approve")
+    assert not decision.allowed and "ai-review-approve-fork" in decision.reason
+
+
+# config
+
+
+def test_the_policy_and_trusted_list_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_FORK_POLICY", " AUTO ")
+    cfg = ReviewConfig.from_env()
+    assert cfg.fork_policy == "auto" and cfg.fork_trusted_associations == ("OWNER", "COLLABORATOR")
+    monkeypatch.setenv("AI_FORK_TRUSTED_ASSOCIATIONS", "member, owner")
+    assert ReviewConfig.from_env().fork_trusted_associations == ("MEMBER", "OWNER")
+    monkeypatch.setenv("AI_FORK_TRUSTED_ASSOCIATIONS", "")
+    assert ReviewConfig.from_env().fork_trusted_associations == ()
+
+
+@pytest.mark.parametrize("bad", ["approve", "x", ""])
+def test_an_unknown_policy_falls_back_to_label_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], bad: str,
+) -> None:
+    monkeypatch.setenv("AI_FORK_POLICY", bad)
+    assert ReviewConfig.from_env().fork_policy == "label"
+    assert "AI_FORK_POLICY" in capsys.readouterr().err
+
+
+# GitHub facts
+
+
+def _pr_by(association: str | None, login: str | None, head: str = "mallory/r") -> dict[str, Any]:
+    pr = _pr(head)
+    if login is not None:
+        pr["user"] = {"login": login}
+    if association is not None:
+        pr["author_association"] = association
+    return pr
+
+
+def test_the_facts_carry_the_author_login_and_association() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/repos/o/r/pulls/7":
+            return httpx.Response(200, json=_pr_by("CONTRIBUTOR", "mallory"))
+        return httpx.Response(200, json={"statuses": []})
+
+    facts = _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT)
+    assert facts == ForkGateFacts("mallory/r", "o/r", "", "mallory", "CONTRIBUTOR")
+
+
+@pytest.mark.parametrize(("association", "login"), [(None, None), (5, ["x"]), (None, "mallory")])
+def test_a_missing_or_odd_author_field_gives_an_empty_string_never_trusted(association: Any, login: Any) -> None:
+    pr = _pr("mallory/r")
+    if login is not None:
+        pr["user"] = {"login": login}
+    if association is not None:
+        pr["author_association"] = association
+    handler = lambda req: httpx.Response(200, json=pr if "pulls" in req.url.path else {"statuses": []})  # noqa: E731
+    facts = _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT)
+    assert facts is not None and facts.author_association == ""
+    assert facts.author_login == (login if isinstance(login, str) else "")
+
+
+def test_read_approval_false_makes_no_statuses_request() -> None:
+    paths: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        paths.append(req.url.path)
+        return httpx.Response(200, json=_pr_by("NONE", "mallory"))
+
+    facts = _github(handler).get_fork_gate_facts(SHA_A, APPROVAL_CONTEXT, read_approval=False)
+    assert facts == ForkGateFacts("mallory/r", "o/r", "", "mallory", "NONE")
+    assert paths == ["/repos/o/r/pulls/7"]
+
+
+# the runtime
+
+
+def test_the_runtime_applies_the_policy_and_returns_the_profile() -> None:
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto")
+    provider = _Facts(_author("CONTRIBUTOR"))
+    config, skip, profile = _apply_fork_gate(cfg, provider)  # type: ignore[arg-type]
+    assert skip is None and profile == ForkProfile("mallory/r", "mallory", "CONTRIBUTOR")
+    assert config.max_cost_usd == DEFAULT_FORK_MAX_COST_USD  # a fork profile run still gets the run ceiling
+    assert provider.read_approval == [False]  # auto never reads the approval status
+
+
+def test_a_trusted_author_under_auto_has_no_profile_but_keeps_the_ceiling() -> None:
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto")
+    config, skip, profile = _apply_fork_gate(cfg, _Facts(_author("OWNER")))  # type: ignore[arg-type]
+    assert skip is None and profile is None and config.max_cost_usd == DEFAULT_FORK_MAX_COST_USD
+
+
+def test_the_runtime_passes_the_configured_trusted_list() -> None:
+    cfg = _make_config(
+        event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto", fork_trusted_associations=("MEMBER",))
+    _, _, member = _apply_fork_gate(cfg, _Facts(_author("MEMBER")))  # type: ignore[arg-type]
+    _, _, owner = _apply_fork_gate(cfg, _Facts(_author("OWNER")))  # type: ignore[arg-type]
+    assert member is None and owner is not None
+
+
+def test_block_and_label_read_the_policy_and_label_reads_the_approval() -> None:
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="block")
+    provider = _Facts(_author("OWNER"))
+    _, skip, profile = _apply_fork_gate(cfg, provider)  # type: ignore[arg-type]
+    assert skip is not None and skip.is_fork_gate_skip and profile is None and provider.read_approval == [False]
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="label")
+    provider = _Facts(_facts(approval_state="success"))
+    _, skip, profile = _apply_fork_gate(cfg, provider)  # type: ignore[arg-type]
+    assert skip is None and profile is None and provider.read_approval == [True]
+
+
+@pytest.mark.parametrize("policy", ["auto", "block", "label"])
+def test_the_runtime_pauses_on_unreadable_facts_under_every_policy(policy: str) -> None:
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy=policy)
+    _, skip, profile = _apply_fork_gate(cfg, _Facts(None))  # type: ignore[arg-type]
+    assert skip is not None and skip.is_fork_gate_skip and profile is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_auto_keeps_the_workspace_head_check_and_hands_the_profile_to_the_runtime(anyio_backend: str) -> None:
+    gh = _GitHub()
+    gh.paths = []
+    cfg = _make_config(event_name="pull_request_target", head_sha=SHA_A, fork_policy="auto")
+    provider = _github(gh.handler)
+    _CHECKED_OUT["sha"] = SHA_B  # the workspace is not at the commit under review
+    with patch("ai_pr_review.review.runtime.run_compute", lambda *a, **k: {"skip": True, "reason": "x"}):
+        result = await build_review_runtime(cfg, provider_factory=lambda: provider)
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and "bbbbbbb" in result.reason
+    assert not any(p.endswith("/status") for p in gh.paths)  # no statuses request under auto

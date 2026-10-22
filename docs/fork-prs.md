@@ -6,7 +6,21 @@ nav_order: 8
 
 # Fork pull requests
 
-A workflow that runs on `pull_request_target` has the repository secrets and a write token, and it checks out the head of the pull request. For a fork, that head is code that anyone can write. The engine therefore pauses a fork pull request until a maintainer approves one exact head commit.
+A workflow that runs on `pull_request_target` has the repository secrets and a write token, and it checks out the head of the pull request. For a fork, that head is code that anyone can write. The engine therefore pauses a fork pull request until a maintainer approves one exact head commit (the `label` policy, the default).
+
+## Fork policy
+
+`AI_FORK_POLICY` sets what the engine does with a fork pull request. The default is `label`.
+
+| Policy | What happens to a fork pull request |
+|--------|-------------------------------------|
+| `label` | The run pauses until a maintainer approves the head commit (the approval described below). This is the maintainer-label policy. |
+| `auto` | The run starts at once. An author whose `author_association` is in `AI_FORK_TRUSTED_ASSOCIATIONS` gets the normal pipeline. Any other author gets a fork profile. The engine does not read the approval status, so the workflow does not need `statuses: read`. |
+| `block` | Every fork pull request pauses, whoever wrote it. |
+
+`AI_FORK_TRUSTED_ASSOCIATIONS` is a comma-separated list. The default is `OWNER,COLLABORATOR`. `MEMBER` is not in the default list. An empty value trusts nobody. The list applies to the `auto` policy only. The `label` and `block` policies treat every fork author the same. An unknown `AI_FORK_POLICY` value is ignored with a warning, and `label` applies.
+
+Under `auto`, this release only chooses the fork profile for a non-trusted author. The caps, the scrubbed environment, the dropped text and the output restrictions of that profile are separate changes. Do not set `auto` until they ship. Every allowed fork run, trusted or not, keeps the 2 USD default cost ceiling and the workspace commit check.
 
 ## What the engine does
 

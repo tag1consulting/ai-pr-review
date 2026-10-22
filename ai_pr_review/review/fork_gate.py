@@ -23,6 +23,14 @@ The rule, kept deliberately small:
   A workflow that checks out a branch name could otherwise review code newer than the approval.
 * If the facts cannot be read, the run is blocked. The gate fails closed.
 
+``AI_FORK_POLICY`` picks what happens to a gated fork pull request:
+
+* ``label``: the approval status above (the default until story 17-13).
+* ``auto``: the run starts at once. An author whose ``author_association`` is in
+  ``AI_FORK_TRUSTED_ASSOCIATIONS`` gets the normal pipeline. Any other author gets a
+  ``ForkProfile`` that later stories use to restrict the run. The approval status is not read.
+* ``block``: every fork pull request is paused, whoever wrote it.
+
 The status is read from the **base** repository only. A fork owner controls statuses in the
 fork, never in the base repository.
 
@@ -39,6 +47,10 @@ from dataclasses import dataclass
 APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
 APPROVAL_LABEL = "ai-review-approve-fork"
 DEFAULT_FORK_MAX_COST_USD = 2.0
+FORK_POLICIES = ("auto", "label", "block")
+DEFAULT_FORK_POLICY = "label"  # story 17-13 flips this to "auto"
+DEFAULT_TRUSTED_ASSOCIATIONS = ("OWNER", "COLLABORATOR")
+MODE_NORMAL, MODE_TRUSTED, MODE_APPROVED, MODE_FORK = "normal", "trusted", "approved", "fork"
 UNGATED_EVENTS = frozenset({"pull_request"})
 LLM_KEY_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "BEDROCK_API_KEY")
 
@@ -50,6 +62,18 @@ class ForkGateFacts:
     head_repo: str
     base_repo: str
     approval_state: str  # state of the newest status with APPROVAL_CONTEXT on the head commit, or ""
+    author_login: str = ""  # "" when the VCS did not report it
+    author_association: str = ""  # OWNER, COLLABORATOR, MEMBER, CONTRIBUTOR, ... or "" when not reported
+
+
+@dataclass(frozen=True)
+class ForkProfile:
+    """Marks a run as a fork run by a non-trusted author. Later stories read it to apply the caps,
+    the environment scrub, the dropped text and the output clamp. This story only creates it."""
+
+    head_repo: str
+    author_login: str
+    author_association: str
 
 
 @dataclass(frozen=True)
@@ -57,6 +81,8 @@ class GateDecision:
     gated: bool  # the pull request is a fork under a gated event
     allowed: bool
     reason: str = ""  # shown to maintainers when the run is blocked
+    mode: str = MODE_NORMAL  # normal, trusted, approved or fork (see the MODE_ constants)
+    profile: ForkProfile | None = None  # set only for mode "fork"
 
 
 def llm_key_present() -> bool:
@@ -85,6 +111,19 @@ def workspace_head(workspace: str = ".") -> str | None:
     return sha if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
 
+def parse_trusted_associations(raw: str | None) -> tuple[str, ...]:
+    """Parse ``AI_FORK_TRUSTED_ASSOCIATIONS``. ``None`` (unset) gives the default. An empty value
+    trusts nobody."""
+    if raw is None:
+        return DEFAULT_TRUSTED_ASSOCIATIONS
+    return tuple(dict.fromkeys(p.strip().upper() for p in raw.split(",") if p.strip()))
+
+
+def is_trusted(association: str, trusted: tuple[str, ...]) -> bool:
+    """An empty or unknown association is never trusted."""
+    return bool(association) and association.strip().upper() in {t.upper() for t in trusted}
+
+
 def is_fork(facts: ForkGateFacts) -> bool:
     return not facts.head_repo or facts.head_repo.casefold() != facts.base_repo.casefold()
 
@@ -109,8 +148,24 @@ def _blocked_text(head_sha: str, head_repo: str, state: str) -> str:
     )
 
 
-def decide(event_name: str, head_sha: str, facts: ForkGateFacts | None, *, key_present: bool) -> GateDecision:
-    """Decide whether the review may run. ``facts`` is ``None`` when the VCS could not be read."""
+def _block_text(head_repo: str) -> str:
+    source = f"the fork `{head_repo}`" if head_repo else "a fork whose repository is gone"
+    return (
+        f"This pull request comes from {source}. The repository sets `AI_FORK_POLICY=block`, "
+        "so fork pull requests are not reviewed.")
+
+
+def decide(
+    event_name: str,
+    head_sha: str,
+    facts: ForkGateFacts | None,
+    *,
+    key_present: bool,
+    policy: str = DEFAULT_FORK_POLICY,
+    trusted: tuple[str, ...] = DEFAULT_TRUSTED_ASSOCIATIONS,
+) -> GateDecision:
+    """Decide whether the review may run, and under which mode. ``facts`` is ``None`` when the VCS
+    could not be read. An unknown *policy* is treated as ``label``."""
     if not needs_facts(event_name, key_present):
         return GateDecision(gated=False, allowed=True)
     if facts is None:
@@ -120,8 +175,15 @@ def decide(event_name: str, head_sha: str, facts: ForkGateFacts | None, *, key_p
                    "Re-run the workflow. The gate stays closed when it cannot read the facts.")
     if not is_fork(facts):
         return GateDecision(gated=False, allowed=True)
-    if facts.approval_state == "success":
-        return GateDecision(gated=True, allowed=True)
+    if policy == "block":
+        return GateDecision(gated=True, allowed=False, reason=_block_text(facts.head_repo))
+    if policy == "auto":
+        if is_trusted(facts.author_association, trusted):
+            return GateDecision(gated=True, allowed=True, mode=MODE_TRUSTED)
+        profile = ForkProfile(facts.head_repo, facts.author_login, facts.author_association)
+        return GateDecision(gated=True, allowed=True, mode=MODE_FORK, profile=profile)
+    if facts.approval_state == "success":  # policy "label"
+        return GateDecision(gated=True, allowed=True, mode=MODE_APPROVED)
     return GateDecision(gated=True, allowed=False, reason=_blocked_text(head_sha, facts.head_repo, facts.approval_state))
 
 
