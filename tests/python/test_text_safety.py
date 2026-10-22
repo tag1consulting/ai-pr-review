@@ -175,3 +175,16 @@ def test_feedback_reason_closer_is_escaped() -> None:
         rule_id="r",
     )
     assert "</repo-feedback> y" not in _render_entry(entry)
+
+
+def test_the_cost_estimate_sees_the_sanitized_diff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Showing bidi and tag characters as markers grows the text. The estimate must use that text."""
+    import inspect
+
+    from ai_pr_review.review import runtime
+
+    source = inspect.getsource(runtime)
+    assert "estimate_diff_text = safe_code(diff_text)" in source
+    assert source.count("diff_text=estimate_diff_text,") == 3
+    grown = safe_code("‮" * 100)
+    assert len(grown) == 100 * len("<U+202E>")

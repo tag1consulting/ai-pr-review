@@ -880,10 +880,9 @@ class GitHubProvider:
             int(i["number"]) for i in self._get_pages(url, params, "list issues", truncate=True)
             if self._is_spend_issue(i)]
         if not found:
-            try:
-                found = self._search_spend_issue()
-            except RuntimeError as exc:
-                _log.warning("Could not search for the spend issue (%s), treating it as not found.", exc)
+            # A search that fails is not "not found". Creating a second issue then would split the
+            # spend entries and undercount, so the error propagates and the fork run pauses.
+            found = self._search_spend_issue()
         return min(found) if found else None
 
     def _spend_issue_number(self, *, create: bool) -> int | None:

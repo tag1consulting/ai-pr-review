@@ -848,12 +848,18 @@ async def build_review_runtime(
         )
 
         pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
+        # The agents see the sanitized diff, where each tag character or bidi override becomes a
+        # visible ``<U+XXXX>`` marker and the text grows. Estimate the cost and the context
+        # window on that same text, so a hostile diff cannot make the estimate too low.
+        from ai_pr_review.text_safety import safe_code
+
+        estimate_diff_text = safe_code(diff_text)
         if fork_profile is not None and not pricing_data:
             # With no prices every estimate is $0, so the per-run and per-PR caps would bound nothing.
             raise RuntimeError("fork run: no pricing data, so the cost cannot be bounded")
         cost_estimate = estimate_review_cost(
             agents=agents,
-            diff_text=diff_text,
+            diff_text=estimate_diff_text,
             shared_context_text=shared_context_block,
             language_profile_text=_language_profile_text,
             standard_model=config.model_standard,
@@ -881,7 +887,7 @@ async def build_review_runtime(
                 estimate_preflight_agent_cost(
                     agent_name="pr-summarizer",
                     model=config.model_standard,
-                    diff_text=diff_text,
+                    diff_text=estimate_diff_text,
                     output_tokens=preflight_agent_max_tokens("pr-summarizer"),
                     pricing_data=pricing_data,
                 )
@@ -898,7 +904,7 @@ async def build_review_runtime(
                 estimate_preflight_agent_cost(
                     agent_name="issue-linker",
                     model=config.model_standard,
-                    diff_text=diff_text,
+                    diff_text=estimate_diff_text,
                     output_tokens=preflight_agent_max_tokens("issue-linker"),
                     pricing_data=pricing_data,
                 )

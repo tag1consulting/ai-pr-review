@@ -642,6 +642,9 @@ jobs:
           ref: refs/pull/${{ inputs.issue-number }}/head
           fetch-depth: 0
           token: ${{ secrets.actions-token || github.token }}
+          # Do not leave the token in .git/config. The engine pauses a fork run that finds one
+          # there (docs/fork-prs.md), and fetch-depth 0 already fetched every branch.
+          persist-credentials: false
 
       - name: Get PR metadata
         if: |

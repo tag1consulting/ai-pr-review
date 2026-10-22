@@ -576,13 +576,14 @@ def test_nothing_found_by_listing_or_search_creates_the_issue() -> None:
     assert len([c for c in api.posts() if c[1] == "/repos/o/r/issues"]) == 1
 
 
-def test_a_failed_search_counts_as_not_found_and_creates_the_issue() -> None:
+def test_a_failed_search_fails_closed_and_creates_nothing() -> None:
     api = Api([])
     api.creator_empty = True
     api.search_status = 422
     prov = _provider(api)
-    prov.create_spend_entry("b")
-    assert len([c for c in api.posts() if c[1] == "/repos/o/r/issues"]) == 1
+    with pytest.raises(RuntimeError):
+        prov.create_spend_entry("b")
+    assert [c for c in api.posts() if c[1] == "/repos/o/r/issues"] == []
 
 
 def test_a_huge_issue_listing_never_raises_and_never_scans_all_issues(caplog: pytest.LogCaptureFixture) -> None:
