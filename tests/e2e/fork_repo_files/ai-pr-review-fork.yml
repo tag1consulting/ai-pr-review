@@ -1,0 +1,84 @@
+# DRAFT for the test repository (tag1consulting/ai-pr-review-test). Not applied anywhere.
+#
+# Reviews fork pull requests on pull_request_target, for the fork e2e profile. Read
+# memory-bank/bmad/planning-artifacts/e2e-fork-pr-test-design.md in the engine repository.
+#
+# Placeholders to replace before use:
+#   __ENGINE_REF__   the engine ref under test (a tag, branch or full SHA). `uses:` cannot read a variable.
+#
+# Repository variables read here (all optional):
+#   AI_FORK_POLICY, AI_FORK_TRUSTED_ASSOCIATIONS, E2E_PERSIST_CREDENTIALS, E2E_IMAGE_TAG, E2E_MAX_COST_USD
+#
+# This job holds the LLM key and a write token. It checks out fork code. The engine pauses the run
+# when the checkout leaves a credential in .git/config. Keep every other step free of secrets.
+name: AI PR Review (fork e2e)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    # Fork pull requests only. A same-repository PR (for example the release e2e harness PRs) must not
+    # get a second review from this workflow.
+    if: >-
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      !github.event.pull_request.draft &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
+    concurrency:
+      group: ai-review-fork-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      # The engine compares git rev-parse HEAD with the head sha, so check out the sha, not the ref.
+      - name: Check out the fork head commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: ${{ vars.E2E_PERSIST_CREDENTIALS == 'true' }}
+
+      - name: Run AI review
+        uses: tag1consulting/ai-pr-review/container-action@__ENGINE_REF__
+        env:
+          AI_FORK_POLICY: ${{ vars.AI_FORK_POLICY }}
+          # An empty value trusts nobody, so keep the engine default as the fallback.
+          AI_FORK_TRUSTED_ASSOCIATIONS: ${{ vars.AI_FORK_TRUSTED_ASSOCIATIONS || 'OWNER,COLLABORATOR' }}
+        with:
+          image-tag: ${{ vars.E2E_IMAGE_TAG || 'dev' }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.pull_request.number }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          review-mode: quick
+          agents: code-reviewer
+          max-cost-usd: ${{ vars.E2E_MAX_COST_USD || '1.00' }}
+          fail-on-findings: 'false'
+
+      # Runs even after a pause or a failure. It only lists files, it runs no git command and no fork code.
+      - name: List canary files
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/canary"
+          find "$GITHUB_WORKSPACE" -maxdepth 3 -name 'E2E-PWNED-*' -not -path '*/.git/*' -printf '%f\n' \
+            | sort > "$RUNNER_TEMP/canary/listing-$PR_NUMBER.txt"
+          echo "canary files found: $(wc -l < "$RUNNER_TEMP/canary/listing-$PR_NUMBER.txt")"
+
+      - name: Upload canary listing
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-canary-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/canary/
+          if-no-files-found: error
+          retention-days: 3

@@ -1,0 +1,5 @@
+{"_synthetic": true, "_note": "API envelope shape only. Text bodies are built by the tests with the engine renderers.",
+ "number": 41, "state": "open", "draft": false,
+ "user": {"login": "gchaix", "type": "User"}, "author_association": "MEMBER",
+ "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "e2e/fork-s3", "repo": {"full_name": "gchaix/ai-pr-review-test"}},
+ "base": {"ref": "main", "repo": {"full_name": "tag1consulting/ai-pr-review-test"}}}
