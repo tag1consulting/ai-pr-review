@@ -864,3 +864,26 @@ async def test_the_rescan_credit_does_not_change_the_author_or_the_daily_cap(tmp
     provider.pr_ledger.maintainer = [(900, "/ai-pr-review rescan")]
     result, _ = await _build(tmp_path, provider)
     assert isinstance(result, SkipPlan) and "daily" in result.reason
+
+
+def test_a_failed_reread_after_the_write_releases_the_own_entry() -> None:
+    mem = SpendMem()
+    mem.after_create = lambda: setattr(mem, "fail_read", True)
+    with pytest.raises(LedgerError):
+        _spend(mem).reserve(10)
+    mem.fail_read = False
+    assert mem.bot == {}
+
+
+def test_a_failed_reread_and_a_failed_release_stay_charged_and_pause() -> None:
+    mem = SpendMem()
+
+    def flap() -> None:
+        mem.fail_read = True
+        mem.fail_delete = True
+
+    mem.after_create = flap
+    with pytest.raises(LedgerError):
+        _spend(mem).reserve(10)
+    mem.fail_read = mem.fail_delete = False
+    assert len(mem.bot) == 1

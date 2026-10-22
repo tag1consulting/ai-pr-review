@@ -210,7 +210,11 @@ class ForkSpend:
             own_id = self._backend.create_spend_entry(body)
         except Exception as exc:  # noqa: BLE001 - any write failure must pause the run
             raise LedgerError(f"could not write the spend ledger ({type(exc).__name__})") from exc
-        entries, _ = self._scan()
+        try:
+            entries, _ = self._scan()
+        except LedgerError:
+            self._release_quietly(own_id)
+            raise
         if not any(e.comment_id == own_id for e in entries):
             raise LedgerError("the own spend entry is gone, so admission cannot be checked")
         through = _tier_sum(entries, self._tier, through_id=own_id)
@@ -222,6 +226,15 @@ class ForkSpend:
                                type(exc).__name__)
             raise ForkBudgetPause(CAP_DAILY, daily_pause_text(self._tier, through - estimate_cents, self._caps))
         return SpendReservation(own_id, estimate_cents, now)
+
+    def _release_quietly(self, own_id: int) -> None:
+        """Best-effort delete of the own entry when admission could not be checked, so a flapping
+        API does not leave an estimate charged for 24 hours."""
+        try:
+            self._backend.delete_spend_entry(own_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("fork spend: could not delete the own entry (%s). It stays charged.",
+                           type(exc).__name__)
 
     def settle(self, reservation: SpendReservation, actual_cents: int) -> None:
         """Replace the estimate in the own entry with the actual cost. Raises ``LedgerError`` on failure.
