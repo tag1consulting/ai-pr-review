@@ -39,7 +39,15 @@ _BLOCKED_NAMES = frozenset(
         "BEDROCK_API_KEY",
     }
 )
-_BLOCKED_PREFIXES = ("ACTIONS_",)
+_BLOCKED_PREFIXES = ("ACTIONS_", "AWS_")
+# Any name that looks like a credential is refused, so a token this list does not know by
+# name (GITLAB_TOKEN, CI_JOB_TOKEN, BITBUCKET_API_TOKEN, ...) cannot be passed by mistake.
+_BLOCKED_SUFFIXES = ("_TOKEN", "_KEY", "_SECRET", "_PASSWORD", "_PASSWD", "_APP_PASSWORD")
+# Network settings that carry no engine secret. Tools behind a proxy or a private CA need them.
+_NETWORK_NAMES = (
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+)  # fmt: skip
 _NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _lock = threading.Lock()
@@ -50,7 +58,12 @@ _allow_passthrough = True
 
 def is_blocked_name(name: str) -> bool:
     """True when *name* is a secret variable that must never reach a subprocess."""
-    return name in _BLOCKED_NAMES or name.startswith(_BLOCKED_PREFIXES)
+    upper = name.upper()
+    return (
+        name in _BLOCKED_NAMES
+        or upper.startswith(_BLOCKED_PREFIXES)
+        or upper.endswith(_BLOCKED_SUFFIXES)
+    )
 
 
 def configure_passthrough(names: Iterable[str], *, allow_passthrough: bool = True) -> None:
@@ -97,6 +110,9 @@ def tool_env(
         "LC_ALL": "C.UTF-8",
         "PYTHONSAFEPATH": "1",
     }
+    for net in _NETWORK_NAMES:
+        if net in os.environ:
+            env[net] = os.environ[net]
     allow = _allow_passthrough if allow_passthrough is None else allow_passthrough
     names = _passthrough if passthrough is None else tuple(passthrough)
     if allow:
@@ -142,4 +158,8 @@ def gh_env() -> dict[str, str]:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
         env["GH_TOKEN"] = token
+    # GitHub Enterprise Server settings, which only gh reads.
+    for name in ("GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     return env

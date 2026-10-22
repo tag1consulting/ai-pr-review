@@ -65,6 +65,8 @@ def _assert_scrubbed(rec: _Recorder, secrets: dict[str, str], *, allow: tuple[st
 
 def test_tool_env_allowlist_only(secrets: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOME_OTHER", "x")
+    for name in _env._NETWORK_NAMES:
+        monkeypatch.delenv(name, raising=False)
     env = tool_env()
     assert set(env) == {"PATH", "HOME", "LC_ALL", "PYTHONSAFEPATH"}
     assert env["LC_ALL"] == "C.UTF-8"
@@ -81,17 +83,17 @@ def test_extra_reaches_env() -> None:
 
 
 def test_passthrough_normal_variable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
-    _env.configure_passthrough(("HTTPS_PROXY",))
-    assert tool_env()["HTTPS_PROXY"] == "http://proxy:3128"
-    assert git_env()["HTTPS_PROXY"] == "http://proxy:3128"
+    monkeypatch.setenv("TOOL_SETTING", "custom")
+    _env.configure_passthrough(("TOOL_SETTING",))
+    assert tool_env()["TOOL_SETTING"] == "custom"
+    assert git_env()["TOOL_SETTING"] == "custom"
 
 
 def test_passthrough_ignored_when_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
-    _env.configure_passthrough(("HTTPS_PROXY",), allow_passthrough=False)
-    assert "HTTPS_PROXY" not in tool_env()
-    assert "HTTPS_PROXY" not in tool_env(passthrough=("HTTPS_PROXY",), allow_passthrough=False)
+    monkeypatch.setenv("TOOL_SETTING", "custom")
+    _env.configure_passthrough(("TOOL_SETTING",), allow_passthrough=False)
+    assert "TOOL_SETTING" not in tool_env()
+    assert "TOOL_SETTING" not in tool_env(passthrough=("TOOL_SETTING",), allow_passthrough=False)
 
 
 @pytest.mark.parametrize("name", ["GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY", "ACTIONS_X"])
@@ -215,13 +217,13 @@ def test_passthrough_reaches_analyzer(tmp_path: Path, monkeypatch: pytest.Monkey
     from ai_pr_review.analyzers.native.trufflehog import _run_trufflehog
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+    monkeypatch.setenv("TOOL_SETTING", "custom")
     (tmp_path / "a.txt").write_text("x\n")
-    _env.configure_passthrough(("HTTPS_PROXY",))
+    _env.configure_passthrough(("TOOL_SETTING",))
     rec = _Recorder()
     with patch("subprocess.run", rec), patch("shutil.which", return_value="/usr/bin/t"):
         _run_trufflehog(ChangedFiles(all_files=["a.txt"]), Path("/dev/null"))
-    assert rec.calls[0][1]["env"]["HTTPS_PROXY"] == "http://proxy:3128"
+    assert rec.calls[0][1]["env"]["TOOL_SETTING"] == "custom"
 
 
 def test_ripgrep_symbol_lookup_is_scrubbed(
@@ -321,7 +323,13 @@ def test_every_subprocess_run_passes_env() -> None:
                 and node.func.attr in {"run", "Popen", "check_output", "check_call", "call"}
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "subprocess"
-                and not any(kw.arg == "env" for kw in node.keywords)
+                and (
+                    not any(kw.arg == "env" for kw in node.keywords)
+                    or any(
+                        kw.arg == "env" and "os.environ" in ast.unparse(kw.value)
+                        for kw in node.keywords
+                    )
+                )
             ):
                 missing.append(f"{rel}:{node.lineno}")
     assert not missing, f"subprocess launch without env=: {missing}"
@@ -343,3 +351,24 @@ def test_gh_env_uses_its_own_home_apart_from_the_analyzer_home(monkeypatch) -> N
     assert env["HOME"] != _env.run_home()
     assert env["GH_CONFIG_DIR"] == env["HOME"]
     assert env["GH_TOKEN"] == "tok"
+
+
+@pytest.mark.parametrize(
+    "name", ["GITLAB_TOKEN", "CI_JOB_TOKEN", "BITBUCKET_API_TOKEN", "AWS_ACCESS_KEY_ID", "MY_SECRET"]
+)
+def test_credential_looking_names_are_refused(name: str) -> None:
+    from ai_pr_review.analyzers import _env
+
+    assert _env.is_blocked_name(name)
+
+
+def test_proxy_and_ca_settings_reach_every_launch_and_gh_keeps_host(monkeypatch) -> None:
+    from ai_pr_review.analyzers import _env
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ca.pem")
+    monkeypatch.setenv("GH_HOST", "ghe.example.com")
+    assert _env.tool_env()["HTTPS_PROXY"] == "http://proxy:3128"
+    assert _env.tool_env()["SSL_CERT_FILE"] == "/etc/ca.pem"
+    assert "GH_HOST" not in _env.tool_env()
+    assert _env.gh_env()["GH_HOST"] == "ghe.example.com"
