@@ -90,7 +90,7 @@ A fork pull request by a non-trusted author has four caps. A run that would pass
 
 **Resume.** A maintainer comments `/ai-pr-review rescan` on a paused pull request. The engine counts each rescan comment from an owner, member or collaborator once. One rescan adds one run and `AI_FORK_MAX_COST_USD` to the cap of that pull request. It does not reset the count, and it does not change the author cap or the daily cap. Each further run after a pause needs another rescan.
 
-A rescan runs through the `slash-commands.yml` workflow. That workflow does not read the environment of your review job. That workflow has no input for `AI_FORK_POLICY` or `AI_FORK_TRUSTED_ASSOCIATIONS`, so a rescan always applies the defaults (the `auto` policy, and `OWNER` and `COLLABORATOR` as trusted). If you run `block` or `label` or a custom trusted list, a maintainer rescan of a fork pull request still runs under the defaults. Only an owner, member or collaborator can start a rescan.
+A rescan runs through the `slash-commands.yml` workflow. That workflow does not read the environment of your review job. That workflow does not read the environment of your review job. It reads `AI_FORK_POLICY` and `AI_FORK_TRUSTED_ASSOCIATIONS` from the repository variables of the calling repository. If you change either setting, set it as a repository variable too, or the rescan applies the defaults (the `auto` policy, and `OWNER` and `COLLABORATOR` as trusted). Only an owner, member or collaborator can start a rescan.
 
 ## The spend issue
 

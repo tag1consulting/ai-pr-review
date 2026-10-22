@@ -688,6 +688,12 @@ jobs:
         uses: tag1consulting/ai-pr-review/container-action@main
         env:
           FORCE_FULL_DIFF: 'true'
+          # Fork pull request settings (docs/fork-prs.md), read from the repository variables
+          # of the calling repository. An unset variable is an empty string, which gives the
+          # engine default (auto). AI_FORK_TRUSTED_ASSOCIATIONS needs a fallback because an
+          # empty value there means trust nobody.
+          AI_FORK_POLICY: ${{ vars.AI_FORK_POLICY }}
+          AI_FORK_TRUSTED_ASSOCIATIONS: ${{ vars.AI_FORK_TRUSTED_ASSOCIATIONS || 'OWNER,COLLABORATOR' }}
         with:
           image-tag: ${{ inputs.image-tag }}
           provider: ${{ inputs.provider }}
