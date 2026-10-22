@@ -2,11 +2,12 @@
 
 A reader sees "approved" or a list of findings. Without this note the reader
 cannot tell a clean change from a change that was only partly reviewed. The note
-lists three things that are known when the review starts:
+lists four things that are known when the review starts:
 
 - file patterns removed from the diff (lockfiles, vendor directories, and any
   user patterns),
-- agents that did not run because their trigger did not fire, and
+- agents that did not run because their trigger did not fire,
+- analyzers that a fork run skips because they read configuration from the pull request, and
 - an incremental review, which covers only the commits since the last review.
 
 The note is plain text, built from names and patterns the tool itself holds.
@@ -39,6 +40,7 @@ def build_not_reviewed_notice(
     excluded_patterns: Iterable[str],
     skipped_agents: Iterable[str],
     is_incremental: bool,
+    skipped_analyzers: Iterable[str] = (),
 ) -> str:
     """Return the note, or an empty string when nothing was left out."""
     patterns = [p for p in (_clean(p) for p in excluded_patterns) if p]
@@ -50,6 +52,12 @@ def build_not_reviewed_notice(
         parts.append(
             f"no run of {_listed(agents, _MAX_AGENTS)} (the trigger for "
             f"{'this agent' if len(agents) == 1 else 'these agents'} did not fire)"
+        )
+    analyzers = sorted(set(skipped_analyzers))
+    if analyzers:
+        parts.append(
+            f"no run of the static analyzers {_listed(analyzers, _MAX_AGENTS)} (a fork run skips "
+            "analyzers that read configuration from the pull request)"
         )
     if is_incremental:
         parts.append("changes before the last review (this is an incremental review)")

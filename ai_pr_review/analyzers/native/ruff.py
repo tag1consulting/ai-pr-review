@@ -21,6 +21,7 @@ import subprocess  # noqa: F401
 from pathlib import Path
 from typing import Any
 
+from ai_pr_review.analyzers._env import fork_isolated
 from ai_pr_review.analyzers.native._cli_runner import run_cli_json_analyzer
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
@@ -43,9 +44,11 @@ def _run_ruff(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
         logger.warning("[ai-pr-review] WARNING: ruff not found; skipping.")
         return []
 
+    # A fork run ignores pyproject.toml, ruff.toml and any parent config from the pull request.
+    isolate = ["--isolated"] if fork_isolated() else []
     return run_cli_json_analyzer(
         tool="ruff",
-        command=["ruff", "check", "--output-format=json", "--no-cache", "--exit-zero", "--", *py_files],
+        command=["ruff", "check", *isolate, "--output-format=json", "--no-cache", "--exit-zero", "--", *py_files],
         timeout_secs=_TIMEOUT_SECS,
         extract_items=_ruff_items,
         build_finding=_ruff_finding,

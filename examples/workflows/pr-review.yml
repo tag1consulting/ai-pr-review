@@ -138,6 +138,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          # Do not leave the token in .git/config. A fork review pauses when it finds one.
+          persist-credentials: false
 
       - name: Run AI review
         uses: tag1consulting/ai-pr-review/container-action@main

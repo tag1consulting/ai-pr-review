@@ -34,6 +34,17 @@ The engine checks the pull request before it runs any git command in the checked
 - A same-repository pull request is never paused and never reads statuses.
 - The gate applies to GitHub only. GitLab and Bitbucket runs are not gated.
 
+## The fork profile
+
+Under `auto`, a fork pull request from an author who is not trusted runs under the fork profile. The profile changes four things:
+
+- Only analyzers with a trusted or isolated configuration run. These are phpcs, phpstan, checkov, tflint, ruff (with `--isolated`), trufflehog (without the repository config), docs-api-check, docs-ref-check, docs-drift-check, dep-exists, cve-check, and suppression-check. The analyzers eslint, golangci-lint, semgrep, shellcheck, hadolint, and kube-linter are skipped. The review comment names the skipped analyzers that had files to check.
+- Suppression rules come from the base branch, never from the fork tree. This applies to `.ai-pr-review/suppressions.json` and its legacy path.
+- `AI_ANALYZER_ENV_PASSTHROUGH` has no effect. The analyzers get no extra environment variable, and no proxy setting.
+- The review pauses when `.git/config` holds a persisted credential. The checks are: an `http.*.extraheader` key, a `credential.*` key, an `includeIf` key, or a token in a remote URL. Set `persist-credentials: false` on the checkout step to fix the pause. The newer `actions/checkout` versions keep the token in a separate file and add an `includeIf` key, so the default checkout pauses a fork review.
+
+A rule in a suppressions file that has an invalid regular expression is dropped alone. The other rules stay. This applies to every run.
+
 ## Permissions
 
 The workflow that runs the review needs `statuses: read` for a fork pull request, because the engine reads the approval status. Without it, the status request fails and the run stays paused, with a log line that names the permission. A same-repository pull request does not need it. If your workflow sets a `permissions:` block, add `statuses: read`.

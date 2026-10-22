@@ -45,6 +45,8 @@ def _workspace(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(
         "ai_pr_review.review.fork_gate.workspace_head", lambda workspace=".": _CHECKED_OUT["sha"] or SHA_A)
+    monkeypatch.setattr(  # the real check runs git in the test's working directory (see test_fork_safe_analyzers)
+        "ai_pr_review.review.fork_gate.persisted_credential_reason", lambda workspace=".": "")
 
 
 def _facts(**kw: str) -> ForkGateFacts:

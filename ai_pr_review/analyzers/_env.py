@@ -54,6 +54,7 @@ _lock = threading.Lock()
 _home: str | None = None
 _passthrough: tuple[str, ...] = ()
 _allow_passthrough = True
+_fork_isolated = False
 
 
 def _carries_no_credentials(name: str, value: str) -> bool:
@@ -85,6 +86,21 @@ def configure_passthrough(names: Iterable[str], *, allow_passthrough: bool = Tru
         _allow_passthrough = allow_passthrough
 
 
+def configure_fork_isolation(active: bool) -> None:
+    """Set the run-wide fork switch. Call once, before any launch.
+
+    When active, an analyzer must not read its configuration from the pull request tree.
+    """
+    global _fork_isolated
+    with _lock:
+        _fork_isolated = active
+
+
+def fork_isolated() -> bool:
+    """True on a fork run, where an analyzer may use only a trusted or isolated config."""
+    return _fork_isolated
+
+
 def _cleanup_home() -> None:
     global _home
     with _lock:
@@ -112,8 +128,7 @@ def tool_env(
 
     *extra* holds per-tool variables (for example ``TFLINT_PLUGIN_DIR``).
     *passthrough* and *allow_passthrough* default to the run-wide values from
-    ``configure_passthrough``. A fork run passes ``allow_passthrough=False``
-    (story 17-9 wires this). A name that is a secret is refused with a warning.
+    ``configure_passthrough``. A fork run sets the run-wide value to False. A name that is a secret is refused with a warning.
     """
     env = {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
