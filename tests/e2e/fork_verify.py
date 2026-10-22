@@ -552,7 +552,8 @@ def verify_s7(ev: ForkEvidence, *, run_cents: int = 200) -> Verdict:
     problems = _paused_with(ev, pause_text(CAP_RUNS, entries, Caps(run_cents=run_cents)), "run cap")
     if _entries_used(entries)[0] != PR_MAX_RUNS + allowance_of(entries):
         problems.append(f"the ledger holds {_entries_used(entries)[0]} runs, not the cap")
-    if "/ai-pr-review rescan" not in (_last_skip(ev).text if _last_skip(ev) else ""):
+    skip = _last_skip(ev)
+    if "/ai-pr-review rescan" not in (skip.text if skip else ""):
         problems.append("the pause does not mention rescan")
     return _verdict("S7", problems + _common(ev))
 

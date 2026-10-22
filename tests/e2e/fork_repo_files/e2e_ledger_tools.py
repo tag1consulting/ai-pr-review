@@ -82,8 +82,14 @@ class Api:
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed https API host
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
-            raise SystemExit(f"{method} {path}: HTTP {exc.code}") from None
-        return json.loads(raw) if raw else None
+            detail = exc.read(500).decode("utf-8", "replace").strip()
+            raise SystemExit(f"{method} {path}: HTTP {exc.code} {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise SystemExit(f"{method} {path}: request failed: {exc}") from exc
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError as exc:
+            raise SystemExit(f"{method} {path}: the reply is not JSON") from exc
 
     def pages(self, path: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -109,8 +115,10 @@ class Api:
             return min(found)
         if not create:
             return None
-        self.call("POST", f"/repos/{self.repo}/issues", {"title": SPEND_ISSUE_TITLE, "body": SPEND_ISSUE_BODY})
-        return self.spend_issue(create=False)
+        made = self.call("POST", f"/repos/{self.repo}/issues", {"title": SPEND_ISSUE_TITLE, "body": SPEND_ISSUE_BODY})
+        if not isinstance(made, dict) or "number" not in made:
+            raise SystemExit("the spend issue was created but the reply has no issue number")
+        return int(made["number"])
 
 
 def seed_ledger(api: Api, pr: int, runs: int, cents: int) -> None:
@@ -120,14 +128,15 @@ def seed_ledger(api: Api, pr: int, runs: int, cents: int) -> None:
 
 def seed_spend(api: Api, tier: str, cents: int, pr: int) -> None:
     number = api.spend_issue(create=True)
-    assert number is not None
+    if number is None:
+        raise SystemExit("seed-spend: no spend issue found or created")
     print(f"seed-spend: comment {api.comment(number, spend_body(tier, cents, pr, datetime.now(UTC)))}")
 
 
 def clear_ledgers(api: Api, pr: int | None) -> None:
-    """Delete bot ledger entries (one PR or all open PRs) and every bot spend entry. The issue stays."""
+    """Delete bot ledger entries (one PR or every PR, open or closed) and every bot spend entry. The issue stays."""
     prs = [pr] if pr is not None else [
-        int(p["number"]) for p in api.pages(f"/repos/{api.repo}/pulls?state=open")]
+        int(p["number"]) for p in api.pages(f"/repos/{api.repo}/pulls?state=all")]
     for number in prs:
         for c in api.pages(f"/repos/{api.repo}/issues/{number}/comments"):
             if (c.get("user") or {}).get("login") == BOT_LOGIN and try_parse_entry(int(c["id"]), c.get("body") or ""):
@@ -143,7 +152,8 @@ def clear_ledgers(api: Api, pr: int | None) -> None:
 
 def set_lock(api: Api, locked: bool) -> None:
     number = api.spend_issue(create=True)
-    assert number is not None
+    if number is None:
+        raise SystemExit("lock-spend-issue: no spend issue found or created")
     if locked:
         api.call("PUT", f"/repos/{api.repo}/issues/{number}/lock", {"lock_reason": "resolved"})
     else:
