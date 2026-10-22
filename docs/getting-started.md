@@ -83,7 +83,7 @@ The example workflow at [`examples/workflows/pr-review.yml`](https://github.com/
   env:
     FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
   with:
-    image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}  # or pin to a release tag, for example '2.24.1'
+    image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}  # or pin to a release tag, for example '2.25.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}

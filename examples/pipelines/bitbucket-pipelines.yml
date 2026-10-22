@@ -20,7 +20,7 @@
 #                                    documented.
 #   AI_REVIEW_IMAGE_TAG (plain): Container tag to pull. Recommended:
 #                                    'latest' (stable), 'dev' (pre-release),
-#                                    or a pinned release like '2.24.1'
+#                                    or a pinned release like '2.25.0'
 #                                    (image tags strip the 'v' prefix).
 #                                    Must be a non-secured variable: Bitbucket
 #                                    templates image.name itself via
@@ -106,10 +106,10 @@ image:
   # values:
   #   'latest': stable
   #   'dev': dogfood pre-release builds
-  #   '2.24.1' (or similar): pin a specific release.
+  #   '2.25.0' (or similar): pin a specific release.
   #   Note: image tags strip the 'v' prefix from the git tag (publish-image.yml
-  #   uses docker/metadata-action's semver pattern), so the git tag v2.24.1
-  #   publishes image tags 2.24.1, 2.24, and 2.
+  #   uses docker/metadata-action's semver pattern), so the git tag v2.25.0
+  #   publishes image tags 2.25.0, 2.25, and 2.
   name: ghcr.io/tag1consulting/ai-pr-review:${{AI_REVIEW_IMAGE_TAG}}
   # For private pulls (ai-pr-review is currently public: use the public
   # pull below unless/until you host your own mirror). If you fork to a
