@@ -25,8 +25,9 @@ The rule, kept deliberately small:
 
 ``AI_FORK_POLICY`` picks what happens to a gated fork pull request:
 
-* ``label``: the approval status above (the default until story 17-13).
-* ``auto``: the run starts at once. An author whose ``author_association`` is in
+* ``label``: the approval status above. This is the safest policy and the fallback for an
+  unknown value.
+* ``auto`` (the default): the run starts at once. An author whose ``author_association`` is in
   ``AI_FORK_TRUSTED_ASSOCIATIONS`` gets the normal pipeline. Any other author gets a
   ``ForkProfile`` that later stories use to restrict the run. The approval status is not read.
 * ``block``: every fork pull request is paused, whoever wrote it.
@@ -48,7 +49,10 @@ APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
 APPROVAL_LABEL = "ai-review-approve-fork"
 DEFAULT_FORK_MAX_COST_USD = 2.0
 FORK_POLICIES = ("auto", "label", "block")
-DEFAULT_FORK_POLICY = "label"  # story 17-13 flips this to "auto"
+DEFAULT_FORK_POLICY = "auto"
+# An unknown AI_FORK_POLICY value must never open the gate, so it falls back to the safest policy,
+# which is NOT the default. Only an unset or empty value gets DEFAULT_FORK_POLICY.
+SAFEST_FORK_POLICY = "label"
 DEFAULT_TRUSTED_ASSOCIATIONS = ("OWNER", "COLLABORATOR")
 MODE_NORMAL, MODE_TRUSTED, MODE_APPROVED, MODE_FORK = "normal", "trusted", "approved", "fork"
 UNGATED_EVENTS = frozenset({"pull_request"})
@@ -235,7 +239,8 @@ def decide(
     trusted: tuple[str, ...] = DEFAULT_TRUSTED_ASSOCIATIONS,
 ) -> GateDecision:
     """Decide whether the review may run, and under which mode. ``facts`` is ``None`` when the VCS
-    could not be read. An unknown *policy* is treated as ``label``."""
+    could not be read. An unknown *policy* is treated as ``label`` (``SAFEST_FORK_POLICY``), not as
+    the ``auto`` default."""
     if not needs_facts(event_name, key_present):
         return GateDecision(gated=False, allowed=True)
     if facts is None:

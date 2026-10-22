@@ -86,6 +86,8 @@ Commit and merge the workflow file. After it lands on your default branch, post 
 
 Forces a full-diff re-review of the PR and bypasses the SHA watermark. Use this command when you want a fresh review after a series of small fixup commits.
 
+On a fork PR that the engine paused at a cap, `rescan` also resumes it. One `rescan` by an owner, member or collaborator adds exactly one run, and `AI_FORK_MAX_COST_USD` (2 USD by default), to the budget of that PR. It does not reset the run count and does not change the author cap or the daily cap. The `slash-commands.yml` workflow does not read the environment of your review job. If you set `AI_FORK_POLICY` or `AI_FORK_TRUSTED_ASSOCIATIONS` to a non-default value, set it for the rescan step too. See [Fork pull requests](fork-prs).
+
 ### `/ai-pr-review review-full`
 
 Starts a full-mode review that uses all agents. These agents include architecture-reviewer, security-reviewer, blind-hunter, edge-case-hunter, and adversarial-general. This review takes longer and costs more than the default quick mode.
