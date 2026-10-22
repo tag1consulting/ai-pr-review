@@ -69,6 +69,26 @@ _CAP_EXEMPT_RE = re.compile(
 )
 
 
+# Exempt spans get their own budget, so a huge fence cannot skip the cap.
+_EXEMPT_BUDGET_BYTES: Final[int] = 65_536
+
+_SUGGESTION_RE = re.compile(r"```suggestion[^\n]*\n.*?\n[ \t]*```", re.DOTALL)
+
+
+def _drop_altered_suggestions(text: str) -> str:
+    """Drop a suggestion fence that the scrub would change.
+
+    A fence is code that GitHub commits when the author clicks Apply. A redacted fence
+    would commit ``<redacted>`` into the file, so the whole fence goes instead.
+    """
+
+    def keep_or_drop(m: re.Match[str]) -> str:
+        span = m.group()
+        return span if scrub_outbound_text(span) == span else ""
+
+    return _SUGGESTION_RE.sub(keep_or_drop, text)
+
+
 def scrub_outbound_text(text: str) -> str:
     """Remove secret literals and token prefixes from a string the engine posts.
 
@@ -102,9 +122,16 @@ def cap_outbound_text(text: str, limit: int = MAX_OUTBOUND_STRING_BYTES) -> str:
         cut = True
 
     pos = 0
+    exempt_used = 0
     for m in _CAP_EXEMPT_RE.finditer(text):
         take(text[pos : m.start()])
-        out.append(m.group())
+        span = m.group()
+        size = len(span.encode("utf-8"))
+        if exempt_used + size <= _EXEMPT_BUDGET_BYTES:
+            exempt_used += size
+            out.append(span)
+        else:
+            take(span)
         pos = m.end()
     take(text[pos:])
     if cut:
@@ -115,7 +142,7 @@ def cap_outbound_text(text: str, limit: int = MAX_OUTBOUND_STRING_BYTES) -> str:
 def sanitize_outbound(value: Any, *, cap: bool = True) -> Any:
     """Scrub (and cap) every string inside a JSON-like request body."""
     if isinstance(value, str):
-        scrubbed = scrub_outbound_text(value)
+        scrubbed = scrub_outbound_text(_drop_altered_suggestions(value))
         return cap_outbound_text(scrubbed) if cap else scrubbed
     if isinstance(value, dict):
         return {k: sanitize_outbound(v, cap=cap) for k, v in value.items()}

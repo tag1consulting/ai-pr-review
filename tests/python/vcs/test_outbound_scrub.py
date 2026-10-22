@@ -21,6 +21,7 @@ from ai_pr_review.vcs.http import (
     RetryPolicy,
     TapeRecorder,
     cap_outbound_text,
+    sanitize_outbound,
 )
 from ai_pr_review.vcs.marker import build_id_map_marker
 from ai_pr_review.vcs.protocol import DiffContext
@@ -139,7 +140,7 @@ def test_cut_never_splits_a_multibyte_character() -> None:
 
 
 def test_markers_survive_a_cut_and_do_not_count() -> None:
-    hidden = "[//]: # (ai-pr-review-id-map:" + base64.b64encode(b"x" * 400_000).decode() + ")"
+    hidden = "[//]: # (ai-pr-review-id-map:" + base64.b64encode(b"x" * 40_000).decode() + ")"
     html = build_id_map_marker({"fp": 1})
     text = "a" * (MAX_OUTBOUND_STRING_BYTES + 10) + f"\n{html}\n{hidden}"
     out = json.loads(_post({"body": text}))["body"]
@@ -149,13 +150,13 @@ def test_markers_survive_a_cut_and_do_not_count() -> None:
 
 
 def test_marker_alone_over_the_cap_is_untouched() -> None:
-    hidden = "[//]: # (ai-pr-review-verdicts:" + base64.b64encode(b"y" * 400_000).decode() + ")"
+    hidden = "[//]: # (ai-pr-review-verdicts:" + base64.b64encode(b"y" * 40_000).decode() + ")"
     assert json.loads(_post({"body": "short\n" + hidden}))["body"] == "short\n" + hidden
 
 
 def test_suggestion_code_does_not_count_toward_the_cap() -> None:
-    fence = "```suggestion\n" + "z" * (MAX_OUTBOUND_STRING_BYTES + 10) + "\n```"
-    text = "intro\n" + fence + "\ntail"
+    fence = "```suggestion\n" + "z" * 40_000 + "\n```"
+    text = "p" * (MAX_OUTBOUND_STRING_BYTES - 10) + "\n" + fence + "\ntail"
     assert json.loads(_post({"body": text}))["body"] == text
 
 
@@ -207,7 +208,7 @@ def test_canary_secret_in_a_finding_never_reaches_a_posted_review() -> None:
         text = raw.decode("utf-8")
         assert CANARY_TOKEN not in text
         assert CANARY_LITERAL not in text
-    assert any(b"```suggestion" in raw for raw in sent)
+    assert not any(b"```suggestion" in raw for raw in sent)
 
 
 def test_canary_secret_in_a_summary_never_reaches_a_posted_comment() -> None:
@@ -247,3 +248,20 @@ def test_github_feedback_store_write_is_scrubbed_before_encoding() -> None:
     decoded = base64.b64decode(json.loads(sent[0])["content"]).decode("utf-8")
     assert CANARY_TOKEN not in decoded
     assert "<redacted>" in decoded
+
+
+def test_suggestion_fence_holding_a_secret_is_dropped_not_redacted() -> None:
+    body = "fix\n```suggestion\nKEY = 'sk-abcdefghijklmnop'\n```\nend"
+    out = sanitize_outbound(body)
+    assert "```suggestion" not in out
+    assert "<redacted>" not in out
+
+
+def test_clean_suggestion_fence_is_kept() -> None:
+    body = "fix\n```suggestion\nx = 1\n```\nend"
+    assert sanitize_outbound(body) == body
+
+
+def test_huge_suggestion_fence_cannot_skip_the_cap() -> None:
+    body = "```suggestion\n" + "a" * 300_000 + "\n```"
+    assert len(sanitize_outbound(body).encode()) < 300_000
