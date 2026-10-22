@@ -15,7 +15,12 @@ import pytest
 
 from ai_pr_review.cli import _settle_fork_budget
 from ai_pr_review.config import ReviewConfig
-from ai_pr_review.review.fork_budget import LEDGER_ERROR_TEXT, ForkBudgetPause, LedgerError
+from ai_pr_review.review.fork_budget import (
+    LEDGER_ERROR_TEXT,
+    ForkBudgetPause,
+    LedgerError,
+    with_run_pointer,
+)
 from ai_pr_review.review.fork_gate import ForkGateFacts
 from ai_pr_review.review.fork_spend import (
     AUTHOR_MAX_PRS,
@@ -863,7 +868,7 @@ async def test_a_spend_or_author_read_or_write_failure_pauses_the_fork_run(tmp_p
     mem = SpendMem()
     setattr(mem, fail, True)
     result, _ = await _build(tmp_path, _provider_class()(mem))
-    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.reason == LEDGER_ERROR_TEXT
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.reason == with_run_pointer(LEDGER_ERROR_TEXT)
     assert mem.bot == {}
 
 
@@ -875,7 +880,7 @@ async def test_a_provider_without_a_spend_ledger_pauses_the_fork_run(tmp_path: P
         list_spend_entries = None  # type: ignore[assignment]
 
     result, _ = await _build(tmp_path, _NoSpend(SpendMem()))
-    assert isinstance(result, SkipPlan) and result.reason == LEDGER_ERROR_TEXT
+    assert isinstance(result, SkipPlan) and result.reason == with_run_pointer(LEDGER_ERROR_TEXT)
 
 
 @pytest.mark.anyio
@@ -886,7 +891,7 @@ async def test_a_pr_ledger_failure_after_the_daily_reserve_releases_the_daily_en
     provider = _provider_class()(mem)
     provider.pr_ledger.fail_create = True  # the PR reserve fails after the daily reserve passed
     result, _ = await _build(tmp_path, provider)
-    assert isinstance(result, SkipPlan) and result.reason == LEDGER_ERROR_TEXT
+    assert isinstance(result, SkipPlan) and result.reason == with_run_pointer(LEDGER_ERROR_TEXT)
     assert mem.bot == {}
 
 
@@ -943,3 +948,12 @@ def test_a_failed_reread_and_a_failed_release_stay_charged_and_pause() -> None:
         _spend(mem).reserve(10)
     mem.fail_read = mem.fail_delete = False
     assert len(mem.bot) == 1
+
+
+def test_a_malformed_spend_comment_error_names_the_comment_id_and_not_the_body() -> None:
+    mem = SpendMem()
+    mem.bot[777] = "<!-- ai-pr-review-fork-spend tier=bogus INJECTED-FORK-TEXT -->"
+    with pytest.raises(LedgerError) as caught:
+        _spend(mem).precheck()
+    assert "777" in str(caught.value)
+    assert "INJECTED-FORK-TEXT" not in str(caught.value)

@@ -36,6 +36,7 @@ from ai_pr_review.review.fork_budget import (
     LedgerError,
     Reservation,
     cents_from_units,
+    with_run_pointer,
 )
 from ai_pr_review.review.fork_gate import DEFAULT_FORK_MAX_COST_USD, MODE_FORK, ForkProfile
 from ai_pr_review.review.fork_spend import (
@@ -411,11 +412,11 @@ async def build_review_runtime(
         fork_budget = _open_fork_budget(config, provider)
         if fork_budget is None:
             logger.warning("fork budget: the provider keeps no ledger, so the fork run is paused")
-            return _fork_pause(provider, LEDGER_ERROR_TEXT)
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
         fork_spend = _open_fork_spend(config, provider, fork_profile)
         if fork_spend is None:
             logger.warning("fork spend: the provider keeps no spend ledger, so the fork run is paused")
-            return _fork_pause(provider, LEDGER_ERROR_TEXT)
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
         try:
             # Story 17-7: the author cap first, then the PR ledger, then the daily ledger. All read only.
             check_author_cap(
@@ -428,7 +429,7 @@ async def build_review_runtime(
             return _fork_pause(provider, pause.reason)
         except LedgerError as exc:
             logger.warning("fork budget: run paused, %s", exc)
-            return _fork_pause(provider, LEDGER_ERROR_TEXT)
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
 
     # 2. Fetch last-reviewed SHA *before* compute so incremental diff works.
     last_reviewed = provider.get_last_reviewed_sha()
@@ -970,7 +971,7 @@ async def build_review_runtime(
         if fork_profile is not None:
             # A fork run fails closed: with no estimate there is no ceiling and no ledger reserve.
             logger.warning("cost estimate: failed for a fork run, so the run is paused: %s", exc, exc_info=True)
-            return _fork_pause(provider, ESTIMATE_ERROR_TEXT)
+            return _fork_pause(provider, with_run_pointer(ESTIMATE_ERROR_TEXT))
         logger.warning(
             "cost estimate: pre-flight estimation failed (fail-soft; "
             "proceeding without a cost ceiling check for this run): %s",
@@ -986,7 +987,7 @@ async def build_review_runtime(
     fork_spend_reservation: SpendReservation | None = None
     if fork_budget is not None:
         if pre_flight_cost_estimate_units is None:
-            return _fork_pause(provider, ESTIMATE_ERROR_TEXT)
+            return _fork_pause(provider, with_run_pointer(ESTIMATE_ERROR_TEXT))
         estimate_cents = cents_from_units(pre_flight_cost_estimate_units)
         try:
             # Daily first: it is the cap a run most often loses here, and then nothing else was written.
@@ -1000,7 +1001,7 @@ async def build_review_runtime(
                 logger.warning("fork budget: run paused at the %s cap", stop.cap)
                 return _fork_pause(provider, stop.reason)
             logger.warning("fork budget: run paused, %s", stop)
-            return _fork_pause(provider, LEDGER_ERROR_TEXT)
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
 
     # 13. Build orchestrator config.
     _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"

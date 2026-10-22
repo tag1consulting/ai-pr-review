@@ -72,6 +72,21 @@ ESTIMATE_ERROR_TEXT = (
     "so the run does not start. Run the workflow again.")
 
 
+def with_run_pointer(text: str) -> str:
+    """Add a pointer to the workflow run to a generic pause text, so a maintainer can find the log.
+
+    The specific cause of a ledger or estimate pause is only in a warning log line. The pointer is
+    built from runner variables (``ci_run_url``), never from fork text. With no run URL the text is
+    returned unchanged.
+    """
+    from ai_pr_review.review.reporting import ci_run_url
+
+    url = ci_run_url()
+    if not url.startswith(("https://", "http://")):
+        return text
+    return f"{text} A maintainer can read the cause in the log of this workflow run: {url}"
+
+
 class ForkBudgetPause(Exception):
     """A cap stops the run. ``cap`` is ``runs`` or ``usd``. ``reason`` is the text for the skip comment."""
 
@@ -249,8 +264,13 @@ class ForkBudget:
             ledger, maintainer = self._backend.list_budget_comments()
         except Exception as exc:  # noqa: BLE001 - any read failure must pause the run
             raise LedgerError(f"could not read the ledger ({type(exc).__name__})") from exc
-        parsed = (try_parse_entry(cid, body) for cid, body in ledger)
-        entries = sorted((e for e in parsed if e is not None), key=lambda e: e.comment_id)
+        parsed = [(cid, try_parse_entry(cid, body)) for cid, body in ledger]
+        # A bot comment that only quotes the tag is not an entry and is ignored. Log its ID, never its body.
+        skipped = [cid for cid, e in parsed if e is None]
+        if skipped:
+            logger.info("fork budget: ignored %d bot comment(s) that hold the ledger tag but are not "
+                        "entries (comment IDs %s)", len(skipped), ", ".join(str(c) for c in skipped))
+        entries = sorted((e for _, e in parsed if e is not None), key=lambda e: e.comment_id)
         return entries, maintainer
 
     def _create(self, body: str) -> int:
