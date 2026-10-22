@@ -56,7 +56,17 @@ A paused run exits 0, so a required review check can turn green without a review
 
 ## Cost ceiling
 
-An approved fork pull request gets a default cost ceiling of 2 USD when you set none. Set `max-cost-usd` to use your own ceiling for all pull requests. Set `AI_FORK_MAX_COST_USD` to change the default for forks, or to `0` to switch the default off. An unusable value falls back to 2 USD and never switches the ceiling off. The ceiling does not bound a model that has no price entry (see `AI_COST_CEILING_UNPRICED`).
+An approved fork pull request gets a default cost ceiling of 2 USD when you set none. Set `max-cost-usd` to use your own ceiling for all pull requests. Set `AI_FORK_MAX_COST_USD` to change the default for forks. A zero, negative or non-finite value falls back to 2 USD with a warning, so no value switches the ceiling off. The ceiling does not bound a model that has no price entry (see `AI_COST_CEILING_UNPRICED`).
+
+## Budget for one fork pull request
+
+With `AI_FORK_POLICY=auto`, a fork pull request by a non-trusted author gets at most 4 review runs and 6 USD in total. A run that would pass either cap is paused before it runs any analyzer or model. The skip comment names the cap. The cap is fixed and has no setting.
+
+The engine keeps the budget in hidden comments that only the bot wrote. Each run adds one entry for its estimated cost and replaces it with the actual cost when the run ends. A cancelled run stays charged at its estimate. Comments from other users are ignored. If the engine cannot read or write the budget, or cannot estimate the cost, the run is paused.
+
+A maintainer resumes a paused pull request with `/ai-pr-review rescan`. The engine counts each rescan comment from an owner, member or collaborator once. One rescan adds one run and `AI_FORK_MAX_COST_USD` (2 USD by default) to the cap. It does not reset the count. A user with write access can delete the bot comments and so reset the budget.
+
+For a non-trusted fork run, the per-run ceiling is the smaller of `AI_MAX_COST_USD` and `AI_FORK_MAX_COST_USD`.
 
 ## What this does not do
 
