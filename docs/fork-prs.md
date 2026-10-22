@@ -18,7 +18,7 @@ A workflow that runs on `pull_request_target` has the repository secrets and a w
 | `label` | The run pauses until a maintainer approves the exact head commit. See [The label policy](#the-label-policy). |
 | `block` | Every fork pull request pauses, whoever wrote it. Use it to switch fork review off. |
 
-An unknown `AI_FORK_POLICY` value is ignored with a warning, and `label` applies. `label` is the safest policy, so an unknown value never gives the more open `auto`. An unset or empty value gives the default, `auto`.
+An unknown `AI_FORK_POLICY` value is ignored with a warning, and `label` applies. `label` is the safest policy that still allows a review, so an unknown value never gives the more open `auto`. A misspelled `block` also gives `label`, so check the warning in the job log after you set the policy. An unset or empty value gives the default, `auto`.
 
 ## Who is trusted
 
@@ -34,7 +34,7 @@ The engine checks the pull request before it runs any git command in the checked
 - Any other event is checked when the head repository is not the base repository. This includes `pull_request_target`, `issue_comment` and an unknown event. A deleted fork counts as a fork.
 - The checked-out tree must be the commit under review. The engine compares `git rev-parse HEAD` of the workspace with the head commit and pauses on any difference. Your workflow must check out `github.event.pull_request.head.sha`, never a branch name.
 - If the engine cannot read the pull request, the run pauses. The gate fails closed. The cause is in the job log.
-- A same-repository pull request is never paused.
+- A same-repository pull request is not paused by the fork policy. If the engine cannot read the pull request facts, it pauses every gated event, including a same-repository one (see the fail-closed rule below).
 - The gate applies to GitHub only. GitLab and Bitbucket runs are not gated.
 
 ## The fork profile
@@ -90,7 +90,7 @@ A fork pull request by a non-trusted author has four caps. A run that would pass
 
 **Resume.** A maintainer comments `/ai-pr-review rescan` on a paused pull request. The engine counts each rescan comment from an owner, member or collaborator once. One rescan adds one run and `AI_FORK_MAX_COST_USD` to the cap of that pull request. It does not reset the count, and it does not change the author cap or the daily cap. Each further run after a pause needs another rescan.
 
-A rescan runs through the `slash-commands.yml` workflow. That workflow does not read the environment of your review job. If you set `AI_FORK_POLICY` or `AI_FORK_TRUSTED_ASSOCIATIONS` to a non-default value, set the same value for the rescan step as well, or the rescan applies the defaults.
+A rescan runs through the `slash-commands.yml` workflow. That workflow does not read the environment of your review job. That workflow has no input for `AI_FORK_POLICY` or `AI_FORK_TRUSTED_ASSOCIATIONS`, so a rescan always applies the defaults (the `auto` policy, and `OWNER` and `COLLABORATOR` as trusted). If you run `block` or `label` or a custom trusted list, a maintainer rescan of a fork pull request still runs under the defaults. Only an owner, member or collaborator can start a rescan.
 
 ## The spend issue
 
