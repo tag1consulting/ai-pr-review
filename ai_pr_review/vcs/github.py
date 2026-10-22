@@ -696,6 +696,70 @@ class GitHubProvider:
         return results
 
     # ------------------------------------------------------------------
+    # Fork budget ledger (CAP-2, story 17-6). Every method raises on any failure: a partial
+    # list would undercount spend, so unlike the summary helpers nothing goes to self._errors.
+    # ------------------------------------------------------------------
+    def list_budget_comments(self) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+        """Return ``(ledger, maintainer)`` comments of the pull request, as ``(id, body)`` lists.
+
+        ``ledger`` holds bot-authored comments with the ledger tag. A comment from anyone else
+        that holds the tag is ignored. ``maintainer`` holds non-bot comments whose
+        ``author_association`` is OWNER, MEMBER or COLLABORATOR. Raises ``RuntimeError`` on an
+        HTTP error, a bad page or a bad comment on any page.
+        """
+        from ai_pr_review.review.fork_budget import LEDGER_TAG, MAINTAINER_ASSOCIATIONS
+
+        ledger: list[tuple[int, str]] = []
+        maintainer: list[tuple[int, str]] = []
+        url: str | None = self._issue_comments_url()
+        params: dict[str, Any] | None = {"per_page": 100}
+        while url:
+            resp = self.client.request("GET", url, params=params)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"list comments: HTTP {resp.status_code}")
+            try:
+                page = resp.json()
+            except ValueError as exc:
+                raise RuntimeError("list comments: response is not JSON") from exc
+            if not isinstance(page, list):
+                raise RuntimeError("list comments: response is not a list")
+            for item in page:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), int):
+                    raise RuntimeError("list comments: a comment has no integer id")
+                body = item.get("body")
+                body = body if isinstance(body, str) else ""
+                if self._is_bot_authored(item):
+                    if LEDGER_TAG in body:
+                        ledger.append((item["id"], body))
+                elif str(item.get("author_association") or "").upper() in MAINTAINER_ASSOCIATIONS:
+                    maintainer.append((item["id"], body))
+            url = _parse_next_link(resp.headers.get("link", ""))
+            params = None
+        return ledger, maintainer
+
+    def create_budget_entry(self, body: str) -> int:
+        resp = self.client.request("POST", self._issue_comments_url(), json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"create budget entry: HTTP {resp.status_code}")
+        try:
+            comment_id = resp.json()["id"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError("create budget entry: no comment id in the response") from exc
+        if not isinstance(comment_id, int):
+            raise RuntimeError("create budget entry: the comment id is not an integer")
+        return comment_id
+
+    def update_budget_entry(self, comment_id: int, body: str) -> None:
+        resp = self.client.request("PATCH", self._issue_comment_url(comment_id), json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"update budget entry: HTTP {resp.status_code}")
+
+    def delete_budget_entry(self, comment_id: int) -> None:
+        resp = self.client.request("DELETE", self._issue_comment_url(comment_id))
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise RuntimeError(f"delete budget entry: HTTP {resp.status_code}")
+
+    # ------------------------------------------------------------------
     # post_skip_comment — upsert skip comment (mirrors post_summary)
     # ------------------------------------------------------------------
     def post_skip_comment(

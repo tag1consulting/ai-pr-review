@@ -16,7 +16,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import click
@@ -288,6 +288,24 @@ def _preflight_agent_results(
         )
         for name, model_id, max_tokens, resp in usage
     ]
+
+
+def _settle_fork_budget(runtime: ReviewRuntime, totals: Any) -> None:
+    """Settle the fork run's ledger entry. Fail-soft: the run is over, so a failure leaves the
+    reserved estimate charged, which is the safe direction. With no totals, or a model that has
+    no price, the estimate stays."""
+    budget, reservation = runtime.fork_budget, runtime.fork_reservation
+    if budget is None or reservation is None:
+        return
+    if totals is None or totals.any_unknown:
+        logger.info("fork budget: no priced totals, so the entry keeps the estimate")
+        return
+    from ai_pr_review.review.fork_budget import LedgerError, cents_from_units
+
+    try:
+        budget.settle(reservation, cents_from_units(totals.cost_units))
+    except LedgerError as exc:
+        logger.warning("fork budget: %s. The entry keeps the estimate.", exc)
 
 
 async def _run_review_async(config: ReviewConfig) -> int:
@@ -578,6 +596,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # totals reuse the same compute_token_totals() the token table itself
     # renders from, so this can never disagree with what a reader of the
     # table sees.
+    _actual_totals = None
     if runtime.pre_flight_cost_estimate_units is not None:
         _actual_totals = _compute_token_totals(
             _with_preflight(result.agent_results), runtime.script_dir,
@@ -597,6 +616,9 @@ async def _run_review_async(config: ReviewConfig) -> int:
                 _format_cost(_actual_totals.cost_units),
                 _format_cost(_actual_totals.cost_units - runtime.pre_flight_cost_estimate_units),
             )
+
+    # Story 17-6: replace the fork run's reserved estimate with the actual cost.
+    _settle_fork_budget(runtime, _actual_totals)
 
     # Full per-agent breakdown, always echoed to the CI job log regardless of
     # provider (#758) -- GitLab and Bitbucket have no GITHUB_STEP_SUMMARY

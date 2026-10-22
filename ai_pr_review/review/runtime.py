@@ -26,6 +26,17 @@ from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
 from ai_pr_review.review.cost_ceiling import ContextWindowExceeded, CostCeilingExceeded
+from ai_pr_review.review.fork_budget import (
+    DEFAULT_RUN_CENTS,
+    ESTIMATE_ERROR_TEXT,
+    LEDGER_ERROR_TEXT,
+    Caps,
+    ForkBudget,
+    ForkBudgetPause,
+    LedgerError,
+    Reservation,
+    cents_from_units,
+)
 from ai_pr_review.review.fork_gate import ForkProfile
 from ai_pr_review.review.not_reviewed import build_not_reviewed_notice
 from ai_pr_review.review.pr_context import build_shared_context_block
@@ -137,6 +148,10 @@ class ReviewRuntime:
     # Set when AI_FORK_POLICY=auto and the author of a fork pull request is not trusted. Later
     # stories apply the caps, the environment scrub, the dropped text and the output clamp from it.
     fork_profile: ForkProfile | None = None
+    # Set with fork_profile when the per-PR ledger is active (not a dry run). cli.py settles the
+    # reservation with the actual cost after the run. A run that never settles stays charged.
+    fork_budget: ForkBudget | None = None
+    fork_reservation: Reservation | None = None
 
 
 def _merge_allowlist(
@@ -271,10 +286,28 @@ def _apply_fork_gate(
             return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True), None
     if decision.gated:
         logger.info("fork gate: fork pull request allowed (policy %s, mode %s)", config.fork_policy, decision.mode)
-    if decision.gated and config.max_cost_usd == 0 and config.fork_max_cost_usd > 0:
+    if decision.profile is not None and config.fork_max_cost_usd > 0:
+        # A stranger's run never gets more than the fork ceiling, even when AI_MAX_COST_USD is larger.
+        if config.max_cost_usd == 0 or config.max_cost_usd > config.fork_max_cost_usd:
+            logger.info("fork gate: fork profile run, cost ceiling $%.2f", config.fork_max_cost_usd)
+            config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
+    elif decision.gated and config.max_cost_usd == 0 and config.fork_max_cost_usd > 0:
         logger.info("fork gate: allowed fork pull request, default cost ceiling $%.2f", config.fork_max_cost_usd)
         config = config.model_copy(update={"max_cost_usd": config.fork_max_cost_usd})
     return config, None, decision.profile
+
+
+def _fork_pause(provider: VcsProvider, reason: str) -> SkipPlan:
+    return SkipPlan(reason=reason, provider=provider, is_fork_gate_skip=True)
+
+
+def _open_fork_budget(config: ReviewConfig, provider: VcsProvider) -> ForkBudget | None:
+    """The per-PR ledger for a fork-profile run, or ``None`` when the provider cannot keep one."""
+    needed = ("list_budget_comments", "create_budget_entry", "update_budget_entry", "delete_budget_entry")
+    if not all(callable(getattr(provider, name, None)) for name in needed):
+        return None
+    run_cents = round(config.fork_max_cost_usd * 100) if config.fork_max_cost_usd > 0 else DEFAULT_RUN_CENTS
+    return ForkBudget(provider, Caps(run_cents=run_cents))  # type: ignore[arg-type]
 
 
 async def build_review_runtime(
@@ -317,6 +350,23 @@ async def build_review_runtime(
     config, gate_skip, fork_profile = _apply_fork_gate(config, provider)
     if gate_skip is not None:
         return gate_skip
+
+    # 1c. Per-PR ledger (CAP-2, story 17-6): a fork-profile run pauses at a cap before any analyzer
+    # or git command touches the fork tree. A dry run posts nothing, so it is not charged.
+    fork_budget: ForkBudget | None = None
+    if fork_profile is not None and not config.dry_run:
+        fork_budget = _open_fork_budget(config, provider)
+        if fork_budget is None:
+            logger.warning("fork budget: the provider keeps no ledger, so the fork run is paused")
+            return _fork_pause(provider, LEDGER_ERROR_TEXT)
+        try:
+            fork_budget.precheck()
+        except ForkBudgetPause as pause:
+            logger.warning("fork budget: run paused at the %s cap", pause.cap)
+            return _fork_pause(provider, pause.reason)
+        except LedgerError as exc:
+            logger.warning("fork budget: run paused, %s", exc)
+            return _fork_pause(provider, LEDGER_ERROR_TEXT)
 
     # 2. Fetch last-reviewed SHA *before* compute so incremental diff works.
     last_reviewed = provider.get_last_reviewed_sha()
@@ -722,6 +772,9 @@ async def build_review_runtime(
         )
 
         pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
+        if fork_profile is not None and not pricing_data:
+            # With no prices every estimate is $0, so the per-run and per-PR caps would bound nothing.
+            raise RuntimeError("fork run: no pricing data, so the cost cannot be bounded")
         cost_estimate = estimate_review_cost(
             agents=agents,
             diff_text=diff_text,
@@ -791,6 +844,9 @@ async def build_review_runtime(
             unpriced_mode=config.cost_ceiling_unpriced,
             pricing_loaded=bool(pricing_data),
         )
+        if fork_profile is not None and unpriced_models(cost_estimate):
+            # An unpriced model counts as $0, so the caps would not bound it.
+            raise RuntimeError("fork run: a model has no pricing entry, so the cost cannot be bounded")
         if config.max_cost_usd > 0:
             # Reaching here means the run proceeds (warn mode, or block mode
             # with nothing unpriced / no pricing file to judge by).
@@ -825,6 +881,10 @@ async def build_review_runtime(
             is_incremental=is_incremental,
         )
     except Exception as exc:
+        if fork_profile is not None:
+            # A fork run fails closed: with no estimate there is no ceiling and no ledger reserve.
+            logger.warning("cost estimate: failed for a fork run, so the run is paused: %s", exc, exc_info=True)
+            return _fork_pause(provider, ESTIMATE_ERROR_TEXT)
         logger.warning(
             "cost estimate: pre-flight estimation failed (fail-soft; "
             "proceeding without a cost ceiling check for this run): %s",
@@ -833,6 +893,21 @@ async def build_review_runtime(
         # A ceiling the user set is not being applied. Say so in the posted
         # review as well, not only in this job-log line (#977).
         cost_ceiling_check_failed = config.max_cost_usd > 0
+
+    # 9f. Reserve this run's estimate in the per-PR ledger, before any LLM call (cli.py's
+    # pr-summarizer and issue-linker come next). A run that does not fit is paused.
+    fork_reservation: Reservation | None = None
+    if fork_budget is not None:
+        if pre_flight_cost_estimate_units is None:
+            return _fork_pause(provider, ESTIMATE_ERROR_TEXT)
+        try:
+            fork_reservation = fork_budget.reserve(cents_from_units(pre_flight_cost_estimate_units))
+        except ForkBudgetPause as pause:
+            logger.warning("fork budget: run paused at the %s cap", pause.cap)
+            return _fork_pause(provider, pause.reason)
+        except LedgerError as exc:
+            logger.warning("fork budget: run paused, %s", exc)
+            return _fork_pause(provider, LEDGER_ERROR_TEXT)
 
     # 13. Build orchestrator config.
     _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"
@@ -883,6 +958,8 @@ async def build_review_runtime(
         cost_ceiling_check_failed=cost_ceiling_check_failed,
         policy_ignored_reason=policy_ignored_reason,
         fork_profile=fork_profile,
+        fork_budget=fork_budget,
+        fork_reservation=fork_reservation,
         not_reviewed_notice=build_not_reviewed_notice(
             # Only the patterns the user added. The built-in lockfile and vendor
             # excludes are the same on every run, so listing them is noise.
