@@ -416,6 +416,8 @@ class GitHubProvider:
     # falls back to `client`, matching pre-#734 behavior.
     elevated_client: RecordingClient | None = None
     _errors: list[str] = field(default_factory=list, init=False, repr=False)
+    # Number of the fork spend issue once this run has found or created it (story 17-7).
+    _spend_issue: int | None = field(default=None, init=False, repr=False)
     # Thread ids post_findings PATCHed (update/escalate) or successfully
     # reopened (recurred) during its most recent call, in this same process.
     # resolve_stale consults this so it doesn't immediately re-resolve a
@@ -758,6 +760,146 @@ class GitHubProvider:
         resp = self.client.request("DELETE", self._issue_comment_url(comment_id))
         if resp.status_code >= 400 and resp.status_code != 404:
             raise RuntimeError(f"delete budget entry: HTTP {resp.status_code}")
+
+    # ------------------------------------------------------------------
+    # Fork author cap and daily spend ledger (CAP-2, story 17-7). Same rule as above: every
+    # method raises on any failure, because a partial list would undercount.
+    # ------------------------------------------------------------------
+    _MAX_PAGES = 100
+
+    def _get_pages(self, url: str, params: dict[str, Any], label: str) -> list[dict[str, Any]]:
+        """Every item of a paged list endpoint. Raises ``RuntimeError`` on any HTTP error, bad page,
+        non-object item, or more than ``_MAX_PAGES`` pages."""
+        items: list[dict[str, Any]] = []
+        next_url: str | None = url
+        next_params: dict[str, Any] | None = params
+        for _ in range(self._MAX_PAGES):
+            if not next_url:
+                return items
+            resp = self.client.request("GET", next_url, params=next_params)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"{label}: HTTP {resp.status_code}")
+            try:
+                page = resp.json()
+            except ValueError as exc:
+                raise RuntimeError(f"{label}: response is not JSON") from exc
+            if not isinstance(page, list) or not all(isinstance(i, dict) for i in page):
+                raise RuntimeError(f"{label}: response is not a list of objects")
+            items.extend(page)
+            next_url = _parse_next_link(resp.headers.get("link", ""))
+            next_params = None
+        if next_url:
+            raise RuntimeError(f"{label}: more than {self._MAX_PAGES} pages")
+        return items
+
+    def list_open_pulls(self) -> list[tuple[int, str, str]]:
+        """Open pull requests as ``(number, author login, head repository full name)``."""
+        c = self.config
+        pulls = self._get_pages(
+            f"/repos/{c.owner}/{c.repo}/pulls", {"state": "open", "per_page": 100}, "list pulls")
+        result: list[tuple[int, str, str]] = []
+        for item in pulls:
+            number = item.get("number")
+            if not isinstance(number, int):
+                raise RuntimeError("list pulls: a pull request has no integer number")
+            login = (item.get("user") or {}).get("login")
+            head = (item.get("head") or {}).get("repo")
+            repo_name = head.get("full_name") if isinstance(head, dict) else ""
+            result.append((number, login if isinstance(login, str) else "",
+                           repo_name if isinstance(repo_name, str) else ""))
+        return result
+
+    def _is_spend_issue(self, item: dict[str, Any]) -> bool:
+        """A look-alike never passes: it must not be a pull request, must be bot-authored and must
+        carry the exact title."""
+        from ai_pr_review.review.fork_spend import SPEND_ISSUE_TITLE
+
+        return (
+            "pull_request" not in item and isinstance(item.get("number"), int)
+            and self._is_bot_authored(item) and item.get("title") == SPEND_ISSUE_TITLE)
+
+    def _find_spend_issue(self) -> int | None:
+        """The lowest-numbered bot-created spend issue, open or closed. ``None`` when there is none.
+
+        The ``creator`` filter keeps the listing short. When it finds nothing, a full scan confirms
+        before the caller creates an issue, so a filter that does not match a bot login can never
+        cause one new issue per run.
+        """
+        c = self.config
+        url = f"/repos/{c.owner}/{c.repo}/issues"
+        base = {"state": "all", "per_page": 100}
+        for params in ({**base, "creator": c.bot_login}, base):
+            found: list[int] = [
+                int(i["number"]) for i in self._get_pages(url, params, "list issues") if self._is_spend_issue(i)]
+            if found:
+                return min(found)
+        return None
+
+    def _spend_issue_number(self, *, create: bool) -> int | None:
+        if self._spend_issue is not None:
+            return self._spend_issue
+        number = self._find_spend_issue()
+        if number is None and create:
+            from ai_pr_review.review.fork_spend import SPEND_ISSUE_TITLE
+
+            c = self.config
+            body = ("This issue holds the daily spend entries of automatic fork pull request reviews. "
+                    "The bot adds and edits the comments. Do not close, lock or edit this issue.")
+            resp = self.client.request(
+                "POST", f"/repos/{c.owner}/{c.repo}/issues", json_body={"title": SPEND_ISSUE_TITLE, "body": body})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"create spend issue: HTTP {resp.status_code}")
+            number = self._find_spend_issue()  # two first runs converge on the lowest number
+            if number is None:
+                raise RuntimeError("create spend issue: the new issue is not in the listing")
+        self._spend_issue = number
+        return number
+
+    def list_spend_entries(self, since: str) -> list[tuple[int, str]]:
+        """Bot-authored comments with the spend tag, updated at or after *since*. A comment from
+        anyone else that holds the tag is ignored. No spend issue gives an empty list."""
+        from ai_pr_review.review.fork_spend import SPEND_TAG
+
+        number = self._spend_issue_number(create=False)
+        if number is None:
+            return []
+        c = self.config
+        comments = self._get_pages(
+            f"/repos/{c.owner}/{c.repo}/issues/{number}/comments",
+            {"since": since, "per_page": 100}, "list spend entries")
+        result: list[tuple[int, str]] = []
+        for item in comments:
+            if not isinstance(item.get("id"), int):
+                raise RuntimeError("list spend entries: a comment has no integer id")
+            body = item.get("body")
+            if self._is_bot_authored(item) and isinstance(body, str) and SPEND_TAG in body:
+                result.append((item["id"], body))
+        return result
+
+    def create_spend_entry(self, body: str) -> int:
+        number = self._spend_issue_number(create=True)
+        c = self.config
+        resp = self.client.request(
+            "POST", f"/repos/{c.owner}/{c.repo}/issues/{number}/comments", json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"create spend entry: HTTP {resp.status_code}")
+        try:
+            comment_id = resp.json()["id"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError("create spend entry: no comment id in the response") from exc
+        if not isinstance(comment_id, int):
+            raise RuntimeError("create spend entry: the comment id is not an integer")
+        return comment_id
+
+    def update_spend_entry(self, comment_id: int, body: str) -> None:
+        resp = self.client.request("PATCH", self._issue_comment_url(comment_id), json_body={"body": body})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"update spend entry: HTTP {resp.status_code}")
+
+    def delete_spend_entry(self, comment_id: int) -> None:
+        resp = self.client.request("DELETE", self._issue_comment_url(comment_id))
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise RuntimeError(f"delete spend entry: HTTP {resp.status_code}")
 
     # ------------------------------------------------------------------
     # post_skip_comment — upsert skip comment (mirrors post_summary)

@@ -38,6 +38,13 @@ from ai_pr_review.review.fork_budget import (
     cents_from_units,
 )
 from ai_pr_review.review.fork_gate import ForkProfile
+from ai_pr_review.review.fork_spend import (
+    DailyCaps,
+    ForkSpend,
+    SpendReservation,
+    check_author_cap,
+    tier_of,
+)
 from ai_pr_review.review.not_reviewed import build_not_reviewed_notice
 from ai_pr_review.review.pr_context import build_shared_context_block
 from ai_pr_review.vcs import provider_from_env
@@ -152,6 +159,9 @@ class ReviewRuntime:
     # reservation with the actual cost after the run. A run that never settles stays charged.
     fork_budget: ForkBudget | None = None
     fork_reservation: Reservation | None = None
+    # Story 17-7: the daily spend ledger, set with fork_budget. cli.py settles its entry too.
+    fork_spend: ForkSpend | None = None
+    fork_spend_reservation: SpendReservation | None = None
 
 
 def _merge_allowlist(
@@ -310,6 +320,22 @@ def _open_fork_budget(config: ReviewConfig, provider: VcsProvider) -> ForkBudget
     return ForkBudget(provider, Caps(run_cents=run_cents))  # type: ignore[arg-type]
 
 
+def _open_fork_spend(config: ReviewConfig, provider: VcsProvider, profile: ForkProfile) -> ForkSpend | None:
+    """The daily spend ledger for a fork-profile run, or ``None`` when the provider cannot keep one."""
+    needed = ("list_spend_entries", "create_spend_entry", "update_spend_entry", "delete_spend_entry",
+              "list_open_pulls")
+    if not all(callable(getattr(provider, name, None)) for name in needed):
+        return None
+    try:
+        pr_number = int(config.pr_number)
+    except ValueError:
+        return None
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    caps = DailyCaps.from_usd(config.fork_daily_max_cost_usd, config.fork_daily_reserved_share)
+    return ForkSpend(provider, caps, tier=tier_of(profile.author_association),  # type: ignore[arg-type]
+                     pr_number=pr_number, run_id=run_id)
+
+
 async def build_review_runtime(
     config: ReviewConfig,
     *,
@@ -354,13 +380,23 @@ async def build_review_runtime(
     # 1c. Per-PR ledger (CAP-2, story 17-6): a fork-profile run pauses at a cap before any analyzer
     # or git command touches the fork tree. A dry run posts nothing, so it is not charged.
     fork_budget: ForkBudget | None = None
+    fork_spend: ForkSpend | None = None
     if fork_profile is not None and not config.dry_run:
         fork_budget = _open_fork_budget(config, provider)
         if fork_budget is None:
             logger.warning("fork budget: the provider keeps no ledger, so the fork run is paused")
             return _fork_pause(provider, LEDGER_ERROR_TEXT)
+        fork_spend = _open_fork_spend(config, provider, fork_profile)
+        if fork_spend is None:
+            logger.warning("fork spend: the provider keeps no spend ledger, so the fork run is paused")
+            return _fork_pause(provider, LEDGER_ERROR_TEXT)
         try:
+            # Story 17-7: the author cap first, then the PR ledger, then the daily ledger. All read only.
+            check_author_cap(
+                provider, pr_number=int(config.pr_number), author=fork_profile.author_login,  # type: ignore[arg-type]
+                base_repo=fork_profile.base_repo)
             fork_budget.precheck()
+            fork_spend.precheck()
         except ForkBudgetPause as pause:
             logger.warning("fork budget: run paused at the %s cap", pause.cap)
             return _fork_pause(provider, pause.reason)
@@ -897,16 +933,23 @@ async def build_review_runtime(
     # 9f. Reserve this run's estimate in the per-PR ledger, before any LLM call (cli.py's
     # pr-summarizer and issue-linker come next). A run that does not fit is paused.
     fork_reservation: Reservation | None = None
+    fork_spend_reservation: SpendReservation | None = None
     if fork_budget is not None:
         if pre_flight_cost_estimate_units is None:
             return _fork_pause(provider, ESTIMATE_ERROR_TEXT)
+        estimate_cents = cents_from_units(pre_flight_cost_estimate_units)
         try:
-            fork_reservation = fork_budget.reserve(cents_from_units(pre_flight_cost_estimate_units))
-        except ForkBudgetPause as pause:
-            logger.warning("fork budget: run paused at the %s cap", pause.cap)
-            return _fork_pause(provider, pause.reason)
-        except LedgerError as exc:
-            logger.warning("fork budget: run paused, %s", exc)
+            # Daily first: it is the cap a run most often loses here, and then nothing else was written.
+            if fork_spend is not None:
+                fork_spend_reservation = fork_spend.reserve(estimate_cents)
+            fork_reservation = fork_budget.reserve(estimate_cents)
+        except (ForkBudgetPause, LedgerError) as stop:
+            if fork_spend is not None and fork_spend_reservation is not None:
+                fork_spend.release(fork_spend_reservation)  # the run will not start, so free its daily entry
+            if isinstance(stop, ForkBudgetPause):
+                logger.warning("fork budget: run paused at the %s cap", stop.cap)
+                return _fork_pause(provider, stop.reason)
+            logger.warning("fork budget: run paused, %s", stop)
             return _fork_pause(provider, LEDGER_ERROR_TEXT)
 
     # 13. Build orchestrator config.
@@ -960,6 +1003,8 @@ async def build_review_runtime(
         fork_profile=fork_profile,
         fork_budget=fork_budget,
         fork_reservation=fork_reservation,
+        fork_spend=fork_spend,
+        fork_spend_reservation=fork_spend_reservation,
         not_reviewed_notice=build_not_reviewed_notice(
             # Only the patterns the user added. The built-in lockfile and vendor
             # excludes are the same on every run, so listing them is noise.

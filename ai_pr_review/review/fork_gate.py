@@ -42,7 +42,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
 APPROVAL_LABEL = "ai-review-approve-fork"
@@ -74,6 +74,7 @@ class ForkProfile:
     head_repo: str
     author_login: str
     author_association: str
+    base_repo: str = field(default="", compare=False)  # for the author cap (story 17-7)
 
 
 @dataclass(frozen=True)
@@ -180,7 +181,7 @@ def decide(
     if policy == "auto":
         if is_trusted(facts.author_association, trusted):
             return GateDecision(gated=True, allowed=True, mode=MODE_TRUSTED)
-        profile = ForkProfile(facts.head_repo, facts.author_login, facts.author_association)
+        profile = ForkProfile(facts.head_repo, facts.author_login, facts.author_association, facts.base_repo)
         return GateDecision(gated=True, allowed=True, mode=MODE_FORK, profile=profile)
     if facts.approval_state == "success":  # policy "label"
         return GateDecision(gated=True, allowed=True, mode=MODE_APPROVED)

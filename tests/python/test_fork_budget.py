@@ -380,7 +380,8 @@ def test_units_round_up_to_cents() -> None:
 def _runtime(backend: Backend) -> tuple[Any, ForkBudget]:
     budget = _budget(backend)
     reservation = budget.reserve(100)
-    return SimpleNamespace(fork_budget=budget, fork_reservation=reservation), budget
+    return SimpleNamespace(
+        fork_budget=budget, fork_reservation=reservation, fork_spend=None, fork_spend_reservation=None), budget
 
 
 def test_the_cli_settles_with_the_priced_actual_cost() -> None:
@@ -407,7 +408,8 @@ def test_a_settle_failure_in_the_cli_is_soft_and_keeps_the_estimate() -> None:
 
 
 def test_a_run_without_a_reservation_settles_nothing() -> None:
-    _settle_fork_budget(SimpleNamespace(fork_budget=None, fork_reservation=None), None)
+    _settle_fork_budget(
+        SimpleNamespace(fork_budget=None, fork_reservation=None, fork_spend=None, fork_spend_reservation=None), None)
 
 
 # --- the GitHub provider side ------------------------------------------------
@@ -532,6 +534,7 @@ def test_a_failed_write_raises(status: int) -> None:
 
 
 def _make_provider_class() -> type:
+    from tests.python.test_fork_spend import SpendMem
     from tests.python.test_runtime import _FakeProvider
 
     class _Provider(_FakeProvider):
@@ -540,6 +543,7 @@ def _make_provider_class() -> type:
         def __init__(self, backend: Backend, association: str = "NONE") -> None:
             super().__init__()
             self.backend, self.association = backend, association
+            self.spend = SpendMem()
 
         def get_fork_gate_facts(self, head_sha: str, context: str, *, read_approval: bool = True) -> ForkGateFacts:
             return ForkGateFacts("mallory/r", "o/r", "", "mallory", self.association)
@@ -555,6 +559,21 @@ def _make_provider_class() -> type:
 
         def delete_budget_entry(self, comment_id: int) -> None:
             self.backend.delete_budget_entry(comment_id)
+
+        def list_spend_entries(self, since: str) -> list[tuple[int, str]]:
+            return self.spend.list_spend_entries(since)
+
+        def create_spend_entry(self, body: str) -> int:
+            return self.spend.create_spend_entry(body)
+
+        def update_spend_entry(self, comment_id: int, body: str) -> None:
+            self.spend.update_spend_entry(comment_id, body)
+
+        def delete_spend_entry(self, comment_id: int) -> None:
+            self.spend.delete_spend_entry(comment_id)
+
+        def list_open_pulls(self) -> list[tuple[int, str, str]]:
+            return self.spend.list_open_pulls()
 
     return _Provider
 

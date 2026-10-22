@@ -291,21 +291,29 @@ def _preflight_agent_results(
 
 
 def _settle_fork_budget(runtime: ReviewRuntime, totals: Any) -> None:
-    """Settle the fork run's ledger entry. Fail-soft: the run is over, so a failure leaves the
-    reserved estimate charged, which is the safe direction. With no totals, or a model that has
-    no price, the estimate stays."""
+    """Settle the fork run's ledger entries (per-PR, story 17-6, and daily, story 17-7). Fail-soft:
+    the run is over, so a failure leaves the reserved estimate charged, which is the safe direction.
+    With no totals, or a model that has no price, the estimate stays. Each entry settles on its own."""
     budget, reservation = runtime.fork_budget, runtime.fork_reservation
-    if budget is None or reservation is None:
+    spend, spend_reservation = runtime.fork_spend, runtime.fork_spend_reservation
+    if (budget is None or reservation is None) and (spend is None or spend_reservation is None):
         return
     if totals is None or totals.any_unknown:
-        logger.info("fork budget: no priced totals, so the entry keeps the estimate")
+        logger.info("fork budget: no priced totals, so the entries keep the estimate")
         return
     from ai_pr_review.review.fork_budget import LedgerError, cents_from_units
 
-    try:
-        budget.settle(reservation, cents_from_units(totals.cost_units))
-    except LedgerError as exc:
-        logger.warning("fork budget: %s. The entry keeps the estimate.", exc)
+    actual = cents_from_units(totals.cost_units)
+    if budget is not None and reservation is not None:
+        try:
+            budget.settle(reservation, actual)
+        except LedgerError as exc:
+            logger.warning("fork budget: %s. The entry keeps the estimate.", exc)
+    if spend is not None and spend_reservation is not None:
+        try:
+            spend.settle(spend_reservation, actual)
+        except LedgerError as exc:
+            logger.warning("fork spend: %s. The entry keeps the estimate.", exc)
 
 
 async def _run_review_async(config: ReviewConfig) -> int:

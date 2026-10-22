@@ -99,6 +99,8 @@ _KNOWN_AI_VARS: frozenset[str] = frozenset(
         "AI_MAX_COST_USD",
         # --- Fork pull request gate ---
         "AI_FORK_MAX_COST_USD",
+        "AI_FORK_DAILY_MAX_COST_USD",
+        "AI_FORK_DAILY_RESERVED_SHARE",
         "AI_FORK_POLICY",
         "AI_FORK_TRUSTED_ASSOCIATIONS",
         "AI_FAIL_ON_FORK_GATE",
@@ -614,6 +616,10 @@ class ReviewConfig(BaseModel):
     # Ceiling applied to an approved fork pull request when max_cost_usd is 0 (see review/fork_gate.py).
     # 0 turns the default off. A non-zero max_cost_usd always wins.
     fork_max_cost_usd: float = 2.0
+    # Daily spend cap (USD per rolling 24 hours) for fork runs by non-trusted authors, and the share of
+    # it that only CONTRIBUTOR authors use (story 17-7). 0 pauses every such run.
+    fork_daily_max_cost_usd: float = 50.0
+    fork_daily_reserved_share: float = 0.7
     # What the engine does with a fork pull request: auto, label (maintainer approval status) or
     # block. The default flips to auto in story 17-13. An unknown value falls back to label.
     fork_policy: str = "label"
@@ -884,6 +890,31 @@ class ReviewConfig(BaseModel):
             return 2.0
         return v
 
+    @field_validator("fork_daily_max_cost_usd")
+    @classmethod
+    def _fork_daily_max_cost_usd_falls_back(cls, v: float) -> float:
+        # An unusable value must not lift the daily cap. Use the default instead. 0 is valid and pauses all.
+        if not math.isfinite(v) or v < 0:
+            print(
+                f"WARNING: AI_FORK_DAILY_MAX_COST_USD={v} is not a finite, non-negative number; "
+                "using the default of 50.0.",
+                file=sys.stderr,
+            )
+            return 50.0
+        return v
+
+    @field_validator("fork_daily_reserved_share")
+    @classmethod
+    def _fork_daily_reserved_share_falls_back(cls, v: float) -> float:
+        if not math.isfinite(v) or v < 0 or v > 1:
+            print(
+                f"WARNING: AI_FORK_DAILY_RESERVED_SHARE={v} is not a number from 0 to 1; "
+                "using the default of 0.7.",
+                file=sys.stderr,
+            )
+            return 0.7
+        return v
+
     @field_validator("fork_policy")
     @classmethod
     def _fork_policy_falls_back(cls, v: str) -> str:
@@ -1022,6 +1053,8 @@ class ReviewConfig(BaseModel):
             token_usage_warn_usd=_float("AI_TOKEN_USAGE_WARN_USD", 1.00),
             max_cost_usd=_float("AI_MAX_COST_USD", 0.0),
             fork_max_cost_usd=_float("AI_FORK_MAX_COST_USD", 2.0),
+            fork_daily_max_cost_usd=_float("AI_FORK_DAILY_MAX_COST_USD", 50.0),
+            fork_daily_reserved_share=_float("AI_FORK_DAILY_RESERVED_SHARE", 0.7),
             fork_policy=os.environ.get("AI_FORK_POLICY", "label"),
             fork_trusted_associations=parse_trusted_associations(os.environ.get("AI_FORK_TRUSTED_ASSOCIATIONS")),
             fail_on_fork_gate=_bool("AI_FAIL_ON_FORK_GATE"),
