@@ -1128,3 +1128,37 @@ def test_bitbucket_annotation_summary_and_details_are_clamped() -> None:
     got = _send({"annotations": [{"summary": f"s {_HOSTILE}", "details": f"d {_HOSTILE}"}], "summary": f"s {_HOSTILE}", "details": f"d {_HOSTILE}"})
     for text in (got["summary"], got["details"]):
         _assert_clean(text)
+
+
+def test_settling_the_ledger_writes_outside_the_clamp() -> None:
+    """The settle step runs inside the fork clamp scope. Its ledger bodies must not be clamped."""
+    from types import SimpleNamespace
+
+    from ai_pr_review import cli
+    from ai_pr_review.output_clamp import clamp_active
+
+    seen: list[bool] = []
+
+    class _Ledger:
+        def settle(self, reservation: object, cents: int) -> None:
+            seen.append(clamp_active())
+
+    runtime = SimpleNamespace(
+        fork_budget=_Ledger(), fork_reservation=object(), fork_spend=_Ledger(), fork_spend_reservation=object()
+    )
+    totals = SimpleNamespace(any_unknown=False, cost_units=1_000_000)
+    with output_clamp(True, REPO):
+        cli._settle_fork_budget(runtime, totals)  # type: ignore[arg-type]
+        assert clamp_active()  # the scope is restored afterwards
+    assert seen == [False, False]
+
+
+def test_a_real_ledger_body_survives_the_clamped_client_only_when_written_outside_it() -> None:
+    from ai_pr_review.output_clamp import clamp_suspended
+    from ai_pr_review.review.fork_budget import render_entry
+
+    body = render_entry(1, 200, 0, None)
+    with output_clamp(True, REPO):
+        assert _send({"body": body}, clamp=False)["body"] != body  # clamped: banner and escaped marker
+        with clamp_suspended():
+            assert _send({"body": body}, clamp=False)["body"] == body

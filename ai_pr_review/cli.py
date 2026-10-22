@@ -300,21 +300,29 @@ def _settle_fork_budget(runtime: ReviewRuntime, totals: Any) -> None:
     if (budget is None or reservation is None) and (spend is None or spend_reservation is None):
         return
     if totals is None or totals.any_unknown:
-        logger.info("fork budget: no priced totals, so the entries keep the estimate")
+        logger.warning(
+            "fork budget: no priced totals (a model without a price, or no usage data), so the ledger "
+            "entries keep the full estimate and may overcharge the PR and the daily pool"
+        )
         return
+    from ai_pr_review.output_clamp import clamp_suspended
     from ai_pr_review.review.fork_budget import LedgerError, cents_from_units
 
     actual = cents_from_units(totals.cost_units)
-    if budget is not None and reservation is not None:
-        try:
-            budget.settle(reservation, actual)
-        except LedgerError as exc:
-            logger.warning("fork budget: %s. The entry keeps the estimate.", exc)
-    if spend is not None and spend_reservation is not None:
-        try:
-            spend.settle(spend_reservation, actual)
-        except LedgerError as exc:
-            logger.warning("fork spend: %s. The entry keeps the estimate.", exc)
+    # The ledger entries are engine data, not review text. Written inside the output clamp they
+    # would get the banner and the strict pass (``<!--`` becomes ``&lt;!--``), the entry would
+    # no longer parse, and every later fork run would pause. Write them outside the clamp.
+    with clamp_suspended():
+        if budget is not None and reservation is not None:
+            try:
+                budget.settle(reservation, actual)
+            except LedgerError as exc:
+                logger.warning("fork budget: %s. The entry keeps the estimate.", exc)
+        if spend is not None and spend_reservation is not None:
+            try:
+                spend.settle(spend_reservation, actual)
+            except LedgerError as exc:
+                logger.warning("fork spend: %s. The entry keeps the estimate.", exc)
 
 
 async def _run_review_async(config: ReviewConfig) -> int:

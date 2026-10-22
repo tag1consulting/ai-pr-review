@@ -75,12 +75,14 @@ def test_diff_line_closer_escaped() -> None:
     assert safe_code("+ </symbol-context>") == "+ &lt;/symbol-context>"
 
 
-def test_clean_code_keeps_zwj_zwnj_marks_but_strips_overrides() -> None:
+def test_clean_code_keeps_zwj_zwnj_marks_and_shows_overrides() -> None:
     keep = "\U0001f468‍\U0001f469 a‌b ‎ ‏"
     assert clean_code(keep) == keep
     assert clean_text(keep) != keep
-    assert clean_code("a‮b⁦c⁩d") == "abcd"
-    assert clean_code(f"a{TAGCHAR}b\x00c") == "abc"
+    # Bidi overrides and tag characters stay visible, so a reviewer can flag a Trojan Source line.
+    assert clean_code("a‮b⁦c⁩d") == "a<U+202E>b<U+2066>c<U+2069>d"
+    assert clean_code(f"a{TAGCHAR}b\x00c") == f"a<U+{ord(TAGCHAR):04X}>bc"
+    assert clean_code(clean_code("a‮b")) == clean_code("a‮b")  # idempotent
 
 
 def test_symbol_snippet_name_and_file_escaped_and_fence_grows() -> None:

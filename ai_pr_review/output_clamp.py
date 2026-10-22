@@ -72,6 +72,18 @@ def output_clamp(enabled: bool, repo: str = "") -> Iterator[None]:
         _STATE.reset(token)
 
 
+@contextmanager
+def clamp_suspended() -> Iterator[None]:
+    """Turn the clamp off inside the ``with`` block, also inside an outer clamp.
+
+    Use it only for engine data that is not review text, such as the budget ledger entries."""
+    token = _STATE.set(None)
+    try:
+        yield
+    finally:
+        _STATE.reset(token)
+
+
 def clamp_active() -> bool:
     """True inside an ``output_clamp`` scope."""
     return _STATE.get() is not None

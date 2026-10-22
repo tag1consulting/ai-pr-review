@@ -45,3 +45,14 @@ def _reset_fork_isolation_state():
     yield
     _env.configure_fork_isolation(False)
     _env.configure_passthrough((), allow_passthrough=True)
+
+
+@pytest.fixture(autouse=True)
+def _no_persisted_credential_in_the_test_workspace(monkeypatch: pytest.MonkeyPatch):
+    """CI checks the repository out with a stored credential in .git/config, which the fork gate
+    (rightly) pauses on. Tests that are not about that check must not depend on the checkout.
+    A test that wants the real check imports ``fork_gate.persisted_credential_reason`` itself."""
+    from ai_pr_review.review import fork_gate
+
+    monkeypatch.setattr(fork_gate, "persisted_credential_reason", lambda workspace=".": "")
+    yield

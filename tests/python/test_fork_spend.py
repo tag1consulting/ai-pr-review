@@ -481,16 +481,27 @@ class Api:
         self.issues, self.comments = issues, comments or []
         self.calls: list[tuple[str, str, str]] = []
         self.creator_empty = False
+        self.search_items: list[dict[str, Any]] = []
+        self.search_status = 200
+        self.endless = False  # the issue listing never ends: every page links to a next page
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         path, query = req.url.path, req.url.query.decode()
         self.calls.append((req.method, path, query))
+        if req.method == "GET" and path == "/search/issues":
+            if self.search_status >= 400:
+                return httpx.Response(self.search_status, json={})
+            return httpx.Response(200, json={"items": self.search_items})
         if req.method == "GET" and path == "/repos/o/r/issues":
-            if "creator=" in query and self.creator_empty:
+            if "creator=" not in query:
+                raise AssertionError("the issue listing must always use the creator filter")
+            if self.creator_empty:
                 return httpx.Response(200, json=[])
-            return httpx.Response(200, json=self.issues)
+            headers = {"link": '<https://api.github.com/repos/o/r/issues?creator=x&page=2>; rel="next"'} if self.endless else {}
+            return httpx.Response(200, json=self.issues, headers=headers)
         if req.method == "POST" and path == "/repos/o/r/issues":
             self.issues.append(_issue(900))
+            self.creator_empty = False  # the new issue shows up in the listing
             return httpx.Response(201, json={"number": 900})
         if req.method == "GET" and path.endswith("/comments"):
             return httpx.Response(200, json=self.comments)
@@ -533,13 +544,57 @@ def test_no_spend_issue_creates_one_with_the_exact_title_then_comments_on_it() -
     assert ("POST", "/repos/o/r/issues/900/comments", "") in api.calls
 
 
-def test_a_creator_filter_that_finds_nothing_falls_back_to_a_full_scan_before_creating() -> None:
-    api = Api([_issue(3)])
+def test_a_creator_filter_that_finds_nothing_falls_back_to_a_search_before_creating() -> None:
+    api = Api([])
     api.creator_empty = True
+    api.search_items = [_issue(3)]
     prov = _provider(api)
     prov.create_spend_entry("b")
     assert not any(c[1] == "/repos/o/r/issues" and c[0] == "POST" for c in api.calls)
     assert ("POST", "/repos/o/r/issues/3/comments", "") in api.calls
+    search = next(c for c in api.calls if c[1] == "/search/issues")
+    from urllib.parse import unquote_plus
+
+    q = unquote_plus(search[2])
+    assert "repo:o/r" in q and "is:issue" in q and "in:title" in q and "author:app/github-actions" in q
+    assert SPEND_ISSUE_TITLE in q and "[bot]" not in q
+
+
+def test_the_search_fallback_ignores_look_alikes_and_takes_the_lowest_number() -> None:
+    api = Api([])
+    api.creator_empty = True
+    api.search_items = [_issue(8), _issue(2, user=_USER), _issue(5, pull=True), _issue(6), _issue(4, title="x")]
+    assert _provider(api)._find_spend_issue() == 6
+    assert api.posts() == []
+
+
+def test_nothing_found_by_listing_or_search_creates_the_issue() -> None:
+    api = Api([_issue(1, user=_USER)])
+    api.creator_empty = True
+    prov = _provider(api)
+    prov.create_spend_entry("b")
+    assert len([c for c in api.posts() if c[1] == "/repos/o/r/issues"]) == 1
+
+
+def test_a_failed_search_counts_as_not_found_and_creates_the_issue() -> None:
+    api = Api([])
+    api.creator_empty = True
+    api.search_status = 422
+    prov = _provider(api)
+    prov.create_spend_entry("b")
+    assert len([c for c in api.posts() if c[1] == "/repos/o/r/issues"]) == 1
+
+
+def test_a_huge_issue_listing_never_raises_and_never_scans_all_issues(caplog: pytest.LogCaptureFixture) -> None:
+    api = Api([_issue(5)])
+    api.endless = True
+    with caplog.at_level("WARNING"):
+        assert _provider(api)._find_spend_issue() == 5
+    assert "more than" in caplog.text
+    api2 = Api([])
+    api2.endless = True
+    api2.search_items = []
+    assert _provider(api2)._find_spend_issue() is None  # a capped listing with no hit is not found, no raise
 
 
 def test_reading_with_no_spend_issue_returns_nothing_and_creates_nothing() -> None:

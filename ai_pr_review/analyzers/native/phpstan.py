@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from ai_pr_review.analyzers._env import tool_env
+from ai_pr_review.analyzers._env import fork_isolated, tool_env
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -85,13 +85,31 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     # guarantees no workspace config is ever honored, regardless of trust
     # context. This intentionally drops the previous "consumer phpstan.neon
     # drives everything" behavior; PHPSTAN_LEVEL now always applies.
+    # On a fork run, phpstan must not start in the workspace. PHPStan loads
+    # `vendor/autoload.php` from its working directory (or the `vendor-dir` of a
+    # `composer.json` there), and both are files of the fork tree, so a stranger's
+    # PHP would run in this job. Run from an empty temp directory instead, keep
+    # the trusted config inside it, and pass absolute file paths. Verified with
+    # phpstan 2.3.1: from the tree the autoload file ran, from an empty directory
+    # it did not. The cost is that the project's own classes are not resolved, so
+    # a fork run may report fewer findings. This is accepted.
+    isolated = fork_isolated()
+    fork_dir: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".neon", prefix="phpstan-trusted-", delete=False
-        ) as trusted_config:
-            trusted_config.write("# Deliberately empty; see #739.\n")
-            trusted_config_path = trusted_config.name
+        if isolated:
+            fork_dir = tempfile.mkdtemp(prefix="phpstan-cwd-")
+            trusted_config_path = os.path.join(fork_dir, "phpstan-trusted.neon")
+            with open(trusted_config_path, "w") as trusted_config:
+                trusted_config.write("# Deliberately empty; see #739.\n")
+        else:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".neon", prefix="phpstan-trusted-", delete=False
+            ) as trusted_config:
+                trusted_config.write("# Deliberately empty; see #739.\n")
+                trusted_config_path = trusted_config.name
     except OSError as exc:
+        if fork_dir:
+            shutil.rmtree(fork_dir, ignore_errors=True)
         logger.warning("[ai-pr-review] WARNING: could not create trusted phpstan config: %s; skipping.", exc)
         return []
 
@@ -106,7 +124,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
     # beginning with a dash (e.g. `--autoload-file=evil.php`) is treated as a
     # path, not a flag. Matches the sibling analyzers (shellcheck, ruff, etc.).
     args.append("--")
-    args += target_files
+    args += [os.path.abspath(f) for f in target_files] if isolated else target_files
 
     try:
         try:
@@ -120,6 +138,7 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
                 text=True,
                 timeout=_TIMEOUT_SECS,
                 env=tool_env(),
+                cwd=fork_dir,
             )
         except subprocess.TimeoutExpired as exc:
             logger.warning("[ai-pr-review] WARNING: phpstan timed out after %ss; skipping.", exc.timeout)
@@ -128,8 +147,11 @@ def _run_phpstan(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
             logger.warning("[ai-pr-review] WARNING: phpstan failed to start: %s", exc)
             return []
     finally:
-        with contextlib.suppress(OSError):
-            os.unlink(trusted_config_path)
+        if fork_dir:
+            shutil.rmtree(fork_dir, ignore_errors=True)
+        else:
+            with contextlib.suppress(OSError):
+                os.unlink(trusted_config_path)
 
     if result.returncode >= 2:
         logger.warning(

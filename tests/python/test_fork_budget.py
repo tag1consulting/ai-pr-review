@@ -510,7 +510,9 @@ def _provider(handler: Callable[[httpx.Request], httpx.Response]) -> GitHubProvi
     client = RecordingClient(
         http=http, recorder=TapeRecorder(record_dir=None),
         retry_policy=RetryPolicy(attempts=1, base_backoff=0, jitter=False, sleep=lambda _s: None))
-    return GitHubProvider(config=GitHubConfig(owner="o", repo="r", pr_number=7, token="t"), client=client)
+    prov = GitHubProvider(config=GitHubConfig(owner="o", repo="r", pr_number=7, token="t"), client=client)
+    prov._pr_author_login = "the-fork-author"  # the facts read sets this before the ledger is used
+    return prov
 
 
 def _comments(*items: dict[str, Any]) -> Callable[[httpx.Request], httpx.Response]:
@@ -818,3 +820,21 @@ def test_a_zero_fork_ceiling_in_the_config_falls_back_with_a_warning(
     monkeypatch.setenv("AI_FORK_MAX_COST_USD", "0")
     assert ReviewConfig.from_env().fork_max_cost_usd == 2.0
     assert "AI_FORK_MAX_COST_USD" in capsys.readouterr().err
+
+
+def test_the_pull_request_author_cannot_credit_their_own_rescan() -> None:
+    prov = _provider(_comments(
+        {"id": 1, "user": {"login": "The-Fork-Author"}, "author_association": "MEMBER", "body": RESCAN},
+        {"id": 2, "user": {"login": "maintainer"}, "author_association": "MEMBER", "body": RESCAN},
+    ))
+    _ledger, maintainer = prov.list_budget_comments()
+    assert [cid for cid, _ in maintainer] == [2]  # case-insensitive match on the author login
+
+
+def test_with_an_unknown_author_nobody_is_credited() -> None:
+    prov = _provider(_comments(
+        {"id": 2, "user": {"login": "maintainer"}, "author_association": "OWNER", "body": RESCAN},
+    ))
+    prov._pr_author_login = ""
+    _ledger, maintainer = prov.list_budget_comments()
+    assert maintainer == []

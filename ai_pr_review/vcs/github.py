@@ -734,7 +734,16 @@ class GitHubProvider:
                     if is_entry_body(body):
                         ledger.append((item["id"], body))
                 elif str(item.get("author_association") or "").upper() in MAINTAINER_ASSOCIATIONS:
-                    maintainer.append((item["id"], body))
+                    # The pull request author cannot lift their own cap, and with an unknown author
+                    # nobody is credited. A rescan from another maintainer is the only way to resume.
+                    commenter = (item.get("user") or {}).get("login") if isinstance(item.get("user"), dict) else None
+                    pr_author = getattr(self, "_pr_author_login", "")
+                    if (
+                        pr_author
+                        and isinstance(commenter, str)
+                        and commenter.casefold() != pr_author.casefold()
+                    ):
+                        maintainer.append((item["id"], body))
             url = _parse_next_link(resp.headers.get("link", ""))
             params = None
         return ledger, maintainer
@@ -767,9 +776,12 @@ class GitHubProvider:
     # ------------------------------------------------------------------
     _MAX_PAGES = 100
 
-    def _get_pages(self, url: str, params: dict[str, Any], label: str) -> list[dict[str, Any]]:
+    def _get_pages(
+        self, url: str, params: dict[str, Any], label: str, *, truncate: bool = False
+    ) -> list[dict[str, Any]]:
         """Every item of a paged list endpoint. Raises ``RuntimeError`` on any HTTP error, bad page,
-        non-object item, or more than ``_MAX_PAGES`` pages."""
+        non-object item, or more than ``_MAX_PAGES`` pages. With ``truncate``, the page cap is not an
+        error: a warning is logged and the items seen so far are returned."""
         items: list[dict[str, Any]] = []
         next_url: str | None = url
         next_params: dict[str, Any] | None = params
@@ -789,6 +801,9 @@ class GitHubProvider:
             next_url = _parse_next_link(resp.headers.get("link", ""))
             next_params = None
         if next_url:
+            if truncate:
+                _log.warning("%s: more than %d pages, using the items seen so far.", label, self._MAX_PAGES)
+                return items
             raise RuntimeError(f"{label}: more than {self._MAX_PAGES} pages")
         return items
 
@@ -818,22 +833,58 @@ class GitHubProvider:
             "pull_request" not in item and isinstance(item.get("number"), int)
             and self._is_bot_authored(item) and item.get("title") == SPEND_ISSUE_TITLE)
 
+    _SEARCH_MAX_PAGES = 10  # GitHub search returns at most 1000 results
+
+    def _search_spend_issue(self) -> list[int]:
+        """Numbers of spend issue candidates from a bounded GitHub search (never a full listing scan).
+
+        The query is ``repo:o/r is:issue in:title "<title>" author:app/<name>`` for a ``[bot]``
+        login and ``author:<login>`` otherwise. Every hit is still checked with ``_is_spend_issue``.
+        """
+        from ai_pr_review.review.fork_spend import SPEND_ISSUE_TITLE
+
+        c = self.config
+        login = c.bot_login
+        author = f"app/{login[:-5]}" if login.lower().endswith("[bot]") else login
+        query = f'repo:{c.owner}/{c.repo} is:issue in:title "{SPEND_ISSUE_TITLE}" author:{author}'
+        found: list[int] = []
+        for page in range(1, self._SEARCH_MAX_PAGES + 1):
+            resp = self.client.request(
+                "GET", "/search/issues", params={"q": query, "per_page": 100, "page": page})
+            if resp.status_code >= 400:
+                raise RuntimeError(f"search spend issue: HTTP {resp.status_code}")
+            try:
+                items = resp.json().get("items")
+            except (ValueError, AttributeError) as exc:
+                raise RuntimeError("search spend issue: bad response") from exc
+            if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                raise RuntimeError("search spend issue: bad response")
+            found += [int(i["number"]) for i in items if self._is_spend_issue(i)]
+            if len(items) < 100:
+                break
+        return found
+
     def _find_spend_issue(self) -> int | None:
         """The lowest-numbered bot-created spend issue, open or closed. ``None`` when there is none.
 
-        The ``creator`` filter keeps the listing short. When it finds nothing, a full scan confirms
-        before the caller creates an issue, so a filter that does not match a bot login can never
-        cause one new issue per run.
+        The ``creator`` listing is bounded by the bot's own issues and runs first. When it finds
+        nothing, a bounded search confirms before the caller creates an issue, so a filter that does
+        not match a bot login cannot cause one new issue per run. The listing of all issues and pull
+        requests is never scanned: a repository can hold more than ``_MAX_PAGES`` pages of them. A
+        search that fails is a warning and counts as not found, so the issue is created.
         """
         c = self.config
         url = f"/repos/{c.owner}/{c.repo}/issues"
-        base = {"state": "all", "per_page": 100}
-        for params in ({**base, "creator": c.bot_login}, base):
-            found: list[int] = [
-                int(i["number"]) for i in self._get_pages(url, params, "list issues") if self._is_spend_issue(i)]
-            if found:
-                return min(found)
-        return None
+        params = {"state": "all", "per_page": 100, "creator": c.bot_login}
+        found = [
+            int(i["number"]) for i in self._get_pages(url, params, "list issues", truncate=True)
+            if self._is_spend_issue(i)]
+        if not found:
+            try:
+                found = self._search_spend_issue()
+            except RuntimeError as exc:
+                _log.warning("Could not search for the spend issue (%s), treating it as not found.", exc)
+        return min(found) if found else None
 
     def _spend_issue_number(self, *, create: bool) -> int | None:
         if self._spend_issue is not None:
@@ -2705,6 +2756,7 @@ class GitHubProvider:
             return None
         author = pr.get("user")
         login = author.get("login") if isinstance(author, dict) else ""
+        self._pr_author_login = login if isinstance(login, str) else ""
         association = pr.get("author_association")
         who = {
             "author_login": login if isinstance(login, str) else "",

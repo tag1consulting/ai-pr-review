@@ -21,7 +21,11 @@ _STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\U000e0000-\U000e007f]")
 
 # Controls, the tag block, and the bidi override and isolate characters.
 # ZWJ, ZWNJ, LRM and RLM stay, because emoji sequences and some scripts need them.
-_CODE_STRIP = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\U000e0000-\U000e007f‪-‮⁦-⁩]")
+_CODE_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+# Bidi overrides and isolates (Trojan Source) and the tag block (hidden instructions) are not deleted
+# from code. A reviewer must still be able to see that they are there, so each becomes a visible
+# ``<U+XXXX>`` marker.
+_CODE_VISIBLE = re.compile("[\U000e0000-\U000e007f‪-‮⁦-⁩]")
 
 # Closers of the blocks the engine builds around untrusted text.
 BLOCK_TAGS = ("pr-context", "symbol-context", "repo-feedback")
@@ -34,9 +38,12 @@ def clean_text(text: str) -> str:
 
 
 def clean_code(text: str) -> str:
-    """Light variant of ``clean_text`` for code. Drop controls, tag characters and bidi overrides.
-    Keep ZWJ, ZWNJ, LRM and RLM. Tab, newline and carriage return stay."""
-    return _CODE_STRIP.sub("", text)
+    """Light variant of ``clean_text`` for code. Drop controls. Show each tag character and bidi
+    override as a visible ``<U+XXXX>`` marker, so a Trojan Source or hidden-text attack stays
+    visible to the reviewing agents. Keep ZWJ, ZWNJ, LRM and RLM. Tab, newline and carriage return
+    stay."""
+    text = _CODE_CONTROLS.sub("", text)
+    return _CODE_VISIBLE.sub(lambda m: f"<U+{ord(m.group()):04X}>", text)
 
 
 def _closing_pattern(tags: tuple[str, ...]) -> re.Pattern[str]:

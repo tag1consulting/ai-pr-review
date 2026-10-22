@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -394,3 +395,57 @@ class TestBridgeIntegration:
             await run_analyzers(ChangedFiles(), "/dev/null")
 
         assert not called
+
+
+class TestForkIsolatedLaunch:
+    """On a fork run phpstan starts in an empty directory, so the tree's vendor/autoload.php never loads."""
+
+    def _launch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, fork: bool) -> tuple[MagicMock, dict]:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "vendor").mkdir()
+        (tmp_path / "vendor" / "autoload.php").write_text("<?php\n")
+        (tmp_path / "a.php").write_text("<?php\n")
+        seen: dict = {}
+
+        def fake_run(args: list[str], **kwargs: object) -> MagicMock:
+            cwd = kwargs.get("cwd")
+            seen["cwd"] = cwd
+            seen["existed"] = bool(cwd) and Path(str(cwd)).is_dir()
+            seen["empty_but_config"] = sorted(p.name for p in Path(str(cwd)).iterdir()) if cwd else None
+            return MagicMock(returncode=0, stdout='{"files":{},"errors":[]}', stderr="")
+
+        with (
+            patch("ai_pr_review.analyzers.native.phpstan.fork_isolated", return_value=fork),
+            patch("ai_pr_review.analyzers.native.phpstan.shutil.which", return_value="/usr/bin/phpstan"),
+            patch("ai_pr_review.analyzers.native.phpstan.subprocess.run", side_effect=fake_run) as mock_run,
+        ):
+            _run_phpstan(_make_cf(["a.php"]), Path("/dev/null"))
+        return mock_run, seen
+
+    def test_fork_run_uses_empty_cwd_and_absolute_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_run, seen = self._launch(tmp_path, monkeypatch, fork=True)
+        args = mock_run.call_args[0][0]
+        assert seen["existed"] and Path(seen["cwd"]) != tmp_path
+        assert seen["empty_but_config"] == ["phpstan-trusted.neon"]
+        assert args[-1] == str(tmp_path / "a.php")
+        assert f"--configuration={seen['cwd']}/phpstan-trusted.neon" in args
+        assert not Path(seen["cwd"]).exists()
+
+    def test_non_fork_run_launch_is_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_run, seen = self._launch(tmp_path, monkeypatch, fork=False)
+        assert seen["cwd"] is None
+        assert mock_run.call_args[0][0][-1] == "a.php"
+
+    @pytest.mark.skipif(shutil.which("phpstan") is None, reason="phpstan not installed")
+    def test_real_phpstan_does_not_run_the_tree_autoload(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        marker = tmp_path / "marker"
+        (tmp_path / "vendor").mkdir()
+        (tmp_path / "vendor" / "autoload.php").write_text(
+            f"<?php file_put_contents({str(marker)!r}, 'pwned');\n"
+        )
+        (tmp_path / "a.php").write_text("<?php\nfunction f(): int { return 'a'; }\n")
+        monkeypatch.chdir(tmp_path)
+        with patch("ai_pr_review.analyzers.native.phpstan.fork_isolated", return_value=True):
+            findings = _run_phpstan(_make_cf(["a.php"]), Path("/dev/null"))
+        assert not marker.exists()
+        assert findings and findings[0].file == "a.php"
