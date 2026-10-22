@@ -73,7 +73,7 @@ def test_a_plain_pull_request_event_without_a_key_is_not_gated_and_needs_no_fact
 def test_a_plain_pull_request_event_with_a_key_is_gated_like_any_other() -> None:
     # A private repository can send secrets to fork pull requests. A key in the environment shows that it did.
     assert needs_facts("pull_request", key_present=True)
-    assert not decide("pull_request", SHA_A, FORK, key_present=True).allowed
+    assert not decide("pull_request", SHA_A, FORK, key_present=True, policy="label").allowed
     assert decide("pull_request", SHA_A, None, key_present=True).gated
 
 
@@ -93,20 +93,20 @@ def test_llm_key_present_sees_each_provider_key(
 
 @pytest.mark.parametrize("event", ["pull_request_target", "issue_comment", "workflow_run", ""])
 def test_a_fork_with_no_approval_is_blocked_on_every_other_event_including_an_unknown_one(event: str) -> None:
-    decision = decide(event, SHA_A, FORK, key_present=True)
+    decision = decide(event, SHA_A, FORK, key_present=True, policy="label")
     assert decision.gated and not decision.allowed
     assert "mallory/r" in decision.reason and "aaaaaaa" in decision.reason and "ai-review-approve-fork" in decision.reason
     assert "full pull request diff" in decision.reason  # not just the top commit
 
 
 def test_an_approved_fork_is_allowed_but_stays_gated_for_the_cost_default() -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(approval_state="success"), key_present=True)
+    decision = decide("pull_request_target", SHA_A, _facts(approval_state="success"), key_present=True, policy="label")
     assert decision.gated and decision.allowed
 
 
 @pytest.mark.parametrize("state", ["pending", "failure", "error"])
 def test_an_approval_that_is_not_successful_does_not_count(state: str) -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(approval_state=state), key_present=True)
+    decision = decide("pull_request_target", SHA_A, _facts(approval_state=state), key_present=True, policy="label")
     assert not decision.allowed and "not in a successful state" in decision.reason
 
 
@@ -116,7 +116,7 @@ def test_a_same_repository_pull_request_is_not_gated() -> None:
 
 
 def test_a_deleted_fork_is_gated_and_named_without_a_repo_name() -> None:
-    decision = decide("pull_request_target", SHA_A, _facts(head_repo=""), key_present=True)
+    decision = decide("pull_request_target", SHA_A, _facts(head_repo=""), key_present=True, policy="label")
     assert not decision.allowed and "gone" in decision.reason
 
 
@@ -229,11 +229,11 @@ def _gate(event: str, facts: ForkGateFacts | None, **cfg: object) -> tuple[Revie
 
 
 def test_an_approved_fork_gets_the_default_cost_ceiling_and_an_explicit_ceiling_wins() -> None:
-    config, skip = _gate("pull_request_target", _facts(approval_state="success"))
+    config, skip = _gate("pull_request_target", _facts(approval_state="success"), fork_policy="label")
     assert skip is None and config.max_cost_usd == DEFAULT_FORK_MAX_COST_USD
-    config, _ = _gate("pull_request_target", _facts(approval_state="success"), max_cost_usd=9.0)
+    config, _ = _gate("pull_request_target", _facts(approval_state="success"), fork_policy="label", max_cost_usd=9.0)
     assert config.max_cost_usd == 9.0
-    config, _ = _gate("pull_request_target", _facts(approval_state="success"), fork_max_cost_usd=0.0)
+    config, _ = _gate("pull_request_target", _facts(approval_state="success"), fork_policy="label", fork_max_cost_usd=0.0)
     assert config.max_cost_usd == DEFAULT_FORK_MAX_COST_USD  # 0 is not a way to switch the ceiling off
     config, _ = _gate("pull_request_target", _facts(head_repo="o/r"))
     assert config.max_cost_usd == 0.0  # a same-repository pull request keeps its own setting
@@ -289,7 +289,8 @@ async def _run(
         computed.append(config.head_sha)  # git work on the checkout would start here
         return {"skip": True, "reason": "NO-CHANGES"}
 
-    config = _make_config(event_name=event, head_sha=sha)
+    # These tests cover the label policy (the approval status), which is no longer the default.
+    config = _make_config(event_name=event, head_sha=sha, fork_policy="label")
     with patch("ai_pr_review.review.runtime.run_compute", fake_compute):
         result = await build_review_runtime(config, provider_factory=lambda: provider)
     return result, computed
@@ -348,17 +349,16 @@ async def test_a_failed_approval_after_a_success_blocks_again(anyio_backend: str
     assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and computed == []
 
 
-def test_this_repository_uses_the_same_approval_workflow_as_the_example() -> None:
+def test_the_example_approval_workflow_stays_free_of_a_checkout_and_of_expressions_in_scripts() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    own = (root / ".github" / "workflows" / "fork-approval.yml").read_text()
-    assert own == (root / "examples" / "workflows" / "fork-approval.yml").read_text()
+    example = (root / "examples" / "workflows" / "fork-approval.yml").read_text()
     # The approval job must stay free of a checkout and of any expression inside a run script.
-    assert "actions/checkout" not in own
+    assert "actions/checkout" not in example
     import re
 
-    for script in re.findall(r"run: \|\n((?:\s{10}.*\n|\n)+)", own):
+    for script in re.findall(r"run: \|\n((?:\s{10}.*\n|\n)+)", example):
         assert "${{" not in script
 
 
@@ -556,9 +556,29 @@ def test_label_is_the_old_approval_behavior_and_ignores_the_trusted_list() -> No
     assert approved.allowed and approved.gated and approved.mode == "approved" and approved.profile is None
 
 
-def test_the_default_policy_is_label() -> None:
-    assert not decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True).allowed
-    assert ReviewConfig.from_env().fork_policy == "label"
+def test_the_default_policy_is_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_FORK_POLICY", raising=False)
+    decision = decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True)
+    assert decision.allowed and decision.mode == "fork" and decision.profile is not None
+    assert ReviewConfig.from_env().fork_policy == "auto"
+    assert ReviewConfig().fork_policy == "auto"
+
+
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_an_empty_policy_value_gets_the_default_without_a_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], empty: str,
+) -> None:
+    # A workflow that forwards an unset variable sets the name to an empty string.
+    monkeypatch.setenv("AI_FORK_POLICY", empty)
+    assert ReviewConfig.from_env().fork_policy == "auto"
+    assert "AI_FORK_POLICY" not in capsys.readouterr().err
+
+
+def test_label_and_block_still_work_when_set_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    for policy, allowed in (("label", False), ("block", False)):
+        monkeypatch.setenv("AI_FORK_POLICY", policy)
+        assert ReviewConfig.from_env().fork_policy == policy
+        assert decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True, policy=policy).allowed is allowed
 
 
 @pytest.mark.parametrize("policy", ["auto", "label", "block"])
@@ -600,13 +620,15 @@ def test_the_policy_and_trusted_list_come_from_the_environment(monkeypatch: pyte
     assert ReviewConfig.from_env().fork_trusted_associations == ()
 
 
-@pytest.mark.parametrize("bad", ["approve", "x", ""])
-def test_an_unknown_policy_falls_back_to_label_with_a_warning(
+@pytest.mark.parametrize("bad", ["approve", "x", "AUTO!"])
+def test_an_unknown_policy_falls_back_to_label_not_auto_with_a_warning(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], bad: str,
 ) -> None:
     monkeypatch.setenv("AI_FORK_POLICY", bad)
     assert ReviewConfig.from_env().fork_policy == "label"
     assert "AI_FORK_POLICY" in capsys.readouterr().err
+    # The engine function also treats an unknown value as label, never as the auto default.
+    assert not decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True, policy=bad).allowed
 
 
 # GitHub facts

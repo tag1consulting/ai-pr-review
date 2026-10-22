@@ -49,7 +49,38 @@ If the action ever executed working-tree content under `pull_request_target`, a 
 
 ### Fork pull requests
 
-The engine pauses a fork pull request until a maintainer approves one exact head commit, and it requires the checked-out tree to be that commit. The approval is a commit status in the base repository, created by a trusted workflow after a write-access user adds a label. A new push needs a new approval. The engine fails closed when it cannot read the facts. See [docs/fork-prs.md](docs/fork-prs.md) for the rule, the approval workflow and the limits. This gate does not contain a flaw in the engine itself, because the review still runs in the job that holds the secrets.
+The default policy is `AI_FORK_POLICY=auto`. A fork pull request gets a review at once, with no maintainer step, and the engine contains the run from the inside. See [docs/fork-prs.md](docs/fork-prs.md) for the settings. [ADR 0006](docs/adr/0006-fork-prs-reviewed-in-one-deprivileged-job.md) records the decision.
+
+An attacker is anyone who can open a fork pull request. They control the diff, the whole tree, the history, the pull request text, the commit messages and the branch name. They can start a run. They cannot change workflow files on the base branch, labels or comments of other users. The assets are the LLM keys, `GH_TOKEN` with the write-scoped Actions token, the LLM budget, the runner and the pull request surface (comments, reviews and check runs).
+
+The controls for a non-trusted author are these:
+
+- **A scrubbed environment.** Every analyzer and git subprocess gets an allowlist-only environment. No LLM key, `GH_TOKEN`, `GITHUB_TOKEN` or `ACTIONS_*` value reaches it. This applies to every run.
+- **A fork-safe analyzer set.** Only analyzers with a trusted or isolated configuration run. Suppression rules come from the base branch.
+- **A credential check.** The review pauses when `.git/config` holds a persisted credential.
+- **Dropped and neutralized text.** The prompts carry no PR body, commit message, open-issue title or branch name. The engine strips invisible characters and escapes closing tags in untrusted embeds on every run.
+- **A clamped output.** The review event is COMMENT, suggestions are off, a fixed banner starts each comment, and the text has no external link or image. Mentions and cross references are neutralized on a fork run only. On every run, the engine scrubs secrets from every outbound string, and unreadable agent output forces COMMENT.
+- **Bot-authored state only.** The engine reads the watermark, skip comments, ledgers and spend entries only from comments that the bot wrote.
+- **Caps that fail closed.** There is a cap per run, per pull request, per author and per day. An unreadable fact, ledger or cost estimate pauses the run.
+
+A fork pull request by a trusted author (`OWNER` and `COLLABORATOR` by default) gets the normal pipeline and the per-run cap. The `label` policy keeps the older design: the engine pauses a fork pull request until a maintainer approves one exact head commit. Use `block` to switch fork review off.
+
+These limits remain:
+
+- **Prompt injection is not preventable.** It can make the review say nothing, or something misleading, about the fork's own pull request. The output clamp limits what a misled review can do.
+- **The review runs in the same job as the secrets.** The environment scrub covers subprocesses. A flaw in the engine process itself is not contained. [ADR 0006](docs/adr/0006-fork-prs-reviewed-in-one-deprivileged-job.md) and issue #1098 track the split into two jobs.
+- **The ledgers are best effort.** A user with write access can delete or edit a ledger comment and so reset a cap. Another workflow that runs as the same bot login can write a valid-looking entry.
+- **Many accounts can use up the daily pool.** Fork reviews then pause until the window moves on. Trusted pull requests are not affected.
+- **A trusted author can carry untrusted commits.** The engine trusts the author of the pull request and not each commit.
+- **`COLLABORATOR` can include low-privilege accounts.** Check who has that association, or remove it from `AI_FORK_TRUSTED_ASSOCIATIONS`.
+- **A persisted checkout credential pauses a fork run.** The `actions/checkout` step must set `persist-credentials: false`. The credential check does not cover `core.sshCommand`, `core.askPass`, `http.cookieFile`, `http.proxy` with a user name or `config.worktree`.
+- **Forks get fewer analyzers.** eslint, golangci-lint, semgrep, shellcheck, hadolint and kube-linter do not run on a fork until each one has a trusted configuration.
+- **dep-exists and docs-drift-check read files from the fork tree.** A fork can silence findings about unknown packages for its own pull request and can hide references to a deleted file. ruff and trufflehog still honor inline suppressions, and trufflehog follows symlinks in changed files.
+- **The engine reads SARIF files from the fork tree** (`AI_SARIF_PATHS`). `AI_POLICY_SOURCE=workspace` also reads `policy.yml` from the fork tree.
+- **The gate applies to GitHub only.** GitLab and Bitbucket runs are not gated.
+- **Other workflow steps are not covered.** Every other step in your workflow runs on every fork push. Keep them free of secrets.
+
+A custom bot identity must set `GITHUB_BOT_USERNAME`. The engine ignores summary, skip and ledger comments from any other login.
 
 ### Regression guard
 

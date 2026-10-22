@@ -13,7 +13,12 @@ import sys
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from ai_pr_review.review.fork_gate import parse_trusted_associations
+from ai_pr_review.review.fork_gate import (
+    DEFAULT_FORK_POLICY,
+    FORK_POLICIES,
+    SAFEST_FORK_POLICY,
+    parse_trusted_associations,
+)
 
 
 class ConfigError(ValueError):
@@ -621,8 +626,9 @@ class ReviewConfig(BaseModel):
     fork_daily_max_cost_usd: float = 50.0
     fork_daily_reserved_share: float = 0.7
     # What the engine does with a fork pull request: auto, label (maintainer approval status) or
-    # block. The default flips to auto in story 17-13. An unknown value falls back to label.
-    fork_policy: str = "label"
+    # block. The default is auto. An unknown value falls back to label, the safest policy, and not
+    # to the auto default.
+    fork_policy: str = DEFAULT_FORK_POLICY
     # author_association values that skip the fork profile under the auto policy.
     fork_trusted_associations: tuple[str, ...] = ("OWNER", "COLLABORATOR")
     # Exit 2 when the fork gate pauses a run, so a required check does not turn green with no review.
@@ -918,14 +924,16 @@ class ReviewConfig(BaseModel):
     @field_validator("fork_policy")
     @classmethod
     def _fork_policy_falls_back(cls, v: str) -> str:
-        # An unknown value must not open the gate. label pauses a fork until a maintainer approves.
+        # An unknown value must not open the gate. The default is auto, but an unknown value falls
+        # back to the SAFEST policy (label pauses a fork until a maintainer approves), never to auto.
         value = v.strip().lower()
-        if value not in ("auto", "label", "block"):
+        if value not in FORK_POLICIES:
             print(
-                f"WARNING: AI_FORK_POLICY={v!r} is not one of auto, label, block; using 'label'.",
+                f"WARNING: AI_FORK_POLICY={v!r} is not one of auto, label, block; "
+                f"using {SAFEST_FORK_POLICY!r}.",
                 file=sys.stderr,
             )
-            return "label"
+            return SAFEST_FORK_POLICY
         return value
 
     @field_validator("log_format")
@@ -1055,7 +1063,8 @@ class ReviewConfig(BaseModel):
             fork_max_cost_usd=_float("AI_FORK_MAX_COST_USD", 2.0),
             fork_daily_max_cost_usd=_float("AI_FORK_DAILY_MAX_COST_USD", 50.0),
             fork_daily_reserved_share=_float("AI_FORK_DAILY_RESERVED_SHARE", 0.7),
-            fork_policy=os.environ.get("AI_FORK_POLICY", "label"),
+            # An unset or empty value (a workflow that forwards an unset variable) gets the default.
+            fork_policy=os.environ.get("AI_FORK_POLICY", "").strip() or DEFAULT_FORK_POLICY,
             fork_trusted_associations=parse_trusted_associations(os.environ.get("AI_FORK_TRUSTED_ASSOCIATIONS")),
             fail_on_fork_gate=_bool("AI_FAIL_ON_FORK_GATE"),
             event_name=os.environ.get("GITHUB_EVENT_NAME", "").strip(),

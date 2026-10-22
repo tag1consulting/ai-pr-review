@@ -1,11 +1,11 @@
-"""Output clamp for fork runs, and reference neutralizing for every run (story 17-11, CAP-5).
+"""Output clamp for fork runs (story 17-11, CAP-5).
 
 A fork run posts text that is derived from code an unknown author controls. This module holds the
 pure helpers that limit what that text can do in the bot's voice:
 
 - ``output_clamp`` opens a scope. Inside it ``clamp_active`` is true. The CLI opens the scope around
   the posting phase of a fork run.
-- ``neutralize_references`` stops ``@mention`` and ``owner/repo#N`` pings. It applies on every run.
+- ``neutralize_references`` stops ``@mention`` and ``owner/repo#N`` pings. It runs only inside ``strict_text``, so it applies to fork runs only.
 - ``strict_text`` also removes images, links to other places, raw HTML that can load or link, and
   autolinked URLs. It applies inside the scope only.
 - ``clamp_request_body`` is the last line of defense at the HTTP layer. It adds the fixed banner to

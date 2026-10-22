@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fork pull requests are now reviewed automatically (`AI_FORK_POLICY=auto` is the new default).** Before, the engine paused every fork pull request until a maintainer approved the head commit. Now a fork pull request gets a review at once. The engine limits the run. Every analyzer and git subprocess gets a scrubbed environment. Only analyzers with a trusted or isolated configuration run on a fork. The prompts carry no PR body, commit message, open-issue title or branch name. The review event is COMMENT, suggestions are off, a fixed banner starts each comment, and the text has no external link or image. Spend is capped per run (2 USD), per pull request (4 runs and 6 USD), per author (2 open pull requests) and per day (50 USD). A pull request that reaches a cap pauses, and a maintainer resumes it with `/ai-pr-review rescan`. `OWNER` and `COLLABORATOR` authors are trusted and get the normal pipeline. To keep the old behavior, set `AI_FORK_POLICY=label` and keep the approval workflow. The `approve` value is now `label`. Set `block` to switch fork review off. See `docs/fork-prs.md` and `SECURITY.md` for the limits that remain, including that the review still runs in the job that holds the secrets (issue #1098).
+- **Upgrade notes for the fork change.** `AI_FAIL_ON_FINDINGS=true` now also exits with code 2 when an agent returns output that the engine cannot read, because that run now posts COMMENT. A custom bot identity must set `GITHUB_BOT_USERNAME`, because the engine now ignores summary and skip comments from any other login. The checkout step must set `persist-credentials: false`, or a fork review pauses. The standard proxy and certificate variables reach analyzers, but a proxy value that holds credentials does not. The outbound secret scrub and the size limit on posted strings now apply to every run. The `@mention` and `owner/repo#N` neutralizing applies to fork runs only. The workflow `.github/workflows/fork-approval.yml` and the `statuses: read` permission are not needed under `auto`. A repository that sets `AI_FORK_POLICY` to a non-default value must also set it for the `/ai-pr-review rescan` step.
+
 ## [2.24.1] - 2026-10-21
 
 ### Security

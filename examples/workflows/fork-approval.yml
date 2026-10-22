@@ -1,5 +1,9 @@
 # Approve one commit of a fork pull request for review (see docs/fork-prs.md).
 #
+# Use this workflow ONLY with AI_FORK_POLICY=label. The default policy, auto, reviews a fork
+# pull request at once and does not read the approval status, so it needs no approval workflow.
+# Also add `statuses: read` to the permissions of your review workflow when you use `label`.
+#
 # The engine pauses a fork pull request until the base repository has a successful commit status
 # named "ai-pr-review/fork-approval" on the exact head commit. This workflow creates that status
 # when a maintainer with write access adds the "ai-review-approve-fork" label. A new push removes
