@@ -24,7 +24,7 @@ from ai_pr_review.context.symbols import (
     PROXIMITY_ORDER,
     Definition,
 )
-from ai_pr_review.text_safety import code_fence, safe_code, safe_text
+from ai_pr_review.text_safety import code_fence, safe_code, safe_text, single_line
 
 # Codepoint ranges where a 4-chars-per-token ratio badly undercounts: CJK
 # ideographs (including compatibility/extension blocks and the SIP plane),
@@ -76,7 +76,7 @@ _estimate_tokens = estimate_tokens
 def _format_definition(d: Definition) -> str:
     snippet = safe_code(d.snippet)
     fence = code_fence(snippet)
-    return f"### {safe_text(d.symbol)} — {safe_text(d.file)}:{d.line}\n{fence}\n{snippet}\n{fence}"
+    return f"### {single_line(safe_text(d.symbol))} — {single_line(safe_text(d.file))}:{d.line}\n{fence}\n{snippet}\n{fence}"
 
 
 def build_context_block(

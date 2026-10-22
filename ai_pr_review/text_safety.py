@@ -52,46 +52,62 @@ def escape_closing_tags(text: str, tags: tuple[str, ...] = BLOCK_TAGS) -> str:
     return pattern.sub(r"&lt;/\1", text)
 
 
-def safe_text(text: str) -> str:
-    """Full strip, then escape. Use for metadata and non-code fields."""
-    return escape_closing_tags(clean_text(text))
-
-
 # Categories that render as nothing or attach to a neighbor: format characters, combining marks and
-# controls. A closer can hide inside them, so match on a copy with them removed.
+# controls. Some blank-rendering letters and symbols sit outside them (Hangul fillers, braille blank).
+# A tag can hide inside any of these, so match on a copy with them removed.
 _HIDING_CATEGORIES = frozenset({"Cf", "Mn", "Me", "Cc"})
+_BLANK_CHARS = frozenset("\u115f\u1160\u17b4\u17b5\u2800\u3164\uffa0")
+_KEEP = frozenset("\t\n\r")
+
+# An opening or closing tag of one of the engine's own blocks.
+_BLOCK_TAG = re.compile(
+    r"(?i)<\s*(/?)\s*(" + "|".join(re.escape(t) for t in BLOCK_TAGS) + ")"
+)
 
 
-def safe_code(text: str) -> str:
-    """Light strip, then escape. Use for the diff and for code snippets.
+def _escape_blocks(text: str) -> str:
+    """Escape every opening and closing tag of the engine's own blocks.
 
-    The light strip keeps ZWJ and ZWNJ, so a closer such as ``<ZWJ/pr-context>`` can survive it.
-    Find closers on a copy with every format character, combining mark and control removed,
-    then escape those spans in the original. Text outside a closer is left as it was, so
-    legitimate emoji sequences stay intact.
+    Find the tags on a copy with every hiding character removed, then escape those spans in the
+    original. Text outside a tag is left as it was, so legitimate emoji sequences stay intact.
     """
-    text = clean_code(text)
     kept: list[str] = []
     origin: list[int] = []
     for i, ch in enumerate(text):
-        if unicodedata.category(ch) in _HIDING_CATEGORIES and ch not in "\t\n\r":
+        if ch not in _KEEP and (unicodedata.category(ch) in _HIDING_CATEGORIES or ch in _BLANK_CHARS):
             continue
         kept.append(ch)
         origin.append(i)
-    view = "".join(kept)
-    matches = list(_BLOCK_CLOSER.finditer(view))
+    matches = list(_BLOCK_TAG.finditer("".join(kept)))
     if not matches:
         return text
     out: list[str] = []
     cursor = 0
     for m in matches:
-        start = origin[m.start()]
-        end = origin[m.end() - 1] + 1
-        out.append(text[cursor:start])
-        out.append("&lt;/" + m.group(1))
-        cursor = end
+        out.append(text[cursor : origin[m.start()]])
+        out.append("&lt;" + m.group(1) + m.group(2))
+        cursor = origin[m.end() - 1] + 1
     out.append(text[cursor:])
     return "".join(out)
+
+
+def safe_text(text: str) -> str:
+    """Full strip, then escape block tags. Use for metadata and non-code fields."""
+    return _escape_blocks(clean_text(text))
+
+
+def safe_code(text: str) -> str:
+    """Light strip, then escape block tags. Use for the diff and for code snippets.
+
+    The light strip keeps ZWJ and ZWNJ, so a tag such as ``<ZWJ/pr-context>`` can survive it.
+    The escape finds tags through hiding characters, so it still catches them.
+    """
+    return _escape_blocks(clean_code(text))
+
+
+def single_line(text: str) -> str:
+    """Collapse every run of whitespace, line breaks included, to one space."""
+    return " ".join(text.split())
 
 
 def code_fence(snippet: str) -> str:

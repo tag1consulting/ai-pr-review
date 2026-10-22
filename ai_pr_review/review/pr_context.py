@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from ai_pr_review.text_safety import safe_text
+from ai_pr_review.text_safety import safe_text, single_line
 
 # PR/MR descriptions routinely carry HTML comments -- template boilerplate
 # ("<!-- Delete sections that don't apply -->"), collapsed
@@ -46,7 +46,7 @@ def build_shared_context_block(
     # invisible characters and escape closing tags before any truncation, so a
     # closer cannot be cut in half and slip past the escape. Do it once, here, so the
     # cached prefix stays the same for every agent.
-    title = safe_text(pr_title).strip()
+    title = single_line(safe_text(pr_title))
     body = safe_text(_HTML_COMMENT_RE.sub("", pr_body)).strip()
     if len(body) > max_body_chars:
         body = body[:max_body_chars].rstrip() + "\n\n_[description truncated]_"
