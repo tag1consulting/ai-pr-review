@@ -792,6 +792,12 @@ def _provider_class() -> type:
     return _Provider
 
 
+@pytest.fixture(autouse=True)
+def _pin_run_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the run pointer the same inside and outside ``_build``, whatever the runner sets."""
+    monkeypatch.setenv("GITHUB_RUN_ID", "777")
+
+
 async def _build(tmp_path: Path, provider: Any, **cfg: Any) -> Any:
     from ai_pr_review.review.runtime import build_review_runtime
     from tests.python.test_runtime import _make_config, _make_diff_result
