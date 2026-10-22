@@ -36,10 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # The engine compares git rev-parse HEAD with the head sha, so check out the sha, not the ref.
+      # Leave out "repository:". The checkout then keeps the base repository as origin, so the engine
+      # reads policy, suppressions and the diff base from the trusted base branch, not from the fork.
       - name: Check out the fork head commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: ${{ vars.E2E_PERSIST_CREDENTIALS == 'true' }}

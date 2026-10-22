@@ -156,6 +156,7 @@ _MARKER_LINE_RE: Final[re.Pattern[str]] = re.compile(
     r"(?m)^(?:<!-- ai-pr-review-[^\n]*-->|\[//\]: # \(ai-pr-review-[^\n]*\))[ \t]*$"
 )
 _SCHEME_RE: Final[re.Pattern[str]] = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*)://([^\s<>\"')\]]*)")
+_LINKED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "ftp"})
 _LINK_DEST_RE: Final[re.Pattern[str]] = re.compile(r"\]\(\s*<?([^)\s>]*)")
 _RAW_TAG_RE: Final[re.Pattern[str]] = re.compile(
     r"(?i)<\s*/?\s*(a|img|script|iframe|style|object|embed|svg|form|link|meta|base|video|audio|source)[\s/>]"
@@ -206,6 +207,8 @@ def text_problems(text: str, base_repo: str) -> list[str]:
         problems.append("raw html tag that can load or link")
     for m in _SCHEME_RE.finditer(body):
         scheme, rest = m.group(1).lower(), m.group(2)
+        if scheme not in _LINKED_SCHEMES:
+            continue  # GitHub renders other schemes (s3://, git://) as plain text, and so does the clamp
         if scheme != "https" or not _allowed_destination(rest, base_repo):
             host = rest.split("/", 1)[0][:60]
             problems.append(f"live url to {scheme}://{host}")
@@ -402,7 +405,8 @@ def _spend_for_pr(ev: ForkEvidence, state: str | None = None) -> list[SpendEntry
 def verify_s1(ev: ForkEvidence, *, require_run_evidence: bool = True) -> Verdict:
     """S1: a plain ``pull_request`` run on a fork does nothing. The fork workflow must be off."""
     problems: list[str] = []
-    if classify_bodies(ev):
+    # Spend entries on the shared issue belong to other pull requests. _spend_for_pr covers this one.
+    if [b for b in classify_bodies(ev) if b.kind != KIND_SPEND]:
         problems.append("the bot posted something on a plain pull_request fork run")
     if _spend_for_pr(ev):
         problems.append("a spend entry exists for this pull request")
@@ -604,7 +608,8 @@ def verify_s9(ev: ForkEvidence, *, cap: str = CAP_RUNS, run_cents: int = 200) ->
 
 
 def verify_s10(
-    ev: ForkEvidence, *, maintainer_login: str, expected_runs: int, expect_rebind: bool = False
+    ev: ForkEvidence, *, maintainer_login: str, expected_runs: int, expect_rebind: bool = False,
+    run_cents: int = 200, forged_sha: str | None = None,
 ) -> Verdict:
     """S10: a maintainer rescan adds one credit and exactly one more run."""
     entries = bot_entries(ev)
@@ -623,9 +628,15 @@ def verify_s10(
     if not bodies_of(ev, KIND_SUMMARY) and not bot_review_count(ev):
         problems.append("no review ran after the credit")
     if expect_rebind:
+        # The pause comment of S7 stays on the pull request, so match the text for the post-credit
+        # ledger (cap and used count), which only a new pause can hold.
         skip = _last_skip(ev)
-        if skip is None or "paused" not in skip.text:
+        if skip is None or pause_text(CAP_RUNS, entries, Caps(run_cents=run_cents)) not in skip.text:
             problems.append("the cap did not bind again")
+    if forged_sha and forged_sha != ev.head_sha:
+        for b in bodies_of(ev, KIND_SUMMARY):
+            if extract_summary_sha(b.text) == forged_sha:
+                problems.append("the bot summary carries the forged watermark sha")
     return _verdict("S10", problems + _common(ev, banner_required={KIND_REVIEW, KIND_INLINE, KIND_SUMMARY}))
 
 
@@ -704,9 +715,9 @@ def verify_s14(ev: ForkEvidence, *, cancelled_run_id: str, completed_run_id: str
 
 
 def verify_s15(
-    ev: ForkEvidence, *, expected_bot_runs: int, expected_bot_cents: int, forged_sha: str | None = None
+    ev: ForkEvidence, *, expected_bot_runs: int, expected_bot_cents: int
 ) -> Verdict:
-    """S15: forged entries and a forged watermark have no effect on the caps or the reviewed commit."""
+    """S15: forged ledger entries have no effect on the caps. S10 covers the forged watermark."""
     problems: list[str] = []
     if not forged_entry_ids(ev):
         return Verdict("S15", False, "no forged entry in the evidence, the scenario did not run", category="infra_failure")
@@ -721,10 +732,6 @@ def verify_s15(
     elif f"({expected_bot_runs} used)" not in skip.text and f"({expected_bot_cents // 100}.{expected_bot_cents % 100:02d} USD used)" not in skip.text:
         problems.append("the pause text counts something other than the bot entries")
     problems += _nothing_reviewed(ev)
-    if forged_sha and forged_sha != ev.head_sha:
-        for b in bodies_of(ev, KIND_SUMMARY):
-            if extract_summary_sha(b.text) == forged_sha:
-                problems.append("the bot summary carries the forged watermark sha")
     return _verdict("S15", problems + _common(ev))
 
 

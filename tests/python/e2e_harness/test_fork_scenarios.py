@@ -161,6 +161,7 @@ def test_fork_workflow_shape():
     assert job["concurrency"]["group"].endswith("${{ github.event.pull_request.number }}")
     checkout = job["steps"][0]
     assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    assert "repository" not in checkout["with"]  # origin must stay the base repository (trusted policy)
     assert checkout["with"]["persist-credentials"] == "${{ vars.E2E_PERSIST_CREDENTIALS == 'true' }}"
     review = next(s for s in job["steps"] if "container-action" in s.get("uses", ""))
     assert review["uses"].endswith("@__ENGINE_REF__")

@@ -61,6 +61,11 @@ def test_text_predicates_catch_live_content(text, fragment):
     assert any(fragment in p for p in fv.text_problems(text, BASE)), text
 
 
+def test_schemes_that_github_does_not_link_are_not_live():
+    assert fv.text_problems("bucket s3://e2e-reports and git://x/y", BASE) == []
+    assert any("live url" in p for p in fv.text_problems("ftp://evil.example/x", BASE))
+
+
 def test_in_repo_and_docs_links_and_anchors_are_allowed():
     ok = (
         f"[f](https://github.com/{BASE}/blob/main/a.py#L1) "
@@ -158,6 +163,9 @@ def test_s1_pass_and_fail():
     assert fv.verify_s1(evidence(runs=runs)).ok
     posted = evidence(runs=runs, issue_comments=[summary()])
     assert not fv.verify_s1(posted).ok
+    # A spend entry of another pull request on the shared spend issue is not a post on this one.
+    other = evidence(runs=runs, spend_comments=[spend(5, pr=99)])
+    assert fv.verify_s1(other).ok
     assert not fv.verify_s1(evidence()).ok  # no run evidence, so nothing was proven
     target = [*runs, {"id": 2, "event": "pull_request_target"}]
     assert "disable" in fv.verify_s1(evidence(runs=target)).reason

@@ -60,9 +60,18 @@ def test_s10_pass_and_fail():
     assert "one credit" in fv.verify_s10(two, maintainer_login=MAINTAINER, expected_runs=5).reason
     no_review = evidence(issue_comments=base)
     assert "no review" in fv.verify_s10(no_review, maintainer_login=MAINTAINER, expected_runs=5).reason
-    rebind = evidence(issue_comments=[*base, skip(20, _runs_text(5))], reviews=[review()])
+    post_credit = pause_text("runs", [*[Entry(i, 1, 10, 0) for i in range(5)], Entry(9, 0, 0, 0, 8)], Caps())
+    rebind = evidence(issue_comments=[*base, skip(20, post_credit)], reviews=[review()])
     assert fv.verify_s10(rebind, maintainer_login=MAINTAINER, expected_runs=5, expect_rebind=True).ok
     assert not fv.verify_s10(ok, maintainer_login=MAINTAINER, expected_runs=5, expect_rebind=True).ok
+    # The pause comment of S7 stays on the pull request and must not count as a new pause.
+    stale = evidence(issue_comments=[*base, skip(20, _runs_text())], reviews=[review()])
+    assert "did not bind" in fv.verify_s10(stale, maintainer_login=MAINTAINER, expected_runs=5, expect_rebind=True).reason
+    forged = "c" * 40
+    taken = evidence(issue_comments=[*base, comment(23, fv.BOT_LOGIN, "x\n<!-- ai-pr-review-summary sha=" + forged + " -->")],
+                     reviews=[review()])
+    assert "forged watermark" in fv.verify_s10(taken, maintainer_login=MAINTAINER, expected_runs=5, forged_sha=forged).reason
+    assert forged != HEAD
 
 
 # --- S11 ---------------------------------------------------------------------------
@@ -155,11 +164,6 @@ def test_s15_pass_and_fail():
     assert not fv.verify_s15(reviewed, **kw).ok
     lifted = evidence(issue_comments=[*_capped(), ledger(25, 0, 0, 1, 19), *_forged(), skip(30, _runs_text())])
     assert "allowance" in fv.verify_s15(lifted, **kw).reason
-    forged_mark = comment(22, AUTHOR, "<!-- ai-pr-review-summary sha=" + "c" * 40 + " -->")
-    taken = evidence(
-        issue_comments=[*base, forged_mark, comment(23, fv.BOT_LOGIN, "x\n<!-- ai-pr-review-summary sha=" + "c" * 40 + " -->")])
-    assert "forged watermark" in fv.verify_s15(taken, forged_sha="c" * 40, **kw).reason
-    assert HEAD != "c" * 40
 
 
 # --- S16 ---------------------------------------------------------------------------
