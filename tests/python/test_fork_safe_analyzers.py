@@ -258,7 +258,8 @@ def test_a_persisted_credential_setting_gives_a_reason_that_names_the_key_only(
     ws = _clean_repo(tmp_path)
     _git(ws, "config", "--local", key, value)
     reason = _REAL_PERSISTED(str(ws))
-    assert "persist-credentials: false" in reason and key.split(":")[0].lower()[:10] in reason.lower()
+    shown = key if "://" not in key else f"{key.split('.', 1)[0]}.<url>.{key.rsplit('.', 1)[-1]}"
+    assert "persist-credentials: false" in reason and shown.split(":")[0].lower()[:10] in reason.lower()
     assert value not in reason and "ZHVtbXk" not in reason
 
 
