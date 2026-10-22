@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Final
 from urllib.parse import unquote
 
@@ -37,6 +38,8 @@ BANNER_BLOCK: Final[str] = f"> {FORK_BANNER}\n\n"
 
 # The engine's own repository. Its links (for example the footer) stay on a fork run.
 ENGINE_REPO: Final[str] = "tag1consulting/ai-pr-review"
+# The engine's documentation site. The review body links to it (slash command reference).
+ENGINE_DOCS: Final[str] = "https://tag1consulting.github.io/ai-pr-review"
 
 _ZWSP: Final[str] = "​"
 
@@ -81,54 +84,46 @@ def clamp_repo() -> str:
 
 
 # ---------------------------------------------------------------------------
-# References: mentions and cross references (every run)
+# Strict pass (fork runs). Default deny on the structural characters.
 # ---------------------------------------------------------------------------
+#
+# Filtering Markdown links with patterns is a race against the renderer. This pass instead breaks
+# every structural character unless the text right there matches a short allow pattern:
+#
+# - ``![`` always breaks, so no image can form.
+# - ``](`` breaks unless a tight allow pattern matches (an anchor, a plain relative path, or a URL
+#   into this repository).
+# - ``]:`` always breaks, so no reference definition can form.
+# - ``<`` becomes ``&lt;`` unless it opens a plain tag from a short list.
+# - ``@`` and ``mailto:`` and ``xmpp:`` and ``www.`` break, so no autolink forms.
 
-# GitHub pings a user or team for ``@name`` that follows a non-word character.
-_MENTION_RE: Final[re.Pattern[str]] = re.compile(r"(?<![A-Za-z0-9_])@(?=[A-Za-z0-9])")
-# ``owner/repo#123`` and ``owner/repo@<sha>`` link to another repository.
-_XREF_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?<![A-Za-z0-9_./-])([A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+)(#(?=[0-9])|@(?=[0-9a-fA-F]{7,40}\b))"
-)
-
-
-def neutralize_references(text: str) -> str:
-    """Break ``@mention`` and ``owner/repo#N`` references with a zero-width space.
-
-    The text still reads the same, but GitHub no longer pings the user or links the other
-    repository. This runs on code spans too, because a backslash can make a renderer treat what
-    looks like a code span as plain text.
-    """
-    if not text or ("@" not in text and "#" not in text):
-        return text
-    text = _MENTION_RE.sub("@" + _ZWSP, text)
-    return _XREF_RE.sub(lambda m: m.group(1) + _ZWSP + m.group(2), text)
-
-
-# ---------------------------------------------------------------------------
-# Strict pass: images, links, raw HTML, bare URLs (fork runs)
-# ---------------------------------------------------------------------------
-
-_IMAGE_RE: Final[re.Pattern[str]] = re.compile(r"!\[([^\]\n]*)\]\(([^)\n]*)\)")
-_LINK_RE: Final[re.Pattern[str]] = re.compile(r"\[((?:[^\[\]\n]|\[[^\[\]\n]*\])*)\]\(([^)\n]*)\)")
-# Reference definitions. The Bitbucket hidden marker form ``[//]: # (...)`` is not one.
-# A definition can sit inside a quote or a list item, so allow container prefixes before the bracket.
-_REF_DEF_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?m)^(?P<prefix>[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*)"
-    r"\[(?![ \t]*//[ \t]*\][ \t]*:[ \t]*#)[^\]\n]+\]:[ \t]*\S.*$"
-)
 _BARE_URL_RE: Final[re.Pattern[str]] = re.compile(r"(?i)\b(https?|ftp)://[^\s<>\"'\])]+")
 _WWW_RE: Final[re.Pattern[str]] = re.compile(r"(?i)(?<![\w/.@-])www\.(?=[\w-])")
-_RAW_TAG_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?i)<(/?)(a|img|image|picture|source|video|audio|iframe|embed|object|svg|form|input|button"
-    r"|link|style|script|base|meta|area|map|math|use|frame|frameset|applet|portal)(?=[\s/>]|$)"
+_SCHEME_WORD_RE: Final[re.Pattern[str]] = re.compile(r"(?i)\b(mailto|xmpp):(?!" + _ZWSP + ")")
+_AT_RE: Final[re.Pattern[str]] = re.compile("@(?!" + _ZWSP + ")")
+# ``owner/repo#123`` and ``owner/repo@<sha>`` link to another repository.
+_XREF_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<![A-Za-z0-9_./-])([A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+)(#(?=[0-9]))"
 )
-_SCHEME_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-# The exact marker forms the engine writes (single line, ``ai-pr-review`` first). The strict pass
-# skips them. Any other comment span is display text and gets the strict pass.
+
+# Plain tags the engine emits. No attribute is allowed except a bare ``open`` on ``details``.
+_ALLOWED_TAGS: Final[str] = (
+    "details|summary|br|sub|sup|b|i|code|pre|p|hr|ul|ol|li|table|thead|tbody|tr|th|td|blockquote|h[1-6]"
+)
+_ALLOWED_TAG_RE: Final[re.Pattern[str]] = re.compile(
+    rf"<(?:/(?:{_ALLOWED_TAGS})|(?:{_ALLOWED_TAGS})(?: open)?[ ]?/?)>"
+)
+
+# The exact marker grammars the engine writes. No ``>``, ``!`` or newline can sit inside, so a
+# marker cannot end early or hide a tag. The strict pass skips them. Anything else that starts like
+# a marker is display text.
+_MARKER_PAYLOAD: Final[str] = r'[A-Za-z0-9+/=_,.:{}|\[\]" -]'
 _MARKER_SPAN_RE: Final[re.Pattern[str]] = re.compile(
-    r"<!-- ai-pr-review[^\n]*?-->|\[//\]: # \(ai-pr-review[^\n)]*\)"
+    rf"<!-- ai-pr-review[a-z-]*(?:[: ]{_MARKER_PAYLOAD}{{0,50000}})? -->"
+    rf"|\[//\]: # \(ai-pr-review[a-z-]*(?:[: ]{_MARKER_PAYLOAD}{{0,50000}})?\)"
 )
+
+_REL_CHARS: Final[str] = r"[A-Za-z0-9_.~/+,=-]"
 
 
 def _has_dotdot(path: str) -> bool:
@@ -138,6 +133,8 @@ def _has_dotdot(path: str) -> bool:
 
 def _allowed_url(url: str, repo: str) -> bool:
     """True for an absolute URL that points into this repository or the engine repository."""
+    if re.match(r"(?i)^" + re.escape(ENGINE_DOCS) + r"(?:[/?#]|$)", url) and not _has_dotdot(url):
+        return True
     for allowed in {repo, ENGINE_REPO}:
         if not allowed:
             continue
@@ -147,54 +144,46 @@ def _allowed_url(url: str, repo: str) -> bool:
     return False
 
 
-def _allowed_destination(dest: str, repo: str) -> bool:
-    """True when a link destination stays inside this repository.
-
-    That is an absolute URL into this repository, an anchor, or a plain relative path.
-    """
-    dest = dest.strip()
-    if dest.startswith("<") and ">" in dest:
-        dest = dest[1 : dest.index(">")]
-    else:
-        dest = dest.split()[0] if dest.split() else ""
-    if not dest or dest.startswith("#"):
-        return True
-    # An entity can spell a scheme (``&#104;ttps:``), a slash or a colon. A root-relative path leaves
-    # the repository for the site root. A parenthesis means the destination was cut short.
-    if "&" in dest or "(" in dest or "\\" in dest or dest.startswith("/"):
-        return False
-    if _SCHEME_RE.match(dest):
-        return _allowed_url(dest, repo)
-    # A relative path. A percent sign could hide a dot segment, so refuse it.
-    if "%" in dest.split("#", 1)[0].split("?", 1)[0]:
-        return False
-    return not _has_dotdot(dest)
+@lru_cache(maxsize=16)
+def _link_tail_re(repo: str) -> re.Pattern[str]:
+    """What may follow ``](`` for the link to stay: one destination, an optional title, ``)``."""
+    repos = "|".join(re.escape(r) for r in sorted({repo, ENGINE_REPO}) if r)
+    docs = re.escape(ENGINE_DOCS)
+    absolute = rf"(?i:https://github\.com/(?:{repos})|{docs})(?:[/?#][^\s()<>&%\\\"'`]*)?"
+    anchor = r"#[A-Za-z0-9_.~/+,=:-]*"
+    relative = rf"(?!/){_REL_CHARS}+(?:#{_REL_CHARS}*)?"
+    return re.compile(rf"[ ]?(?P<dest>{absolute}|{anchor}|{relative})(?:[ ]\"[^\")\n]*\")?\)")
 
 
-def _strip_links(text: str, repo: str) -> str:
-    def image(m: re.Match[str]) -> str:
-        return "[image removed]"
+def _break_links(text: str, repo: str) -> str:
+    tail = _link_tail_re(repo)
 
-    def link(m: re.Match[str]) -> str:
-        if _allowed_destination(m.group(2), repo):
+    def check(m: re.Match[str]) -> str:
+        t = tail.match(m.string, m.end())
+        if t is not None and not _has_dotdot(t.group("dest")):
             return m.group(0)
-        return f"{m.group(1)} (link removed)"
+        return "]" + _ZWSP + "("
 
-    # Run until stable, because a stripped link can expose a link nested in its text.
-    for _ in range(4):
-        new = _LINK_RE.sub(link, _IMAGE_RE.sub(image, text))
-        if new == text:
-            break
-        text = new
-    return text
+    return re.sub(r"\]\(", check, text)
+
+
+def _escape_lt(text: str) -> str:
+    def check(m: re.Match[str]) -> str:
+        nxt = m.string[m.end() : m.end() + 1]
+        if nxt == "" or nxt.isspace() or nxt.isdigit() or nxt == "=":
+            return "<"
+        if _ALLOWED_TAG_RE.match(m.string, m.start()):
+            return "<"
+        return "&lt;"
+
+    return re.sub("<", check, text)
 
 
 def _defang_bare_url(m: re.Match[str], repo: str) -> str:
     url = m.group(0)
     end = m.end()
     # Keep a URL only when it stops at whitespace or the end. An autolinker may extend a URL that is
-    # followed by other characters.
-    # A destination inside a link that the link pass already kept (``](url)``) is not autolinked.
+    # followed by other characters. A destination inside a kept link (``](url)``) is not autolinked.
     if _allowed_url(url, repo) and (
         end == len(m.string) or m.string[end].isspace() or m.string[max(0, m.start() - 2) : m.start()] == "]("
     ):
@@ -202,10 +191,23 @@ def _defang_bare_url(m: re.Match[str], repo: str) -> str:
     return f"{m.group(1)}:{_ZWSP}//{url[len(m.group(1)) + 3:]}"
 
 
+def neutralize_references(text: str) -> str:
+    """Break every ``@``, ``owner/repo#N``, ``mailto:`` and ``xmpp:`` with a zero-width space.
+
+    The text still reads the same, but GitHub no longer pings a user, links another repository or
+    autolinks an address. It also runs inside code spans, because a backslash can make a renderer
+    treat what looks like a code span as plain text.
+    """
+    text = _XREF_RE.sub(lambda m: m.group(1) + _ZWSP + m.group(2), text)
+    text = _SCHEME_WORD_RE.sub(lambda m: m.group(0) + _ZWSP, text)
+    return _AT_RE.sub("@" + _ZWSP, text)
+
+
 def _strict_segment(text: str, repo: str) -> str:
-    text = _REF_DEF_RE.sub(lambda m: m.group("prefix") + "[reference removed]", text)
-    text = _strip_links(text, repo)
-    text = _RAW_TAG_RE.sub(lambda m: "<" + _ZWSP + m.group(1) + m.group(2), text)
+    text = text.replace("![", "!" + _ZWSP + "[")
+    text = _break_links(text, repo)
+    text = text.replace("]:", "]" + _ZWSP + ":")
+    text = _escape_lt(text)
     text = _BARE_URL_RE.sub(lambda m: _defang_bare_url(m, repo), text)
     text = _WWW_RE.sub("www" + _ZWSP + ".", text)
     return neutralize_references(text)

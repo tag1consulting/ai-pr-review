@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,8 +13,12 @@ import pytest
 
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.output_clamp import (
+    _ALLOWED_TAG_RE,
+    _MARKER_SPAN_RE,
     BANNER_BLOCK,
     FORK_BANNER,
+    _allowed_url,
+    _link_tail_re,
     clamp_active,
     clamp_request_body,
     neutralize_references,
@@ -69,25 +74,48 @@ def test_the_clamp_is_off_by_default_and_scoped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Strict sanitizer: images, links, HTML, URLs
+# Strict sanitizer: default deny
 # ---------------------------------------------------------------------------
 
+_TAIL = _link_tail_re(REPO)
+_OK_LT = re.compile(r"<(?:[\s0-9=]|$)")
 
-def test_an_image_is_removed() -> None:
+
+def assert_neutralized(out: str, *, skip_markers: bool = True) -> None:
+    """The structural properties of every strict output, whatever the input was."""
+    if skip_markers:
+        out = _MARKER_SPAN_RE.sub("", out)  # an exact engine marker is skipped on purpose
+    assert "![" not in out, out
+    assert not re.search(r"\]:", out), out
+    for m in re.finditer(r"\]\(", out):
+        tail = _TAIL.match(out, m.end())
+        assert tail is not None and ".." not in tail.group("dest").split("/"), (out, m.start())
+        dest = tail.group("dest")
+        assert not dest.startswith(("/", "//")) and "&" not in dest and "%" not in dest, out
+    for m in re.finditer("<", out):
+        assert _ALLOWED_TAG_RE.match(out, m.start()) or _OK_LT.match(out, m.start()), out
+    assert not re.search("@(?!" + ZW + ")", out), out
+    assert not re.search(r"(?i)(mailto|xmpp):(?!" + ZW + ")", out), out
+    assert not re.search(r"(?i)\bwww\.", out), out
+    for m in re.finditer(r"(?i)\b(?:https?|ftp)://[^\s<>\"'\])]+", out):
+        url = m.group(0)
+        stop = m.end() == len(out) or out[m.end()].isspace() or out[m.start() - 2 : m.start()] == "]("
+        assert _allowed_url(url, REPO) and stop, out
+
+
+def test_an_image_cannot_form() -> None:
     out = strict("look ![pixel](https://evil.example/p.png) here")
-    assert "evil.example" not in out and "![" not in out
-    assert "[image removed]" in out
+    assert "![" not in out and ZW in out
 
 
-def test_an_image_that_points_into_this_repository_is_also_removed() -> None:
-    out = strict("![x](https://github.com/o/r/raw/main/a.png)")
-    assert "![" not in out and "a.png" not in out
+def test_an_image_that_points_into_this_repository_cannot_form() -> None:
+    assert "![" not in strict("![x](https://github.com/o/r/raw/main/a.png)")
 
 
-def test_a_link_to_another_host_is_removed_but_its_text_stays() -> None:
+def test_a_link_to_another_host_stops_being_a_link_but_its_text_stays() -> None:
     out = strict("see [the docs](https://evil.example/login) now")
-    assert "evil.example" not in out and "](" not in out
-    assert "the docs (link removed)" in out
+    assert "](" not in out
+    assert "[the docs]" in out and "evil.example/login" in out  # the text still reads
 
 
 @pytest.mark.parametrize(
@@ -103,11 +131,25 @@ def test_a_link_to_another_host_is_removed_but_its_text_stays() -> None:
         "data:text/html;base64,AAAA",
         "mailto:a@evil.example",
         r"\\evil.example\share",
+        "&#104;ttps://evil.example/p",
+        "https&colon;//evil.example",
+        "/evil/repo/pull/1",
+        "/",
+        "https://github.com/o/r/blob/a(b",
+        "https://github.com/o/r/blob/a&amp;b",
+        "<//evil.example/>",
+        "<https://evil.example>",
+        "\n//evil.example",
+        " \n//evil.example",
+        "a b",
+        "a%2e%2e/b",
+        "",
     ],
 )
-def test_a_link_that_leaves_this_repository_is_removed(dest: str) -> None:
-    out = strict(f"[x]({dest})")
-    assert "](" not in out and "(link removed)" in out
+def test_a_link_that_leaves_this_repository_stops_being_a_link(dest: str) -> None:
+    out = strict_body(f"[x]({dest})", REPO)
+    assert f"]{ZW}(" in out, out
+    assert_neutralized(out)
 
 
 @pytest.mark.parametrize(
@@ -117,28 +159,58 @@ def test_a_link_that_leaves_this_repository_is_removed(dest: str) -> None:
         "https://github.com/O/R/blob/abc/app.py",
         "https://github.com/o/r/pull/7#discussion_r12",
         "https://github.com/tag1consulting/ai-pr-review",
+        'https://github.com/o/r/blob/abc/app.py "a title"',
         "src/app.py",
+        "evil.com",
+        "src/app.py#L3",
         "#section",
     ],
 )
 def test_a_link_to_this_repository_stays(dest: str) -> None:
     text = f"see [the file]({dest}) here"
     assert strict(text) == text
+    assert_neutralized(strict(text))
 
 
-def test_a_link_nested_in_a_link_text_is_removed() -> None:
-    out = strict("[![a](https://evil.example/i.png)](https://evil.example/go)")
-    assert "evil.example" not in out
+def test_deeply_nested_link_text_cannot_hide_a_destination() -> None:
+    for text in ("[x [y [z]]](//evil.example)", "[a [b [c [d]]]](mailto:a@evil.example)", "[![a](//e.example/i.png)](//e.example)"):
+        assert_neutralized(strict_body(text, REPO))
 
 
-def test_a_reference_style_link_cannot_resolve() -> None:
-    out = strict("click [here][1]\n\n[1]: https://evil.example/login")
-    assert "evil.example" not in out
+def test_every_occurrence_of_a_bracket_paren_pair_is_checked() -> None:
+    out = strict_body("](//evil.example) and x](//evil.example) and [y](//evil.example)", REPO)
+    assert out.count("](") == 0
 
 
-def test_the_hidden_reference_marker_form_is_not_treated_as_a_definition() -> None:
-    text = "[//]: # (ai-pr-review-verdicts:abc)"
-    assert "[reference removed]" not in strict_body(text, REPO)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[a]:\n//evil.example\n\n[a]",
+        "[a]: \n  //evil.example",
+        "- [x]:\n  //evil.example",
+        "> [x]:\n> //evil.example",
+        "[a\nb]: //evil.example",
+        "[a\\]]: //evil.example",
+        "> [1]: //evil.example/x",
+        "- [1]: //evil.example/x",
+        "1. [1]: //evil.example/x",
+        "> - > [1]: //evil.example/x",
+        "   [1]: https://evil.example/x",
+        "\t[1]: //evil.example/x",
+        "click [here][1]\n\n[1]: https://evil.example/login",
+        "[^1]: footnote",
+    ],
+)
+def test_no_reference_definition_can_form(text: str) -> None:
+    out = strict_body(text, REPO)
+    assert "]:" not in out
+    assert_neutralized(out)
+
+
+def test_a_reference_marker_form_stays_only_when_exact() -> None:
+    exact = "[//]: # (ai-pr-review-verdicts:QUJD)"
+    assert strict_body(exact, REPO) == exact
+    assert "]:" not in strict_body("[//]: # (not-engine) [//]: //evil.example", REPO)
 
 
 @pytest.mark.parametrize(
@@ -149,12 +221,19 @@ def test_the_hidden_reference_marker_form_is_not_treated_as_a_definition() -> No
         "go to http://evil.example now",
         "go to www.evil.example now",
         "ftp://evil.example/x",
+        "<mailto:a@evil.example>",
+        "<evil@evil.example>",
+        "user@evil.example",
+        "mailto:a@x",
+        "xmpp:a@x",
+        "MAILTO:a@x",
+        "<//evil.example/x>",
     ],
 )
-def test_a_bare_url_to_another_host_is_not_autolinked(text: str) -> None:
-    out = strict(text)
-    assert "://evil" not in out.replace(f":{ZW}//", "") and "www.evil" not in out
-    assert "evil.example" in out  # the text still reads the same
+def test_no_autolink_can_form(text: str) -> None:
+    out = strict_body(text, REPO)
+    assert_neutralized(out)
+    assert "evil" in out or "a@" in out  # the text still reads
 
 
 def test_a_bare_url_into_this_repository_is_left_alone() -> None:
@@ -162,17 +241,47 @@ def test_a_bare_url_into_this_repository_is_left_alone() -> None:
     assert strict(text) == text
 
 
-@pytest.mark.parametrize("tag", ["a href='https://evil.example'", "img src=x", "IMG src=x", "iframe src=x", "/a"])
-def test_raw_html_that_links_or_loads_is_defanged(tag: str) -> None:
-    out = strict(f"x <{tag}> y")
-    assert f"<{tag.split()[0]}" not in out
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://github.com/o/r/blob/a.py)evil",
+        "https://github.com/o/r/blob/a.py]x",
+        'https://github.com/o/r/blob/a.py"x',
+        "(https://evil.example/x)",
+        "x](https://evil.example/x)",
+    ],
+)
+def test_a_bare_url_followed_by_extra_characters_is_defanged(text: str) -> None:
+    assert "https://" not in strict_body(text, REPO)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    ["a href='https://evil.example'", "img src=x", "IMG src=x", "iframe src=x", "/a", "details onclick=x", "p style=x",
+     "!-- x --", "?php", "script", "https://evil.example", "//evil.example", "evil@evil.example"],
+)
+def test_raw_html_outside_the_short_list_is_escaped(tag: str) -> None:
+    out = strict_body(f"x <{tag}> y", REPO)
+    assert "<" not in out and "&lt;" in out
+
+
+@pytest.mark.parametrize(
+    "tag", ["<details>", "</details>", "<details open>", "<summary>", "</summary>", "<br>", "<br/>", "<b>", "</b>", "<code>",
+            "<table>", "<tr>", "<th>", "<td>", "<h3>", "</h3>", "<blockquote>", "<hr>", "<sub>", "<sup>", "<li>"],
+)
+def test_the_short_list_of_plain_tags_is_kept(tag: str) -> None:
+    assert strict_body(f"a {tag} b", REPO) == f"a {tag} b"
+
+
+def test_a_less_than_sign_in_code_is_left_alone() -> None:
+    assert strict("x = a < b and 1 <2 and a <= b") == "x = a < b and 1 <2 and a <= b"
 
 
 def test_invisible_characters_cannot_hide_a_link_from_the_strict_pass() -> None:
     out = strict("[x](https://evil.exa\u200bmple/y)")
-    assert "evil.example" not in out.replace(ZW, "")
+    assert "](" not in out
     out = strict("[x](https://evil.example/y)".replace("](", "]\U000e0020("))
-    assert "evil.example" not in out
+    assert "](" not in out and "\U000e0020" not in out
 
 
 def test_benign_markdown_survives_strict_mode() -> None:
@@ -181,13 +290,13 @@ def test_benign_markdown_survives_strict_mode() -> None:
 
 
 def test_strict_mode_is_idempotent() -> None:
-    text = "[a](https://evil.example) @team o/r#1 <img src=x> https://evil.example ![i](x)"
+    text = "[a](https://evil.example) @team o/r#1 <img src=x> https://evil.example ![i](x) [1]: //e.example <a@b.c>"
     once = strict(text)
     assert strict(once) == once
 
 
 def test_strict_text_without_scope_still_works_when_called_directly() -> None:
-    assert "evil.example" not in strict_text("[a](https://evil.example)", REPO)
+    assert "](" not in strict_text("[a](https://evil.example)", REPO)
 
 
 # ---------------------------------------------------------------------------
@@ -202,19 +311,19 @@ def test_a_mention_is_neutralized_in_a_fork_run(text: str) -> None:
     assert out.replace(ZW, "") == text  # reads the same
 
 
-@pytest.mark.parametrize("text", ["owner/repo#1", "see other/project#123 now", "x/y@abcdef1234567"])
+@pytest.mark.parametrize("text", ["owner/repo#1", "see other/project#123 now"])
 def test_a_cross_reference_is_neutralized_in_a_fork_run(text: str) -> None:
     out = strict(text)
     assert ZW in out and out.replace(ZW, "") == text
 
 
-@pytest.mark.parametrize("text", ["user@example.com", "see #12", "a#b", "path/to/file.py", "x/y@main"])
+@pytest.mark.parametrize("text", ["see #12", "a#b", "path/to/file.py", "x/y at main"])
 def test_text_that_is_not_a_reference_is_unchanged(text: str) -> None:
     assert strict(text) == text
 
 
 @pytest.mark.parametrize(
-    "text", ["@Override", "node_modules/@types/node", "src/a#12", "ping @team", "owner/repo#1", "x/y@abcdef1234567"]
+    "text", ["@Override", "node_modules/@types/node", "src/a#12", "ping @team", "owner/repo#1", "x/y@abcdef1234567", "a@b.com", "mailto:a@b.com", "![i](x)", "[a]: b", "<a href=x>"]
 )
 def test_a_same_repository_run_does_not_touch_mentions_or_paths(text: str) -> None:
     assert sanitize_display_text(text) == text
@@ -279,7 +388,8 @@ def test_the_agent_prompt_runs_every_string_through_the_sanitizer() -> None:
     assert "@team" in prompt and "o/r#1" in prompt  # same-repository output keeps paths and mentions
     with output_clamp(True, REPO):
         clamped = build_agent_prompt([f])
-    assert "evil.example" not in clamped and "@team" not in clamped and "o/r#1" not in clamped
+    assert_neutralized(strict_body(clamped.split("```json", 1)[1], REPO))
+    assert "@team" not in clamped and "o/r#1" not in clamped
 
 
 def test_a_triple_backtick_cannot_close_the_agent_prompt_fence() -> None:
@@ -375,9 +485,8 @@ def _hostile_findings() -> list[Finding]:
 
 
 def _assert_clean(text: str) -> None:
-    assert "://evil.example" not in text and "www.evil" not in text and "](" not in text.replace(
-        "](https://github.com/tag1consulting/ai-pr-review)", ""), text
-    assert "![" not in text and "<img" not in text and "@team" not in text and "other/repo#7" not in text, text
+    assert_neutralized(text)
+    assert "<img" not in text and "@team" not in text and "other/repo#7" not in text, text
 
 
 def test_every_body_of_a_fork_run_has_the_banner_and_no_hostile_text() -> None:
@@ -436,7 +545,7 @@ def test_a_same_repository_run_is_unchanged() -> None:
 
 def test_the_http_layer_keeps_marker_spans_and_the_engine_footer_link() -> None:
     marker = "<!-- ai-pr-review-finding:QUJDL0RFRg== -->"
-    verdicts = '<!-- ai-pr-review-verdicts: {"o/r#1@abcdef1": "dismissed"} -->'
+    verdicts = '<!-- ai-pr-review-verdicts: {"abcdef1234567890": "dismissed"} -->'
     footer = "[ai-pr-review](https://github.com/tag1consulting/ai-pr-review)"
     own = "[file](https://github.com/o/r/blob/abc/app.py#L3)"
     with output_clamp(True, REPO):
@@ -564,91 +673,8 @@ def test_a_fork_skip_posts_with_the_comment_ceiling(monkeypatch: pytest.MonkeyPa
 
 
 # ---------------------------------------------------------------------------
-# Review findings on the first version
+# Markers, check runs, providers
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "dest",
-    [
-        "&#104;ttps://evil.example/p",
-        "https&colon;//evil.example",
-        "&#x68;ttps://evil.example",
-        "https://github.com/o/r/blob/a&amp;b",
-        "/evil/repo/pull/1",
-        "/",
-        "https://github.com/o/r/blob/a(b",
-    ],
-)
-def test_an_encoded_or_root_relative_destination_is_removed(dest: str) -> None:
-    out = strict_body(f"[x]({dest})", REPO)
-    assert out == "x (link removed)", out
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "> [1]: //evil.example/x",
-        "- [1]: //evil.example/x",
-        "1. [1]: //evil.example/x",
-        "> - > [1]: //evil.example/x",
-        "   [1]: https://evil.example/x",
-        "\t[1]: //evil.example/x",
-    ],
-)
-def test_a_nested_reference_definition_is_removed(text: str) -> None:
-    out = strict_body(text, REPO)
-    assert "evil.example" not in out and "[reference removed]" in out
-
-
-def test_a_nested_definition_keeps_its_container_prefix() -> None:
-    assert strict_body("> [1]: //evil.example/x", REPO) == "> [reference removed]"
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "https://github.com/o/r/blob/a.py)evil",
-        "https://github.com/o/r/blob/a.py]x",
-        'https://github.com/o/r/blob/a.py"x',
-        "https://github.com/o/r/a<script>",
-        "(https://evil.example/x)",
-        "x](https://evil.example/x)",
-    ],
-)
-def test_a_bare_url_followed_by_extra_characters_is_defanged(text: str) -> None:
-    out = strict_body(text, REPO)
-    assert "https://" not in out and "http" in out
-
-
-def test_a_bare_url_that_ends_at_whitespace_or_the_end_stays_when_allowed() -> None:
-    for text in ("see https://github.com/o/r/blob/a.py now", "see https://github.com/o/r/blob/a.py"):
-        assert strict_body(text, REPO) == text
-
-
-def test_a_kept_link_is_not_broken_by_the_bare_url_pass() -> None:
-    text = "[f](https://github.com/o/r/blob/a.py#L3) and [g](https://github.com/o/r/pull/7#discussion_r1)"
-    assert strict_body(text, REPO) == text
-
-
-def test_a_comment_span_that_is_not_an_engine_marker_gets_the_strict_pass() -> None:
-    out = strict_body("<!-- [x](https://evil.example/login) @team -->", REPO)
-    assert "](" not in out and "@team" not in out
-    out = strict_body("<!-- not-ai-pr-review [a](https://evil.example) -->", REPO)
-    assert "evil.example)" not in out
-    out = strict_body("<!--\n[a](https://evil.example)\n-->", REPO)
-    assert "](" not in out
-
-
-def test_only_the_exact_engine_marker_forms_are_preserved() -> None:
-    forms = [
-        "<!-- ai-pr-review-summary sha=abc -->",
-        "<!-- ai-pr-review-skip -->",
-        '<!-- ai-pr-review-verdicts: {"o/r#1": "dismissed"} -->',
-        "[//]: # (ai-pr-review-verdicts:QUJD)",
-    ]
-    for form in forms:
-        assert strict_body(form, REPO) == form
 
 
 def test_a_check_run_output_gets_the_banner_and_the_strict_pass() -> None:
@@ -674,3 +700,139 @@ def test_a_fork_profile_can_only_occur_on_a_provider_that_reads_fork_facts() -> 
     assert hasattr(GitHubProvider, "get_fork_gate_facts")
     assert not hasattr(GitLabProvider, "get_fork_gate_facts")
     assert not hasattr(BitbucketProvider, "get_fork_gate_facts")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<!-- ai-pr-review --!>[x](//evil.example)<img src=//evil/a> -->",
+        "<!-- ai-pr-review-x [x](//evil.example) -->",
+        "<!-- ai-pr-review-x <img src=x> -->",
+        "<!-- ai-pr-review-x\n[x](//evil.example)\n-->",
+        "<!-- [x](https://evil.example/login) @team -->",
+        "<!-- not-ai-pr-review [a](https://evil.example) -->",
+        "<!--\n[a](https://evil.example)\n-->",
+        "<!-- ai-pr-review-skip --!><a href=//evil.example>x</a>",
+    ],
+)
+def test_a_span_that_only_starts_like_a_marker_gets_the_strict_pass(text: str) -> None:
+    # No marker skipping here: nothing in the output may be left as a preserved span.
+    assert_neutralized(strict_body(text, REPO), skip_markers=False)
+
+
+def test_only_the_exact_engine_marker_forms_are_preserved() -> None:
+    forms = [
+        "<!-- ai-pr-review-summary sha=abc1234 -->",
+        "<!-- ai-pr-review-summary -->",
+        "<!-- ai-pr-review-skip -->",
+        "<!-- ai-pr-review-inline -->",
+        "<!-- ai-pr-review-usage -->",
+        '<!-- ai-pr-review-verdicts: {"abcdef1234567890": "dismissed"} -->',
+        '<!-- ai-pr-review-id-map: {"abcdef1234567890": 3} -->',
+        "<!-- ai-pr-review-finding:QUJDL0RFRg== -->",
+        "[//]: # (ai-pr-review-verdicts:QUJD)",
+    ]
+    for form in forms:
+        assert strict_body(form, REPO) == form
+
+
+# ---------------------------------------------------------------------------
+# Corpus: every hostile input ends neutralized
+# ---------------------------------------------------------------------------
+
+_CORPUS = [
+    # images
+    "![a](https://evil.example/p.png)", "![a](//evil.example/p.png)", "![a](\n//evil.example/a.png)",
+    "![a][1]\n\n[1]: //evil.example/a.png", "![![a](x)](y)", "!\n[a](b)", "![](https://github.com/o/r/raw/main/a.png)",
+    "<img src=//evil.example/a.png>", "<IMG SRC=x onerror=y>", "<picture><source srcset=x></picture>",
+    # links
+    "[a](https://evil.example)", "[a](//evil.example)", "[a](\n//evil.example)", "[a](<//evil.example/)>)",
+    "[a](<https://evil.example>)", "[a](javascript:alert(1))", "[a](JaVaScRiPt:x)", "[a](data:text/html,x)",
+    "[a](vbscript:x)", "[a](mailto:a@evil.example)", "[a](tel:123)", "[a](&#104;ttps://evil.example)",
+    "[a](https&colon;//evil.example)", "[a](https://evil.example/\u200b)", "[x [y [z]]](//evil.example)",
+    "[a](/evil/repo/pull/1)", "[a](/)", "[a](..)", "[a](../../x)", "[a](a/../../x)", "[a](%2e%2e/x)", "[a](a%2fb)",
+    "[a](https://github.com/other/repo)", "[a](https://github.com/o/r/../../other)", "[a](https://github.com/o/rx)",
+    "[a](https://github.com/o/r@evil.example)", "[a](https://github.com:443/o/r)", "[a](http://github.com/o/r)",
+    "[a](HTTPS://EVIL.EXAMPLE)", "[a]( //evil.example)", "[a](\t//evil.example)", "[a](x y)", "[a](x \"t\" z)",
+    "[a](x \"t)\" )", "[a](x\n)", "[a]\n(//evil.example)", "[a][b]\n\n[b]: //evil.example", "[a]: //evil.example\n[a]",
+    "x](//evil.example)", "](//evil.example)", "[a](https://evil.example \"t\")", "[a]((//evil.example))",
+    "[a](https://github.com/o/r/blob/a(b)c)", "[a](https://github.com/o/r/blob/a b)",
+    "[a](https://github.com/o/r/blob/a%20b)", "[a](https://github.com/o/r/blob/a&b)",
+    "[a](evil.example/\\\\x)", "[a](\\\\evil.example\\x)", "[\\[a](//evil.example)",
+    # reference definitions
+    "[a]:\n//evil.example\n\n[a]", "[a]: \n  //evil.example", "- [x]:\n  //evil.example", "> [x]:\n> //evil.example",
+    "[a\nb]: //evil.example", "[a\\]]: //evil.example", "   [a]: //evil.example", "\t[a]: //evil.example",
+    "> - > [a]: //evil.example", "1. [a]: //evil.example", "[//]: //evil.example", "[//]: # (x) [a]: //evil.example",
+    "[a]: <//evil.example>", "[^a]: x", "[a]: javascript:alert(1)", "text [a]: //evil.example [a]",
+    # raw HTML and autolinks
+    "<a href=\"//evil.example\">x</a>", "<A HREF=x>", "<iframe src=x>", "<script>x</script>", "<style>x</style>",
+    "<form action=x>", "<base href=//evil.example>", "<meta http-equiv=refresh content=0;url=//evil.example>",
+    "<svg onload=x>", "<math href=x>", "<details onclick=x>", "<details open onclick=x>", "<p style=x>",
+    "<https://evil.example>", "<//evil.example>", "<mailto:a@evil.example>", "<evil@evil.example>", "<xmpp:a@x>",
+    "<!-- x -->", "<!--[if x]>", "<![CDATA[x]]>", "<?php x ?>", "<!DOCTYPE x>", "<\u200ba href=x>", "< a href=x>",
+    "https://evil.example", "http://evil.example/x", "ftp://evil.example", "www.evil.example", "WWW.EVIL.EXAMPLE",
+    "user@evil.example", "mailto:a@x", "xmpp:a@x", "MailTo:a@x", "a@b", "@team", "@org/team", "(@team)", "x@@y",
+    "other/repo#1", "other/repo@abcdef1", "https://github.com/o/r/blob/a.py)evil", "https://github.com/other/r",
+    # markers
+    "<!-- ai-pr-review --!>[x](//evil.example)<img src=//evil/a> -->", "<!-- ai-pr-review-x <a href=x> -->",
+    "<!-- ai-pr-review-x\n<a href=x>\n-->", "[//]: # (ai-pr-review-x [a](//evil.example))",
+    "<!-- ai-pr-review-verdicts: {} --><a href=x>", "<!-- ai-pr-review-verdicts: {\"a\":\"<b>\"} -->",
+    # mixed
+    "[![a](//e.example/i.png)](//e.example)", "[a](//e.example) ![b](//e.example) <a href=//e.example> @t o/r#1",
+]
+
+
+def test_the_corpus_is_large_enough() -> None:
+    assert len(_CORPUS) >= 100
+
+
+@pytest.mark.parametrize("text", _CORPUS)
+def test_a_hostile_input_ends_neutralized(text: str) -> None:
+    out = strict_body(text, REPO)
+    assert_neutralized(out)
+    assert strict_body(out, REPO) == out  # idempotent
+    assert_neutralized(strict_text(text, REPO))
+
+
+# ---------------------------------------------------------------------------
+# The engine's own bodies pass through unchanged
+# ---------------------------------------------------------------------------
+
+
+def _engine_bodies(clamped: bool) -> list[tuple[str, str]]:
+    sent: list[tuple[str, str, Any]] = []
+    prov = _provider(sent)
+    diff = DiffContext(diff_text=_DIFF, head_sha=_SHA)
+    findings = [
+        Finding(  # inline
+            severity="High", confidence=90, finding="Possible null dereference in the loop (see line 4).",
+            source="code-reviewer", file="app.py", line=4, impact="The request fails.", trigger="An empty list.",
+            remediation="Check the list first, then loop: `if items:`.",
+        ),
+        Finding(severity="Medium", confidence=80, finding="Body-level note about naming.", source="phpcs"),
+        Finding(  # out of diff
+            severity="Low", confidence=70, finding="Old style issue.", source="ruff", file="old.py", line=99,
+            out_of_diff=True,
+        ),
+    ]
+    usage = "<details>\n<summary>Token usage by agent</summary>\n\n| Agent | Tokens |\n|---|---|\n| a | 10 |\n</details>"
+    with output_clamp(clamped, REPO):
+        prov.post_summary("## Summary\nSmall change.\n\n<details>\n<summary>Walkthrough</summary>\n\n| File | Change |\n|---|---|\n| app.py | edit |\n</details>", _SHA)
+        prov.post_skip_comment("The estimated cost is above the ceiling.", findings=findings[1:])
+        prov.post_findings(
+            findings, diff, event="COMMENT", usage_block=usage, usage_warning="Note: see https://github.com/o/r/actions/runs/1",
+            enable_suggestions=False,
+        )
+    return _bodies(sent)
+
+
+def test_the_engine_bodies_pass_the_clamp_unchanged_apart_from_the_banner() -> None:
+    plain = _engine_bodies(False)
+    clamped = _engine_bodies(True)
+    assert len(plain) == len(clamped) >= 4
+    for (path_a, a), (path_b, b) in zip(plain, clamped, strict=True):
+        assert path_a == path_b
+        assert b == BANNER_BLOCK + a, (a, b)
+    joined = "\n".join(a for _p, a in plain)
+    for needle in ("<details>", "</summary>", "ai-pr-review-summary", "ai-pr-review-skip", "tag1consulting/ai-pr-review"):
+        assert needle in joined, needle
