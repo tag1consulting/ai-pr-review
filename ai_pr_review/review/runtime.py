@@ -22,6 +22,7 @@ from ai_pr_review.agents.dispatch import (
     load_shared_prompt_fragments,
 )
 from ai_pr_review.config import ReviewConfig
+from ai_pr_review.fork_policy import DEFAULT_FORK_MAX_COST_USD
 from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
@@ -38,7 +39,7 @@ from ai_pr_review.review.fork_budget import (
     cents_from_units,
     with_run_pointer,
 )
-from ai_pr_review.review.fork_gate import DEFAULT_FORK_MAX_COST_USD, MODE_FORK, ForkProfile
+from ai_pr_review.review.fork_gate import MODE_FORK, ForkProfile
 from ai_pr_review.review.fork_spend import (
     DailyCaps,
     ForkSpend,

@@ -46,17 +46,30 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 
+# The policy constants and the association parser live in ``ai_pr_review.fork_policy``, which has no
+# package imports, so ``config.py`` does not import this module. They are re-exported here.
+from ai_pr_review.fork_policy import (
+    DEFAULT_FORK_MAX_COST_USD,
+    DEFAULT_FORK_POLICY,
+    DEFAULT_TRUSTED_ASSOCIATIONS,
+    FORK_POLICIES,
+    SAFEST_FORK_POLICY,
+    parse_trusted_associations,
+)
+
+__all__ = [
+    "DEFAULT_FORK_MAX_COST_USD",
+    "DEFAULT_FORK_POLICY",
+    "DEFAULT_TRUSTED_ASSOCIATIONS",
+    "FORK_POLICIES",
+    "SAFEST_FORK_POLICY",
+    "parse_trusted_associations",
+]
+
 logger = logging.getLogger(__name__)
 
 APPROVAL_CONTEXT = "ai-pr-review/fork-approval"
 APPROVAL_LABEL = "ai-review-approve-fork"
-DEFAULT_FORK_MAX_COST_USD = 2.0
-FORK_POLICIES = ("auto", "label", "block")
-DEFAULT_FORK_POLICY = "auto"
-# An unknown AI_FORK_POLICY value must never open the gate, so it falls back to the safest policy,
-# which is NOT the default. Only an unset or empty value gets DEFAULT_FORK_POLICY.
-SAFEST_FORK_POLICY = "label"
-DEFAULT_TRUSTED_ASSOCIATIONS = ("OWNER", "COLLABORATOR")
 MODE_NORMAL, MODE_TRUSTED, MODE_APPROVED, MODE_FORK = "normal", "trusted", "approved", "fork"
 UNGATED_EVENTS = frozenset({"pull_request"})
 LLM_KEY_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "BEDROCK_API_KEY")
@@ -200,14 +213,6 @@ def _redact_key(key: str) -> str:
     if "://" not in key and "@" not in key:
         return key[:80]
     return f"{key.split('.', 1)[0]}.<url>.{key.rsplit('.', 1)[-1]}"[:80]
-
-
-def parse_trusted_associations(raw: str | None) -> tuple[str, ...]:
-    """Parse ``AI_FORK_TRUSTED_ASSOCIATIONS``. ``None`` (unset) gives the default. An empty value
-    trusts nobody."""
-    if raw is None:
-        return DEFAULT_TRUSTED_ASSOCIATIONS
-    return tuple(dict.fromkeys(p.strip().upper() for p in raw.split(",") if p.strip()))
 
 
 def is_trusted(association: str, trusted: tuple[str, ...]) -> bool:
