@@ -372,3 +372,15 @@ def test_proxy_and_ca_settings_reach_every_launch_and_gh_keeps_host(monkeypatch)
     assert _env.tool_env()["SSL_CERT_FILE"] == "/etc/ca.pem"
     assert "GH_HOST" not in _env.tool_env()
     assert _env.gh_env()["GH_HOST"] == "ghe.example.com"
+
+
+def test_proxy_with_credentials_is_not_forwarded_and_fork_runs_get_no_network_settings(
+    monkeypatch,
+) -> None:
+    from ai_pr_review.analyzers import _env
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:pw@proxy:3128")
+    monkeypatch.setenv("NO_PROXY", "localhost")
+    assert "HTTPS_PROXY" not in _env.tool_env()
+    assert _env.tool_env()["NO_PROXY"] == "localhost"
+    assert "NO_PROXY" not in _env.tool_env(allow_passthrough=False)
