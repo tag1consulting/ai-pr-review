@@ -73,7 +73,8 @@ _CAP_EXEMPT_RE = re.compile(
 # Exempt spans get their own budget, so a huge fence cannot skip the cap.
 _EXEMPT_BUDGET_BYTES: Final[int] = 65_536
 
-_SUGGESTION_RE = re.compile(r"```suggestion[^\n]*\n.*?\n[ \t]*```", re.DOTALL)
+# A fence starts at the start of a line. An unanchored match could delete text in the middle of a line.
+_SUGGESTION_RE = re.compile(r"(?m)^```suggestion[^\n]*\n.*?\n[ \t]*```", re.DOTALL)
 
 
 def _drop_altered_suggestions(text: str) -> str:
@@ -336,11 +337,12 @@ class RecordingClient:
     ) -> httpx.Response:
         # Every string the engine posts passes through here (story 17-12).
         if json_body is not None:
-            # Fork output clamp first (story 17-11): the banner, the strict pass and the event cap.
-            # The scrub then sees the final text. No change outside a fork run's clamp scope.
+            # Scrub first, then the fork output clamp (story 17-11). The clamp must be the last step
+            # that changes a posted string, because the scrub can delete a suggestion fence and so
+            # join the text on both sides of it. No change outside a fork run's clamp scope.
+            json_body = sanitize_outbound(json_body)
             if method.upper() in ("POST", "PATCH", "PUT"):
                 json_body = clamp_request_body(json_body)
-            json_body = sanitize_outbound(json_body)
 
         def _call() -> httpx.Response:
             return self.http.request(

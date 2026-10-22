@@ -97,8 +97,12 @@ def clamp_repo() -> str:
 # - ``<`` becomes ``&lt;`` unless it opens a plain tag from a short list.
 # - ``@`` and ``mailto:`` and ``xmpp:`` and ``www.`` break, so no autolink forms.
 
-_BARE_URL_RE: Final[re.Pattern[str]] = re.compile(r"(?i)\b(https?|ftp)://[^\s<>\"'\])]+")
-_WWW_RE: Final[re.Pattern[str]] = re.compile(r"(?i)(?<![\w/.@-])www\.(?=[\w-])")
+# No word boundary: ``1http://x`` and ``_http://x`` must not slip past.
+_BARE_URL_RE: Final[re.Pattern[str]] = re.compile(r"(?i)(https?|ftp)://[^\s<>\"'\])]+")
+_WWW_RE: Final[re.Pattern[str]] = re.compile(r"(?i)www\.")
+# An HTML entity can spell ``@``, ``#``, ``:`` or a letter. Break each one except the four the clamp
+# and the engine write themselves. ``&amp;#64;`` stays text, so the rewrite is idempotent.
+_ENTITY_RE: Final[re.Pattern[str]] = re.compile(r"&(?=#|(?!(?:lt|gt|amp|quot);)[A-Za-z][A-Za-z0-9]{1,31};)")
 _SCHEME_WORD_RE: Final[re.Pattern[str]] = re.compile(r"(?i)\b(mailto|xmpp):(?!" + _ZWSP + ")")
 _AT_RE: Final[re.Pattern[str]] = re.compile("@(?!" + _ZWSP + ")")
 # ``owner/repo#123`` and ``owner/repo@<sha>`` link to another repository.
@@ -114,13 +118,25 @@ _ALLOWED_TAG_RE: Final[re.Pattern[str]] = re.compile(
     rf"<(?:/(?:{_ALLOWED_TAGS})|(?:{_ALLOWED_TAGS})(?: open)?[ ]?/?)>"
 )
 
-# The exact marker grammars the engine writes. No ``>``, ``!`` or newline can sit inside, so a
-# marker cannot end early or hide a tag. The strict pass skips them. Anything else that starts like
-# a marker is display text.
-_MARKER_PAYLOAD: Final[str] = r'[A-Za-z0-9+/=_,.:{}|\[\]" -]'
+# The exact marker grammars the engine writes (vcs/marker.py). A span is preserved only when the
+# name and the payload both match its grammar, it sits on a line of its own, and it holds no URL
+# scheme. No ``>``, ``!`` or newline can sit inside, so a marker cannot end early or hide a tag.
+# Anything else that starts like a marker is display text. A well-formed marker that reaches the HTTP
+# layer from untrusted text cannot be told from a real one here, so the renderers must defang
+# untrusted text first (``sanitize_display_text`` does).
+_SHA: Final[str] = r"[0-9a-f]{7,40}"
+_B64: Final[str] = r"[A-Za-z0-9+/=]+"
+_JSON: Final[str] = r"\{[^<>\n]{0,100000}\}"
+_HTML_MARKER: Final[str] = (
+    rf"<!-- ai-pr-review-(?:summary(?: sha={_SHA})?|skip|inline|usage|gitlab-body-findings"
+    rf"|(?:id-map|verdicts|judge-map|headline-map): {_JSON}|finding:{_B64}) -->"
+)
+_HIDDEN_MARKER: Final[str] = (
+    rf"\[//\]: # \(ai-pr-review-(?:summary(?: sha={_SHA})?|skip|inline|usage|gitlab-body-findings"
+    rf"|(?:id-map|verdicts|judge-map|headline-map|acks|finding|verdict-reply-key|verdict-reply):{_B64})\)"
+)
 _MARKER_SPAN_RE: Final[re.Pattern[str]] = re.compile(
-    rf"<!-- ai-pr-review[a-z-]*(?:[: ]{_MARKER_PAYLOAD}{{0,50000}})? -->"
-    rf"|\[//\]: # \(ai-pr-review[a-z-]*(?:[: ]{_MARKER_PAYLOAD}{{0,50000}})?\)"
+    rf"(?m)^(?:{_HTML_MARKER}|{_HIDDEN_MARKER})(?=\n|\Z)"
 )
 
 _REL_CHARS: Final[str] = r"[A-Za-z0-9_.~/+,=-]"
@@ -133,13 +149,14 @@ def _has_dotdot(path: str) -> bool:
 
 def _allowed_url(url: str, repo: str) -> bool:
     """True for an absolute URL that points into this repository or the engine repository."""
-    if re.match(r"(?i)^" + re.escape(ENGINE_DOCS) + r"(?:[/?#]|$)", url) and not _has_dotdot(url):
+    if re.match(r"^" + re.escape(ENGINE_DOCS) + r"(?:[/?#]|$)", url, re.ASCII | re.IGNORECASE) and not _has_dotdot(url):
         return True
     for allowed in {repo, ENGINE_REPO}:
         if not allowed:
             continue
-        pattern = r"(?i)^https://github\.com/" + re.escape(allowed) + r"(?:[/?#]|$)"
-        if re.match(pattern, url) and not _has_dotdot(url):
+        pattern = r"^https://github\.com/" + re.escape(allowed) + r"(?:[/?#]|$)"
+        # ASCII only: a case-insensitive Unicode match would accept a dotless i or a Kelvin sign.
+        if re.match(pattern, url, re.ASCII | re.IGNORECASE) and not _has_dotdot(url):
             return True
     return False
 
@@ -149,7 +166,7 @@ def _link_tail_re(repo: str) -> re.Pattern[str]:
     """What may follow ``](`` for the link to stay: one destination, an optional title, ``)``."""
     repos = "|".join(re.escape(r) for r in sorted({repo, ENGINE_REPO}) if r)
     docs = re.escape(ENGINE_DOCS)
-    absolute = rf"(?i:https://github\.com/(?:{repos})|{docs})(?:[/?#][^\s()<>&%\\\"'`]*)?"
+    absolute = rf"(?ai:https://github\.com/(?:{repos})|{docs})(?:[/?#][^\s()<>&%\\\"'`]*)?"
     anchor = r"#[A-Za-z0-9_.~/+,=:-]*"
     relative = rf"(?!/){_REL_CHARS}+(?:#{_REL_CHARS}*)?"
     return re.compile(rf"[ ]?(?P<dest>{absolute}|{anchor}|{relative})(?:[ ]\"[^\")\n]*\")?\)")
@@ -204,6 +221,7 @@ def neutralize_references(text: str) -> str:
 
 
 def _strict_segment(text: str, repo: str) -> str:
+    text = _ENTITY_RE.sub("&amp;", text)
     text = text.replace("![", "!" + _ZWSP + "[")
     text = _break_links(text, repo)
     text = text.replace("]:", "]" + _ZWSP + ":")
@@ -230,6 +248,8 @@ def strict_body(body: str, repo: str = "") -> str:
     out: list[str] = []
     pos = 0
     for m in _MARKER_SPAN_RE.finditer(body):
+        if "://" in m.group(0):
+            continue  # second guard: a marker holds no URL scheme, so this one is display text
         out.append(_strict_segment(body[pos : m.start()], repo))
         out.append(m.group(0))
         pos = m.end()
@@ -251,7 +271,7 @@ def with_banner(body: str) -> str:
 
 def clamp_event(event: str) -> str:
     """Cap a review event at COMMENT inside a clamp scope."""
-    if clamp_active() and event in _CAPPED_EVENTS:
+    if clamp_active() and event.strip().upper() in _CAPPED_EVENTS:
         return "COMMENT"
     return event
 
@@ -269,15 +289,24 @@ def clamp_request_body(value: Any) -> Any:
     return _walk(value, state.repo)
 
 
+# JSON keys that carry text a person can read. ``body`` is a GitHub comment or review, ``note`` is
+# GitLab, ``raw`` is Bitbucket ``content.raw``. Those get the banner. The others get the strict pass
+# only, because a banner would not fit a commit message or a short title.
+_BANNER_KEYS: Final[frozenset[str]] = frozenset({"body", "note", "raw"})
+_STRICT_KEYS: Final[frozenset[str]] = frozenset({"message", "title", "text", "raw_details", "description"})
+
+
 def _walk(value: Any, repo: str) -> Any:
     if isinstance(value, dict):
         out: dict[Any, Any] = {}
         for key, item in value.items():
-            if key == "body" and isinstance(item, str):
+            if key in _BANNER_KEYS and isinstance(item, str):
                 out[key] = with_banner(strict_body(item, repo))
+            elif key in _STRICT_KEYS and isinstance(item, str):
+                out[key] = strict_body(item, repo)
             elif key == "output" and isinstance(item, dict):
                 out[key] = _clamp_check_output(item, repo)
-            elif key == "event" and isinstance(item, str) and item in _CAPPED_EVENTS:
+            elif key == "event" and isinstance(item, str) and item.strip().upper() in _CAPPED_EVENTS:
                 out[key] = "COMMENT"
             else:
                 out[key] = _walk(item, repo)
@@ -288,11 +317,14 @@ def _walk(value: Any, repo: str) -> Any:
 
 
 def _clamp_check_output(output: dict[Any, Any], repo: str) -> dict[Any, Any]:
-    """Clamp a check-run ``output`` object. The summary gets the banner, the title and text do not."""
+    """Clamp a check-run ``output`` object. The summary gets the banner. Title, text and every
+    annotation (``message``, ``title``, ``raw_details``) get the strict pass."""
     out = dict(output)
     for key in ("title", "summary", "text"):
         value = out.get(key)
         if isinstance(value, str):
             clean = strict_body(value, repo)
             out[key] = with_banner(clean) if key == "summary" else clean
+    if "annotations" in out:
+        out["annotations"] = _walk(out["annotations"], repo)
     return out
