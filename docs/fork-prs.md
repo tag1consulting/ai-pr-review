@@ -86,7 +86,7 @@ A fork pull request by a non-trusted author has four caps. A run that would pass
 
 **Daily cap.** Authors with the `CONTRIBUTOR` association have 70 percent of the daily budget (`AI_FORK_DAILY_RESERVED_SHARE`). Every other non-trusted author shares the remaining 30 percent. A full shared pool does not use the `CONTRIBUTOR` pool. A run that is over the budget removes its own entry and pauses. The pause clears as the 24 hour window moves on. `AI_FORK_DAILY_MAX_COST_USD=0` pauses every fork run, so use `AI_FORK_POLICY=block` to switch fork review off.
 
-**Fail closed.** If the engine cannot read or write a ledger, cannot read the author's open pull requests, or cannot estimate the cost, the run pauses.
+**Fail closed.** If the engine cannot read or write a ledger, cannot read the author's open pull requests, or cannot estimate the cost, the run pauses. The pause comment names the workflow run when the CI environment provides its address. The cause is in the log of that run.
 
 **Resume.** A maintainer comments `/ai-pr-review rescan` on a paused pull request. The engine counts each rescan comment from an owner, member or collaborator once. One rescan adds one run and `AI_FORK_MAX_COST_USD` to the cap of that pull request. It does not reset the count, and it does not change the author cap or the daily cap. Each further run after a pause needs another rescan.
 

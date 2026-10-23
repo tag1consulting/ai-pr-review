@@ -821,3 +821,18 @@ def test_the_persisted_credential_key_is_the_same_with_and_without_the_clamp() -
         out = clamp_request_body({"body": text})["body"]
     assert "`http.URL.extraheader`" in out
     assert "&lt;" not in out
+
+
+def test_a_run_pointer_in_a_pause_text_survives_the_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_pr_review.output_clamp import BANNER_BLOCK, clamp_request_body, output_clamp
+    from ai_pr_review.review.fork_budget import LEDGER_ERROR_TEXT, with_run_pointer
+
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_RUN_ID", "777")
+    text = with_run_pointer(LEDGER_ERROR_TEXT)
+    assert "https://github.com/o/r/actions/runs/777" in text
+    with output_clamp(True, repo="o/r"):
+        out = clamp_request_body({"body": text})["body"]
+    assert out.startswith(BANNER_BLOCK)
+    assert "https://github.com/o/r/actions/runs/777" in out

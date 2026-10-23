@@ -9,7 +9,8 @@ cannot stop two concurrent runs: both read N, both write N+1, both re-read their
 pass. Here each run appends its own entry. The ledger is the sum of every bot-authored entry.
 Admission is ordered by comment ID: an entry passes only when the running sum up to its own ID
 fits the caps. A run that does not fit deletes its own entry and pauses. Story 17-7 reuses this
-append, re-read, remove-own pattern for the daily cap.
+append, re-read, remove-own pattern for the daily cap. The shared steps are in
+``_ledger_admission.py``, which also documents how the two ledgers differ.
 
 * ``precheck``: before any analyzer. Credits maintainer rescan comments, then pauses at a cap.
 * ``reserve``: after the cost estimate. Appends an entry for the estimate, re-reads, verifies.
@@ -31,6 +32,16 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Protocol
+
+from ai_pr_review.review._ledger_admission import (
+    LedgerError,
+    append_and_reread,
+    entries_through,
+    release_quietly,
+    require_own_entry,
+)
+
+__all__ = ["LedgerError"]  # re-exported: the exception now lives in _ledger_admission
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +72,19 @@ ESTIMATE_ERROR_TEXT = (
     "so the run does not start. Run the workflow again.")
 
 
-class LedgerError(Exception):
-    """The ledger could not be read, written or understood. A fork run pauses."""
+def with_run_pointer(text: str) -> str:
+    """Add a pointer to the workflow run to a generic pause text, so a maintainer can find the log.
+
+    The specific cause of a ledger or estimate pause is only in a warning log line. The pointer is
+    built from runner variables (``ci_run_url``), never from fork text. With no run URL the text is
+    returned unchanged.
+    """
+    from ai_pr_review.review.reporting import ci_run_url
+
+    url = ci_run_url()
+    if not url.startswith(("https://", "http://")):
+        return text
+    return f"{text} A maintainer can read the cause in the log of this workflow run: {url}"
 
 
 class ForkBudgetPause(Exception):
@@ -205,9 +227,8 @@ def cannot_fit(entries: list[Entry], caps: Caps, estimate_cents: int) -> str | N
 def not_admitted(entries: list[Entry], caps: Caps, own_id: int) -> str | None:
     """The admission rule: the running sum up to the own entry, in comment ID order, must fit the caps.
     All allowance counts. A missing own entry is a ``LedgerError``, because admission cannot be checked."""
-    counted = [e for e in entries if e.comment_id <= own_id]
-    if not any(e.comment_id == own_id for e in counted):
-        raise LedgerError("the own ledger entry is gone, so admission cannot be checked")
+    require_own_entry([e.comment_id for e in entries], own_id, "ledger")
+    counted = entries_through(entries, own_id, lambda e: e.comment_id)
     max_runs, max_cents = _limits(entries, caps)
     if sum(e.runs for e in counted) > max_runs:
         return CAP_RUNS
@@ -243,8 +264,13 @@ class ForkBudget:
             ledger, maintainer = self._backend.list_budget_comments()
         except Exception as exc:  # noqa: BLE001 - any read failure must pause the run
             raise LedgerError(f"could not read the ledger ({type(exc).__name__})") from exc
-        parsed = (try_parse_entry(cid, body) for cid, body in ledger)
-        entries = sorted((e for e in parsed if e is not None), key=lambda e: e.comment_id)
+        parsed = [(cid, try_parse_entry(cid, body)) for cid, body in ledger]
+        # A bot comment that only quotes the tag is not an entry and is ignored. Log its ID, never its body.
+        skipped = [cid for cid, e in parsed if e is None]
+        if skipped:
+            logger.info("fork budget: ignored %d bot comment(s) that hold the ledger tag but are not "
+                        "entries (comment IDs %s)", len(skipped), ", ".join(str(c) for c in skipped))
+        entries = sorted((e for _, e in parsed if e is not None), key=lambda e: e.comment_id)
         return entries, maintainer
 
     def _create(self, body: str) -> int:
@@ -291,17 +317,19 @@ class ForkBudget:
         cap = cannot_fit(entries, self._caps, estimate_cents)
         if cap is not None:
             raise ForkBudgetPause(cap, pause_text(cap, entries, self._caps, estimate_cents=estimate_cents))
-        own_id = self._create(render_entry(1, estimate_cents, 0))
-        entries, _ = self._scan()
+        own_id, entries = append_and_reread(
+            lambda: self._create(render_entry(1, estimate_cents, 0)),
+            lambda: self._scan()[0],
+            self._backend.delete_budget_entry,
+            lambda e: e.comment_id,
+            label="fork budget",
+        )
         cap = not_admitted(entries, self._caps, own_id)
         if cap is not None:
-            try:
-                self._backend.delete_budget_entry(own_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("fork budget: could not delete the losing entry (%s). It stays charged.",
-                               type(exc).__name__)
+            release_quietly(self._backend.delete_budget_entry, own_id, label="fork budget", why="of the losing run")
             raise ForkBudgetPause(cap, pause_text(
-                cap, [e for e in entries if e.comment_id <= own_id], self._caps, estimate_cents=estimate_cents))
+                cap, entries_through(entries, own_id, lambda e: e.comment_id), self._caps,
+                estimate_cents=estimate_cents))
         return Reservation(own_id, estimate_cents)
 
     def settle(self, reservation: Reservation, actual_cents: int) -> None:

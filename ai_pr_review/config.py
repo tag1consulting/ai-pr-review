@@ -13,7 +13,7 @@ import sys
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from ai_pr_review.review.fork_gate import (
+from ai_pr_review.fork_policy import (
     DEFAULT_FORK_POLICY,
     FORK_POLICIES,
     SAFEST_FORK_POLICY,

@@ -30,6 +30,7 @@ from ai_pr_review.review.fork_budget import (
     parse_entry,
     render_entry,
     try_parse_entry,
+    with_run_pointer,
 )
 from ai_pr_review.review.fork_gate import ForkGateFacts
 from ai_pr_review.vcs.github import GitHubConfig, GitHubProvider
@@ -47,6 +48,7 @@ class Backend:
         self.maintainer: list[tuple[int, str]] = []
         self.fail_read = self.fail_create = self.fail_update = self.fail_delete = False
         self.before_create: Callable[[], None] | None = None
+        self.after_create: Callable[[], None] | None = None
         self.lock = threading.Lock()
 
     def add(self, runs: int = 1, cents: int = 0, allowance: int = 0, rescan_id: int | None = None) -> int:
@@ -70,7 +72,11 @@ class Backend:
         with self.lock:
             self.next_id += 1
             self.bot[self.next_id] = body
-            return self.next_id
+            new_id = self.next_id
+        if self.after_create is not None:
+            hook, self.after_create = self.after_create, None
+            hook()
+        return new_id
 
     def update_budget_entry(self, comment_id: int, body: str) -> None:
         if self.fail_update:
@@ -721,7 +727,7 @@ async def test_a_ledger_failure_pauses_the_fork_run(tmp_path: Path, fail: str) -
     setattr(backend, fail, True)
     result, _ = await _build(tmp_path, _Provider(backend))
     assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.fork_output_clamp
-    assert result.reason == LEDGER_ERROR_TEXT
+    assert result.reason == with_run_pointer(LEDGER_ERROR_TEXT)
 
 
 @pytest.mark.anyio
@@ -733,7 +739,7 @@ async def test_a_failed_estimate_pauses_a_fork_run_and_reserves_nothing(tmp_path
     with patch("ai_pr_review.review.cost_ceiling.estimate_review_cost", side_effect=ValueError("corrupt")):
         result, _ = await _build(tmp_path, _Provider(backend))
     assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.fork_output_clamp
-    assert result.reason == ESTIMATE_ERROR_TEXT
+    assert result.reason == with_run_pointer(ESTIMATE_ERROR_TEXT)
     assert backend.bot == {}
 
 
@@ -744,7 +750,7 @@ async def test_a_fork_run_with_an_unpriced_model_pauses(tmp_path: Path) -> None:
 
     backend = Backend()
     result, _ = await _build(tmp_path, _Provider(backend), model_standard="no-such-model-x")
-    assert isinstance(result, SkipPlan) and result.reason == ESTIMATE_ERROR_TEXT and backend.bot == {}
+    assert isinstance(result, SkipPlan) and result.reason == with_run_pointer(ESTIMATE_ERROR_TEXT) and backend.bot == {}
 
 
 @pytest.mark.anyio
@@ -776,7 +782,7 @@ async def test_a_fork_run_with_no_pricing_data_pauses(tmp_path: Path) -> None:
     backend = Backend()
     with patch("ai_pr_review.pricing.load_pricing", return_value={}):
         result, _ = await _build(tmp_path, _Provider(backend))
-    assert isinstance(result, SkipPlan) and result.reason == ESTIMATE_ERROR_TEXT and backend.bot == {}
+    assert isinstance(result, SkipPlan) and result.reason == with_run_pointer(ESTIMATE_ERROR_TEXT) and backend.bot == {}
 
 
 @pytest.mark.anyio
@@ -840,3 +846,58 @@ def test_with_an_unknown_author_nobody_is_credited() -> None:
     prov._pr_author_login = ""
     _ledger, maintainer = prov.list_budget_comments()
     assert maintainer == []
+
+
+def test_a_failed_reread_after_the_write_releases_the_own_entry() -> None:
+    backend = Backend()
+    backend.after_create = lambda: setattr(backend, "fail_read", True)
+    with pytest.raises(LedgerError):
+        _budget(backend).reserve(10)
+    backend.fail_read = False
+    assert backend.bot == {}
+
+
+def test_a_failed_reread_and_a_failed_release_stay_charged_and_pause() -> None:
+    backend = Backend()
+
+    def flap() -> None:
+        backend.fail_read = True
+        backend.fail_delete = True
+
+    backend.after_create = flap
+    with pytest.raises(LedgerError):
+        _budget(backend).reserve(10)
+    backend.fail_read = backend.fail_delete = False
+    assert len(backend.bot) == 1
+
+
+def test_the_pause_text_points_to_the_workflow_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_pr_review.review.fork_budget import LEDGER_ERROR_TEXT
+
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "org/repo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "12345")
+    text = with_run_pointer(LEDGER_ERROR_TEXT)
+    assert text.startswith(LEDGER_ERROR_TEXT)
+    assert text.endswith("https://github.com/org/repo/actions/runs/12345")
+
+
+def test_the_pause_text_is_unchanged_without_a_run_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_pr_review.review.fork_budget import LEDGER_ERROR_TEXT
+
+    for name in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "CI_JOB_URL",
+                 "BITBUCKET_REPO_FULL_NAME", "BITBUCKET_BUILD_NUMBER"):
+        monkeypatch.delenv(name, raising=False)
+    assert with_run_pointer(LEDGER_ERROR_TEXT) == LEDGER_ERROR_TEXT
+
+
+def test_an_ignored_bot_comment_is_logged_by_id_and_never_by_body(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    backend = Backend()
+    backend.bot[555] = "Summary quoting <!-- ai-pr-review-fork-ledger runs=9 --> INJECTED-FORK-TEXT"
+    with caplog.at_level(logging.INFO):
+        entries, _ = _budget(backend)._scan()
+    assert entries == []
+    assert "555" in caplog.text
+    assert "INJECTED-FORK-TEXT" not in caplog.text
