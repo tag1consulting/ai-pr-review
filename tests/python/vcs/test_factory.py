@@ -687,3 +687,17 @@ def test_bitbucket_verdict_owners_do_not_follow_ai_policy_source(
     assert isinstance(prov, BitbucketProvider)
     assert not hasattr(prov.config, "verdict_owners_source")
     assert prov.config.base_ref == "develop"
+
+
+def test_gitlab_bot_username_override_is_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stray whitespace or a leading @ must not break the author match."""
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("VCS_PROVIDER", "gitlab")
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-x")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "42")
+    monkeypatch.setenv("MR_IID", "7")
+    monkeypatch.setenv("GITLAB_DIFF_BASE_SHA", "abc1234")
+    monkeypatch.setenv("GITLAB_BOT_USERNAME", "  @my-bot ")
+    prov = provider_from_env()
+    assert isinstance(prov, GitLabProvider)
+    assert prov.config.bot_username == "my-bot"

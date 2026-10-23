@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import site
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
-from ai_pr_review.analyzers.native.checkov import _is_iac_file, _run_checkov
+from ai_pr_review.analyzers.native.checkov import (
+    _TRUSTED_CONFIG,
+    _checkov_env,
+    _is_iac_file,
+    _run_checkov,
+)
 from ai_pr_review.manifest import ChangedFiles
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "checkov"
@@ -163,6 +172,149 @@ class TestRunCheckovTrustedConfig:
         call_args = mock_run.call_args[0][0]
         configured_path = call_args[call_args.index("--config-file") + 1]
         assert not Path(configured_path).exists()
+
+
+_SG_TF = (
+    'resource "aws_security_group" "sg" {\n'
+    '  name = "x"\n'
+    "  ingress {\n"
+    "    from_port   = 22\n"
+    "    to_port     = 22\n"
+    '    protocol    = "tcp"\n'
+    '    cidr_blocks = ["0.0.0.0/0"]\n'
+    "  }\n"
+    "}\n"
+)
+
+
+class TestTrustedConfigContent:
+    def test_trusted_config_is_a_yaml_mapping(self) -> None:
+        """Checkov rejects a --config-file that is not a YAML mapping and
+        exits 2 without a scan (#1102)."""
+        assert isinstance(yaml.safe_load(_TRUSTED_CONFIG), dict)
+
+    def test_trusted_config_names_no_workspace_option(self) -> None:
+        keys = set(yaml.safe_load(_TRUSTED_CONFIG))
+        forbidden = {
+            "external-checks-dir", "external-checks-git", "baseline",
+            "policy-metadata-filter", "directory", "file", "repo-root-for-plan-enrichment",
+        }
+        assert not keys & forbidden
+
+    def test_written_config_is_the_constant_and_run_is_isolated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CKV_CHECK", "CKV_X")
+        monkeypatch.setenv("BC_API_KEY", "value")
+        monkeypatch.setenv("PRISMA_API_URL", "value")
+        monkeypatch.setenv("CHECKOV_MAX_IAC_FILE_SIZE", "1")
+        monkeypatch.setenv("EXTERNAL_MODULES_DIR", "/x")
+        monkeypatch.setenv("GITHUB_TOKEN", "secret")
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+        tf = tmp_path / "main.tf"
+        tf.write_text("resource \"x\" \"y\" {}\n")
+        cf = _make_cf(["main.tf"], terraform=["main.tf"])
+        seen: dict[str, object] = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            seen["cmd"] = cmd
+            seen["kwargs"] = kwargs
+            seen["config"] = Path(cmd[cmd.index("--config-file") + 1]).read_text()
+            run_cwd = Path(str(kwargs["cwd"]))
+            seen["cwd_entries"] = list(run_cwd.iterdir())
+            seen["cwd_exists"] = run_cwd.is_dir()
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with (
+            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
+            patch("ai_pr_review.analyzers.native.checkov.subprocess.run", side_effect=fake_run),
+        ):
+            _run_checkov(cf, Path("/dev/null"))
+
+        assert seen["config"] == _TRUSTED_CONFIG
+        assert seen["cwd_exists"] is True
+        assert seen["cwd_entries"] == []
+        kwargs = seen["kwargs"]
+        assert isinstance(kwargs, dict)
+        assert not Path(str(kwargs["cwd"])).resolve().is_relative_to(tmp_path.resolve())
+        assert not Path(str(kwargs["cwd"])).exists()
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        assert env["HOME"] == kwargs["cwd"]
+        assert not {"GITHUB_TOKEN", "ANTHROPIC_API_KEY", "CKV_CHECK", "BC_API_KEY", "PRISMA_API_URL",
+                    "CHECKOV_MAX_IAC_FILE_SIZE", "EXTERNAL_MODULES_DIR"} & set(env)
+        assert {"HOME", "PATH", "PYTHONSAFEPATH"} <= set(env)
+        assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+        cmd = seen["cmd"]
+        assert isinstance(cmd, list)
+        assert cmd[cmd.index("--file") + 1] == str(tmp_path / "main.tf")
+
+
+@pytest.mark.skipif(
+    shutil.which("checkov") is None and not os.environ.get("CHECKOV_REQUIRED_IN_TESTS"),
+    reason="checkov is not installed",
+)
+class TestRealCheckov:
+    """Run the real checkov binary. These tests need no network, but checkov
+    prints a warning when it cannot reach its guideline service."""
+
+    def test_known_misconfiguration_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "main.tf").write_text(_SG_TF)
+        findings = _run_checkov(_make_cf(["main.tf"], terraform=["main.tf"]), Path("/dev/null"))
+        ids = {f.finding.split(":")[0] for f in findings}
+        assert {"CKV_AWS_23", "CKV_AWS_24"} <= ids
+        assert {f.file for f in findings} == {"main.tf"}
+
+    def test_workspace_config_baseline_and_external_checks_are_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hostile .checkov.yaml/.checkov.yml with external-checks-dir and a
+        baseline, in the workspace and in HOME, must not run its Python check
+        and must not hide findings (#739, #1102)."""
+        ws = tmp_path / "ws"
+        home = tmp_path / "home"
+        marker = tmp_path / "MARKER"
+        (ws / "evil").mkdir(parents=True)
+        home.mkdir()
+        (ws / "main.tf").write_text(_SG_TF)
+        (ws / "evil" / "__init__.py").write_text("")
+        (ws / "evil" / "evil_check.py").write_text(
+            f"import pathlib\n"
+            f"pathlib.Path({str(marker)!r}).write_text('executed')\n"
+            "from checkov.common.models.enums import CheckResult, CheckCategories\n"
+            "from checkov.terraform.checks.resource.base_resource_check import BaseResourceCheck\n"
+            "class Evil(BaseResourceCheck):\n"
+            "    def __init__(self):\n"
+            "        super().__init__(name='evil', id='CKV_EVIL_1',\n"
+            "            categories=[CheckCategories.GENERAL_SECURITY],\n"
+            "            supported_resources=['aws_security_group'])\n"
+            "    def scan_resource_conf(self, conf):\n"
+            "        return CheckResult.FAILED\n"
+            "Evil()\n"
+        )
+        (ws / ".checkov.baseline").write_text(json.dumps({"failed_checks": [{
+            "file": "/main.tf",
+            "findings": [{"resource": "aws_security_group.sg",
+                          "check_ids": ["CKV_AWS_23", "CKV_AWS_24"]}],
+        }]}))
+        hostile = "external-checks-dir:\n  - ./evil\nbaseline: .checkov.baseline\n"
+        (ws / ".checkov.yaml").write_text(hostile)
+        (ws / ".checkov.yml").write_text(hostile)
+        (home / ".checkov.yaml").write_text(f"external-checks-dir:\n  - {ws / 'evil'}\n")
+        monkeypatch.chdir(ws)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("CKV_CHECK", "CKV_NOTHING")
+
+        findings = _run_checkov(_make_cf(["main.tf"], terraform=["main.tf"]), Path("/dev/null"))
+
+        ids = {f.finding.split(":")[0] for f in findings}
+        assert not marker.exists()
+        assert "CKV_EVIL_1" not in ids
+        assert {"CKV_AWS_23", "CKV_AWS_24"} <= ids
 
 
 class TestRunCheckovFindings:
@@ -387,6 +539,26 @@ class TestRunCheckovFindings:
             findings = _run_checkov(cf, Path("/dev/null"))
         assert findings == []
 
+    def test_exit_1_with_empty_stdout_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        tf = tmp_path / "main.tf"
+        tf.write_text("resource \"x\" \"y\" {}\n")
+        cf = _make_cf([str(tf)], terraform=[str(tf)])
+        with (
+            patch("ai_pr_review.analyzers.native.checkov.shutil.which", return_value="/usr/bin/checkov"),
+            patch("ai_pr_review.analyzers.native.checkov.subprocess.run") as mock_run,
+            caplog.at_level("WARNING"),
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="ModuleNotFoundError")
+            findings = _run_checkov(cf, Path("/dev/null"))
+        assert findings == []
+        assert "exited 1 with no output" in caplog.text
+
+    def test_user_base_is_passed_so_a_user_install_stays_importable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("PYTHONUSERBASE", raising=False)
+        env = _checkov_env("/scratch")
+        assert env["HOME"] == "/scratch"
+        assert env["PYTHONUSERBASE"] == site.getuserbase()
+
     def test_exitcode_2_returns_empty_with_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         tf = tmp_path / "main.tf"
         tf.write_text("resource \"x\" \"y\" {}\n")
@@ -487,3 +659,20 @@ class TestBridgeIntegration:
             await run_analyzers(ChangedFiles(), "/dev/null")
 
         assert not called
+
+
+class TestRepoRelativePath:
+    def test_inside_workspace(self) -> None:
+        from ai_pr_review.analyzers.native.checkov import _repo_relative_path
+
+        assert _repo_relative_path({"file_abs_path": "/ws/sub/main.tf"}, "/ws") == "sub/main.tf"
+
+    def test_dotdot_prefixed_name_stays_inside(self) -> None:
+        from ai_pr_review.analyzers.native.checkov import _repo_relative_path
+
+        assert _repo_relative_path({"file_abs_path": "/ws/..x.tf"}, "/ws") == "..x.tf"
+
+    def test_outside_workspace_is_dropped(self) -> None:
+        from ai_pr_review.analyzers.native.checkov import _repo_relative_path
+
+        assert _repo_relative_path({"file_abs_path": "/other/main.tf", "repo_file_path": "/main.tf"}, "/ws") == ""

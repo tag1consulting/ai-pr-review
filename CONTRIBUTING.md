@@ -198,5 +198,5 @@ Before opening a pull request:
 ## Code style
 
 - Python code follows PEP 8; ruff enforces E, F, W, I, UP, B, and SIM rule sets
-- Native analyzer modules use the mock env var pattern for testing: never call real binaries in tests
+- Native analyzer modules use the mock env var pattern for testing: never call real binaries in tests. One deliberate exception is `TestRealCheckov` in `tests/python/test_analyzer_checkov.py`: it runs the real checkov, pinned to the Dockerfile version in CI, because the trusted-config security property (#1102) cannot be checked with a mock. It skips when checkov is absent, and `CHECKOV_REQUIRED_IN_TESTS=1` turns that skip into a failure
 - Findings JSON uses the schema documented in [docs/architecture-internals.md](docs/architecture-internals.md#agent-output-schema)

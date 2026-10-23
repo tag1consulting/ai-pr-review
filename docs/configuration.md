@@ -366,4 +366,4 @@ Secret masking is always active. The engine redacts API keys, tokens, and other 
 | `GITLAB_API_URL` | `https://gitlab.com/api/v4` | API base URL for self-hosted instances |
 | `GITLAB_PROJECT_ID` | n/a | Numeric project ID. If unset, the engine uses `CI_PROJECT_ID`, then the URL-encoded value of `CI_PROJECT_PATH` or `GITHUB_REPOSITORY`. |
 | `GITLAB_DIFF_BASE_SHA` | n/a | Base SHA for inline discussion positions. If unset, the engine uses `CI_MERGE_REQUEST_DIFF_BASE_SHA`. The review stops with a configuration error if neither is set. |
-| `GITLAB_BOT_USERNAME` | n/a | Username of the bot that posts reviews (used to resolve stale threads). The default is the authenticated user. |
+| `GITLAB_BOT_USERNAME` | n/a | Username of the bot that posts reviews. The engine uses it to resolve stale threads and to accept a summary or skip marker only from the bot's own notes. The default is the authenticated user. If the review posts as a custom bot account, set this variable. |

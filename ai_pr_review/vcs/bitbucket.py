@@ -417,7 +417,7 @@ class BitbucketProvider:
                 SUMMARY_MARKER_PREFIX in _comment_body(item)
                 or SUMMARY_MARKER_HIDDEN_PREFIX in _comment_body(item)
             )
-            and (item.get("user") or {}).get("account_id") == bot_account_id
+            and _comment_account_id(item) == bot_account_id
         ]
 
     def _bot_account_id(self) -> str | None:
@@ -1523,6 +1523,15 @@ def _strip_base_url(url: str, base: str) -> str:
     return url
 
 
+def _comment_account_id(item: dict[str, Any]) -> str | None:
+    """Return the comment author's account_id, or None for a null, missing
+    or malformed `user`. A None never equals the bot account id, so such a
+    comment is rejected (fail closed)."""
+    user = item.get("user")
+    account_id = user.get("account_id") if isinstance(user, dict) else None
+    return account_id if isinstance(account_id, str) else None
+
+
 def _comment_body(item: dict[str, Any]) -> str:
     return ((item.get("content") or {}).get("raw")) or ""
 
@@ -2030,7 +2039,17 @@ def _post_summary_impl(
 
 
 def _list_skip_comments_bb(provider: BitbucketProvider) -> list[dict[str, Any]]:
-    """Return all PR comments whose body contains SKIP_MARKER."""
+    """Return this bot's own PR comments that contain SKIP_MARKER.
+
+    Security-critical, like `BitbucketProvider._list_summary_comments`: any
+    PR commenter can type a skip marker, so a comment counts only when its
+    `user.account_id` equals the bot account. Fails closed: when the bot
+    identity cannot be resolved, no comment is accepted. The user-visible
+    effect is a new skip comment on that run in place of an in-place update.
+    """
+    bot_account_id = provider._bot_account_id()
+    if bot_account_id is None:
+        return []
     results: list[dict[str, Any]] = []
     url: str | None = provider._comments_url()
     params: dict[str, Any] | None = {"pagelen": 100, "sort": "-updated_on"}
@@ -2044,7 +2063,10 @@ def _list_skip_comments_bb(provider: BitbucketProvider) -> list[dict[str, Any]]:
         data = resp.json() or {}
         for item in data.get("values") or []:
             body = _comment_body(item)
-            if has_skip_marker(body):
+            if (
+                has_skip_marker(body)
+                and _comment_account_id(item) == bot_account_id
+            ):
                 results.append(item)
         next_url = data.get("next")
         if not isinstance(next_url, str) or not next_url:

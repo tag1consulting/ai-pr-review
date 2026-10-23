@@ -344,11 +344,10 @@ def test_5xx_get_user_error_included_in_stale_result() -> None:
         client=client,
     )
     result = prov.resolve_stale()
-    # 5xx degrades gracefully (marker-only gating, resolution continues)
-    # but the GET /user 5xx error must appear in StaleResult.errors
+    # 5xx leaves the identity unknown, so nothing is resolved (a marker
+    # alone is not trusted) and the GET /user error must be reported
     assert any("500" in e for e in result.errors)
-    # The discussion itself was resolved despite the degraded bot check
-    assert result.threads_resolved == 1
+    assert result.threads_resolved == 0
 
 
 def test_gitlab_provider_satisfies_protocol() -> None:

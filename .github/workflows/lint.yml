@@ -39,6 +39,14 @@ jobs:
         run: |
           pip install --quiet ".[dev,context]" || pip install --quiet -e . pytest ruff mypy pydantic httpx click
 
+      # The real-checkov tests (tests/python/test_analyzer_checkov.py) need the
+      # same checkov version as the container image. The version comes from
+      # the Dockerfile so that there is one pin. CHECKOV_REQUIRED_IN_TESTS turns a
+      # skipped real-checkov test into a failure (#1102).
+      - name: Install checkov (version pinned in the Dockerfile)
+        run: |
+          pip install --quiet "checkov==$(sed -n 's/^ARG CHECKOV_VERSION=//p' Dockerfile)"
+
       - name: ruff check
         if: matrix.python-version == '3.14'
         run: ruff check ai_pr_review/
@@ -48,4 +56,6 @@ jobs:
         run: mypy --strict ai_pr_review/
 
       - name: pytest
+        env:
+          CHECKOV_REQUIRED_IN_TESTS: "1"
         run: python -m pytest tests/python/ -v --tb=short

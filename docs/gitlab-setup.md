@@ -93,7 +93,7 @@ The starter pipeline translates the native GitLab CI variables to the canonical 
 | `AI_PROVIDER` | CI/CD variable (default `anthropic`) |
 | `AI_REVIEW_MODE` | CI/CD variable (default empty: defer to `policy.yml` route matching, else `quick`. Set to `full` for deep agents) |
 | `ANTHROPIC_API_KEY` (or equivalent) | CI/CD variable (masked) |
-| `GITLAB_BOT_USERNAME` | (optional) CI/CD variable. If unset, the review detects it with `GET /user` |
+| `GITLAB_BOT_USERNAME` | (optional) CI/CD variable. If unset, the review detects it with `GET /user`. If the lookup fails, the review trusts no summary or skip marker, so it runs in full on every push. Set it when the review posts as a custom bot account. |
 
 > **Note:** The review needs `GITLAB_DIFF_BASE_SHA` or `CI_MERGE_REQUEST_DIFF_BASE_SHA`. If neither is set, the review stops with a configuration error.
 
