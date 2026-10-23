@@ -1,0 +1,3 @@
+<?php
+// Canary: PHPStan loads vendor/autoload.php from its working directory.
+@file_put_contents('/workspace/E2E-PWNED-phpstan', 'ran');

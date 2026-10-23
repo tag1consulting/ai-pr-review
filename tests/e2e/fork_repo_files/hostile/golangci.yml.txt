@@ -1,0 +1,5 @@
+# Config only. It cannot write a file. It shows that a fork config is not read.
+run:
+  timeout: 1s
+linters:
+  disable-all: true
