@@ -52,9 +52,9 @@ _TRUSTED_CONFIG = "# Trusted config for ai-pr-review; see #739 and #1102.\nquiet
 # Checkov gets the shared scrubbed environment (`tool_env`). It parses untrusted
 # files, so it must not see the job credentials, and it reads many option
 # variables (CKV_*, CHECKOV_*, BC_*, PRISMA_*, EXTERNAL_MODULES_DIR and others)
-# that must not change what it scans. `tool_env` passes only the search path,
-# the locale and the proxy and CA settings, and a variable named in
-# AI_ANALYZER_ENV_PASSTHROUGH on a run that is not a fork run.
+# that must not change what it scans. `tool_env` always sets PATH, a temp HOME,
+# LC_ALL and PYTHONSAFEPATH. The proxy and CA settings and the names in
+# AI_ANALYZER_ENV_PASSTHROUGH pass only on a run that is not a fork run.
 
 
 def _checkov_env(home: str) -> dict[str, str]:

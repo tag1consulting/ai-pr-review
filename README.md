@@ -233,7 +233,7 @@ Slash commands are built into the canonical [examples/workflows/pr-review.yml](e
 
 ## Fork pull requests
 
-By default (`AI_FORK_POLICY=auto`), the engine reviews a fork pull request at once, with no maintainer step. A non-trusted author gets a limited run: a scrubbed environment, fewer analyzers, no PR body in the prompts, a COMMENT-only output, and spend caps. Set `AI_FORK_POLICY=label` to require a maintainer approval of each commit, or `block` to switch fork review off. The checkout step must set `persist-credentials: false`. See [docs/fork-prs.md](docs/fork-prs.md) and [SECURITY.md](SECURITY.md).
+By default (`AI_FORK_POLICY=block`), the engine does not review a fork pull request and posts one pause comment. Set `AI_FORK_POLICY=auto` to review a fork pull request at once, with no maintainer step. Under `auto`, a non-trusted author gets a limited run: a scrubbed environment, fewer analyzers, no PR body in the prompts, a COMMENT-only output, and spend caps. Set `AI_FORK_POLICY=label` to require a maintainer approval of each commit. The checkout step must set `persist-credentials: false`. See [docs/fork-prs.md](docs/fork-prs.md) and [SECURITY.md](SECURITY.md).
 
 ## Action inputs
 

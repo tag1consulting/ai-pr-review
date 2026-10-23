@@ -405,3 +405,19 @@ def test_a_credentialed_proxy_named_in_the_passthrough_list_is_refused(monkeypat
     env = _env.tool_env(passthrough=("ALL_PROXY", "FTP_PROXY"), allow_passthrough=True)
     assert "ALL_PROXY" not in env
     assert env["FTP_PROXY"] == "http://proxy:3128"
+
+
+def test_a_proxy_value_with_credentials_is_dropped_with_one_warning_that_hides_the_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from ai_pr_review.analyzers import _env
+
+    _env.configure_passthrough((), allow_passthrough=True)
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:hunter2@proxy.example:3128")
+    with caplog.at_level("WARNING", logger="ai_pr_review.analyzers._env"):
+        first = _env.tool_env()
+        second = _env.tool_env()
+    assert "HTTPS_PROXY" not in first and "HTTPS_PROXY" not in second
+    messages = [r.getMessage() for r in caplog.records if "HTTPS_PROXY" in r.getMessage()]
+    assert len(messages) == 1
+    assert "hunter2" not in messages[0] and "proxy.example" not in messages[0]

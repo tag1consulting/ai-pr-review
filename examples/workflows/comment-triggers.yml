@@ -77,7 +77,7 @@ permissions:
   issues: write
   pull-requests: write
   # Reads the fork approval status. Only AI_FORK_POLICY=label needs it, and only for a fork
-  # pull request (docs/fork-prs.md). The default policy, auto, does not read it, so you can
+  # pull request (docs/fork-prs.md). Only the label policy reads it, so you can
   # remove this line unless you set AI_FORK_POLICY=label.
   statuses: read
   # Uncomment if .ai-pr-review/policy.yml uses a route's `require`

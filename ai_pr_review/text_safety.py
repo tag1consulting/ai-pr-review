@@ -19,7 +19,8 @@ import unicodedata
 
 _STRIP = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\U000e0000-\U000e007f]")
 
-# Controls, the tag block, and the bidi override and isolate characters.
+# Control characters only. The tag block and the bidi override and isolate characters are
+# shown as visible markers by ``_CODE_VISIBLE`` and are not dropped here.
 # ZWJ, ZWNJ, LRM and RLM stay, because emoji sequences and some scripts need them.
 _CODE_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 # Bidi overrides and isolates (Trojan Source) and the tag block (hidden instructions) are not deleted

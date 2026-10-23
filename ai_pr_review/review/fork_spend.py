@@ -1,4 +1,4 @@
-"""Author cap and global daily spend ledger for fork runs (CAP-2, story 17-7).
+"""Author cap and global daily spend ledger for fork runs (CAP-2).
 
 Two caps apply to a fork run by a non-trusted author (a ``ForkProfile`` run), on top of the per-run
 ceiling and the per-PR ledger of ``fork_budget.py``.
@@ -9,9 +9,9 @@ ceiling and the per-PR ledger of ``fork_budget.py``.
   comment to a dedicated issue. CONTRIBUTOR authors have their own pool
   (``AI_FORK_DAILY_RESERVED_SHARE``, 70 percent). Every other non-trusted author shares the rest.
 
-The daily ledger uses the pattern of story 17-6: append the reserve, re-read the sum, and delete the
-own entry and pause when the run does not fit. Admission is ordered by comment ID inside the tier pool.
-A run that does not fit appends nothing. A run that never settles (cancelled) stays charged at its
+The daily ledger uses the pattern of ``fork_budget.py``: append the reserve, re-read the sum, and delete
+the own entry and pause when the run loses the ID ordering. Admission is ordered by comment ID inside
+the tier pool. A run that already does not fit on the first read appends nothing. A run that never settles (cancelled) stays charged at its
 estimate. Trusted authors and non-fork runs never reach this module.
 
 The shared admission steps are in ``_ledger_admission.py``, which also documents how this ledger

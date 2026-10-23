@@ -57,7 +57,7 @@ The set of restrictions that the engine applies to a fork PR run. It uses a stri
 _Avoid_: calling the fork profile a sandbox. The run stays in the job that holds the secrets (see [ADR 0006](docs/adr/0006-fork-prs-reviewed-in-one-deprivileged-job.md)).
 
 **Fork policy** (`AI_FORK_POLICY`):
-The setting that decides what the engine does with a fork PR. `auto` reviews it at once under the fork profile and is the default. `label` pauses it until a maintainer adds the maintainer label for the exact head commit. `block` never reviews it.
+The setting that decides what the engine does with a fork PR. `block` never reviews it and is the default. `auto` (opt in) reviews it at once under the fork profile. `label` (opt in) pauses it until a maintainer adds the maintainer label for the exact head commit.
 _Avoid_: reading `label` as an automatic labeling feature. It is the maintainer-label policy, the name of the `approve` value of an unreleased draft. Also avoid "approve" for any policy. In this repository "approve" means the APPROVE review event (see Review event).
 
 **Cap** (run, PR, author, daily):

@@ -65,8 +65,8 @@ def test_unknown_action_and_missing_argument():
 
 
 def test_unrestored_variable_workflow_and_lock_are_errors():
-    errors = fs.validate_table(_replace(fs.SCENARIOS, "S2", teardown=()))
-    assert any("var AI_FORK_POLICY is not restored" in e for e in errors)
+    errors = fs.validate_table(_replace(fs.SCENARIOS, "S6", teardown=()))
+    assert any("var E2E_PERSIST_CREDENTIALS is not restored" in e for e in errors)
     assert any("workflow" in e for e in fs.validate_table(_replace(fs.SCENARIOS, "S1", teardown=())))
     assert any("lock" in e for e in fs.validate_table(_replace(fs.SCENARIOS, "S13", teardown=())))
 

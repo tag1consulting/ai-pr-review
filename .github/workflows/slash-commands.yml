@@ -693,10 +693,15 @@ jobs:
           FORCE_FULL_DIFF: 'true'
           # Fork pull request settings (docs/fork-prs.md), read from the repository variables
           # of the calling repository. An unset variable is an empty string, which gives the
-          # engine default (auto). AI_FORK_TRUSTED_ASSOCIATIONS needs a fallback because an
-          # empty value there means trust nobody.
+          # engine default (the block policy, and the default value of each other setting).
+          # AI_FORK_TRUSTED_ASSOCIATIONS needs a fallback because an empty value there means
+          # trust nobody.
           AI_FORK_POLICY: ${{ vars.AI_FORK_POLICY }}
           AI_FORK_TRUSTED_ASSOCIATIONS: ${{ vars.AI_FORK_TRUSTED_ASSOCIATIONS || 'OWNER,COLLABORATOR' }}
+          AI_FORK_MAX_COST_USD: ${{ vars.AI_FORK_MAX_COST_USD }}
+          AI_FORK_DAILY_MAX_COST_USD: ${{ vars.AI_FORK_DAILY_MAX_COST_USD }}
+          AI_FORK_DAILY_RESERVED_SHARE: ${{ vars.AI_FORK_DAILY_RESERVED_SHARE }}
+          AI_FAIL_ON_FORK_GATE: ${{ vars.AI_FAIL_ON_FORK_GATE }}
         with:
           image-tag: ${{ inputs.image-tag }}
           provider: ${{ inputs.provider }}

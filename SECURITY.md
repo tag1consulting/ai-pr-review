@@ -49,7 +49,7 @@ If the action ever executed working-tree content under `pull_request_target`, a 
 
 ### Fork pull requests
 
-The default policy is `AI_FORK_POLICY=auto`. A fork pull request gets a review at once, with no maintainer step, and the engine contains the run from the inside. See [docs/fork-prs.md](docs/fork-prs.md) for the settings. [ADR 0006](docs/adr/0006-fork-prs-reviewed-in-one-deprivileged-job.md) records the decision.
+The default policy is `AI_FORK_POLICY=block`. A fork pull request is not reviewed. If you opt in with `AI_FORK_POLICY=auto`, a fork pull request gets a review at once, with no maintainer step, and the engine contains the run from the inside. See [docs/fork-prs.md](docs/fork-prs.md) for the settings. [ADR 0006](docs/adr/0006-fork-prs-reviewed-in-one-deprivileged-job.md) records the decision.
 
 An attacker is anyone who can open a fork pull request. They control the diff, the whole tree, the history, the pull request text, the commit messages and the branch name. They can start a run. They cannot change workflow files on the base branch, labels or comments of other users. The assets are the LLM keys, `GH_TOKEN` with the write-scoped Actions token, the LLM budget, the runner and the pull request surface (comments, reviews and check runs).
 
@@ -63,7 +63,7 @@ The controls for a non-trusted author are these:
 - **Bot-authored state only.** The engine reads the watermark, skip comments, ledgers and spend entries only from comments that the bot wrote.
 - **Caps that fail closed.** There is a cap per run, per pull request, per author and per day. An unreadable fact, ledger or cost estimate pauses the run.
 
-A fork pull request by a trusted author (`OWNER` and `COLLABORATOR` by default) gets the normal pipeline and the per-run cap. The `label` policy is the stricter option: the engine pauses a fork pull request until a maintainer approves one exact head commit. Use `block` to switch fork review off.
+Under `auto`, a fork pull request by a trusted author (`OWNER` and `COLLABORATOR` by default) gets the normal pipeline and the per-run cap. The `label` policy is the stricter option: the engine pauses a fork pull request until a maintainer approves one exact head commit. Use `block` to switch fork review off.
 
 These limits remain:
 

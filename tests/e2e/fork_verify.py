@@ -443,7 +443,7 @@ def _not_reviewed_names(text: str) -> set[str]:
 def verify_s3(
     ev: ForkEvidence, *, run_id: str, expected_skipped: Sequence[str], actual_cents: int | None = None
 ) -> Verdict:
-    """S3 (with S4 and S17's canary check): the default auto review under the fork profile."""
+    """S3 (with S4 and S17's canary check): the auto review under the fork profile. The runner sets AI_FORK_POLICY=auto first."""
     problems = _common(ev, banner_required=CLAMPED_KINDS)
     summaries = bodies_of(ev, KIND_SUMMARY)
     if len(summaries) != 1:

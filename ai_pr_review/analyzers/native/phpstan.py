@@ -39,10 +39,12 @@ _BAKED_COMPOSER_AUTOLOAD = Path("/opt/composer/vendor/autoload.php")
 _BAKED_PHPSTAN_DRUPAL = Path("/opt/composer/vendor/mglaman/phpstan-drupal")
 
 
-# phpstan gets the shared scrubbed environment (`tool_env`: search path, locale,
-# proxy and CA settings). It runs PHP from untrusted files, so the job
-# credentials must not reach it. These names pass in addition, so that a
-# runner-provided php still starts.
+# phpstan gets the shared scrubbed environment (`tool_env`: PATH, a temp HOME,
+# LC_ALL and PYTHONSAFEPATH, plus the proxy and CA settings on a run that is not
+# a fork run). It runs PHP from untrusted files, so the job credentials must not
+# reach it. The names below pass in addition. They are read from the process
+# environment directly, so the fork gate of `tool_env` does not apply to them.
+# LANG, TMPDIR and TZ hold no secrets. The PHP names let a runner-provided php start.
 _ALLOWED_ENV_NAMES = frozenset({
     "LANG", "TMPDIR", "TZ",
     "PHPRC", "PHP_INI_SCAN_DIR", "LD_LIBRARY_PATH",

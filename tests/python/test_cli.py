@@ -2440,3 +2440,54 @@ class TestTokenUsageDisplayModeSelection:
         warning = str(out["usage_warning"])
         assert warning.index("policy.yml ignored") < warning.index("Cost ceiling not enforced")
         assert warning.index("Cost ceiling not enforced") < warning.index("High token usage")
+
+
+class TestForkRunPostsInsideTheOutputClamp:
+    """A fork run must open the output clamp around its posting phase. The clamp pieces are tested
+    on their own, so this pins the wiring in ``_run_review_async``."""
+
+    @staticmethod
+    def _opened_with(runtime: object) -> list[bool]:
+        import asyncio
+        from contextlib import contextmanager
+        from unittest.mock import AsyncMock, patch
+
+        from ai_pr_review.cli import _run_review_async
+        from ai_pr_review.config import ReviewConfig
+
+        opened: list[bool] = []
+
+        @contextmanager
+        def fake_clamp(enabled: bool, repo: str = ""):  # type: ignore[no-untyped-def]
+            opened.append(enabled)
+            yield
+
+        with (
+            patch("ai_pr_review.review.runtime.build_review_runtime", new=AsyncMock(return_value=runtime)),
+            patch("ai_pr_review.output_clamp.output_clamp", new=fake_clamp),
+            patch("ai_pr_review.cli._run_review_with_runtime", new=AsyncMock(return_value=0)),
+        ):
+            asyncio.run(_run_review_async(ReviewConfig()))
+        return opened
+
+    def test_a_fork_skip_plan_is_clamped(self) -> None:
+        from ai_pr_review.review.runtime import SkipPlan
+
+        plan = SkipPlan(reason="paused", provider=object(), fork_output_clamp=True)  # type: ignore[arg-type]
+        assert self._opened_with(plan) == [True]
+
+    def test_a_plain_skip_plan_is_not_clamped(self) -> None:
+        from ai_pr_review.review.runtime import SkipPlan
+
+        plan = SkipPlan(reason="no changes", provider=object())  # type: ignore[arg-type]
+        assert self._opened_with(plan) == [False]
+
+    def test_a_fork_profile_runtime_is_clamped(self) -> None:
+        from types import SimpleNamespace
+
+        assert self._opened_with(SimpleNamespace(fork_profile=object())) == [True]
+
+    def test_a_runtime_without_a_fork_profile_is_not_clamped(self) -> None:
+        from types import SimpleNamespace
+
+        assert self._opened_with(SimpleNamespace(fork_profile=None)) == [False]

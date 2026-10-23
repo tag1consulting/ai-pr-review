@@ -890,7 +890,8 @@ class GitHubProvider:
         nothing, a bounded search confirms before the caller creates an issue, so a filter that does
         not match a bot login cannot cause one new issue per run. The listing of all issues and pull
         requests is never scanned: a repository can hold more than ``_MAX_PAGES`` pages of them. A
-        search that fails is a warning and counts as not found, so the issue is created.
+        search that fails raises, and the fork run pauses. Treating it as not found would create a
+        second spend issue and split the entries.
         """
         c = self.config
         url = f"/repos/{c.owner}/{c.repo}/issues"

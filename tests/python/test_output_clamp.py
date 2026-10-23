@@ -1162,3 +1162,36 @@ def test_a_real_ledger_body_survives_the_clamped_client_only_when_written_outsid
         assert _send({"body": body}, clamp=False)["body"] != body  # clamped: banner and escaped marker
         with clamp_suspended():
             assert _send({"body": body}, clamp=False)["body"] == body
+
+
+class TestClampKeepsTheBodyWithinTheProviderLimit:
+    def test_a_body_that_the_clamp_grows_is_cut_back_to_the_limit(self) -> None:
+        from ai_pr_review.output_clamp import (
+            BANNER_BLOCK,
+            MAX_BODY_BYTES,
+            clamp_request_body,
+            output_clamp,
+        )
+
+        body = "see @someone and <b>x</b> at www.example.org\n" * 3000  # about 135 KB, grows under the clamp
+        body = body.encode()[:MAX_BODY_BYTES].decode("utf-8", errors="ignore")  # what the provider cut leaves
+        with output_clamp(True, repo="o/r"):
+            out = clamp_request_body({"body": body})["body"]
+        assert len(out.encode("utf-8")) <= MAX_BODY_BYTES
+        assert out.startswith(BANNER_BLOCK) and out.rstrip().endswith("provider limit.*")
+        assert "Review output truncated" in out
+
+    def test_a_body_under_the_limit_is_not_touched_by_the_fit(self) -> None:
+        from ai_pr_review.output_clamp import BANNER_BLOCK, clamp_request_body, output_clamp
+
+        with output_clamp(True, repo="o/r"):
+            out = clamp_request_body({"body": "short review"})["body"]
+        assert out == BANNER_BLOCK + "short review"
+
+    def test_a_cut_through_a_comment_marker_does_not_leave_it_open(self) -> None:
+        from ai_pr_review.output_clamp import MAX_BODY_BYTES, _fit
+
+        text = "a" * (MAX_BODY_BYTES - 150) + "<!-- ai-pr-review-id-map: " + "b" * 400 + " -->"
+        out = _fit(text)
+        assert len(out.encode("utf-8")) <= MAX_BODY_BYTES
+        assert out.count("<!--") == out.count("-->")

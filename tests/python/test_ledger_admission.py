@@ -35,6 +35,16 @@ def test_release_quietly_logs_only_the_exception_type(caplog: pytest.LogCaptureF
     assert "secret body text" not in caplog.text
 
 
+def test_release_quietly_logs_the_http_status_but_not_the_rest_of_the_text(caplog: pytest.LogCaptureFixture) -> None:
+    def boom(_: int) -> None:
+        raise RuntimeError("delete budget entry: HTTP 403 secret body text")
+
+    with caplog.at_level(logging.WARNING):
+        release_quietly(boom, 4, label="fork test", why="of a test")
+    assert "HTTP 403" in caplog.text and "stays charged" in caplog.text
+    assert "secret body text" not in caplog.text
+
+
 def test_append_and_reread_returns_the_own_id_and_the_entries() -> None:
     deleted: list[int] = []
     own, entries = append_and_reread(lambda: 5, lambda: [3, 5], deleted.append, lambda e: e, label="x")

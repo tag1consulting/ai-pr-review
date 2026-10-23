@@ -22,10 +22,12 @@ on a malformed entry, because skipping it would undercount the daily spend.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import TypeVar
 
 logger = logging.getLogger(__name__)
+_HTTP_STATUS_RE = re.compile(r"HTTP \d{3}")
 
 T = TypeVar("T")
 
@@ -39,8 +41,11 @@ def release_quietly(delete: Callable[[int], None], own_id: int, *, label: str, w
     try:
         delete(own_id)
     except Exception as exc:  # noqa: BLE001 - the release is best effort
-        logger.warning("%s: could not delete the own entry %s (%s). It stays charged.",
-                       label, why, type(exc).__name__)
+        # Log the HTTP status when the error text holds one, so an operator can tell a 403 from a 500.
+        # The rest of the text is never logged, because a backend may put a response body in it.
+        status = _HTTP_STATUS_RE.search(str(exc))
+        logger.warning("%s: could not delete the own entry %s (%s%s). It stays charged.",
+                       label, why, type(exc).__name__, f", {status.group(0)}" if status else "")
 
 
 def require_own_entry(comment_ids: list[int], own_id: int, label: str) -> None:

@@ -7,6 +7,10 @@ and `python -m tests.e2e.fork_scenarios --plan` prints the report.
 
 Design: memory-bank/bmad/planning-artifacts/e2e-fork-pr-test-design.md (not tracked in git).
 Exit codes follow the harness: 0 pass, 2 invalid plan.
+
+Baseline: the engine default of AI_FORK_POLICY is block. S2 runs with the variable unset to check
+that default. The runner sets AI_FORK_POLICY=auto once, right after S2, and removes it after the
+last scenario. Every later scenario (S3 and on) reviews under auto, so they do not repeat the step.
 """
 
 from __future__ import annotations
@@ -133,10 +137,9 @@ SCENARIOS: Final[tuple[Scenario, ...]] = (
         teardown=(_s("enable_workflow", workflow=FORK_WORKFLOW),),
     ),
     Scenario(
-        "S2", "Policy block", "zero", pr="s2",
-        setup=(_s("set_var", name="AI_FORK_POLICY", value="block"), _open("s2"), _wait("s2"),
+        "S2", "Default policy is block", "zero", pr="s2",
+        setup=(_s("unset_var", name="AI_FORK_POLICY"), _open("s2"), _wait("s2"),
                _s("close_pr", pr="s2")),
-        teardown=(_s("unset_var", name="AI_FORK_POLICY"),),
         expects_author_cap_pass=False,
     ),
     Scenario(
@@ -164,7 +167,7 @@ SCENARIOS: Final[tuple[Scenario, ...]] = (
                _s("mark_ready", pr="s15"), _wait("s15"), _s("close_pr", pr="s15")),
     ),
     Scenario(
-        "S3", "Default auto, fork profile review", "llm", pr="s3", llm_runs_nominal=1, llm_runs_worst=1,
+        "S3", "Policy auto, fork profile review", "llm", pr="s3", llm_runs_nominal=1, llm_runs_worst=1,
         first_review_on_pr=True,
         setup=(_CLEAR, _open("s3"), _wait("s3"), _s("collect_canary", pr="s3"), _s("close_pr", pr="s3")),
     ),

@@ -6,19 +6,23 @@ nav_order: 9
 
 # Fork pull requests
 
-A workflow that runs on `pull_request_target` has the repository secrets and a write token. It also checks out the head of the pull request. For a fork, that head is code that anyone can write. The engine therefore does not trust a fork pull request. By default (`AI_FORK_POLICY=auto`), the engine reviews a fork pull request at once, with no maintainer step, and it limits what that run can do, read, post and spend. A maintainer acts only to resume a pull request that reached a cap.
+A workflow that runs on `pull_request_target` has the repository secrets and a write token. It also checks out the head of the pull request. For a fork, that head is code that anyone can write. The engine therefore does not trust a fork pull request. By default (`AI_FORK_POLICY=block`), the engine does not review a fork pull request. It posts one pause comment instead. If you opt in with `AI_FORK_POLICY=auto`, the engine reviews a fork pull request at once, with no maintainer step, and it limits what that run can do, read, post and spend. Under `auto`, a maintainer acts only to resume a pull request that reached a cap.
 
 ## Fork policy
 
-`AI_FORK_POLICY` sets what the engine does with a fork pull request. The default is `auto`.
+`AI_FORK_POLICY` sets what the engine does with a fork pull request. The default is `block`.
 
 | Policy | What happens to a fork pull request |
 |--------|-------------------------------------|
-| `auto` | The run starts at once. An author whose `author_association` is in `AI_FORK_TRUSTED_ASSOCIATIONS` gets the normal pipeline. Any other author gets the fork profile and the caps. The engine does not read the approval status, so the workflow does not need `statuses: read`. |
-| `label` | The run pauses until a maintainer approves the exact head commit. See [The label policy](#the-label-policy). |
-| `block` | Every fork pull request pauses, whoever wrote it. Use it to switch fork review off. |
+| `block` (default) | Every fork pull request pauses, whoever wrote it. The engine posts one pause comment that says fork pull requests are not reviewed, because the repository sets `AI_FORK_POLICY=block`. This applies to a pull request on a gated event: `pull_request_target`, or a `pull_request` run that has an LLM key. |
+| `auto` (opt in) | The run starts at once. An author whose `author_association` is in `AI_FORK_TRUSTED_ASSOCIATIONS` gets the normal pipeline. Any other author gets the fork profile and the caps. The engine does not read the approval status, so the workflow does not need `statuses: read`. |
+| `label` (opt in) | The run pauses until a maintainer approves the exact head commit. See [The label policy](#the-label-policy). |
 
-An unknown `AI_FORK_POLICY` value is ignored with a warning, and `label` applies. `label` is the safest policy that still allows a review, so an unknown value never gives the more open `auto`. A misspelled `block` also gives `label`, so check the warning in the job log after you set the policy. An unset or empty value gives the default, `auto`.
+An unknown `AI_FORK_POLICY` value is ignored with a warning, and `label` applies. `label` is the safest policy that still allows a review, so an unknown value never gives the more open `auto`. A misspelled `block` also gives `label`, so check the warning in the job log after you set the policy. An unset or empty value gives the default, `block`.
+
+## Enabling fork review
+
+The default is `block` until a live end-to-end test of fork reviews passes. To review forks, opt in with `AI_FORK_POLICY=auto` or `AI_FORK_POLICY=label`. Make that choice only after your own risk assessment. GitLab and Bitbucket are not gated at all (issue #1104), so this setting has no effect on them.
 
 ## Who is trusted
 
@@ -27,6 +31,8 @@ An unknown `AI_FORK_POLICY` value is ignored with a warning, and `label` applies
 A fork pull request by a trusted author gets the normal pipeline. It keeps the per-run cost ceiling and the workspace commit check. It does not get the fork profile, the PR cap, the author cap or the daily cap, and it does not count against the daily cap. The list applies to the `auto` policy only. The `label` and `block` policies treat every fork author the same.
 
 ## How a fork run works under `auto`
+
+The `auto` policy is opt in. A trusted author and a run that a maintainer approved under `label` keep a per-run ceiling (`AI_FORK_MAX_COST_USD`, default 2 USD) when `AI_MAX_COST_USD` is 0. A non-zero `AI_MAX_COST_USD` sets a different limit for those runs. The `auto` policy also needs Issues enabled on the repository and `issues: write` in the workflow, because it keeps a spend issue (see [The spend issue](#the-spend-issue)).
 
 The engine checks the pull request before it runs any git command in the checked-out tree.
 
@@ -90,15 +96,15 @@ A fork pull request by a non-trusted author has four caps. A run that would pass
 
 **Resume.** A maintainer comments `/ai-pr-review rescan` on a paused pull request. The engine counts each rescan comment from an owner, member or collaborator once. One rescan adds one run and `AI_FORK_MAX_COST_USD` to the cap of that pull request. It does not reset the count, and it does not change the author cap or the daily cap. Each further run after a pause needs another rescan.
 
-A rescan runs through the `slash-commands.yml` workflow. That workflow does not read the environment of your review job. It reads `AI_FORK_POLICY` and `AI_FORK_TRUSTED_ASSOCIATIONS` from the repository variables of the calling repository. If you change either setting, set it as a repository variable too, or the rescan applies the defaults (the `auto` policy, and `OWNER` and `COLLABORATOR` as trusted). Only an owner, member or collaborator can start a rescan.
+A rescan runs through the `slash-commands.yml` workflow. That workflow does not read the environment of your review job. It forwards all six fork settings from the repository variables of the calling repository: `AI_FORK_POLICY`, `AI_FORK_TRUSTED_ASSOCIATIONS`, `AI_FORK_MAX_COST_USD`, `AI_FORK_DAILY_MAX_COST_USD`, `AI_FORK_DAILY_RESERVED_SHARE` and `AI_FAIL_ON_FORK_GATE`. If you change a setting, set it as a repository variable too, or the rescan applies the default. Only an owner, member or collaborator can start a rescan.
 
 ## The spend issue
 
-The daily cap needs a record of past runs. The engine keeps one bot comment per fork run on an issue titled `ai-pr-review fork spend (do not close)`. It creates the issue on the first run. The workflow needs `issues: write` for this. Do not close, edit or delete the issue or its comments. Locking the issue would stop other users from adding comments, but check first that the bot can still comment on a locked issue in your repository, because this is not verified. Comments from other users are ignored, but about 10,000 of them in one day make the listing too long, and fork reviews pause until the flood ends. Trusted authors and same-repository pull requests add no entries.
+The daily cap needs a record of past runs. The engine keeps one bot comment per fork run on an issue titled `ai-pr-review fork spend (do not close)`. It creates the issue on the first run. The workflow needs `issues: write` for this, and the repository must have Issues enabled. Without them, every non-trusted fork run pauses with a ledger error. Only the `auto` policy uses this issue. Do not close, edit or delete the issue or its comments. Locking the issue would stop other users from adding comments, but check first that the bot can still comment on a locked issue in your repository, because this is not verified. Comments from other users are ignored, but about 10,000 of them in one day make the listing too long, and fork reviews pause until the flood ends. Trusted authors and same-repository pull requests add no entries.
 
 ## What the workflow must provide
 
-- `permissions:` with `pull-requests: write` and `issues: write`. The `auto` policy does not need `statuses: read`.
+- `permissions:` with `pull-requests: write` and `issues: write`. The `auto` policy does not need `statuses: read`. `issues: write` and an enabled Issues feature are needed only under `auto`.
 - A checkout of `github.event.pull_request.head.sha` with `persist-credentials: false`.
 - A `concurrency` group per pull request, as in `examples/workflows/pr-review.yml`. It serializes runs of one pull request. Without it, the engine relies on its reserve-then-verify step.
 - A trusted `container-action` that you restore from the base branch, as in the examples.

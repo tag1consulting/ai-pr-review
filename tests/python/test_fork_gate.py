@@ -556,12 +556,15 @@ def test_label_is_the_old_approval_behavior_and_ignores_the_trusted_list() -> No
     assert approved.allowed and approved.gated and approved.mode == "approved" and approved.profile is None
 
 
-def test_the_default_policy_is_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_default_policy_is_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The default stays block until the live fork end-to-end test passes. Auto must be set explicitly.
     monkeypatch.delenv("AI_FORK_POLICY", raising=False)
     decision = decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True)
-    assert decision.allowed and decision.mode == "fork" and decision.profile is not None
-    assert ReviewConfig.from_env().fork_policy == "auto"
-    assert ReviewConfig().fork_policy == "auto"
+    assert not decision.allowed and decision.profile is None
+    assert ReviewConfig.from_env().fork_policy == "block"
+    assert ReviewConfig().fork_policy == "block"
+    auto = decide("pull_request_target", SHA_A, _author("CONTRIBUTOR"), key_present=True, policy="auto")
+    assert auto.allowed and auto.mode == "fork" and auto.profile is not None
 
 
 @pytest.mark.parametrize("empty", ["", "   "])
@@ -570,7 +573,7 @@ def test_an_empty_policy_value_gets_the_default_without_a_warning(
 ) -> None:
     # A workflow that forwards an unset variable sets the name to an empty string.
     monkeypatch.setenv("AI_FORK_POLICY", empty)
-    assert ReviewConfig.from_env().fork_policy == "auto"
+    assert ReviewConfig.from_env().fork_policy == "block"
     assert "AI_FORK_POLICY" not in capsys.readouterr().err
 
 

@@ -5,10 +5,12 @@ inherits them can leak them, and several analyzers run with a config from the
 attacker's tree. ``tool_env`` builds the environment from nothing: only the
 names in the allowlist below reach a launch.
 
-Allowlist: ``PATH``, a ``HOME`` that is one fresh temp directory per run (not
-per launch), ``LC_ALL=C.UTF-8``, ``PYTHONSAFEPATH=1``, the per-tool extras the
-caller names, and the names in ``AI_ANALYZER_ENV_PASSTHROUGH`` (non-fork runs
-only).
+Always set: ``PATH``, a ``HOME`` that is one fresh temp directory per run (not
+per launch), ``LC_ALL=C.UTF-8``, ``PYTHONSAFEPATH=1``, and the per-tool extras
+the caller names. On a run that is not a fork run, the proxy and certificate
+variables (``_NETWORK_NAMES``) and the names in ``AI_ANALYZER_ENV_PASSTHROUGH``
+also pass. A fork run gets neither. A proxy value that holds credentials is
+dropped, with a warning that names the variable and never shows the value.
 
 The passthrough list lives in module state, set once per run by
 ``configure_passthrough``. A contextvar does not work here: analyzers run in
@@ -55,6 +57,7 @@ _home: str | None = None
 _passthrough: tuple[str, ...] = ()
 _allow_passthrough = True
 _fork_isolated = False
+_warned_dropped: set[str] = set()  # network variables already reported, so one warning per run
 
 
 def _carries_no_credentials(name: str, value: str) -> bool:
@@ -84,6 +87,7 @@ def configure_passthrough(names: Iterable[str], *, allow_passthrough: bool = Tru
     with _lock:
         _passthrough = tuple(names)
         _allow_passthrough = allow_passthrough
+        _warned_dropped.clear()
 
 
 def configure_fork_isolation(active: bool) -> None:
@@ -140,8 +144,13 @@ def tool_env(
     names = _passthrough if passthrough is None else tuple(passthrough)
     if allow:
         for net in _NETWORK_NAMES:
-            if net in os.environ and _carries_no_credentials(net, os.environ[net]):
+            if net not in os.environ:
+                continue
+            if _carries_no_credentials(net, os.environ[net]):
                 env[net] = os.environ[net]
+            elif net not in _warned_dropped:
+                _warned_dropped.add(net)
+                logger.warning("analyzer environment: dropping %s, its value may hold credentials", net)
         for name in names:
             if not _NAME_RE.fullmatch(name):
                 logger.warning("AI_ANALYZER_ENV_PASSTHROUGH: ignoring invalid name %r", name)

@@ -618,16 +618,18 @@ class ReviewConfig(BaseModel):
     # disables the ceiling -- the estimate is still computed and logged via
     # the COST_ESTIMATE line, just never enforced.
     max_cost_usd: float = 0.0
-    # Ceiling applied to an approved fork pull request when max_cost_usd is 0 (see review/fork_gate.py).
-    # 0 turns the default off. A non-zero max_cost_usd always wins.
+    # Per-run cost ceiling (USD) for a fork run (see review/runtime.py, _apply_fork_gate). A fork-profile
+    # run is always capped at this value, even when max_cost_usd is larger. A trusted or label-approved
+    # run gets it only when max_cost_usd is 0, and a non-zero max_cost_usd wins there. A value that is
+    # not a finite number above 0 falls back to 2.0, so this setting cannot switch the ceiling off.
     fork_max_cost_usd: float = 2.0
     # Daily spend cap (USD per rolling 24 hours) for fork runs by non-trusted authors, and the share of
-    # it that only CONTRIBUTOR authors use (story 17-7). 0 pauses every such run.
+    # it that only CONTRIBUTOR authors use. 0 pauses every such run.
     fork_daily_max_cost_usd: float = 50.0
     fork_daily_reserved_share: float = 0.7
     # What the engine does with a fork pull request: auto, label (maintainer approval status) or
-    # block. The default is auto. An unknown value falls back to label, the safest policy, and not
-    # to the auto default.
+    # block. The default is block until the live fork end-to-end test passes. An unknown value falls
+    # back to label, a policy that still needs a maintainer approval, and not to the block default.
     fork_policy: str = DEFAULT_FORK_POLICY
     # author_association values that skip the fork profile under the auto policy.
     fork_trusted_associations: tuple[str, ...] = ("OWNER", "COLLABORATOR")
@@ -924,8 +926,9 @@ class ReviewConfig(BaseModel):
     @field_validator("fork_policy")
     @classmethod
     def _fork_policy_falls_back(cls, v: str) -> str:
-        # An unknown value must not open the gate. The default is auto, but an unknown value falls
-        # back to the SAFEST policy (label pauses a fork until a maintainer approves), never to auto.
+        # An unknown value must not open the gate. The default is block, but an unknown value falls
+        # back to the SAFEST policy that still reviews (label pauses a fork until a maintainer
+        # approves), never to auto.
         value = v.strip().lower()
         if value not in FORK_POLICIES:
             print(
@@ -975,6 +978,9 @@ class ReviewConfig(BaseModel):
 
         def _float(key: str, default: float) -> float:
             raw = os.environ.get(key, str(default))
+            if not raw.strip():
+                # A workflow that forwards an unset repository variable sets the name to an empty string.
+                return default
             try:
                 return float(raw)
             except ValueError:

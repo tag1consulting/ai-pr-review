@@ -29,7 +29,7 @@ The rule, kept deliberately small:
   unknown value.
 * ``auto`` (the default): the run starts at once. An author whose ``author_association`` is in
   ``AI_FORK_TRUSTED_ASSOCIATIONS`` gets the normal pipeline. Any other author gets a
-  ``ForkProfile`` that later stories use to restrict the run. The approval status is not read.
+  ``ForkProfile`` that restricts the run. The approval status is not read.
 * ``block``: every fork pull request is paused, whoever wrote it.
 
 The status is read from the **base** repository only. A fork owner controls statuses in the
@@ -88,13 +88,13 @@ class ForkGateFacts:
 
 @dataclass(frozen=True)
 class ForkProfile:
-    """Marks a run as a fork run by a non-trusted author. Later stories read it to apply the caps,
-    the environment scrub, the dropped text and the output clamp. This story only creates it."""
+    """Marks a run as a fork run by a non-trusted author. The budget and spend ledgers, the environment
+    scrub, the dropped prompt text and the output clamp read it. Only ``decide`` creates it."""
 
     head_repo: str
     author_login: str
     author_association: str
-    base_repo: str = field(default="", compare=False)  # for the author cap (story 17-7)
+    base_repo: str = field(default="", compare=False)  # for the author cap
 
 
 @dataclass(frozen=True)

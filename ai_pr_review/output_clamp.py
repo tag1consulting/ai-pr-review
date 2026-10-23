@@ -1,4 +1,4 @@
-"""Output clamp for fork runs (story 17-11, CAP-5).
+"""Output clamp for fork runs (CAP-5).
 
 A fork run posts text that is derived from code an unknown author controls. This module holds the
 pure helpers that limit what that text can do in the bot's voice:
@@ -12,7 +12,7 @@ pure helpers that limit what that text can do in the bot's voice:
   every comment and review body, runs the strict pass over the whole body, and caps a review event
   at COMMENT.
 
-The module imports nothing from the rest of the package, so every layer can use it.
+The module imports only ``ai_pr_review.text_safety``, which imports nothing from the package, so every layer can use it.
 """
 
 from __future__ import annotations
@@ -310,12 +310,35 @@ _STRICT_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 
+# GitHub rejects a body above this many bytes. The provider truncates to it before the clamp runs, and
+# the clamp then adds the banner and grows some text (a zero-width space at each ``@``, ``](`` and
+# ``www.``, and ``&lt;`` for ``<``). So the clamp fits the result to the limit again.
+MAX_BODY_BYTES: Final[int] = 65_536
+# The first words match ``vcs._body.TRUNCATION_MARKER``, which readers use to detect a truncated body.
+_FIT_TRAILER: Final[str] = (
+    "\n\n---\n*Review output truncated: the fork output clamp made the text longer than the provider limit.*"
+)
+
+
+def _fit(text: str) -> str:
+    """Cut *text* to ``MAX_BODY_BYTES`` bytes, at a UTF-8 boundary, and end it with a trailer."""
+    data = text.encode("utf-8")
+    if len(data) <= MAX_BODY_BYTES:
+        return text
+    room = MAX_BODY_BYTES - len(_FIT_TRAILER.encode("utf-8"))
+    head = data[:room].decode("utf-8", errors="ignore")
+    opener = head.rfind("<!--")
+    if opener != -1 and "-->" not in head[opener:]:
+        head = head[:opener]  # a cut marker would hide the trailer inside an open HTML comment
+    return head + _FIT_TRAILER
+
+
 def _walk(value: Any, repo: str) -> Any:
     if isinstance(value, dict):
         out: dict[Any, Any] = {}
         for key, item in value.items():
             if key in _BANNER_KEYS and isinstance(item, str):
-                out[key] = with_banner(strict_body(item, repo))
+                out[key] = _fit(with_banner(strict_body(item, repo)))
             elif key in _STRICT_KEYS and isinstance(item, str):
                 out[key] = strict_body(item, repo)
             elif key == "output" and isinstance(item, dict):
@@ -338,7 +361,7 @@ def _clamp_check_output(output: dict[Any, Any], repo: str) -> dict[Any, Any]:
         value = out.get(key)
         if isinstance(value, str):
             clean = strict_body(value, repo)
-            out[key] = with_banner(clean) if key == "summary" else clean
+            out[key] = _fit(with_banner(clean)) if key == "summary" else clean
     if "annotations" in out:
         out["annotations"] = _walk(out["annotations"], repo)
     return out

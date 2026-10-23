@@ -35,6 +35,7 @@ Deterministic Python replacement for the old ~815-line LLM-orchestrated e2e scri
 The fork profile will test automatic review of a fork pull request on the real GitHub test repository, through the real Actions workflow. Only the offline parts exist today. There is no live runner, and `run` and `preflight` do not know the profile.
 
 - `python -m tests.e2e.fork_scenarios --plan` (or `plan --profile fork`) validates the scenario table offline. It checks that S1 to S17 each have a verifier, the ordering rules, the author cap simulation, the teardown of variables and locks, and the cost totals. It makes no network call.
+- The engine default of `AI_FORK_POLICY` is `block`. S2 checks that default with the variable unset. A runner sets `AI_FORK_POLICY=auto` once after S2, so S3 and the later scenarios review under `auto`.
 - `fork_verify.py` holds one pure verifier per scenario and the checks that run on every scenario. Tests are in `tests/python/e2e_harness/test_fork_verify*.py` and `test_fork_scenarios.py`.
 - `fork_repo_files/` holds drafts of the files the test repository needs: `ai-pr-review-fork.yml`, `e2e-ledger-tools.yml`, the helper script `e2e_ledger_tools.py` and inert hostile content under `hostile/`. Nothing is applied anywhere. Replace the `__ENGINE_REF__` placeholder first.
 

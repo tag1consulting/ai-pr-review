@@ -1,4 +1,4 @@
-"""Per-pull-request spend ledger for fork runs (CAP-2, story 17-6).
+"""Per-pull-request spend ledger for fork runs (CAP-2).
 
 A fork run by a non-trusted author is bounded per run (``AI_FORK_MAX_COST_USD``) and, here, per
 pull request: 4 runs and 6 USD. The ledger lives in hidden comments that only the bot wrote. The
@@ -8,7 +8,8 @@ One comment per reservation, not one shared comment. A shared comment that is up
 cannot stop two concurrent runs: both read N, both write N+1, both re-read their own value and
 pass. Here each run appends its own entry. The ledger is the sum of every bot-authored entry.
 Admission is ordered by comment ID: an entry passes only when the running sum up to its own ID
-fits the caps. A run that does not fit deletes its own entry and pauses. Story 17-7 reuses this
+fits the caps. A run that already does not fit on the first read appends nothing. A run that loses the
+ID ordering after it appended deletes its own entry and pauses. ``fork_spend.py`` reuses this
 append, re-read, remove-own pattern for the daily cap. The shared steps are in
 ``_ledger_admission.py``, which also documents how the two ledgers differ.
 
@@ -57,8 +58,8 @@ CAP_RUNS, CAP_USD = "runs", "usd"
 ENTRY_TRAILER = "Fork review budget entry. The bot keeps this comment. Do not edit it."
 # An entry is a bot comment whose body IS the marker (plus the rescan line for a credit) and the fixed
 # trailer, from the first character to the last. A bot comment that only quotes the tag, such as a
-# summary with text taken from the fork, is not an entry and never raises. Anchoring is reusable:
-# a later spend-entry marker can follow the same shape (story 17-7).
+# summary with text taken from the fork, is not an entry and never raises. ``fork_spend.py`` does not
+# anchor its entries. It is safe there only because the spend issue holds nothing but entries.
 _ENTRY_RE = re.compile(
     rf"\A<!-- {LEDGER_TAG} runs=(\d{{1,6}}) usd=(\d{{1,6}})\.(\d{{2}}) allowance=(\d{{1,6}}) -->\n"
     rf"(?:<!-- {RESCAN_TAG} comment=(\d{{1,20}}) -->\n)?{re.escape(ENTRY_TRAILER)}\Z")
