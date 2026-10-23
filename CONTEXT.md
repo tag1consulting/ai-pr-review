@@ -58,7 +58,7 @@ _Avoid_: calling the fork profile a sandbox. The run stays in the job that holds
 
 **Fork policy** (`AI_FORK_POLICY`):
 The setting that decides what the engine does with a fork PR. `auto` reviews it at once under the fork profile and is the default. `label` pauses it until a maintainer adds the maintainer label for the exact head commit. `block` never reviews it.
-_Avoid_: reading `label` as an automatic labeling feature. It is the maintainer-label policy, the old `approve` value renamed. Also avoid "approve" for any policy. In this repository "approve" means the APPROVE review event (see Review event).
+_Avoid_: reading `label` as an automatic labeling feature. It is the maintainer-label policy, the name of the `approve` value of an unreleased draft. Also avoid "approve" for any policy. In this repository "approve" means the APPROVE review event (see Review event).
 
 **Cap** (run, PR, author, daily):
 A spend or count limit on fork PR reviews. The run cap is 2 USD for one run (`AI_FORK_MAX_COST_USD`). The PR cap is 4 runs and 6 USD for one PR. The author cap lets only the 2 lowest-numbered open fork PRs of one author get automatic review. The daily cap is 50 USD over a rolling 24 hours (`AI_FORK_DAILY_MAX_COST_USD`), with 70 percent reserved for CONTRIBUTOR authors (`AI_FORK_DAILY_RESERVED_SHARE`). Caps are best effort because a user with write access can edit the comments that hold the state.

@@ -156,7 +156,7 @@ jobs:
         with:
           # AI_REVIEW_IMAGE_TAG: container image tag (default: latest)
           # Set to 'dev' to dogfood pre-release builds, or pin to a release
-          # tag (e.g. '2.24.1') for reproducibility.
+          # tag (e.g. '2.25.0') for reproducibility.
           image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
           # --- Provider ---
           # Set AI_REVIEW_API_KEY (or ANTHROPIC_API_KEY) as a repository secret.

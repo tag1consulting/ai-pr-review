@@ -68,6 +68,18 @@ jobs:
 
 Reviews start on the next PR.
 
+## What's new in v2.25.0
+
+**Fork pull requests are reviewed automatically (behavior change).** `AI_FORK_POLICY` now defaults to `auto`. A fork pull request gets a review at once, with a scrubbed environment, fewer analyzers, no PR body in the prompts, a COMMENT-only output and spend caps. Set `AI_FORK_POLICY=label` to require a maintainer approval, or `block` to switch fork review off. See [Fork pull requests](fork-prs).
+
+**Upgrade warnings.** An agent that returns unreadable output now counts as a failed agent on every run, so the review posts COMMENT and not APPROVE. With `AI_FAIL_ON_FINDINGS=true` it also exits with code 2. A custom GitHub bot identity must set `GITHUB_BOT_USERNAME`. The checkout step must set `persist-credentials: false` for a fork review. A proxy value with credentials does not reach analyzers. The `@mention` neutralizing applies to fork runs only.
+
+**A review says when a resolved finding is back.** If a later run finds a similar finding where this review resolved one, the comment says so. GitHub only.
+
+**Telemetry schema 4.** `agent_yield` records what each finding agent returned.
+
+See [Version History → v2.25.0](version-history/v2.25.0) for details.
+
 ## What's new in v2.24.1
 
 **Security: the pull request checkout can no longer shadow the engine's Python modules.** A file in a pull request, such as `ai_pr_review/__main__.py` or `yaml.py`, could run instead of the installed module and see the review's API keys. The image and the actions now set `PYTHONSAFEPATH=1`. Update `image-tag` to `2.24.1` or leave it at `latest`. If you run the engine by hand, set `PYTHONSAFEPATH=1` first.
@@ -87,14 +99,6 @@ See [Version History → v2.24.1](version-history/v2.24.1) for details.
 **A new analyzer, `suppression-check`.** It flags a comment that turns off a security rule, such as `# noqa: S301` or `# nosec`. Add it to an `analyzers` allowlist if you use one.
 
 See [Version History → v2.24.0](version-history/v2.24.0) for details.
-
-## What's new in v2.23.2
-
-**Behavior change: Bitbucket verdict owners are IDs only.** An `@nickname` on a `*` line of `.bitbucket/CODEOWNERS` no longer grants, because a nickname is not unique. List the `account_id` or the `{uuid}` instead. The review logs a warning that names each ignored nickname.
-
-**Behavior change: the owners file is read from the target branch only.** `AI_POLICY_SOURCE` no longer applies to it, so a pull request cannot add its own author to the list. Merge a changed owners file into the target branch first.
-
-See [Version History → v2.23.2](version-history/v2.23.2) for details.
 
 ## Learn more
 
@@ -117,6 +121,7 @@ See [Version History → v2.23.2](version-history/v2.23.2) for details.
 - [Static analyzers](static-analyzers): Analyzer table, dependency vulnerability check, SARIF ingestion
 - [Suppression rules](suppression): Suppress false positives with JSON rules. Scope a rule to a line range with `match.line_start` and `match.line_end` (v1.1.0)
 - [Diff-scope severity cap](configuration#static-analyzer-options): Use `analyzer-diff-scope` to control how the tool handles out-of-diff native-analyzer findings (v1.2.0)
+- [Fork pull requests](fork-prs): How the engine reviews a pull request from a fork, what it limits, and the spend caps
 - [Slash commands](slash-commands): PR-comment commands (rescan, review-full, skip, dismiss, help, plus learning-loop commands)
 
 **Internals**

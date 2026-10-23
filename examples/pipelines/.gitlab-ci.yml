@@ -12,7 +12,7 @@
 #   AI_PROVIDER             (default: anthropic)
 #   AI_REVIEW_MODE          (default: empty, which uses the policy.yml route and else quick; set to 'full' for deep agents)
 #   AI_REVIEW_IMAGE_TAG     (default: latest; set to 'dev' to dogfood pre-release
-#                            builds, or pin to a release like '2.24.1': image
+#                            builds, or pin to a release like '2.25.0': image
 #                            tags strip the 'v' prefix from the git tag)
 #   AI_IGNORE_MERGE_COMMITS (default: true; strip base-branch merges from diff; set to false to include upstream merges)
 #
@@ -37,7 +37,7 @@ image:
   # AI_REVIEW_IMAGE_TAG controls which container tag is pulled.  Defaulted
   # below in the `variables:` block to 'latest'; override by setting the
   # variable in project CI/CD settings (e.g. 'dev' to dogfood pre-release
-  # builds, or '2.24.1' to pin a release: image tags strip the 'v' prefix
+  # builds, or '2.25.0' to pin a release: image tags strip the 'v' prefix
   # from the git tag, per docker/metadata-action's semver pattern in
   # publish-image.yml).
   #

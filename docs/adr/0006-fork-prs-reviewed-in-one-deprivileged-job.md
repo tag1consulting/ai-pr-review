@@ -1,6 +1,6 @@
 # Fork PRs are reviewed in one deprivileged job, not a two-job split
 
-Before this change, the engine paused every fork PR until a maintainer added a label for one exact head commit. The maintainer rejected that flow. A stranger's fork should get a review with no maintainer action, as long as spend is capped and prompt injection is contained. There must be no separate API key.
+An earlier draft of this work (never released) paused every fork PR until a maintainer added a label for one exact head commit. The maintainer rejected that flow. A stranger's fork should get a review with no maintainer action, as long as spend is capped and prompt injection is contained. There must be no separate API key.
 
 We decided that `auto` (the new default of `AI_FORK_POLICY`) runs a fork PR in the same job that holds the secrets. The engine restricts that run from inside. Every analyzer and git subprocess gets an allowlist-only environment, so no LLM key and no `GH_TOKEN` is in reach. Only analyzers with trusted or isolated configuration run. The prompts drop the PR body, commit messages, open-issue titles and branch name. The review event is capped at COMMENT, suggestions are off, and the output carries a fixed banner. Spend is bounded per run, per PR, per author and per day, and the engine fails closed when it cannot read its own state. Issue #1098 tracks the two-job split, which is a later option.
 
