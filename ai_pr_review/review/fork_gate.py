@@ -199,7 +199,7 @@ def _redact_key(key: str) -> str:
     """Name a config key without echoing its URL part, which can hold ``user:token@host``."""
     if "://" not in key and "@" not in key:
         return key[:80]
-    return f"{key.split('.', 1)[0]}.<url>.{key.rsplit('.', 1)[-1]}"[:80]
+    return f"{key.split('.', 1)[0]}.URL.{key.rsplit('.', 1)[-1]}"[:80]
 
 
 def parse_trusted_associations(raw: str | None) -> tuple[str, ...]:

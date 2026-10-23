@@ -782,3 +782,42 @@ def test_the_pr_author_is_fetched_when_the_facts_call_did_not_run_first() -> Non
     prov = GitHubProvider(config=GitHubConfig(owner="o", repo="r", pr_number=7, token="t"), client=client)
     _ledger, maintainer = prov.list_budget_comments()
     assert [cid for cid, _ in maintainer] == [2]
+
+
+def test_a_paused_fork_post_is_clamped_but_an_unreadable_facts_pause_is_not() -> None:
+    """The banner rule covers a pause comment when the pull request is known to be a fork."""
+    _, skip = _gate("pull_request_target", FORK, fork_policy="block")
+    assert skip is not None and skip.fork_output_clamp is True
+    _, skip = _gate("pull_request_target", FORK, fork_policy="label")
+    assert skip is not None and skip.fork_output_clamp is True
+    _, skip = _gate("pull_request_target", None)
+    assert skip is not None and skip.fork_output_clamp is False  # not known to be a fork
+
+
+def test_every_fork_pause_text_keeps_its_meaning_under_the_clamp_and_gets_the_banner() -> None:
+    from ai_pr_review.output_clamp import BANNER_BLOCK, clamp_request_body, output_clamp
+    from ai_pr_review.review.fork_budget import ESTIMATE_ERROR_TEXT, LEDGER_ERROR_TEXT
+    from ai_pr_review.review.fork_gate import _block_text
+
+    texts = [
+        _block_text("stranger/some-fork"),
+        LEDGER_ERROR_TEXT,
+        ESTIMATE_ERROR_TEXT,
+    ]
+    with output_clamp(True, repo="o/r"):
+        for text in texts:
+            out = clamp_request_body({"body": text})["body"]
+            assert out.startswith(BANNER_BLOCK)
+            assert "paused" in out.lower() or "not reviewed" in out.lower() or "AI_FORK_POLICY" in out
+
+
+def test_the_persisted_credential_key_is_the_same_with_and_without_the_clamp() -> None:
+    from ai_pr_review.output_clamp import clamp_request_body, output_clamp
+    from ai_pr_review.review.fork_gate import _redact_key
+
+    text = f"The checkout keeps a credential (`{_redact_key('http.https://github.com/.extraheader')}`)."
+    assert "<" not in text
+    with output_clamp(True, repo="o/r"):
+        out = clamp_request_body({"body": text})["body"]
+    assert "`http.URL.extraheader`" in out
+    assert "&lt;" not in out

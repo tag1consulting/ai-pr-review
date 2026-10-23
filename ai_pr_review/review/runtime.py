@@ -292,17 +292,23 @@ def _apply_fork_gate(
         logger.warning(
             "fork gate: review paused (%s, policy %s)",
             "facts unavailable" if facts is None else "fork not allowed", config.fork_policy)
-        return config, SkipPlan(reason=decision.reason, provider=provider, is_fork_gate_skip=True), None
+        # A paused fork post carries the fork banner and the strict text pass. When the facts could
+        # not be read the run cannot tell whether the pull request is a fork, so it stays unclamped.
+        return config, SkipPlan(
+            reason=decision.reason, provider=provider, is_fork_gate_skip=True,
+            fork_output_clamp=facts is not None), None
     if decision.gated:
         mismatch = checkout_mismatch_reason(config.head_sha, workspace_head("."))
         if mismatch:
             logger.warning("fork gate: the workspace is not at the approved commit")
-            return config, SkipPlan(reason=mismatch, provider=provider, is_fork_gate_skip=True), None
+            return config, SkipPlan(
+                reason=mismatch, provider=provider, is_fork_gate_skip=True, fork_output_clamp=True), None
     if decision.mode == MODE_FORK:
         credential = persisted_credential_reason(".")
         if credential:
             logger.warning("fork gate: the workspace git config holds a persisted credential")
-            return config, SkipPlan(reason=credential, provider=provider, is_fork_gate_skip=True), None
+            return config, SkipPlan(
+                reason=credential, provider=provider, is_fork_gate_skip=True, fork_output_clamp=True), None
     if decision.gated:
         logger.info("fork gate: fork pull request allowed (policy %s, mode %s)", config.fork_policy, decision.mode)
     ceiling = _fork_ceiling(config)
@@ -329,7 +335,9 @@ def _fork_ceiling(config: ReviewConfig) -> float:
 
 
 def _fork_pause(provider: VcsProvider, reason: str) -> SkipPlan:
-    return SkipPlan(reason=reason, provider=provider, is_fork_gate_skip=True)
+    # Every caller runs for a fork pull request under the fork profile, so the pause comment is
+    # clamped like every other fork post (banner and strict text pass).
+    return SkipPlan(reason=reason, provider=provider, is_fork_gate_skip=True, fork_output_clamp=True)
 
 
 def _open_fork_budget(config: ReviewConfig, provider: VcsProvider) -> ForkBudget | None:
