@@ -1,0 +1,217 @@
+diff --git a/ai_pr_review/analyzers/native/eslint.py b/ai_pr_review/analyzers/native/eslint.py
+index 53d9336..99043a1 100644
+--- a/ai_pr_review/analyzers/native/eslint.py
++++ b/ai_pr_review/analyzers/native/eslint.py
+@@ -147,6 +147,24 @@ def _eslint_items(data: Any) -> list[tuple[str, dict[str, Any]]] | None:
+     return items
+ 
+ 
++# ESLint rules that only report formatting. The plugin prefixes cover the stylistic and
++# prettier plugins. Rules that find defects (no-eval, no-undef, security/*) are not listed.
++_STYLE_RULES = frozenset({
++    "indent", "semi", "semi-spacing", "quotes", "quote-props", "comma-dangle", "comma-spacing",
++    "comma-style", "eol-last", "no-trailing-spaces", "no-multiple-empty-lines", "no-multi-spaces",
++    "no-extra-semi", "space-before-blocks", "space-before-function-paren", "space-infix-ops",
++    "space-in-parens", "space-unary-ops", "keyword-spacing", "brace-style", "object-curly-spacing",
++    "array-bracket-spacing", "key-spacing", "padded-blocks", "arrow-spacing", "func-call-spacing",
++    "linebreak-style", "operator-linebreak", "spaced-comment", "max-len", "block-spacing",
++    "computed-property-spacing", "template-curly-spacing", "wrap-iife", "dot-location",
++})
++_STYLE_RULE_PREFIXES = ("@stylistic/", "prettier/")
++
++
++def _is_style_rule(rule_id: str) -> bool:
++    return rule_id in _STYLE_RULES or rule_id.startswith(_STYLE_RULE_PREFIXES)
++
++
+ def _eslint_finding(item: tuple[str, dict[str, Any]]) -> Finding | None:
+     rel_path, msg = item
+     rule_id = msg.get("ruleId")
+@@ -167,4 +185,5 @@ def _eslint_finding(item: tuple[str, dict[str, Any]]) -> Finding | None:
+         finding=f"{rule_id}: {message}",
+         remediation=remediation,
+         category="lint",
++        style_only=_is_style_rule(str(rule_id)),
+     )
+diff --git a/ai_pr_review/analyzers/native/phpcs.py b/ai_pr_review/analyzers/native/phpcs.py
+index 08ef768..541918f 100644
+--- a/ai_pr_review/analyzers/native/phpcs.py
++++ b/ai_pr_review/analyzers/native/phpcs.py
+@@ -386,10 +386,15 @@ def _invoke_phpcs(plan: _Plan) -> subprocess.CompletedProcess[str] | None:
+         return None
+ 
+ 
++def _is_style_sniff(source_rule: str) -> bool:
++    """Is *source_rule* (``Squiz.Commenting.FunctionComment.Missing``) a style-only sniff?"""
++    parts = source_rule.split(".")
++    return len(parts) >= 2 and parts[1] in _STYLE_SNIFF_CATEGORIES
++
++
+ def _severity(msg_type: str, source_rule: str) -> str:
+     """Map a phpcs message to a severity, rating style-only sniffs Low."""
+-    parts = source_rule.split(".")
+-    if len(parts) >= 2 and parts[1] in _STYLE_SNIFF_CATEGORIES:
++    if _is_style_sniff(source_rule):
+         return "Low"
+     return "High" if msg_type == "ERROR" else "Medium"
+ 
+@@ -503,6 +508,7 @@ def _run_phpcs(changed_files: ChangedFiles, diff_file: Path) -> list[Finding]:
+                         finding=f"{source_rule}: {msg.get('message', '')}",
+                         remediation=_remediation(plan, normalized_path),
+                         category="lint",
++                        style_only=_is_style_sniff(source_rule),
+                     )
+                 )
+             except (ValueError, TypeError) as exc:
+diff --git a/ai_pr_review/analyzers/native/ruff.py b/ai_pr_review/analyzers/native/ruff.py
+index d53c7ef..1fd7049 100644
+--- a/ai_pr_review/analyzers/native/ruff.py
++++ b/ai_pr_review/analyzers/native/ruff.py
+@@ -7,6 +7,7 @@ converts its JSON output to Finding instances.
+ from __future__ import annotations
+ 
+ import logging
++import re
+ import shutil
+ 
+ # subprocess is never called directly in this module (run_cli_json_analyzer
+@@ -58,6 +59,29 @@ def _ruff_items(data: Any) -> list[dict[str, Any]] | None:
+     return [item for item in data if isinstance(item, dict)]
+ 
+ 
++# ruff rule families that only report style. The family is the leading letters of the
++# code. Families that find real defects (F, B, S, PL, NPY, ...) are not listed. E and W
++# mix style and defects, so they are matched by number below.
++_STYLE_FAMILIES = frozenset({"I", "N", "D", "Q", "UP", "COM", "ISC"})
++
++
++def _is_style_code(code: str) -> bool:
++    """Is the ruff rule *code* about style only (formatting, naming, docstrings, imports)?"""
++    match = re.fullmatch(r"([A-Z]+)(\d+)", code)
++    if match is None:
++        return False
++    family, number = match.groups()
++    if family in _STYLE_FAMILIES:
++        return True
++    if family == "E":
++        return number[0] in "123" or number == "501"  # indentation, whitespace, blank lines, line length
++    if family == "W":
++        return number in ("191", "291", "292", "293")  # tabs and trailing whitespace
++    if family == "C":
++        return number.startswith("4")  # comprehensions
++    return code == "RUF100"  # an unused noqa comment
++
++
+ def _ruff_finding(item: dict[str, Any]) -> Finding:
+     code = item.get("code") or ""
+     prefix = code[:1]
+@@ -82,4 +106,5 @@ def _ruff_finding(item: dict[str, Any]) -> Finding:
+         finding=f"{code}: {item.get('message', '')}",
+         remediation=remediation,
+         category="lint",
++        style_only=_is_style_code(code),
+     )
+diff --git a/ai_pr_review/findings/extract.py b/ai_pr_review/findings/extract.py
+index b105821..8d20e5f 100644
+--- a/ai_pr_review/findings/extract.py
++++ b/ai_pr_review/findings/extract.py
+@@ -160,6 +160,11 @@ def _parse_and_validate(
+                 f = f.model_copy(update={"corroborated": False})
+             if f.judge_verdict is not None:
+                 f = f.model_copy(update={"judge_verdict": None})
++            # Strip style_only: only an analyzer sets it. An injected true value
++            # would keep a security finding out of the cluster of the finding
++            # that corroborates it (#1074).
++            if f.style_only:
++                f = f.model_copy(update={"style_only": False})
+             results.append(f)
+         except Exception as exc:  # noqa: BLE001
+             print(f"WARNING: {agent_name} dropped malformed finding: {exc}", file=sys.stderr)
+diff --git a/ai_pr_review/findings/merge.py b/ai_pr_review/findings/merge.py
+index 7ebf5f2..09ef6d2 100644
+--- a/ai_pr_review/findings/merge.py
++++ b/ai_pr_review/findings/merge.py
+@@ -2,8 +2,8 @@
+ 
+ Proximity-based dedup: findings in the same file within PROXIMITY_LINES of
+ each other are clustered; the highest-severity finding survives with a union
+-of sources. Style findings (`docs`, and `lint` at Low severity) cluster only with
+-their own category, and a cluster counts as corroborated only when an analyzer
++of sources. Style findings (`docs`, and findings that an analyzer marks
++`style_only`) cluster only with style findings of their own category, and a cluster counts as corroborated only when an analyzer
+ member and an agent member describe the same kind of defect (#1074). When the
+ cluster mixes two different analyzer tools, the other tool's message is kept in
+ `Finding.also_reported` so it is not lost (#1044).
+@@ -34,23 +34,19 @@ _SEVERITY_ORDER: dict[Severity, int] = {
+ PROXIMITY_LINES = 3
+ 
+ def _is_style(f: Finding) -> bool:
+-    """Does `f` describe style or documentation, not a defect in how the code behaves?
++    """Does `f` report style or documentation only, and not a defect in how the code behaves?
+ 
+-    A `docs` finding does. A `lint` finding does when its severity is Low: the
+-    analyzers rate style findings Low (the phpcs style sniffs, and the ruff codes
+-    other than F, E, W and C), and a lint finding of higher severity (ruff F821,
+-    an unsafe call) is a real defect. ruff, eslint and phpcs all use the category
+-    `lint` for both kinds, so the severity is what tells them apart.
++    A `docs` finding does. So does a finding that an analyzer marked `style_only`
++    (a phpcs style sniff, a ruff formatting or naming code, an eslint formatting
++    rule). ruff, eslint and phpcs use the category `lint` for both style and real
++    defects, so the analyzers decide per rule and the category cannot.
+ 
+-    Known limit: the ruff S (security) codes are rated Low by the ruff analyzer, so
+-    they count as style here and do not merge with an agent finding that has the
+-    category `other`. They still merge with a finding of the category `lint`.
+-
+-    A style finding clusters only with findings of its own category. Without
++    A style finding clusters only with style findings of its own category, and a
++    finding that is not style-only never joins a cluster that has one. Without
+     this rule, the "other" wildcard below let a phpcs "Missing doc comment"
+     finding absorb a nearby security finding (#1074).
+     """
+-    return f.category == "docs" or (f.category == "lint" and f.severity == "Low")
++    return f.category == "docs" or f.style_only
+ 
+ 
+ # A finding from one of these sources never joins a cluster. The
+@@ -148,7 +144,7 @@ def _cluster_category_compatible(cluster: list[Finding], f: Finding) -> bool:
+         # the cross-run thread match in `vcs/_canonical.py`, and a change to it
+         # would change which old threads a new finding updates. Only the
+         # within-run clustering is strict.
+-        return all(m.category == f.category for m in cluster)
++        return all(m.category == f.category and _is_style(m) == _is_style(f) for m in cluster)
+     established = next((m.category for m in cluster if m.category != "other"), None)
+     return categories_compatible(established, f.category)
+ 
+diff --git a/ai_pr_review/findings/models.py b/ai_pr_review/findings/models.py
+index 97de347..1162371 100644
+--- a/ai_pr_review/findings/models.py
++++ b/ai_pr_review/findings/models.py
+@@ -159,6 +159,14 @@ class Finding(BaseModel):
+     # finding + remediation) cannot hide the surviving finding through the
+     # other tool's text. Internal-only: not serialised by to_dict().
+     also_reported: list[str] = Field(default_factory=list)
++    # Set by an analyzer when the rule it reports is about style only (a phpcs
++    # style sniff, a ruff formatting or naming code, an eslint formatting rule).
++    # ruff, eslint and phpcs use the category "lint" for style and for real
++    # defects, so the category cannot tell them apart. The merge keeps a
++    # style-only finding out of a cluster with a finding that is not style-only
++    # (#1074). Internal-only: not serialised by to_dict(), and reset on agent
++    # output by extract.py.
++    style_only: bool = False
+ 
+     @field_validator("severity", mode="before")
+     @classmethod
+diff --git a/prompts/security-reviewer.md b/prompts/security-reviewer.md
+index 24b7aad..cd25f2e 100644
+--- a/prompts/security-reviewer.md
++++ b/prompts/security-reviewer.md
+@@ -207,7 +207,7 @@ so findings are preserved even if the response is truncated:
+ `confidence` must be an integer 0-100. Only include findings with confidence >= 75.
+ `category` must be exactly one of: `authz`, `injection`, `dependency-cve`, `secret`, `crypto`,
+ `architecture-coupling`, `test-gap`, `edge-case`, `observability`, `docs`, `lint`, `other`.
+-Use `crypto` for weak hashes, weak or predictable randomness, and insecure token or key handling.
++Use `crypto` for weak hashes, weak or predictable randomness, and weak algorithms or modes. A hardcoded key or secret stays `secret`.
+ Use `other` if none fit.
+ `source` must be exactly `"security-reviewer"`.
+ If no findings, emit an empty array: `[]`

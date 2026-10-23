@@ -25,6 +25,8 @@
 # ── Optional repo variables (Settings → Variables) ───────────────────────────
 #
 #   AI_REVIEW_PROVIDER: LLM provider (default: anthropic)
+#   AI_FORK_POLICY: block (default), auto or label. See docs/fork-prs.md for the other
+#     AI_FORK_* variables. They also reach a rescan run.
 #   AI_REVIEW_BASE_URL: custom endpoint for openai-compatible/bedrock-proxy
 #   AI_REVIEW_IMAGE_TAG: container image tag (default: latest)
 #   AI_REVIEW_MODEL_STANDARD: override standard model ID
@@ -69,6 +71,14 @@
 # shown in the commented block below.  Running pull_request_target without
 # hardening exposes your secrets to PR authors.
 #
+# The engine does not review a fork PR by default (AI_FORK_POLICY=block). To review forks,
+# set the repository variable AI_FORK_POLICY=auto, which reviews at once and limits the run
+# (a scrubbed environment, fewer analyzers, no PR body in the prompts, a COMMENT-only output
+# and spend caps), or label, which needs a maintainer approval. See docs/fork-prs.md. The
+# checkout must set persist-credentials: false, or the fork review pauses. The
+# fork-approval.yml example is for AI_FORK_POLICY=label only. The fork settings below come
+# from repository variables, so one variable controls both this job and a rescan.
+#
 # To opt in:
 #   1. Replace the "on: pull_request:" block with "on: pull_request_target:".
 #   2. Replace the simple checkout step and container-action step in the review
@@ -109,6 +119,10 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Reads the fork approval status. Only AI_FORK_POLICY=label needs it, and only for a fork
+  # pull request (docs/fork-prs.md). The block and auto policies do not read it, so you can
+  # remove this line unless you set AI_FORK_POLICY=label.
+  statuses: read
   # checks: write is only exercised when a matched .github/ai-pr-review/
   # policy.yml route sets 'require' (see docs/policy.md): the container
   # action posts the ai-pr-review/policy-gate check run in that case.
@@ -136,15 +150,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          # Do not leave the token in .git/config. A fork review pauses when it finds one.
+          persist-credentials: false
 
       - name: Run AI review
         uses: tag1consulting/ai-pr-review/container-action@main
         env:
           FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
+          # Fork pull request settings (docs/fork-prs.md). An unset variable is an empty string,
+          # which gives the engine default (the block policy). An empty trusted list would trust
+          # nobody, so it needs the fallback.
+          AI_FORK_POLICY: ${{ vars.AI_FORK_POLICY }}
+          AI_FORK_TRUSTED_ASSOCIATIONS: ${{ vars.AI_FORK_TRUSTED_ASSOCIATIONS || 'OWNER,COLLABORATOR' }}
+          AI_FORK_MAX_COST_USD: ${{ vars.AI_FORK_MAX_COST_USD }}
+          AI_FORK_DAILY_MAX_COST_USD: ${{ vars.AI_FORK_DAILY_MAX_COST_USD }}
+          AI_FORK_DAILY_RESERVED_SHARE: ${{ vars.AI_FORK_DAILY_RESERVED_SHARE }}
+          AI_FAIL_ON_FORK_GATE: ${{ vars.AI_FAIL_ON_FORK_GATE }}
         with:
           # AI_REVIEW_IMAGE_TAG: container image tag (default: latest)
           # Set to 'dev' to dogfood pre-release builds, or pin to a release
-          # tag (e.g. '2.24.1') for reproducibility.
+          # tag (e.g. '2.25.0') for reproducibility.
           image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}
           # --- Provider ---
           # Set AI_REVIEW_API_KEY (or ANTHROPIC_API_KEY) as a repository secret.

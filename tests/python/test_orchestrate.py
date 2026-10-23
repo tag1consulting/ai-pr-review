@@ -1394,3 +1394,319 @@ def test_orchestrate_judge_off_leaves_findings_unchanged(tmp_path: Path) -> None
         assert result.findings[0].out_of_diff is False
 
     anyio.run(_run)
+
+
+# ---------------------------------------------------------------------------
+# Agent yield (#1088)
+# ---------------------------------------------------------------------------
+
+
+def _yield_spec(name: str) -> AgentSpec:
+    return AgentSpec(
+        name=name,
+        prompt_path=f"prompts/{name}.md",
+        tier=1,
+        conditional_trigger=None,
+        max_output_tokens=4096,
+        full_mode_only=False,
+        context_enrichment_eligible=False,
+    )
+
+
+def _yield_findings(confidences: list[int]) -> str:
+    return _findings_block(
+        [
+            {"severity": "High", "confidence": c, "finding": f"f{c}", "file": "a.py", "line": 10 * i + 1}
+            for i, c in enumerate(confidences)
+        ]
+    )
+
+
+def _run_yield(
+    tmp_path: Path,
+    names: list[str],
+    returns: dict[str, str],
+    *,
+    llm_call: Any = None,
+    threshold: int = 75,
+) -> Any:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    out: list[Any] = []
+
+    async def _run() -> None:
+        out.append(
+            await run_review(
+                diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+                summary_text="",
+                agents=[_yield_spec(n) for n in names],
+                llm_call=llm_call or _llm_call_factory(returns),
+                dispatch_context=ctx,
+                provider=provider,
+                config=OrchestrationConfig(confidence_threshold=threshold),
+            )
+        )
+
+    anyio.run(_run)
+    return out[0]
+
+
+def test_agent_yield_empty_agent(tmp_path: Path) -> None:
+    y = _run_yield(tmp_path, ["code-reviewer"], {}).agent_yield["code-reviewer"]
+    assert (y["status"], y["emitted"], y["parsed"], y["below_threshold"]) == ("ok", 0, 0, 0)
+
+
+def test_agent_yield_unreadable_answer(tmp_path: Path) -> None:
+    y = _run_yield(tmp_path, ["security-reviewer"], {"security-reviewer": "No block."})
+    assert y.agent_yield["security-reviewer"]["status"] == "no_block"
+
+
+def test_agent_yield_floor_boundary_and_output_tokens(tmp_path: Path) -> None:
+    """The floor keeps a finding at exactly the threshold, as merge does."""
+    result = _run_yield(
+        tmp_path, ["edge-case-hunter"], {"edge-case-hunter": _yield_findings([74, 75, 90])}
+    )
+    y = result.agent_yield["edge-case-hunter"]
+    assert (y["emitted"], y["parsed"], y["below_threshold"]) == (3, 3, 1)
+    assert y["output_tokens"] == 20
+    assert len(result.findings) == 2  # merge dropped exactly the one counted
+
+
+def test_agent_yield_shows_items_dropped_while_reading(tmp_path: Path) -> None:
+    bad = _findings_block([{"severity": "Nope", "confidence": 90, "finding": "x"}])
+    y = _run_yield(tmp_path, ["code-reviewer"], {"code-reviewer": bad}).agent_yield["code-reviewer"]
+    assert (y["status"], y["emitted"], y["parsed"]) == ("ok", 1, 0)
+
+
+def test_agent_yield_truncated_output_reaches_the_status(tmp_path: Path) -> None:
+    """``truncated`` flows from the stop reason, through dispatch, to the status."""
+
+    async def _llm(req: LLMRequest) -> LLMResponse:
+        return LLMResponse(
+            text="Reasoning without a block", input_tokens=10, output_tokens=4096,
+            stop_reason="max_tokens",
+        )
+
+    result = _run_yield(tmp_path, ["code-reviewer"], {}, llm_call=_llm)
+    assert result.agent_yield["code-reviewer"]["status"] == "truncated_no_block"
+
+
+def test_agent_yield_leaves_out_a_failed_agent(tmp_path: Path) -> None:
+    async def _llm(req: LLMRequest) -> LLMResponse:
+        if "blind-hunter" in req.system_prompt:
+            raise SystemExit(4)
+        return LLMResponse(
+            text="```json-findings\n[]\n```", input_tokens=10, output_tokens=20,
+            stop_reason="end_turn",
+        )
+
+    result = _run_yield(tmp_path, ["code-reviewer", "blind-hunter"], {}, llm_call=_llm)
+    assert set(result.agent_yield) == {"code-reviewer"}
+    assert [f.name for f in result.failed_agents] == ["blind-hunter"]
+
+
+def test_agent_yield_does_not_count_analyzer_findings(tmp_path: Path) -> None:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    analyzer_finding = Finding(
+        severity="Low", confidence=90, finding="lint", source="ruff", file="a.py", line=2,
+    )
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="",
+            agents=[_yield_spec("code-reviewer")],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(extra_findings=(analyzer_finding,)),
+        )
+        assert result.agent_yield["code-reviewer"]["parsed"] == 0
+        assert len(result.findings) == 1  # the analyzer finding is in the review
+
+    anyio.run(_run)
+
+
+def test_agent_yield_skip_path_has_none(tmp_path: Path) -> None:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context(tmp_path)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="", head_sha="abc1234567"),
+            summary_text="",
+            agents=[],
+            llm_call=_llm_call_factory({}),
+            dispatch_context=ctx,
+            provider=provider,
+            skip_reason="no changed files",
+        )
+        assert result.skipped is True
+        assert result.agent_yield == {}
+
+    anyio.run(_run)
+
+
+def test_agent_yield_log_line(tmp_path: Path, caplog: Any) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="ai_pr_review.orchestrate"):
+        _run_yield(
+            tmp_path,
+            ["code-reviewer", "edge-case-hunter"],
+            {"edge-case-hunter": _yield_findings([60, 90])},
+        )
+    lines = [r.getMessage() for r in caplog.records if "AGENT_YIELD" in r.getMessage()]
+    assert len(lines) == 2
+    by_agent = {next(t for t in ln.split() if t.startswith("agent=")): ln for ln in lines}
+    edge = by_agent["agent=edge-case-hunter"]
+    for token in ("status=ok", "emitted=2", "parsed=2", "below_threshold=1",
+                  "threshold=75", "output_tokens=20"):
+        assert token in edge
+
+
+# ---------------------------------------------------------------------------
+# Unreadable agent output forces COMMENT (CAP-5)
+# ---------------------------------------------------------------------------
+
+
+def _posted(tmp_path: Path, names: list[str], returns: dict[str, str], *, llm_call: Any = None) -> Any:
+    """Run a review and return (result, kwargs of the one post_findings call)."""
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    out: list[Any] = []
+
+    async def _run() -> None:
+        out.append(
+            await run_review(
+                diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+                summary_text="",
+                agents=[_yield_spec(n) for n in names],
+                llm_call=llm_call or _llm_call_factory(returns),
+                dispatch_context=ctx,
+                provider=provider,
+                config=OrchestrationConfig(),
+            )
+        )
+
+    anyio.run(_run)
+    assert len(provider.findings_calls) == 1
+    return out[0], provider.findings_calls[0]
+
+
+def test_unreadable_output_forces_comment_and_names_agent(tmp_path: Path) -> None:
+    result, posted = _posted(
+        tmp_path, ["code-reviewer", "blind-hunter"], {"blind-hunter": "```json-findings\n[{oops\n```"}
+    )
+    assert result.outcome.event == "COMMENT"
+    assert result.outcome.incomplete is True
+    assert result.outcome.may_approve is False
+    assert [f.name for f in result.failed_agents] == ["blind-hunter"]
+    assert posted["event"] == "COMMENT"
+    assert posted["failed_agents"] == ["blind-hunter (unparseable output)"]
+    # The agent stays in the yield table and the token table inputs.
+    assert result.agent_yield["blind-hunter"]["status"] == "invalid_json"
+    assert result.failed_agents[0].exit_code not in (0, 4)
+
+
+def test_valid_empty_block_still_approves(tmp_path: Path) -> None:
+    result, posted = _posted(tmp_path, ["code-reviewer", "blind-hunter"], {})
+    assert result.outcome.event == "APPROVE"
+    assert result.outcome.incomplete is False
+    assert result.outcome.may_approve is True
+    assert result.failed_agents == []
+    assert posted["failed_agents"] == []
+
+
+def test_all_agents_unreadable_comment_names_all(tmp_path: Path) -> None:
+    result, posted = _posted(
+        tmp_path,
+        ["code-reviewer", "blind-hunter"],
+        {"code-reviewer": "garbage", "blind-hunter": '```json-findings\n{"a": 1}\n```'},
+    )
+    assert result.outcome.event == "COMMENT"
+    assert result.outcome.incomplete is True
+    assert sorted(f.name for f in result.failed_agents) == ["blind-hunter", "code-reviewer"]
+    assert len(posted["failed_agents"]) == 2
+
+
+def test_truncated_without_block_forces_comment(tmp_path: Path) -> None:
+    async def _llm(req: LLMRequest) -> LLMResponse:
+        return LLMResponse(
+            text="Reasoning without a block", input_tokens=10, output_tokens=4096,
+            stop_reason="max_tokens",
+        )
+
+    result, posted = _posted(tmp_path, ["code-reviewer"], {}, llm_call=_llm)
+    assert result.agent_yield["code-reviewer"]["status"] == "truncated_no_block"
+    assert result.outcome.event == "COMMENT"
+    assert posted["failed_agents"] == ["code-reviewer (unparseable output)"]
+
+
+def test_prose_only_output_forces_comment(tmp_path: Path) -> None:
+    result, _ = _posted(tmp_path, ["code-reviewer"], {"code-reviewer": "Looks fine to me."})
+    assert result.agent_yield["code-reviewer"]["status"] == "no_block"
+    assert result.outcome.event == "COMMENT"
+    assert result.outcome.may_approve is False
+
+
+def test_unreadable_output_does_not_hide_a_critical_finding(tmp_path: Path) -> None:
+    critical = _findings_block(
+        [{"severity": "Critical", "confidence": 95, "finding": "rce", "file": "a.py", "line": 3}]
+    )
+    result, posted = _posted(
+        tmp_path,
+        ["code-reviewer", "blind-hunter"],
+        {"code-reviewer": critical, "blind-hunter": "garbage"},
+    )
+    assert result.outcome.event == "REQUEST_CHANGES"
+    assert [f.name for f in result.failed_agents] == ["blind-hunter"]
+    assert posted["failed_agents"] == ["blind-hunter (unparseable output)"]
+
+
+def test_unreadable_output_with_a_medium_finding_is_comment(tmp_path: Path) -> None:
+    medium = _findings_block(
+        [{"severity": "Medium", "confidence": 90, "finding": "meh", "file": "a.py", "line": 3}]
+    )
+    result, _ = _posted(
+        tmp_path,
+        ["code-reviewer", "blind-hunter"],
+        {"code-reviewer": medium, "blind-hunter": "garbage"},
+    )
+    assert result.outcome.event == "COMMENT"
+    assert result.outcome.incomplete is True
+
+
+def test_repaired_truncated_output_is_readable(tmp_path: Path) -> None:
+    """``truncated_repaired`` keeps its findings and is not a failed agent."""
+    one = '{"severity": "Low", "confidence": 90, "finding": "x", "file": "a.py", "line": 1}'
+    cut = "```json-findings\n[\n" + one + ',\n{"severity": "Hi\n```'
+
+    async def _llm(req: LLMRequest) -> LLMResponse:
+        return LLMResponse(text=cut, input_tokens=10, output_tokens=4096, stop_reason="max_tokens")
+
+    result, _ = _posted(tmp_path, ["code-reviewer"], {}, llm_call=_llm)
+    assert result.agent_yield["code-reviewer"]["status"] == "truncated_repaired"
+    assert result.failed_agents == []
+
+
+def test_analyzer_findings_do_not_make_unreadable_output_readable(tmp_path: Path) -> None:
+    provider = _FakeProvider()
+    ctx = _make_dispatch_context_with_prompts(tmp_path)
+    lint = Finding(severity="Low", confidence=90, finding="lint", source="ruff", file="a.py", line=2)
+
+    async def _run() -> None:
+        result = await run_review(
+            diff=DiffContext(diff_text="diff text", head_sha="abc1234567"),
+            summary_text="",
+            agents=[_yield_spec("code-reviewer")],
+            llm_call=_llm_call_factory({"code-reviewer": "garbage"}),
+            dispatch_context=ctx,
+            provider=provider,
+            config=OrchestrationConfig(extra_findings=(lint,)),
+        )
+        assert [f.name for f in result.failed_agents] == ["code-reviewer"]
+        assert result.outcome.incomplete is True
+
+    anyio.run(_run)

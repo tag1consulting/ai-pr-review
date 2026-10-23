@@ -1,0 +1,120 @@
+# DRAFT for the test repository (tag1consulting/ai-pr-review-test). Not applied anywhere.
+#
+# Writes bot-authored ledger and spend entries for the fork e2e profile. Only the bot login can write
+# a valid entry, so this workflow is the only cheap way to fill a cap. It runs with the repository
+# GITHUB_TOKEN, so every comment it writes is authored by github-actions[bot].
+#
+# Placeholders to replace before use:
+#   __ENGINE_REF__   the engine ref under test. The helper imports the engine's own render functions.
+name: E2E ledger tools
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        required: true
+        options:
+          - seed-ledger
+          - seed-spend
+          - clear-ledgers
+          - lock-spend-issue
+          - unlock-spend-issue
+          - check-canary
+      pr:
+        description: Pull request number (seed-ledger, check-canary, optional for others)
+        type: string
+        default: ''
+      runs:
+        description: Number of runs to seed (seed-ledger)
+        type: string
+        default: '0'
+      usd:
+        description: Total cost to seed as X.XX (seed-ledger, seed-spend)
+        type: string
+        default: '0.00'
+      tier:
+        description: Spend tier (seed-spend)
+        type: choice
+        options: [shared, reserved]
+        default: shared
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: e2e-ledger-tools
+  cancel-in-progress: false
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the engine at the ref under test
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: tag1consulting/ai-pr-review
+          ref: __ENGINE_REF__
+          path: engine
+          persist-credentials: false
+
+      - name: Check out the helper script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: self
+          persist-credentials: false
+
+      - name: Run the ledger action
+        if: inputs.action != 'check-canary'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ACTION: ${{ inputs.action }}
+          PR: ${{ inputs.pr }}
+          RUNS: ${{ inputs.runs }}
+          USD: ${{ inputs.usd }}
+          TIER: ${{ inputs.tier }}
+          PYTHONPATH: ${{ github.workspace }}/engine
+        run: |
+          args=("$ACTION")
+          [ -n "$PR" ] && args+=(--pr "$PR")
+          case "$ACTION" in
+            seed-ledger) args+=(--runs "$RUNS" --usd "$USD") ;;
+            seed-spend) args+=(--tier "$TIER" --usd "$USD") ;;
+          esac
+          python3 self/.github/scripts/e2e_ledger_tools.py "${args[@]}"
+
+      # The canary files live on the runner of the fork review job, which is gone after the job.
+      # The fork workflow uploads the listing as an artifact, and this step reads it.
+      - name: Read the canary listing
+        if: inputs.action == 'check-canary'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::pr must be a number"; exit 1; }
+          # Check every unexpired canary artifact of this PR, one per fork review run, so an
+          # earlier run's canary is not missed when a later run exists.
+          gh api "repos/$REPO/actions/artifacts?per_page=100" \
+            --jq ".artifacts[] | select(.name | startswith(\"e2e-canary-pr-$PR-\")) | select(.expired | not) | \"\\(.workflow_run.id) \\(.name)\"" \
+            > "$RUNNER_TEMP/artifacts.txt"
+          [ -s "$RUNNER_TEMP/artifacts.txt" ] || { echo "::error::no canary artifact for PR $PR"; exit 1; }
+          found=0
+          while read -r run_id name; do
+            dir="$RUNNER_TEMP/dl/$run_id"
+            mkdir -p "$dir"
+            gh run download "$run_id" --repo "$REPO" --name "$name" --dir "$dir"
+            [ -f "$dir/listing-$PR.txt" ] || { echo "::error::artifact $name has no listing-$PR.txt"; exit 1; }
+            echo "canary listing for PR $PR (artifact $name):"
+            cat "$dir/listing-$PR.txt"
+            [ -s "$dir/listing-$PR.txt" ] && found=1
+          done < "$RUNNER_TEMP/artifacts.txt"
+          if [ "$found" = 1 ]; then
+            echo "::error::a canary file exists, fork code ran in a tool"
+            exit 1
+          fi

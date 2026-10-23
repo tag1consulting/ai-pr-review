@@ -28,6 +28,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from ai_pr_review.output_clamp import clamp_active
+
 Risk = Literal["None", "Low", "Medium", "High", "Critical", "Unknown"]
 ReviewEvent = Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"]
 ReviewMode = Literal["full", "quick", "summary-only", "security-only"]
@@ -189,6 +191,9 @@ def cap_review_outcome(outcome: ReviewOutcome, ceiling: ApprovalCeiling) -> Revi
     ``ReviewOutcome.may_approve``'s docstring for why that split is
     load-bearing for ``AI_FAIL_ON_FINDINGS``.
     """
+    if clamp_active():
+        # A fork run never posts APPROVE or REQUEST_CHANGES (story 17-11), whatever the config says.
+        ceiling = "comment"
     if outcome.event in _CEILING_ALLOWS[ceiling]:
         return outcome
     return ReviewOutcome(

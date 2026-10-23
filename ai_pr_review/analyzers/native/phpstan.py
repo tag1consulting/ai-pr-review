@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.analyzers.native._paths import strip_workspace_prefix
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
@@ -38,15 +39,14 @@ _BAKED_COMPOSER_AUTOLOAD = Path("/opt/composer/vendor/autoload.php")
 _BAKED_PHPSTAN_DRUPAL = Path("/opt/composer/vendor/mglaman/phpstan-drupal")
 
 
-# phpstan gets an allowlist environment. It runs PHP from untrusted files, so
-# the job credentials must not reach it. Only the search path, the locale, a
-# temp directory and the proxy and CA settings pass.
+# phpstan gets the shared scrubbed environment (`tool_env`: PATH, a temp HOME,
+# LC_ALL and PYTHONSAFEPATH, plus the proxy and CA settings on a run that is not
+# a fork run). It runs PHP from untrusted files, so the job credentials must not
+# reach it. The names below pass in addition. They are read from the process
+# environment directly, so the fork gate of `tool_env` does not apply to them.
+# LANG, TMPDIR and TZ hold no secrets. The PHP names let a runner-provided php start.
 _ALLOWED_ENV_NAMES = frozenset({
-    "PATH", "LANG", "TMPDIR", "TZ",
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "http_proxy", "https_proxy", "no_proxy",
-    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
-    # PHP runtime settings, so a runner-provided php still starts.
+    "LANG", "TMPDIR", "TZ",
     "PHPRC", "PHP_INI_SCAN_DIR", "LD_LIBRARY_PATH",
 })
 # PHP version managers (asdf, mise, phpenv, phpbrew) find the installed php
@@ -69,11 +69,12 @@ _VERSION_MANAGER_HOME_DEFAULTS = (
 
 
 def _phpstan_env(home: str) -> dict[str, str]:
-    env = {
+    env = tool_env()
+    env.update({
         k: v
         for k, v in os.environ.items()
-        if k in _ALLOWED_ENV_NAMES or k in _VERSION_MANAGER_ENV_NAMES or k.startswith("LC_")
-    }
+        if k in _ALLOWED_ENV_NAMES or k in _VERSION_MANAGER_ENV_NAMES
+    })
     real_home = os.environ.get("HOME")
     if real_home:
         for name, rel in _VERSION_MANAGER_HOME_DEFAULTS:

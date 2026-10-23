@@ -47,6 +47,10 @@ If the tool cannot find the watermark (for example, someone deleted the summary 
 
 To force a full-PR diff for one run, add the **`ai-review-rescan`** label to the PR. The watermark still advances as usual afterward, so later pushes resume incremental review. To get another full rescan, add the label again.
 
+### A finding that comes back after a fix (GitHub)
+
+When a later run no longer reports a finding, the review resolves its thread. If a similar finding then appears in the same code, the new comment says that a similar finding here was resolved earlier and is back. A finding counts as similar when it has the same file, a line within 3 lines, a compatible category, and the same source. The note only appears when the code at that place changed, because a thread of unchanged code is not resolved by a push. It does not claim that a push or a fix happened. A human resolution with no verdict gets a different note. A finding never gets both notes. A push that moves the code by more than 3 lines hides the match, so the note does not appear then.
+
 ## Quiet reruns (GitHub)
 
 A rerun of the review on a PR does not always create a new top-level review object. Each run compares its findings with two things. The first is the most recent review that the bot posted with a body (the "canonical" review), in any state, dismissed or not. The second is the existing threads of that review. The tool never treats an empty-body review as canonical. GitHub creates such a review automatically when the bot replies to an inline comment, and GitHub rejects any update to its body. The outcomes are:

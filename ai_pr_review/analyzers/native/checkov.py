@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.findings.models import Finding
 from ai_pr_review.manifest import ChangedFiles
 
@@ -48,25 +49,16 @@ _AZURE_JSON_KEY_RE = re.compile(
 # loads code or data from the workspace.
 _TRUSTED_CONFIG = "# Trusted config for ai-pr-review; see #739 and #1102.\nquiet: true\n"
 
-# Checkov gets an allowlist environment. It parses untrusted files, so it must
-# not see the job credentials, and it reads many option variables (CKV_*,
-# CHECKOV_*, BC_*, PRISMA_*, EXTERNAL_MODULES_DIR and others) that must not
-# change what it scans. Only these names pass: the search path, the locale,
-# a temp directory and the proxy and CA settings for outbound calls.
-_ALLOWED_ENV_NAMES = frozenset({
-    "PATH", "LANG", "TMPDIR", "TZ",
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "http_proxy", "https_proxy", "no_proxy",
-    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
-})
+# Checkov gets the shared scrubbed environment (`tool_env`). It parses untrusted
+# files, so it must not see the job credentials, and it reads many option
+# variables (CKV_*, CHECKOV_*, BC_*, PRISMA_*, EXTERNAL_MODULES_DIR and others)
+# that must not change what it scans. `tool_env` always sets PATH, a temp HOME,
+# LC_ALL and PYTHONSAFEPATH. The proxy and CA settings and the names in
+# AI_ANALYZER_ENV_PASSTHROUGH pass only on a run that is not a fork run.
 
 
 def _checkov_env(home: str) -> dict[str, str]:
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k in _ALLOWED_ENV_NAMES or k.startswith("LC_")
-    }
+    env = tool_env()
     # A pip user install keeps checkov importable only through the real
     # HOME. Pass the user base so it still works with the empty HOME.
     with contextlib.suppress(Exception):  # a missing user base must not stop the run

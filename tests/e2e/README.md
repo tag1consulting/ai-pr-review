@@ -30,6 +30,26 @@ Deterministic Python replacement for the old ~815-line LLM-orchestrated e2e scri
 | `E2E_BITBUCKET_EMAIL` / `E2E_BITBUCKET_TOKEN` | Bitbucket API token auth |
 | `E2E_ANTHROPIC_API_KEY` | Falls back to `ANTHROPIC_API_KEY` if unset |
 
+## Fork profile (not runnable yet)
+
+The fork profile will test automatic review of a fork pull request on the real GitHub test repository, through the real Actions workflow. Only the offline parts exist today. There is no live runner, and `run` and `preflight` do not know the profile.
+
+- `python -m tests.e2e.fork_scenarios --plan` (or `plan --profile fork`) validates the scenario table offline. It checks that S1 to S17 each have a verifier, the ordering rules, the author cap simulation, the teardown of variables and locks, and the cost totals. It makes no network call.
+- The engine default of `AI_FORK_POLICY` is `block`. S2 checks that default with the variable unset. A runner sets `AI_FORK_POLICY=auto` once after S2, so S3 and the later scenarios review under `auto`.
+- `fork_verify.py` holds one pure verifier per scenario and the checks that run on every scenario. Tests are in `tests/python/e2e_harness/test_fork_verify*.py` and `test_fork_scenarios.py`.
+- `fork_repo_files/` holds drafts of the files the test repository needs: `ai-pr-review-fork.yml`, `e2e-ledger-tools.yml`, the helper script `e2e_ledger_tools.py` and inert hostile content under `hostile/`. Nothing is applied anywhere. Replace the `__ENGINE_REF__` placeholder first.
+
+What it still needs before a first live run:
+
+- Approval to change the test repository: the two workflows, the helper script at `.github/scripts/`, the repository variables, and the engine ref and image tag pin.
+- An image built from the release code, and the engine ref for `uses:`.
+- A second maintainer account for S10.
+- A runner that maps the table actions to GitHub calls and fetches the evidence for `fork_verify.py`.
+- Real fixtures captured from the first run, to replace the synthetic ones.
+- Human approval of the LLM budget. A live run is a checkpoint.
+
+Design: memory-bank/bmad/planning-artifacts/e2e-fork-pr-test-design.md (kept outside git history, in the main checkout only).
+
 ## Cleanup policy
 
 On pass, the harness closes the PR/MR and deletes its branch by API, confirming each step. On any failure (product or infra), everything is left open, deliberately: there is no janitor. This is so a failed run stays available for debugging; nothing else cleans it up. A cancelled run (SIGINT/SIGTERM) closes only the PR/MR it opened, since a cancelled run has nothing worth debugging.

@@ -16,7 +16,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import click
@@ -26,6 +26,7 @@ from ai_pr_review.config import ConfigError, ReviewConfig
 from ai_pr_review.logging import generate_correlation_id, setup_logging
 from ai_pr_review.orchestrate import ReviewResult
 from ai_pr_review.review.compute import run_compute
+from ai_pr_review.review.preflight import FORK_SUMMARY_NOTICE
 from ai_pr_review.review.preflight import run_issue_linker as _run_issue_linker
 from ai_pr_review.review.preflight import run_summarizer as _run_summarizer
 from ai_pr_review.review.reporting import (
@@ -290,13 +291,65 @@ def _preflight_agent_results(
     ]
 
 
+def _settle_fork_budget(runtime: ReviewRuntime, totals: Any, incomplete: bool = False) -> None:
+    """Settle the fork run's ledger entries (per-PR, story 17-6, and daily, story 17-7). Fail-soft:
+    the run is over, so a failure leaves the reserved estimate charged, which is the safe direction.
+    With no totals, a model that has no price, or an incomplete run (a failed agent or a refusal
+    fallback, whose spend the totals may miss), the estimate stays. Each entry settles on its own."""
+    budget, reservation = runtime.fork_budget, runtime.fork_reservation
+    spend, spend_reservation = runtime.fork_spend, runtime.fork_spend_reservation
+    if (budget is None or reservation is None) and (spend is None or spend_reservation is None):
+        return
+    if totals is None or totals.any_unknown:
+        logger.warning(
+            "fork budget: no priced totals (a model without a price, or no usage data), so the ledger "
+            "entries keep the full estimate and may overcharge the PR and the daily pool"
+        )
+        return
+    if incomplete:
+        logger.warning(
+            "fork budget: an agent failed or fell back to another model, so the totals may miss "
+            "billed calls. The ledger entries keep the full estimate"
+        )
+        return
+    from ai_pr_review.output_clamp import clamp_suspended
+    from ai_pr_review.review.fork_budget import LedgerError, cents_from_units
+
+    actual = cents_from_units(totals.cost_units)
+    # The ledger entries are engine data, not review text. Written inside the output clamp they
+    # would get the banner and the strict pass (``<!--`` becomes ``&lt;!--``), the entry would
+    # no longer parse, and every later fork run would pause. Write them outside the clamp.
+    with clamp_suspended():
+        if budget is not None and reservation is not None:
+            try:
+                budget.settle(reservation, actual)
+            except LedgerError as exc:
+                logger.warning("fork budget: %s. The entry keeps the estimate.", exc)
+        if spend is not None and spend_reservation is not None:
+            try:
+                spend.settle(spend_reservation, actual)
+            except LedgerError as exc:
+                logger.warning("fork spend: %s. The entry keeps the estimate.", exc)
+
+
 async def _run_review_async(config: ReviewConfig) -> int:
     """Execute the review pipeline; return CLI exit code."""
-    from ai_pr_review.llm.client import call_llm
-    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.output_clamp import output_clamp
     from ai_pr_review.review.runtime import SkipPlan, build_review_runtime
 
     runtime = await build_review_runtime(config)
+    # A fork run posts inside the output clamp (story 17-11): the banner, the strict text pass and
+    # the COMMENT cap apply to everything it posts or writes to the step summary.
+    clamped = runtime.fork_output_clamp if isinstance(runtime, SkipPlan) else runtime.fork_profile is not None
+    with output_clamp(clamped, repo=config.github_repository):
+        return await _run_review_with_runtime(config, runtime)
+
+
+async def _run_review_with_runtime(config: ReviewConfig, runtime: ReviewRuntime | SkipPlan) -> int:
+    """Post the review (or the skip comment) for a prepared runtime; return CLI exit code."""
+    from ai_pr_review.llm.client import call_llm
+    from ai_pr_review.orchestrate import run_review
+    from ai_pr_review.review.runtime import SkipPlan
 
     if isinstance(runtime, SkipPlan):
         click.echo(f"Skipping review: {runtime.reason}", err=True)
@@ -351,6 +404,8 @@ async def _run_review_async(config: ReviewConfig) -> int:
         context_window_failed = (
             runtime.is_context_window_skip and resolved_cfg.fail_on_context_window and result.ok
         )
+        # A fork-gate pause has its own opt-in, so a required check can refuse an unapproved fork.
+        fork_gate_failed = runtime.is_fork_gate_skip and resolved_cfg.fail_on_fork_gate and result.ok
         # #896: a skip can now carry real findings (analyzer/SARIF, computed
         # before the ceiling check). AI_FAIL_ON_FINDINGS applies to them the
         # same way it does on a normal run -- reads the classifier's
@@ -367,12 +422,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
                 outcome_override = "skipped_cost_ceiling_failed"
             elif context_window_failed:
                 outcome_override = "skipped_context_window_failed"
+            elif fork_gate_failed:
+                outcome_override = "skipped_fork_gate_failed"
             elif fail_on_findings_failed:
                 outcome_override = "skipped_fail_on_findings_failed"
             else:
                 outcome_override = "skipped"
             await _emit_telemetry(result, resolved_cfg, 0, outcome_override=outcome_override)
-        if cost_ceiling_failed or context_window_failed or fail_on_findings_failed:
+        if cost_ceiling_failed or context_window_failed or fork_gate_failed or fail_on_findings_failed:
             return 2
         return 0 if result.ok else 1
 
@@ -409,8 +466,16 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # with review/runtime.py's pre-flight cost estimate so the two can never
     # silently disagree about whether this agent will actually run.
     summary_text = runtime.summary_prefix
+    # A fork run (a fork profile is present) runs neither agent: their input is the commit log,
+    # the branch name and the open-issue titles, which the fork author controls (story 17-10).
+    fork_run = runtime.fork_profile is not None
+    if fork_run and not runtime.is_incremental:
+        # Keep the summary comment non-empty. An empty one reads as an incremental run and
+        # leaves the SHA watermark with no comment to live in.
+        summary_text += FORK_SUMMARY_NOTICE
     if should_run_summarizer(
         is_incremental=runtime.is_incremental, agents=rc.agents, exclude_agents=rc.exclude_agents,
+        fork_run=fork_run,
     ):
         summary_text += await _run_summarizer(
             diff_text=runtime.diff.diff_text,
@@ -439,6 +504,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
         vcs_provider=rc.vcs_provider,
         agents=rc.agents,
         exclude_agents=rc.exclude_agents,
+        fork_run=fork_run,
     ):
         issue_linker_md = await _run_issue_linker(
             manifest_text=runtime.manifest_text,
@@ -574,6 +640,7 @@ async def _run_review_async(config: ReviewConfig) -> int:
     # totals reuse the same compute_token_totals() the token table itself
     # renders from, so this can never disagree with what a reader of the
     # table sees.
+    _actual_totals = None
     if runtime.pre_flight_cost_estimate_units is not None:
         _actual_totals = _compute_token_totals(
             _with_preflight(result.agent_results), runtime.script_dir,
@@ -593,6 +660,14 @@ async def _run_review_async(config: ReviewConfig) -> int:
                 _format_cost(_actual_totals.cost_units),
                 _format_cost(_actual_totals.cost_units - runtime.pre_flight_cost_estimate_units),
             )
+
+    # Story 17-6: replace the fork run's reserved estimate with the actual cost.
+    _settle_fork_budget(
+        runtime,
+        _actual_totals,
+        incomplete=bool(result.failed_agents)
+        or any(r.fallback_from_model for r in result.agent_results),
+    )
 
     # Full per-agent breakdown, always echoed to the CI job log regardless of
     # provider (#758) -- GitLab and Bitbucket have no GITHUB_STEP_SUMMARY
@@ -696,6 +771,15 @@ async def _emit_telemetry(
         agent_results = result.agent_results if result is not None else []
         failed_agents = result.failed_agents if result is not None else []
         findings = result.findings if result is not None else []
+        # isinstance guard: a skip or dry-run has no result, and a test double
+        # may not carry the field. The event must still serialize.
+        raw_yield = getattr(result, "agent_yield", None)
+        agent_yield = dict(raw_yield) if isinstance(raw_yield, dict) else {}
+        if result is not None and not isinstance(raw_yield, dict):
+            logger.warning(
+                "[ai-pr-review] telemetry: agent_yield is %s, not a dict; sending none",
+                type(raw_yield).__name__,
+            )
 
         for ar in agent_results:
             if isinstance(ar, _AgentResult) and ar.token_log is not None:
@@ -726,7 +810,7 @@ async def _emit_telemetry(
             agent_latency_ms={ar.name: ar.elapsed_ms for ar in agent_results},
             sarif_elapsed_s=sarif_elapsed_s,
             learning_store_entries_loaded=feedback_entries_count,
-            telemetry_schema_version="3",
+            telemetry_schema_version="4",
             provider=config.provider,
             model_standard=config.model_standard,
             model_premium=config.model_premium,
@@ -737,6 +821,7 @@ async def _emit_telemetry(
                 for f in failed_agents
                 if isinstance(f, _FailedAgent)
             },
+            agent_yield=agent_yield,
         )
     except Exception as exc:
         logger.warning("[ai-pr-review] telemetry assembly failed: %s", exc, exc_info=True)
@@ -789,7 +874,7 @@ async def _orchestrate_skip(
         provider=plan.provider,
         config=OrchestrationConfig(
             mode=config.review_mode,  # type: ignore[arg-type]
-            approval_ceiling=config.approval_ceiling,  # type: ignore[arg-type]
+            approval_ceiling="comment" if plan.fork_output_clamp else config.approval_ceiling,  # type: ignore[arg-type]
             suppression_rules=plan.suppression_rules,
             extra_findings=plan.extra_findings,
             analyzer_diff_scope=plan.analyzer_diff_scope,

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+from ai_pr_review.text_safety import safe_text, single_line
+
 # PR/MR descriptions routinely carry HTML comments -- template boilerplate
 # ("<!-- Delete sections that don't apply -->"), collapsed
 # checklists/details wrappers, or hidden markers other tools left behind.
@@ -40,11 +42,15 @@ def build_shared_context_block(
     manifest) -- callers should skip adding an empty prefix part rather than
     emit an empty wrapper.
     """
-    title = pr_title.strip()
-    body = _HTML_COMMENT_RE.sub("", pr_body).strip()
+    # Remove HTML comments first (a comment can hide half of a closer), then strip
+    # invisible characters and escape closing tags before any truncation, so a
+    # closer cannot be cut in half and slip past the escape. Do it once, here, so the
+    # cached prefix stays the same for every agent.
+    title = single_line(safe_text(pr_title))
+    body = safe_text(_HTML_COMMENT_RE.sub("", pr_body)).strip()
     if len(body) > max_body_chars:
         body = body[:max_body_chars].rstrip() + "\n\n_[description truncated]_"
-    manifest = manifest_text.strip()
+    manifest = safe_text(manifest_text).strip()
 
     sections: list[str] = []
     if title:

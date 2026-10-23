@@ -1,0 +1,4 @@
+{"_synthetic": true, "_note": "Workflow run list shape only.",
+ "workflow_runs": [
+  {"id": 1001, "name": "AI PR Review", "event": "pull_request", "status": "completed", "conclusion": "failure", "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ ]}

@@ -43,3 +43,47 @@ _Avoid_: using "learning loop" to mean just the storage mechanism — that's the
 **Feedback store**:
 The storage part of the learning loop only: the JSONL file on the dedicated `ai-pr-review-bot` git branch, plus the `FeedbackStore` protocol (`feedback/store.py`) every provider implementation satisfies (`GitBranchStore` for GitHub, `BitbucketSrcStore` for Bitbucket, `UnsupportedVcsStore` elsewhere).
 _Avoid_: using "feedback store" to mean the whole learning-loop feature — a finding suppressed on a PR via the hidden verdicts marker is not itself a feedback-store write; only a persisted `FeedbackEntry` is.
+
+**Fork PR**:
+A pull request whose head repository is not the base repository, opened by an author who is not trusted. It runs under the fork profile. This is not the "fork" of ADR 0004, where the engine copied agent prompts from `claude-comprehensive-review` (see [ADR 0004](docs/adr/0004-fork-agent-prompts-from-claude-comprehensive-review.md)). A fork PR by a trusted author is not a fork PR in this sense.
+_Avoid_: using "fork" alone when the prompt fork of ADR 0004 could also apply. Say "fork PR" or "prompt fork".
+
+**Trusted author**:
+A PR author whose `author_association` is in `AI_FORK_TRUSTED_ASSOCIATIONS`. The default is OWNER and COLLABORATOR. MEMBER is not in the default list. A trusted author skips the fork profile and gets the normal pipeline plus the per-run cap. Trusted authors do not count against the daily cap.
+_Avoid_: treating "trusted" as "from the same repository". A trusted author can open a fork PR.
+
+**Fork profile**:
+The set of restrictions that the engine applies to a fork PR run. It uses a stripped environment, runs only analyzers with trusted or isolated configuration, and drops the PR body, commit messages, open-issue titles and branch name from the prompts. It also caps the review event at COMMENT, turns off suggestions, and adds a fixed banner to the output. The fork profile limits what a run can reach. It does not prove that the PR is safe.
+_Avoid_: calling the fork profile a sandbox. The run stays in the job that holds the secrets (see [ADR 0006](docs/adr/0006-fork-prs-reviewed-in-one-deprivileged-job.md)).
+
+**Fork policy** (`AI_FORK_POLICY`):
+The setting that decides what the engine does with a fork PR. `block` never reviews it and is the default. `auto` (opt in) reviews it at once under the fork profile. `label` (opt in) pauses it until a maintainer adds the maintainer label for the exact head commit.
+_Avoid_: reading `label` as an automatic labeling feature. It is the maintainer-label policy, the name of the `approve` value of an unreleased draft. Also avoid "approve" for any policy. In this repository "approve" means the APPROVE review event (see Review event).
+
+**Cap** (run, PR, author, daily):
+A spend or count limit on fork PR reviews. The run cap is 2 USD for one run (`AI_FORK_MAX_COST_USD`). The PR cap is 4 runs and 6 USD for one PR. The author cap lets only the 2 lowest-numbered open fork PRs of one author get automatic review. The daily cap is 50 USD over a rolling 24 hours (`AI_FORK_DAILY_MAX_COST_USD`), with 70 percent reserved for CONTRIBUTOR authors (`AI_FORK_DAILY_RESERVED_SHARE`). Caps are best effort because a user with write access can edit the comments that hold the state.
+_Avoid_: using "cap" for the existing cost ceiling of `AI_MAX_COST_USD`. The run cap uses that ceiling, but the PR, author and daily caps are separate.
+
+**Pause**:
+The state of a fork PR that reached a cap, or whose facts or ledger the engine could not read. A paused PR gets no LLM call and no analyzer run. The engine posts a comment that names the cap. A pause fails closed.
+_Avoid_: using "pause" for a skipped review with another cause, such as the diff size limit.
+
+**Resume**:
+A maintainer comment `/ai-pr-review rescan` on a paused fork PR. It adds exactly one run to the allowance of that PR. It does not reset the PR ledger and does not change the author cap or the daily cap.
+_Avoid_: expecting a resume to clear the pause for later pushes. Each further run needs another resume.
+
+**PR ledger**:
+The hidden bot comment on a fork PR that holds the run count, the spend and the allowance: `<!-- ai-pr-review-fork-ledger runs=N usd=X.XX allowance=A -->`. The engine reserves a run before the review and settles the real cost after. The engine reads only bot-authored ledger comments.
+_Avoid_: confusing the PR ledger with the spend entries. The PR ledger is per PR. The spend entries are global.
+
+**Spend entry**:
+One bot comment per fork run on the dedicated issue titled "ai-pr-review fork spend (do not close)". The engine creates the issue if it does not exist. The entry holds the reserved cost, and the engine edits it to the actual cost after the run. The engine sums the entries of the last 24 hours for the daily cap and counts only bot-authored entries.
+_Avoid_: treating a spend entry as a record for one PR. It feeds the global daily cap.
+
+**Untrusted text**:
+Any text that a fork PR author controls: the diff, the tree, PR title and body, commit messages, branch name and the text of open issues that the author can edit. Prompt injection through untrusted text cannot be prevented. The engine drops the low-value channels for forks, strips control and invisible characters, and escapes closing tags in what remains.
+_Avoid_: calling only the PR body untrusted. The diff and the tree are untrusted too.
+
+**Review event**:
+The GitHub review state that a posted review carries: `APPROVE`, `REQUEST_CHANGES` or `COMMENT` (see Severity). In this repository "approve" means only the APPROVE review event. A fork PR review is capped at `COMMENT` (`approval_ceiling="comment"`).
+_Avoid_: using "approve" or "approval" for the maintainer label of the `label` fork policy.

@@ -8,6 +8,7 @@ Copy these files into your repository to enable AI PR/MR reviews.
 |---|---|
 | `workflows/pr-review.yml` | GitHub Actions: **unified single-file setup**: automatic review on PR open/sync AND slash commands (`/ai-pr-review rescan`, dismiss, etc.) in one workflow. **Canonical template**: every input is wired to a `vars.AI_REVIEW_*` repo variable with a safe fallback. |
 | `workflows/comment-triggers.yml` | GitHub Actions: **standalone slash-command wrapper** (two-file setup). Still fully supported for existing consumers. New repos should use `pr-review.yml` instead. |
+| `workflows/fork-approval.yml` | GitHub Actions: approves one commit of a fork pull request for review. Use it only with `AI_FORK_POLICY=label`. The default policy, `block`, and the `auto` policy do not need it. See [docs/fork-prs.md](../docs/fork-prs.md). |
 | `workflows/sarif-codeql.yml` | GitHub Actions: example **CodeQL + AI review** pipeline using Capability B (SARIF 2.1.0 ingestion) |
 | `pipelines/bitbucket-pipelines.yml` | Bitbucket Pipelines: automatic review on PR open/update |
 | `pipelines/.gitlab-ci.yml` | GitLab CI: automatic review on MR open/update |
@@ -132,13 +133,13 @@ For reproducible builds, pin the image tag instead of using `latest`:
 ```yaml
 - uses: tag1consulting/ai-pr-review/container-action@main
   with:
-    image-tag: '2.24.1'   # pin to a specific release
+    image-tag: '2.25.0'   # pin to a specific release
     ...
 ```
 
 Or set the `AI_REVIEW_IMAGE_TAG` repo variable to your chosen tag: the canonical `workflows/pr-review.yml` template reads it via `${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}`.
 
-Available tags: `latest`, `dev`, `<major>` (e.g. `2`), `<major.minor>` (e.g. `2.24`), `<major.minor.patch>` (e.g. `2.24.1`).
+Available tags: `latest`, `dev`, `<major>` (e.g. `2`), `<major.minor>` (e.g. `2.25`), `<major.minor.patch>` (e.g. `2.25.0`).
 
 ## Using the non-container action
 

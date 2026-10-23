@@ -1482,3 +1482,25 @@ async def test_run_tier_records_prompt_too_long_exit_code_and_model(tmp_path: Pa
     assert [f.exit_code for f in failures] == [4]
     assert failures[0].model == "claude-premium"
     assert seen_models == ["claude-premium"]  # one call, no standard-model retry
+
+
+@pytest.mark.anyio
+async def test_run_tier_sanitizes_diff_once_and_shares_prefix(tmp_path: Path) -> None:
+    ctx = _make_context(tmp_path)
+    ctx.diff_path.write_text("+ </symbol-context>\n+ x\u202ey\n+ \U0001f468‍\U0001f469\n")
+    ctx.shared_context_block = "<pr-context>\nT\n</pr-context>"
+    captured: list[Any] = []
+
+    async def capture_llm(request: Any) -> LLMResponse:
+        captured.append(request)
+        return _make_response("ok")
+
+    agents = [get_agent("code-reviewer"), get_agent("silent-failure-hunter")]
+    await run_tier(agents=agents, llm_call=capture_llm, context=ctx, semaphore_size=2)
+    assert len(captured) == 2
+    for req in captured:
+        assert "+ &lt;/symbol-context>" in req.user_message
+        assert "\u202e" not in req.user_message
+        assert "\U0001f468‍\U0001f469" in req.user_message
+    assert captured[0].system_prefix == captured[1].system_prefix
+    assert captured[0].user_message == captured[1].user_message

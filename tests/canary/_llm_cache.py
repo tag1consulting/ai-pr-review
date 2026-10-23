@@ -79,6 +79,15 @@ def request_key(request: LLMRequest, namespace: str = "") -> str:
         "max_tokens": request.max_tokens,
         "temperature": request.temperature,
     }
+    # Tool-loop turns (#1088). Added only when set, so the key of a request without them stays
+    # exactly what it was and every saved response is still found. The tool results sit inside
+    # ``messages``, so a changed file shows up in the key too.
+    if request.messages:
+        payload["messages"] = list(request.messages)
+    if request.tools:
+        payload["tools"] = list(request.tools)
+    if request.tool_choice:
+        payload["tool_choice"] = request.tool_choice
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
@@ -127,6 +136,7 @@ class LLMCache:
                 cache_read_tokens=int(entry["cache_read_tokens"]),
                 stop_reason=entry["stop_reason"],
                 thinking_tokens=int(entry["thinking_tokens"]),
+                content=list(entry.get("content", [])),
             )
         except (OSError, ValueError, KeyError, TypeError, CacheError) as exc:
             raise CacheError(f"cache entry {path} is unreadable: {exc}") from exc
@@ -150,6 +160,8 @@ class LLMCache:
             "stop_reason": response.stop_reason,
             "thinking_tokens": response.thinking_tokens,
         }
+        if response.content:
+            entry["content"] = response.content  # a tool turn must replay with its tool_use blocks
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".entry.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as handle:

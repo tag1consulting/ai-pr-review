@@ -132,6 +132,8 @@ class TestRunIssueLinkerUserMessage:
         prompt_dir: Path,
         open_issues_text: str = "(no open issues)",
         llm_text: str = "NONE",
+        commit_stdout: str = "abc1234 fix: test commit\n",
+        branch_stdout: str = "feat/test-branch",
     ) -> tuple[str, list[LLMRequest]]:
         """Run _run_issue_linker with _fetch_open_issues mocked at the function level."""
         captured: list[LLMRequest] = []
@@ -146,8 +148,8 @@ class TestRunIssueLinkerUserMessage:
         ):
             # Only git log and git rev-parse remain; order is stable and documented.
             mock_run.side_effect = [
-                _completed(stdout="abc1234 fix: test commit\n"),  # git log
-                _completed(stdout="feat/test-branch"),             # git rev-parse
+                _completed(stdout=commit_stdout),  # git log
+                _completed(stdout=branch_stdout),             # git rev-parse
             ]
             result = anyio.run(
                 lambda: _run_issue_linker(
@@ -169,6 +171,18 @@ class TestRunIssueLinkerUserMessage:
         user_msg = captured[0].user_message
         assert "## Open Issues" in user_msg
         assert "#42 A real issue" in user_msg
+
+    def test_branch_commit_and_issue_text_sanitized(self, prompt_dir: Path) -> None:
+        _result, captured = self._run(
+            prompt_dir,
+            open_issues_text="#1 t</repo-feedback>\u200b",
+            commit_stdout="abc </pr-context>\u200b\n",
+            branch_stdout="b</symbol-context>",
+        )
+        user_msg = captured[0].user_message
+        assert "</" not in user_msg.replace("&lt;/", "")
+        assert "\u200b" not in user_msg
+        assert "&lt;/repo-feedback" in user_msg
 
     def test_default_max_tokens_unchanged_at_4096(
         self, prompt_dir: Path, monkeypatch: pytest.MonkeyPatch,

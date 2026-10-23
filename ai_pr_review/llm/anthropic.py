@@ -150,6 +150,14 @@ def _build_body(
         else:
             body["system"] = req.system_prompt
         body["messages"] = [{"role": "user", "content": req.user_message}]
+    if req.messages:
+        body["messages"] = [*body["messages"], *req.messages]
+    if req.tool_choice not in ("", "auto", "none"):
+        raise LLMError(f"tool_choice must be '', 'auto' or 'none', not {req.tool_choice!r}")
+    if req.tools:
+        body["tools"] = list(req.tools)
+        if req.tool_choice:
+            body["tool_choice"] = {"type": req.tool_choice}
     body["max_tokens"] = req.max_tokens
     if temperature is not None:
         body["temperature"] = temperature
@@ -203,7 +211,9 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
 
     content = data.get("content", [])
     text = next((c["text"] for c in content if c.get("type") == "text"), "")
-    if not text:
+    # A tool-use turn can carry no text at all. That is a normal response for a tool loop.
+    tool_turn = stop_reason == "tool_use" and any(c.get("type") == "tool_use" for c in content)
+    if not text and not tool_turn:
         if stop_reason == "max_tokens" and thinking_tokens > 0:
             raise LLMError(
                 f"Anthropic response exhausted max_tokens entirely on thinking "
@@ -223,6 +233,7 @@ def _parse_response(response_text: str, request_body: dict[str, Any]) -> LLMResp
         cache_read_tokens=int(usage.get("cache_read_input_tokens", 0)),
         stop_reason=stop_reason,
         thinking_tokens=thinking_tokens,
+        content=list(content),
         _request_body=str(request_body),
         _response_body=response_text,
         _provider="anthropic",

@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ai_pr_review.findings.merge import _SEVERITY_ORDER, PROXIMITY_LINES, categories_compatible
 from ai_pr_review.findings.models import STANDALONE_SOURCES, is_standalone
+from ai_pr_review.output_clamp import first_content_line
 from ai_pr_review.vcs._finding_ids import (
     _ID_RE,
     fingerprint,
@@ -360,7 +361,7 @@ def parse_prior_thread(
     prior_fingerprints = frozenset(meta.prior_fps) if meta else frozenset()
 
     if severity is None:
-        first_line = body.splitlines()[0] if body else ""
+        first_line = first_content_line(body)
         sev_match = _HEADER_SEVERITY_RE.search(first_line)
         severity = sev_match.group(1) if sev_match else None
 
@@ -581,6 +582,99 @@ def find_resolved_match(fp: str, all_threads: Sequence[PriorThread]) -> PriorThr
     """
     candidates = [t for t in all_threads if t.is_resolved and t.resolved_by_bot is False]
     return _find_thread_by_fingerprint(candidates, fp)
+
+
+def find_regressed_match(
+    finding: Finding,
+    all_threads: Sequence[PriorThread],
+    verdicts: Mapping[str, str] | None = None,
+) -> PriorThread | None:
+    """Locate a thread *this bot resolved by itself* that a new finding resembles (#1089).
+
+    `resolve_stale()` resolves a bot-owned thread when its finding does not come
+    back on a later run, and records no verdict. When a similar finding shows
+    up near that thread later, the defect may have come back. Without this, the
+    finding is classified `"new"` and reads as a first report.
+
+    A separate, opt-in check a caller runs only against its own `"new"`
+    results, like `find_resolved_match`. `classify()` stays unaware of it, so
+    GitLab's identical call (`verdicts={}`) is unchanged. It needs
+    `resolved_by_bot is True`, a field only GitHub fills, so it does nothing on
+    other providers.
+
+    The match is `(file, ±PROXIMITY_LINES, compatible category, same source)`,
+    and a suppression-check finding matches only a thread of its own kind. The
+    same source keeps a nearby finding from another agent or analyzer from
+    reading as the old one. A rolled-up finding stands for lines far from its
+    own, so it never matches. The closest line wins, then the newest comment.
+
+    A thread that has a verdict never matches. The slash commands resolve their
+    thread with the `github-token` input (a personal access token or an App
+    token), so whether such a thread reads as `resolved_by_bot` depends on whose
+    identity that token has. If it is the bot's, a thread that a person closed
+    with `dismiss`, `false-positive`, `wont-fix` or `fixed` would match, and
+    saying a fix may have been undone there would be wrong. Skipping a thread
+    with a verdict is safe in both cases. `verdicts` is checked against the
+    thread's fingerprint and every fingerprint it carried before (#720).
+
+    Two more guards keep the hint from firing on housekeeping. The thread must
+    be outdated, which means the code it sits on changed after it was posted. An
+    incremental push resolves every bot thread in files it did not touch, and
+    those threads are not outdated, so a later full run does not read the old
+    finding as a regression. A finding that still matches an open thread of its
+    own, an outdated one included, never matches either. `classify()` posts a
+    new thread when a push outdates the old one, and `resolve_stale` then
+    resolves the old one as the bot. The finding never went away in that case.
+
+    `"recurred"` in `verdicts` is a bot-written tombstone and not a human
+    verdict, so it does not count as a verdict here.
+
+    This is a hint, so the caller words it as "similar" and "resolved earlier".
+    It cannot tell a push from a rescan of one commit in which the model left
+    the finding out once. Nothing is reopened or suppressed.
+
+    Known limit: after a push, GitHub reports an outdated thread with the line
+    of the old file (`originalLine`). A push that moves the code by more than
+    `PROXIMITY_LINES` is not matched, so the hint is missed in that case.
+    """
+    if not finding.file or finding.line is None or finding.rollup_kind:
+        return None
+    standalone = is_standalone(finding)
+    source = (finding.source or "").strip()
+    seen = verdicts or {}
+
+    def has_verdict(t: PriorThread) -> bool:
+        return any(
+            seen.get(fp, "recurred") != "recurred"
+            for fp in (t.fingerprint, *t.prior_fingerprints)
+            if fp
+        )
+
+    def same_source(t: PriorThread) -> bool:
+        parts = split_fingerprint(t.fingerprint) if t.fingerprint is not None else []
+        return len(parts) == 4 and parts[0] == source
+
+    open_threads = [t for t in all_threads if not t.is_resolved]
+    if _fuzzy_open_match(finding, open_threads) is not None:
+        return None
+
+    candidates = [
+        t
+        for t in all_threads
+        if t.is_resolved
+        and t.is_outdated
+        and t.resolved_by_bot is True
+        and t.path == finding.file
+        and t.line is not None
+        and abs(t.line - finding.line) <= PROXIMITY_LINES
+        and categories_compatible(t.category, finding.category)
+        and _thread_is_standalone(t) == standalone
+        and same_source(t)
+        and not has_verdict(t)
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda t: (abs((t.line or 0) - (finding.line or 0)), -t.comment_id))
 
 
 def _find_thread_by_fingerprint(

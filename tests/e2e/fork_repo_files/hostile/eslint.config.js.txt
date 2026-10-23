@@ -1,0 +1,3 @@
+// Canary: ESLint executes its config file.
+require('fs').writeFileSync('/workspace/E2E-PWNED-eslint', 'ran');
+module.exports = [];

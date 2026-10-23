@@ -1,0 +1,21 @@
+{
+  "_inert": true,
+  "files": {
+    "vendor__autoload.php.txt": "vendor/autoload.php",
+    "eslint.config.js.txt": "eslint.config.js",
+    "golangci.yml.txt": ".golangci.yml",
+    "trufflehog.yml.txt": ".trufflehog.yml",
+    "Report.php.txt": "src/Controller/Report.php",
+    "main.tf.txt": "infra/main.tf",
+    "report.py.txt": "tools/report.py",
+    "app.js.txt": "web/app.js",
+    "main.go.txt": "cmd/main.go",
+    "run.sh.txt": "scripts/run.sh",
+    "Dockerfile.txt": "Dockerfile",
+    "deployment.yaml.txt": "k8s/deployment.yaml"
+  },
+  "pr_title": "pr_title.txt",
+  "pr_body": "pr_body.md.tmpl",
+  "canary_files": ["vendor/autoload.php", "eslint.config.js"],
+  "config_only_files": [".golangci.yml", ".trufflehog.yml"]
+}

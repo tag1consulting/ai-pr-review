@@ -9,6 +9,7 @@ pure orchestration. `orchestrate.run_review()` receives only the assembled
 from __future__ import annotations
 
 import logging
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,11 +22,31 @@ from ai_pr_review.agents.dispatch import (
     load_shared_prompt_fragments,
 )
 from ai_pr_review.config import ReviewConfig
+from ai_pr_review.fork_policy import DEFAULT_FORK_MAX_COST_USD
 from ai_pr_review.language_profiles import load_language_profiles
 from ai_pr_review.manifest import ChangedFiles, parse_changed_files_payload
 from ai_pr_review.orchestrate import OrchestrationConfig
 from ai_pr_review.review.compute import run_compute
 from ai_pr_review.review.cost_ceiling import ContextWindowExceeded, CostCeilingExceeded
+from ai_pr_review.review.fork_budget import (
+    ESTIMATE_ERROR_TEXT,
+    LEDGER_ERROR_TEXT,
+    Caps,
+    ForkBudget,
+    ForkBudgetPause,
+    LedgerError,
+    Reservation,
+    cents_from_units,
+    with_run_pointer,
+)
+from ai_pr_review.review.fork_gate import MODE_FORK, ForkProfile
+from ai_pr_review.review.fork_spend import (
+    DailyCaps,
+    ForkSpend,
+    SpendReservation,
+    check_author_cap,
+    tier_of,
+)
 from ai_pr_review.review.not_reviewed import build_not_reviewed_notice
 from ai_pr_review.review.pr_context import build_shared_context_block
 from ai_pr_review.vcs import provider_from_env
@@ -51,6 +72,9 @@ class SkipPlan:
     check rather than the diff-too-large/no-changes compute-phase skips.
     cli.py uses this to decide whether AI_FAIL_ON_COST_CEILING should turn
     the otherwise-0 exit code into 2."""
+    is_fork_gate_skip: bool = False
+    """True when the fork gate paused the review (a fork pull request with no approval for its head
+    commit, see ``review/fork_gate.py``). The run exits 0: the skip comment tells a maintainer what to do."""
     is_context_window_skip: bool = False
     """True when this skip came from the #1056 pre-flight context-window
     check. cli.py uses this to decide whether AI_FAIL_ON_CONTEXT_WINDOW should
@@ -71,6 +95,9 @@ class SkipPlan:
     analyzer_diff_scope: str = "cap"
     """Mirrors ``OrchestrationConfig.analyzer_diff_scope`` ("cap"/"drop"/"off")."""
     is_incremental: bool = False
+    fork_output_clamp: bool = False
+    """True when the run has a fork profile (story 17-11). The CLI posts the skip comment inside the
+    fork output clamp, and the review event stays capped at COMMENT."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +157,16 @@ class ReviewRuntime:
     # gate did not fire, incremental scope). cli.py shows it in the posted
     # comment through the same warning segment as policy_ignored_reason.
     not_reviewed_notice: str = ""
+    # Set when AI_FORK_POLICY=auto and the author of a fork pull request is not trusted. Later
+    # stories apply the caps, the environment scrub, the dropped text and the output clamp from it.
+    fork_profile: ForkProfile | None = None
+    # Set with fork_profile when the per-PR ledger is active (not a dry run). cli.py settles the
+    # reservation with the actual cost after the run. A run that never settles stays charged.
+    fork_budget: ForkBudget | None = None
+    fork_reservation: Reservation | None = None
+    # Story 17-7: the daily spend ledger, set with fork_budget. cli.py settles its entry too.
+    fork_spend: ForkSpend | None = None
+    fork_spend_reservation: SpendReservation | None = None
 
 
 def _merge_allowlist(
@@ -222,6 +259,114 @@ def _warn_if_context_enrichment_inert() -> None:
         )
 
 
+def _apply_fork_gate(
+    config: ReviewConfig, provider: VcsProvider,
+) -> tuple[ReviewConfig, SkipPlan | None, ForkProfile | None]:
+    """Apply ``AI_FORK_POLICY`` to a fork pull request and cap the cost of an allowed one.
+
+    Returns the config, a skip plan when the run is paused, and the fork profile when the policy is
+    ``auto`` and the author is not trusted (``None`` otherwise). A provider without
+    ``get_fork_gate_facts`` (GitLab, Bitbucket) is not gated."""
+    from ai_pr_review.review.fork_gate import (
+        APPROVAL_CONTEXT,
+        checkout_mismatch_reason,
+        decide,
+        llm_key_present,
+        needs_facts,
+        persisted_credential_reason,
+        workspace_head,
+    )
+
+    getter = getattr(provider, "get_fork_gate_facts", None)
+    if getter is None:
+        return config, None, None
+    # A plain pull_request run that holds no LLM key needs no facts: GitHub gave a fork no secrets.
+    key_present = llm_key_present()
+    # Only the label policy reads the approval status, so auto and block need no statuses: read.
+    facts = (
+        getter(config.head_sha, APPROVAL_CONTEXT, read_approval=config.fork_policy == "label")
+        if needs_facts(config.event_name, key_present) else None
+    )
+    decision = decide(
+        config.event_name, config.head_sha, facts, key_present=key_present,
+        policy=config.fork_policy, trusted=config.fork_trusted_associations)
+    if not decision.allowed:
+        logger.warning(
+            "fork gate: review paused (%s, policy %s)",
+            "facts unavailable" if facts is None else "fork not allowed", config.fork_policy)
+        # A paused fork post carries the fork banner and the strict text pass. When the facts could
+        # not be read the run cannot tell whether the pull request is a fork, so it stays unclamped.
+        return config, SkipPlan(
+            reason=decision.reason, provider=provider, is_fork_gate_skip=True,
+            fork_output_clamp=facts is not None), None
+    if decision.gated:
+        mismatch = checkout_mismatch_reason(config.head_sha, workspace_head("."))
+        if mismatch:
+            logger.warning("fork gate: the workspace is not at the approved commit")
+            return config, SkipPlan(
+                reason=mismatch, provider=provider, is_fork_gate_skip=True, fork_output_clamp=True), None
+    if decision.mode == MODE_FORK:
+        credential = persisted_credential_reason(".")
+        if credential:
+            logger.warning("fork gate: the workspace git config holds a persisted credential")
+            return config, SkipPlan(
+                reason=credential, provider=provider, is_fork_gate_skip=True, fork_output_clamp=True), None
+    if decision.gated:
+        logger.info("fork gate: fork pull request allowed (policy %s, mode %s)", config.fork_policy, decision.mode)
+    ceiling = _fork_ceiling(config)
+    if decision.profile is not None:
+        # A stranger's run never gets more than the fork ceiling, even when AI_MAX_COST_USD is larger.
+        if config.max_cost_usd == 0 or config.max_cost_usd > ceiling:
+            logger.info("fork gate: fork profile run, cost ceiling $%.2f", ceiling)
+            config = config.model_copy(update={"max_cost_usd": ceiling})
+    elif decision.gated and config.max_cost_usd == 0:
+        logger.info("fork gate: allowed fork pull request, default cost ceiling $%.2f", ceiling)
+        config = config.model_copy(update={"max_cost_usd": ceiling})
+    if decision.profile is not None:
+        # Output clamp (story 17-11): a fork run never approves or requests changes, and offers no
+        # suggestions. The CLI adds the banner and the strict text pass through ``output_clamp``.
+        config = config.model_copy(update={"approval_ceiling": "comment", "enable_suggestions": False})
+    return config, None, decision.profile
+
+
+def _fork_ceiling(config: ReviewConfig) -> float:
+    """The per-run fork ceiling. A value that is not above 0 or not finite means the default, so a
+    zero (or a config built without validation) never removes the ceiling."""
+    value = config.fork_max_cost_usd
+    return value if math.isfinite(value) and value > 0 else DEFAULT_FORK_MAX_COST_USD
+
+
+def _fork_pause(provider: VcsProvider, reason: str) -> SkipPlan:
+    # Every caller runs for a fork pull request under the fork profile, so the pause comment is
+    # clamped like every other fork post (banner and strict text pass).
+    return SkipPlan(reason=reason, provider=provider, is_fork_gate_skip=True, fork_output_clamp=True)
+
+
+def _open_fork_budget(config: ReviewConfig, provider: VcsProvider) -> ForkBudget | None:
+    """The per-PR ledger for a fork-profile run, or ``None`` when the provider cannot keep one."""
+    needed = ("list_budget_comments", "create_budget_entry", "update_budget_entry", "delete_budget_entry")
+    if not all(callable(getattr(provider, name, None)) for name in needed):
+        return None
+    run_cents = round(_fork_ceiling(config) * 100)
+    return ForkBudget(provider, Caps(run_cents=run_cents))  # type: ignore[arg-type]
+
+
+def _open_fork_spend(config: ReviewConfig, provider: VcsProvider, profile: ForkProfile) -> ForkSpend | None:
+    """The daily spend ledger for a fork-profile run, or ``None`` when the provider cannot keep one."""
+    needed = ("list_spend_entries", "create_spend_entry", "update_spend_entry", "delete_spend_entry",
+              "list_open_pulls")
+    if not all(callable(getattr(provider, name, None)) for name in needed):
+        return None
+    try:
+        pr_number = int(config.pr_number)
+    except ValueError:
+        return None
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    caps = DailyCaps.from_usd(config.fork_daily_max_cost_usd, config.fork_daily_reserved_share)
+    return ForkSpend(provider, caps, tier=tier_of(profile.author_association),  # type: ignore[arg-type]
+                     pr_number=pr_number, run_id=run_id)
+
+
 async def build_review_runtime(
     config: ReviewConfig,
     *,
@@ -238,12 +383,19 @@ async def build_review_runtime(
     """
     from ai_pr_review.agents.gates import evaluate_gates, filter_agents
     from ai_pr_review.agents.roster import AGENTS, agent_allowed
+    from ai_pr_review.analyzers._env import configure_fork_isolation, configure_passthrough
     from ai_pr_review.findings.models import Finding as _Finding
 
     _factory = provider_factory if provider_factory is not None else provider_from_env
 
     # Resolve provider model defaults before any downstream use.
     config = config.resolve_models()
+
+    # Set the scrubbed-environment passthrough once, before any git or analyzer launch.
+    # Closed until the fork gate decides: a launch before the profile is known gets no passthrough
+    # and the isolated analyzer config. The final state is set right after the gate.
+    configure_passthrough(config.analyzer_env_passthrough, allow_passthrough=False)
+    configure_fork_isolation(True)
 
     if config.enable_context_enrichment:
         _warn_if_context_enrichment_inert()
@@ -253,6 +405,41 @@ async def build_review_runtime(
     if not isinstance(provider, VcsProvider):
         raise TypeError(f"Expected VcsProvider, got {type(provider).__name__}")
 
+    # 1b. Fork gate: before any git command touches a fork's tree.
+    config, gate_skip, fork_profile = _apply_fork_gate(config, provider)
+    if gate_skip is not None:
+        return gate_skip
+    # A fork run ignores AI_ANALYZER_ENV_PASSTHROUGH and runs only fork-safe analyzers.
+    configure_passthrough(config.analyzer_env_passthrough, allow_passthrough=fork_profile is None)
+    configure_fork_isolation(fork_profile is not None)
+
+    # 1c. Per-PR ledger (CAP-2, story 17-6): a fork-profile run pauses at a cap before any analyzer
+    # or git command touches the fork tree. A dry run posts nothing, so it is not charged.
+    fork_budget: ForkBudget | None = None
+    fork_spend: ForkSpend | None = None
+    if fork_profile is not None and not config.dry_run:
+        fork_budget = _open_fork_budget(config, provider)
+        if fork_budget is None:
+            logger.warning("fork budget: the provider keeps no ledger, so the fork run is paused")
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
+        fork_spend = _open_fork_spend(config, provider, fork_profile)
+        if fork_spend is None:
+            logger.warning("fork spend: the provider keeps no spend ledger, so the fork run is paused")
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
+        try:
+            # Story 17-7: the author cap first, then the PR ledger, then the daily ledger. All read only.
+            check_author_cap(
+                provider, pr_number=int(config.pr_number), author=fork_profile.author_login,  # type: ignore[arg-type]
+                base_repo=fork_profile.base_repo)
+            fork_budget.precheck()
+            fork_spend.precheck()
+        except ForkBudgetPause as pause:
+            logger.warning("fork budget: run paused at the %s cap", pause.cap)
+            return _fork_pause(provider, pause.reason)
+        except LedgerError as exc:
+            logger.warning("fork budget: run paused, %s", exc)
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
+
     # 2. Fetch last-reviewed SHA *before* compute so incremental diff works.
     last_reviewed = provider.get_last_reviewed_sha()
 
@@ -260,7 +447,7 @@ async def build_review_runtime(
     payload = run_compute(config, last_reviewed_sha=last_reviewed)
     if payload.get("skip"):
         reason = str(payload.get("reason") or "no changes")
-        return SkipPlan(reason=reason, provider=provider)
+        return SkipPlan(reason=reason, provider=provider, fork_output_clamp=fork_profile is not None)
 
     diff_text = str(payload.get("diff") or "")
     head_sha = str(payload.get("head") or config.head_sha)
@@ -335,6 +522,9 @@ async def build_review_runtime(
         and isinstance(pr_description[1], str)
     ):
         pr_title, pr_body = pr_description
+        if fork_profile is not None:
+            # Story 17-10: a fork run sends the title only. The body is written by the fork author.
+            pr_body = ""
         shared_context_block = build_shared_context_block(
             manifest_text=manifest_text, pr_title=pr_title, pr_body=pr_body,
         )
@@ -547,11 +737,13 @@ async def build_review_runtime(
     # (rather than only computing them) is a further follow-up, still tracked
     # at #848 -- this PR only fixes the ordering.
     analyzer_findings: list[_Finding] = []
+    _fork_skipped_analyzers: list[str] = []
     try:
         from ai_pr_review.analyzers.bridge import (
             ANALYZER_NAMES,
             _analyzer_skip_names,
             _sarif_covered_names,
+            fork_skipped_eligible,
             run_analyzers,
         )
         _disabled = _analyzer_skip_names(config.analyzers, config.exclude_analyzers)
@@ -560,12 +752,16 @@ async def build_review_runtime(
                 "analyzers: allow/deny configuration disables all known analyzers; "
                 "no static analysis will run"
             )
+        if fork_profile is not None:
+            _fork_skipped_analyzers = fork_skipped_eligible(
+                cf, _disabled | _sarif_covered_names(config.sarif_paths))
         analyzer_findings = await run_analyzers(
             cf,
             diff_file=str(diff_path),
             concurrency=config.analyzer_concurrency,
             sarif_skip=_sarif_covered_names(config.sarif_paths),
             disabled=_disabled,
+            fork_run=fork_profile is not None,
         )
         if analyzer_findings:
             logger.info(
@@ -613,7 +809,12 @@ async def build_review_runtime(
     from ai_pr_review.findings.suppress import load_rules as _load_suppression_rules
     try:
         suppression_rules = tuple(
-            _load_suppression_rules(str(script_dir), workspace=".")
+            _load_suppression_rules(
+                str(script_dir), workspace=".",
+                # A fork tree is attacker content. A fork run reads local rules from the base ref.
+                base_ref=base_ref,
+                local_source="base-ref" if fork_profile is not None else "workspace",
+            )
         )
     except Exception as exc:
         logger.warning(
@@ -657,9 +858,18 @@ async def build_review_runtime(
         )
 
         pricing_data = load_pricing(str(script_dir / "config" / "model-pricing.json"))
+        # The agents see the sanitized diff, where each tag character or bidi override becomes a
+        # visible ``<U+XXXX>`` marker and the text grows. Estimate the cost and the context
+        # window on that same text, so a hostile diff cannot make the estimate too low.
+        from ai_pr_review.text_safety import safe_code
+
+        estimate_diff_text = safe_code(diff_text)
+        if fork_profile is not None and not pricing_data:
+            # With no prices every estimate is $0, so the per-run and per-PR caps would bound nothing.
+            raise RuntimeError("fork run: no pricing data, so the cost cannot be bounded")
         cost_estimate = estimate_review_cost(
             agents=agents,
-            diff_text=diff_text,
+            diff_text=estimate_diff_text,
             shared_context_text=shared_context_block,
             language_profile_text=_language_profile_text,
             standard_model=config.model_standard,
@@ -681,12 +891,13 @@ async def build_review_runtime(
             is_incremental=is_incremental,
             agents=config.agents,
             exclude_agents=config.exclude_agents,
+            fork_run=fork_profile is not None,
         ):
             preflight_parts.append(
                 estimate_preflight_agent_cost(
                     agent_name="pr-summarizer",
                     model=config.model_standard,
-                    diff_text=diff_text,
+                    diff_text=estimate_diff_text,
                     output_tokens=preflight_agent_max_tokens("pr-summarizer"),
                     pricing_data=pricing_data,
                 )
@@ -697,12 +908,13 @@ async def build_review_runtime(
             vcs_provider=config.vcs_provider,
             agents=config.agents,
             exclude_agents=config.exclude_agents,
+            fork_run=fork_profile is not None,
         ):
             preflight_parts.append(
                 estimate_preflight_agent_cost(
                     agent_name="issue-linker",
                     model=config.model_standard,
-                    diff_text=diff_text,
+                    diff_text=estimate_diff_text,
                     output_tokens=preflight_agent_max_tokens("issue-linker"),
                     pricing_data=pricing_data,
                 )
@@ -726,6 +938,9 @@ async def build_review_runtime(
             unpriced_mode=config.cost_ceiling_unpriced,
             pricing_loaded=bool(pricing_data),
         )
+        if fork_profile is not None and unpriced_models(cost_estimate):
+            # An unpriced model counts as $0, so the caps would not bound it.
+            raise RuntimeError("fork run: a model has no pricing entry, so the cost cannot be bounded")
         if config.max_cost_usd > 0:
             # Reaching here means the run proceeds (warn mode, or block mode
             # with nothing unpriced / no pricing file to judge by).
@@ -736,6 +951,7 @@ async def build_review_runtime(
             reason=str(exc),
             provider=provider,
             is_context_window_skip=True,
+            fork_output_clamp=fork_profile is not None,
             extra_findings=extra_findings,
             diff_text=diff_text,
             head_sha=head_sha,
@@ -752,6 +968,7 @@ async def build_review_runtime(
             reason=str(exc),
             provider=provider,
             is_cost_ceiling_skip=True,
+            fork_output_clamp=fork_profile is not None,
             extra_findings=extra_findings,
             diff_text=diff_text,
             head_sha=head_sha,
@@ -760,6 +977,10 @@ async def build_review_runtime(
             is_incremental=is_incremental,
         )
     except Exception as exc:
+        if fork_profile is not None:
+            # A fork run fails closed: with no estimate there is no ceiling and no ledger reserve.
+            logger.warning("cost estimate: failed for a fork run, so the run is paused: %s", exc, exc_info=True)
+            return _fork_pause(provider, with_run_pointer(ESTIMATE_ERROR_TEXT))
         logger.warning(
             "cost estimate: pre-flight estimation failed (fail-soft; "
             "proceeding without a cost ceiling check for this run): %s",
@@ -768,6 +989,28 @@ async def build_review_runtime(
         # A ceiling the user set is not being applied. Say so in the posted
         # review as well, not only in this job-log line (#977).
         cost_ceiling_check_failed = config.max_cost_usd > 0
+
+    # 9f. Reserve this run's estimate in the per-PR ledger, before any LLM call (cli.py's
+    # pr-summarizer and issue-linker come next). A run that does not fit is paused.
+    fork_reservation: Reservation | None = None
+    fork_spend_reservation: SpendReservation | None = None
+    if fork_budget is not None:
+        if pre_flight_cost_estimate_units is None:
+            return _fork_pause(provider, with_run_pointer(ESTIMATE_ERROR_TEXT))
+        estimate_cents = cents_from_units(pre_flight_cost_estimate_units)
+        try:
+            # Daily first: it is the cap a run most often loses here, and then nothing else was written.
+            if fork_spend is not None:
+                fork_spend_reservation = fork_spend.reserve(estimate_cents)
+            fork_reservation = fork_budget.reserve(estimate_cents)
+        except (ForkBudgetPause, LedgerError) as stop:
+            if fork_spend is not None and fork_spend_reservation is not None:
+                fork_spend.release(fork_spend_reservation)  # the run will not start, so free its daily entry
+            if isinstance(stop, ForkBudgetPause):
+                logger.warning("fork budget: run paused at the %s cap", stop.cap)
+                return _fork_pause(provider, stop.reason)
+            logger.warning("fork budget: run paused, %s", stop)
+            return _fork_pause(provider, with_run_pointer(LEDGER_ERROR_TEXT))
 
     # 13. Build orchestrator config.
     _judge_prompt_path = script_dir / "prompts" / "finding-judge.md"
@@ -817,11 +1060,17 @@ async def build_review_runtime(
         cost_ceiling_pricing_missing=cost_ceiling_pricing_missing,
         cost_ceiling_check_failed=cost_ceiling_check_failed,
         policy_ignored_reason=policy_ignored_reason,
+        fork_profile=fork_profile,
+        fork_budget=fork_budget,
+        fork_reservation=fork_reservation,
+        fork_spend=fork_spend,
+        fork_spend_reservation=fork_spend_reservation,
         not_reviewed_notice=build_not_reviewed_notice(
             # Only the patterns the user added. The built-in lockfile and vendor
             # excludes are the same on every run, so listing them is noise.
             excluded_patterns=config.exclude_patterns,
             skipped_agents=[a.name for a in mode_filtered if a not in agents],
             is_incremental=is_incremental,
+            skipped_analyzers=_fork_skipped_analyzers,
         ),
     )

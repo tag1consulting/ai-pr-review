@@ -18,6 +18,7 @@ from ai_pr_review.vcs._canonical import (
     classify,
     decide_action,
     dedupe_thread_claims,
+    find_regressed_match,
     find_resolved_match,
     fingerprint_location,
     merge_verdicts,
@@ -1431,3 +1432,150 @@ def test_classify_a_dismissed_suppression_check_finding_does_not_hide_an_agent_f
         category="lint",
     )
     assert classify(same, verdicts={sup_fp: "dismissed"}, all_threads=[sup_thread]).kind == "suppressed"
+
+
+# ---------------------------------------------------------------------------
+# find_regressed_match (#1089)
+# ---------------------------------------------------------------------------
+
+
+def _bot_resolved(f: Finding, **kw: object) -> PriorThread:
+    kw.setdefault("is_resolved", True)
+    kw.setdefault("resolved_by_bot", True)
+    kw.setdefault("is_outdated", True)
+    return _thread(fp=fingerprint(f), category=f.category, path=f.file, line=f.line, **kw)  # type: ignore[arg-type]
+
+
+def test_regressed_match_finds_a_bot_resolved_thread_for_the_same_source() -> None:
+    old = _finding("old wording", line=10)
+    thread = _bot_resolved(old, finding_id=3)
+    new = _finding("new wording", line=12)
+    assert find_regressed_match(new, [thread]) is thread
+
+
+@pytest.mark.parametrize(
+    ("line", "expected_match"),
+    [(13, True), (14, False), (7, True), (6, False)],
+)
+def test_regressed_match_window_is_three_lines(line: int, expected_match: bool) -> None:
+    thread = _bot_resolved(_finding(line=10))
+    assert (find_regressed_match(_finding("x", line=line), [thread]) is not None) is expected_match
+
+
+def test_regressed_match_ignores_threads_not_resolved_by_the_bot() -> None:
+    old = _finding(line=10)
+    for kw in ({"resolved_by_bot": False}, {"resolved_by_bot": None}, {"is_resolved": False}):
+        assert find_regressed_match(_finding("x", line=10), [_bot_resolved(old, **kw)]) is None
+
+
+def test_regressed_match_needs_the_same_source() -> None:
+    thread = _bot_resolved(_finding(source="code-reviewer", line=10))
+    assert find_regressed_match(_finding("x", source="security-reviewer", line=10), [thread]) is None
+
+
+def test_regressed_match_needs_a_compatible_category() -> None:
+    thread = _bot_resolved(_finding(category="injection", line=10))
+    assert find_regressed_match(_finding("x", category="secret", line=10), [thread]) is None
+    assert find_regressed_match(_finding("x", category="other", line=10), [thread]) is not None
+
+
+def test_regressed_match_needs_the_same_file() -> None:
+    thread = _bot_resolved(_finding(file="a.py", line=10))
+    assert find_regressed_match(_finding("x", file="b.py", line=10), [thread]) is None
+
+
+def test_regressed_match_skips_rolled_up_and_lineless_findings() -> None:
+    thread = _bot_resolved(_finding(line=10))
+    rolled = _finding("x", line=10).model_copy(update={"rollup_kind": "rule"})
+    assert find_regressed_match(rolled, [thread]) is None
+    assert find_regressed_match(_finding("x", line=None), [thread]) is None
+
+
+def test_regressed_match_keeps_suppression_check_findings_apart() -> None:
+    thread = _bot_resolved(_finding(source="suppression-check", category="lint", line=10))
+    assert find_regressed_match(_finding("x", source="suppression-check", category="lint", line=10), [thread]) is thread
+    assert find_regressed_match(_finding("x", source="ruff", category="lint", line=10), [thread]) is None
+
+
+def test_regressed_match_prefers_the_closest_line_then_the_newest_comment() -> None:
+    far = _bot_resolved(_finding(line=12), thread_id="far", comment_id=9)
+    near_old = _bot_resolved(_finding(line=10), thread_id="near_old", comment_id=1)
+    near_new = _bot_resolved(_finding(line=10), thread_id="near_new", comment_id=2)
+    assert find_regressed_match(_finding("x", line=10), [far, near_old, near_new]) is near_new
+
+
+def test_regressed_match_survives_a_thread_with_no_or_legacy_fingerprint_and_no_line() -> None:
+    f = _finding("x", line=10)
+    no_fp = _thread(fp=None, is_resolved=True, resolved_by_bot=True, line=10)
+    legacy = _thread(fp="not-a-fingerprint", is_resolved=True, resolved_by_bot=True, line=10)
+    no_line = _thread(
+        fp=fingerprint(_finding(line=10)), is_resolved=True, resolved_by_bot=True, line=None
+    )
+    assert find_regressed_match(f, [no_fp, legacy, no_line]) is None
+
+
+def test_regressed_match_keeps_other_kinds_apart_only_for_suppression_check() -> None:
+    """A thread of an ordinary source does not match a suppression-check finding."""
+    thread = _bot_resolved(_finding(source="ruff", category="lint", line=10))
+    sc = _finding("x", source="suppression-check", category="lint", line=10)
+    assert find_regressed_match(sc, [thread]) is None
+
+
+def test_regressed_match_skips_a_thread_that_has_a_verdict() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old)
+    new = _finding("x", line=10)
+    assert find_regressed_match(new, [thread], {fingerprint(old): "dismissed"}) is None
+    assert find_regressed_match(new, [thread], {fingerprint(old): "fixed"}) is None
+    assert find_regressed_match(new, [thread], {}) is thread
+    assert find_regressed_match(new, [thread], {"some-other-fp": "dismissed"}) is thread
+
+
+def test_regressed_match_ignores_the_recurred_tombstone() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old)
+    new = _finding("x", line=10)
+    assert find_regressed_match(new, [thread], {fingerprint(old): "recurred"}) is thread
+
+
+def test_regressed_match_needs_an_outdated_thread() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old, is_outdated=False)
+    assert find_regressed_match(_finding("x", line=10), [thread]) is None
+
+
+@pytest.mark.parametrize("outdated", [False, True])
+def test_regressed_match_skips_a_finding_that_still_has_an_open_thread(outdated: bool) -> None:
+    old = _finding(line=10)
+    resolved = _bot_resolved(old, thread_id="t1", comment_id=1)
+    open_thread = _thread(
+        thread_id="t2", comment_id=2, fp=fingerprint(old), category=old.category,
+        path=old.file, line=old.line, is_outdated=outdated,
+    )
+    assert find_regressed_match(_finding("x", line=10), [resolved, open_thread]) is None
+    assert find_regressed_match(_finding("x", line=10), [resolved]) is resolved
+
+
+@pytest.mark.parametrize(("path", "line"), [("other.py", 10), ("app.py", 30)])
+def test_regressed_match_ignores_an_open_thread_that_is_not_near(path: str, line: int) -> None:
+    old = _finding(line=10)
+    resolved = _bot_resolved(old, thread_id="t1", comment_id=1)
+    elsewhere = _thread(
+        thread_id="t2", comment_id=2, fp=fingerprint(old), category=old.category,
+        path=path, line=line,
+    )
+    assert find_regressed_match(_finding("x", line=10), [resolved, elsewhere]) is resolved
+
+
+def test_regressed_match_checks_the_verdict_against_prior_fingerprints_too() -> None:
+    old = _finding(line=10)
+    thread = _bot_resolved(old, prior_fingerprints=frozenset({"x|app.py|10|oldhash"}))
+    assert find_regressed_match(_finding("x", line=10), [thread], {"x|app.py|10|oldhash": "dismissed"}) is None
+
+
+def test_regressed_match_needs_a_four_part_fingerprint_and_trims_the_source() -> None:
+    """A legacy fingerprint with a different shape never matches by its first part."""
+    legacy = _thread(fp="code-reviewer", is_resolved=True, resolved_by_bot=True, line=10)
+    assert find_regressed_match(_finding("x", source="code-reviewer", line=10), [legacy]) is None
+    thread = _bot_resolved(_finding(source="code-reviewer", line=10))
+    assert find_regressed_match(_finding("x", source=" code-reviewer ", line=10), [thread]) is thread

@@ -12,6 +12,7 @@ What changed in each release, newest first. Every release from v2.8.0 onward has
 
 | Version | Highlights |
 |---------|-----------|
+| [v2.25.0](version-history/v2.25.0) | Fork pull requests can be reviewed with limits and spend caps when you opt in (`AI_FORK_POLICY=auto`, new default `block`, behavior change, #1088), a review says when a resolved finding is back (#1089), telemetry schema 4 records what each finding agent returned, and the environment of every analyzer is scrubbed |
 | [v2.24.1](version-history/v2.24.1) | Security: the pull request checkout can no longer shadow the engine's Python modules, `PYTHONSAFEPATH=1` is set in the image and the actions (#1093) |
 | [v2.24.0](version-history/v2.24.0) | A provider "prompt too long" rejection skips the review instead of failing every agent (#1056), the severity icons are different shapes (behavior change, #1037), the Bitbucket `feedback` command works (#933), `COST_ESTIMATE` shows the input and output-cap split (#1055), and the example workflows pass `approval-ceiling` (#1064) |
 | [v2.23.2](version-history/v2.23.2) | Bitbucket verdict owners: an `@nickname` owner line no longer grants and the owners file is read from the target branch only (behavior change, #1071) |

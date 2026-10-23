@@ -18,7 +18,7 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 _log = logging.getLogger(__name__)
 
@@ -165,6 +165,17 @@ _ID_MAP_MARKER_HIDDEN_RE = re.compile(
 )
 
 
+def _marker_json(value: object, **kwargs: Any) -> str:
+    """Compact JSON for an HTML-comment marker with ``<``, ``>`` and ``&`` as ``\\uXXXX`` escapes.
+
+    ``json.loads`` decodes the escapes, so readers see the same value. The text has no raw angle
+    bracket, so the fork output clamp grammar accepts it and a ``-->`` in a value cannot close the
+    comment early.
+    """
+    text = json.dumps(value, separators=(",", ":"), **kwargs)
+    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
 def build_id_map_marker(id_map: dict[str, int], *, hidden: bool = False) -> str:
     """Produce a marker embedding the finding ID map.
 
@@ -179,7 +190,7 @@ def build_id_map_marker(id_map: dict[str, int], *, hidden: bool = False) -> str:
     form instead, with the JSON payload base64-encoded (see module-level note
     above for why raw JSON isn't safe to embed there).
     """
-    payload = json.dumps(id_map, separators=(",", ":"), sort_keys=True)
+    payload = _marker_json(id_map, sort_keys=True)
     if hidden:
         encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
         return f"{ID_MAP_MARKER_HIDDEN_PREFIX}{encoded})"
@@ -283,7 +294,7 @@ def build_judge_map_marker(judge_map: dict[str, dict[str, object]]) -> str:
     defaults (`False`/`None`), matching ``build_inline_meta_marker``'s same
     additive-omit convention.
     """
-    payload = json.dumps(judge_map, separators=(",", ":"), sort_keys=True)
+    payload = _marker_json(judge_map, sort_keys=True)
     return f"{JUDGE_MAP_MARKER_PREFIX} {payload} -->"
 
 
@@ -364,10 +375,8 @@ def build_headline_map_marker(entries: dict[str, tuple[str, bool]]) -> str:
     losing it (body too large, legacy review) only means the headline falls
     back to a plain decrement.
     """
-    payload = json.dumps(
-        {fp: [sev, 1 if inline else 0] for fp, (sev, inline) in entries.items()},
-        separators=(",", ":"),
-        sort_keys=True,
+    payload = _marker_json(
+        {fp: [sev, 1 if inline else 0] for fp, (sev, inline) in entries.items()}, sort_keys=True
     )
     return f"{HEADLINE_MAP_MARKER_PREFIX} {payload} -->"
 
@@ -598,7 +607,7 @@ def build_verdicts_marker(verdicts: dict[str, str], *, hidden: bool = False) -> 
     ``ID_MAP_MARKER_HIDDEN_PREFIX``'s module-level note for why raw JSON
     isn't safe to embed directly in that form.
     """
-    payload = json.dumps(verdicts, separators=(",", ":"), sort_keys=True)
+    payload = _marker_json(verdicts, sort_keys=True)
     if hidden:
         encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
         return f"{VERDICTS_MARKER_HIDDEN_PREFIX}{encoded})"

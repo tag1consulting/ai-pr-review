@@ -1,0 +1,131 @@
+{
+  "caching_cache_blocks": {
+    "max_tokens": 32768,
+    "messages": [
+      {
+        "content": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "USER",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "output_config": {
+      "effort": "low"
+    },
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "A",
+        "type": "text"
+      },
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "B",
+        "type": "text"
+      },
+      {
+        "text": "SYSTEM",
+        "type": "text"
+      }
+    ]
+  },
+  "caching_legacy": {
+    "max_tokens": 32768,
+    "messages": [
+      {
+        "content": "Please perform your review now.",
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "output_config": {
+      "effort": "low"
+    },
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "USER",
+        "type": "text"
+      },
+      {
+        "text": "SYSTEM",
+        "type": "text"
+      }
+    ]
+  },
+  "caching_system_prefix": {
+    "max_tokens": 32768,
+    "messages": [
+      {
+        "content": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "USER",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "output_config": {
+      "effort": "low"
+    },
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "PREFIX",
+        "type": "text"
+      },
+      {
+        "text": "SYSTEM",
+        "type": "text"
+      }
+    ]
+  },
+  "no_caching_plain": {
+    "max_tokens": 32768,
+    "messages": [
+      {
+        "content": "USER",
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "output_config": {
+      "effort": "low"
+    },
+    "system": "SYSTEM"
+  },
+  "no_caching_prefix": {
+    "max_tokens": 32768,
+    "messages": [
+      {
+        "content": "USER",
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "output_config": {
+      "effort": "low"
+    },
+    "system": "PREFIX\n\nSYSTEM"
+  }
+}

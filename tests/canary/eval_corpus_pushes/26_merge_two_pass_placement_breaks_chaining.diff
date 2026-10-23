@@ -1,0 +1,64 @@
+diff --git a/ai_pr_review/findings/merge.py b/ai_pr_review/findings/merge.py
+index f6dadaf..bb10bc1 100644
+--- a/ai_pr_review/findings/merge.py
++++ b/ai_pr_review/findings/merge.py
+@@ -170,31 +170,52 @@ def _dedup_file(findings: list[Finding]) -> list[Finding]:
+     sorted_fs = sorted(findings, key=lambda f: f.line or 0)
+ 
+     clusters: list[list[Finding]] = []
+-    for f in sorted_fs:
++
++    def place(f: Finding) -> None:
+         f_line = f.line or 0
+         # Compare proximity against the last (nearest) finding in the cluster
+         # so that a chain of findings within PROXIMITY_LINES all merge
+         # together, even if the first finding is outside the window. Of the
+         # clusters that accept `f`, join the one whose tail is nearest, and the
+-        # earlier one on a tie. First-fit let an agent `lint` finding join an
+-        # earlier style cluster instead of the analyzer finding on its own
+-        # line, because an agent finding cannot carry `style_only`.
++        # earlier one on a tie.
+         best_cluster: list[Finding] | None = None
+-        best_distance = PROXIMITY_LINES + 1
++        best_rank = (True, PROXIMITY_LINES + 1)
+         if not _is_standalone(f):
+             for cluster in clusters:
+                 distance = abs((cluster[-1].line or 0) - f_line)
++                # An agent finding cannot say whether it is style. When a style
++                # cluster and a defect cluster both accept it, it joins the
++                # defect cluster, so a style hit cannot corroborate it.
++                rank = (_analyzer_tools(f) is None and any(_is_style(m) for m in cluster), distance)
+                 if (
+-                    distance < best_distance
++                    distance <= PROXIMITY_LINES
++                    and rank < best_rank
+                     and not any(_is_standalone(m) for m in cluster)
+                     and _cluster_category_compatible(cluster, f)
+                 ):
+-                    best_cluster, best_distance = cluster, distance
++                    best_cluster, best_rank = cluster, rank
+         if best_cluster is not None:
+             best_cluster.append(f)
+         else:
+             clusters.append([f])
+ 
++    # Analyzer findings cluster first, then every other finding joins its
++    # nearest compatible cluster. An agent finding cannot carry `style_only`, so
++    # it needs the analyzer clusters to exist before it picks one. Placing in
++    # line order alone let an agent finding one line above an analyzer defect
++    # join an earlier style cluster.
++    for f in sorted_fs:
++        if _analyzer_tools(f) is not None:
++            place(f)
++    for f in sorted_fs:
++        if _analyzer_tools(f) is None:
++            place(f)
++    # Collapse sees members in line order, as it did before the two passes.
++    order = {id(f): i for i, f in enumerate(sorted_fs)}
++    for cluster in clusters:
++        cluster.sort(key=lambda m: order[id(m)])
++    clusters.sort(key=lambda c: order[id(c[0])])
++
+     return [_collapse_cluster(c) for c in clusters]
+ 
+ 

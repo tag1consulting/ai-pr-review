@@ -15,6 +15,7 @@ from ai_pr_review.agents.roster import AgentSpec, get_agent
 from ai_pr_review.config import resolve_agent_max_tokens
 from ai_pr_review.languages import detect_language
 from ai_pr_review.llm.base import LLMRequest, LLMResponse
+from ai_pr_review.text_safety import safe_code
 
 _log = logging.getLogger(__name__)
 
@@ -723,6 +724,10 @@ async def run_tier(
     enrichment: _EnrichmentBlock | None = None
     if any(spec.context_enrichment_eligible for spec in agents):
         enrichment = _compute_context_enrichment_block(diff_text, context)
+
+    # Sanitize the diff once for every agent, so the cached prefix stays identical.
+    # Enrichment above parses the raw diff, because it reads real file paths from it.
+    diff_text = safe_code(diff_text)
 
     limiter = anyio.CapacityLimiter(semaphore_size)
     results: list[AgentResult | FailedAgent] = []

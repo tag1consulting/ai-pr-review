@@ -38,6 +38,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from ai_pr_review.analyzers._env import tool_env
 from ai_pr_review.findings.models import Finding
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def run_cli_json_analyzer(
             text=True,
             timeout=timeout_secs,
             cwd=cwd,
-            env=env,
+            env=env if env is not None else tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         logger.warning(

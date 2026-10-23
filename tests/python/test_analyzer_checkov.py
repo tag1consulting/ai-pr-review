@@ -242,10 +242,9 @@ class TestTrustedConfigContent:
         env = kwargs["env"]
         assert isinstance(env, dict)
         assert env["HOME"] == kwargs["cwd"]
-        assert set(env) <= {"HOME", "PYTHONUSERBASE", "PATH", "LANG", "TMPDIR", "TZ", "HTTPS_PROXY",
-                            "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
-                            "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "http_proxy",
-                            "https_proxy", "no_proxy"} | {k for k in env if k.startswith("LC_")}
+        assert not {"GITHUB_TOKEN", "ANTHROPIC_API_KEY", "CKV_CHECK", "BC_API_KEY", "PRISMA_API_URL",
+                    "CHECKOV_MAX_IAC_FILE_SIZE", "EXTERNAL_MODULES_DIR"} & set(env)
+        assert {"HOME", "PATH", "PYTHONSAFEPATH"} <= set(env)
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
         cmd = seen["cmd"]
         assert isinstance(cmd, list)

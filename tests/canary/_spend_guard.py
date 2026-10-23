@@ -260,6 +260,12 @@ class SpendGuard:
             request.system_prompt, request.system_prefix, *request.cache_blocks,
             request.user_message,
         ))
+        # A tool-loop turn also sends the earlier turns and the tool definitions (#1088).
+        # Count them, or a late turn that carries large tool results would be under-reserved.
+        if request.messages:
+            text += json.dumps(list(request.messages), ensure_ascii=False)
+        if request.tools:
+            text += json.dumps(list(request.tools), ensure_ascii=False)
         input_tokens = estimate_billed_tokens(text)
 
         def cost(input_rate: int, output_rate: int, cache_write_rate: int) -> int:

@@ -2120,10 +2120,44 @@ class TestEmitTelemetryThinkingTokens:
         lines = sink_path.read_text().splitlines()
         assert len(lines) == 1
         event = json.loads(lines[0])
-        assert event["telemetry_schema_version"] == "3"
+        assert event["telemetry_schema_version"] == "4"
         agent_usage = event["token_usage_by_agent"]["code-reviewer"]
         assert agent_usage["thinking_tokens"] == 16384
         assert agent_usage["stop_reason"] == "max_tokens"
+
+    @pytest.mark.anyio
+    async def test_event_carries_agent_yield_and_survives_a_result_without_it(
+        self, tmp_path: Path,
+    ) -> None:
+        """#1088: schema v4 adds agent_yield. A result that lacks the field (a
+        mock) must still give a serializable event with an empty dict."""
+        from ai_pr_review.cli import _emit_telemetry
+
+        sink_path = tmp_path / "telemetry.jsonl"
+        config = _make_config(telemetry_enabled=True, telemetry_sink=f"file://{sink_path}")
+
+        with_yield = MagicMock()
+        with_yield.agent_results = []
+        with_yield.failed_agents = []
+        with_yield.findings = []
+        with_yield.outcome.event = "COMMENT"
+        with_yield.agent_yield = {
+            "code-reviewer": {
+                "status": "ok", "parsed": 0, "below_threshold": 0, "output_tokens": 241,
+            },
+        }
+        await _emit_telemetry(with_yield, config, 0)
+
+        without_yield = MagicMock()
+        without_yield.agent_results = []
+        without_yield.failed_agents = []
+        without_yield.findings = []
+        without_yield.outcome.event = "COMMENT"
+        await _emit_telemetry(without_yield, config, 0)
+
+        first, second = (json.loads(x) for x in sink_path.read_text().splitlines())
+        assert first["agent_yield"]["code-reviewer"]["output_tokens"] == 241
+        assert second["agent_yield"] == {}
 
     @pytest.mark.anyio
     async def test_per_agent_dict_thinking_tokens_zero_when_absent(
@@ -2406,3 +2440,54 @@ class TestTokenUsageDisplayModeSelection:
         warning = str(out["usage_warning"])
         assert warning.index("policy.yml ignored") < warning.index("Cost ceiling not enforced")
         assert warning.index("Cost ceiling not enforced") < warning.index("High token usage")
+
+
+class TestForkRunPostsInsideTheOutputClamp:
+    """A fork run must open the output clamp around its posting phase. The clamp pieces are tested
+    on their own, so this pins the wiring in ``_run_review_async``."""
+
+    @staticmethod
+    def _opened_with(runtime: object) -> list[bool]:
+        import asyncio
+        from contextlib import contextmanager
+        from unittest.mock import AsyncMock, patch
+
+        from ai_pr_review.cli import _run_review_async
+        from ai_pr_review.config import ReviewConfig
+
+        opened: list[bool] = []
+
+        @contextmanager
+        def fake_clamp(enabled: bool, repo: str = ""):  # type: ignore[no-untyped-def]
+            opened.append(enabled)
+            yield
+
+        with (
+            patch("ai_pr_review.review.runtime.build_review_runtime", new=AsyncMock(return_value=runtime)),
+            patch("ai_pr_review.output_clamp.output_clamp", new=fake_clamp),
+            patch("ai_pr_review.cli._run_review_with_runtime", new=AsyncMock(return_value=0)),
+        ):
+            asyncio.run(_run_review_async(ReviewConfig()))
+        return opened
+
+    def test_a_fork_skip_plan_is_clamped(self) -> None:
+        from ai_pr_review.review.runtime import SkipPlan
+
+        plan = SkipPlan(reason="paused", provider=object(), fork_output_clamp=True)  # type: ignore[arg-type]
+        assert self._opened_with(plan) == [True]
+
+    def test_a_plain_skip_plan_is_not_clamped(self) -> None:
+        from ai_pr_review.review.runtime import SkipPlan
+
+        plan = SkipPlan(reason="no changes", provider=object())  # type: ignore[arg-type]
+        assert self._opened_with(plan) == [False]
+
+    def test_a_fork_profile_runtime_is_clamped(self) -> None:
+        from types import SimpleNamespace
+
+        assert self._opened_with(SimpleNamespace(fork_profile=object())) == [True]
+
+    def test_a_runtime_without_a_fork_profile_is_not_clamped(self) -> None:
+        from types import SimpleNamespace
+
+        assert self._opened_with(SimpleNamespace(fork_profile=None)) == [False]
