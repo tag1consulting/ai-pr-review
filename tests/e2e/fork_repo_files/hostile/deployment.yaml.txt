@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report
+spec:
+  selector:
+    matchLabels: {app: report}
+  template:
+    metadata:
+      labels: {app: report}
+    spec:
+      containers:
+        - name: report
+          image: report:latest
+          securityContext:
+            privileged: true

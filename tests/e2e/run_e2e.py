@@ -101,9 +101,18 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--platforms", "platforms_raw", multiple=True, default=("github", "gitlab", "bitbucket"))
-@click.option("--profile", default=None, type=click.Choice(["release"]))
+@click.option("--profile", default=None, type=click.Choice(["release", "fork"]))
 def plan(platforms_raw: tuple[str, ...], profile: str | None) -> None:
-    """Offline validation only. No network calls."""
+    """Offline validation only. No network calls.
+
+    --profile fork validates the fork scenario table (GitHub only, --platforms is ignored).
+    """
+    if profile == "fork":
+        from .fork_scenarios import plan_report
+
+        code, text = plan_report()
+        click.echo(text, err=bool(code))
+        sys.exit(code)
     try:
         resolved = validate_platforms(platforms_raw, profile=profile)
     except ValueError as exc:

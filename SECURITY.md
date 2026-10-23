@@ -63,7 +63,7 @@ The controls for a non-trusted author are these:
 - **Bot-authored state only.** The engine reads the watermark, skip comments, ledgers and spend entries only from comments that the bot wrote.
 - **Caps that fail closed.** There is a cap per run, per pull request, per author and per day. An unreadable fact, ledger or cost estimate pauses the run.
 
-A fork pull request by a trusted author (`OWNER` and `COLLABORATOR` by default) gets the normal pipeline and the per-run cap. The `label` policy keeps the older design: the engine pauses a fork pull request until a maintainer approves one exact head commit. Use `block` to switch fork review off.
+A fork pull request by a trusted author (`OWNER` and `COLLABORATOR` by default) gets the normal pipeline and the per-run cap. The `label` policy is the stricter option: the engine pauses a fork pull request until a maintainer approves one exact head commit. Use `block` to switch fork review off.
 
 These limits remain:
 

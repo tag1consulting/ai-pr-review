@@ -260,7 +260,7 @@ def test_a_persisted_credential_setting_gives_a_reason_that_names_the_key_only(
     ws = _clean_repo(tmp_path)
     _git(ws, "config", "--local", key, value)
     reason = _REAL_PERSISTED(str(ws))
-    shown = key if "://" not in key else f"{key.split('.', 1)[0]}.<url>.{key.rsplit('.', 1)[-1]}"
+    shown = key if "://" not in key else f"{key.split('.', 1)[0]}.URL.{key.rsplit('.', 1)[-1]}"
     assert "persist-credentials: false" in reason and shown.split(":")[0].lower()[:10] in reason.lower()
     assert value not in reason and "ZHVtbXk" not in reason
 
@@ -502,4 +502,4 @@ def test_pause_text_hides_user_info_in_a_config_key(tmp_path: Path) -> None:
     reason = _REAL_PERSISTED(str(ws))
     assert reason
     assert "tok123" not in reason
-    assert "url.<url>.insteadof" in reason.lower()
+    assert "url.url.insteadof" in reason.lower()

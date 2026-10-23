@@ -711,7 +711,7 @@ async def test_a_fork_run_at_the_cap_pauses_before_compute_and_names_the_cap(tmp
     for _ in range(4):
         backend.add(cents=10)
     result, compute = await _build(tmp_path, _Provider(backend))
-    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.fork_output_clamp
     assert "4 review runs" in result.reason and "/ai-pr-review rescan" in result.reason
     compute.assert_not_called()  # no git diff and no analyzer on a paused run
     assert backend.totals() == (4, 40)
@@ -726,7 +726,7 @@ async def test_a_ledger_failure_pauses_the_fork_run(tmp_path: Path, fail: str) -
     backend = Backend()
     setattr(backend, fail, True)
     result, _ = await _build(tmp_path, _Provider(backend))
-    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.fork_output_clamp
     assert result.reason == with_run_pointer(LEDGER_ERROR_TEXT)
 
 
@@ -738,7 +738,8 @@ async def test_a_failed_estimate_pauses_a_fork_run_and_reserves_nothing(tmp_path
     backend = Backend()
     with patch("ai_pr_review.review.cost_ceiling.estimate_review_cost", side_effect=ValueError("corrupt")):
         result, _ = await _build(tmp_path, _Provider(backend))
-    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.reason == with_run_pointer(ESTIMATE_ERROR_TEXT)
+    assert isinstance(result, SkipPlan) and result.is_fork_gate_skip and result.fork_output_clamp
+    assert result.reason == with_run_pointer(ESTIMATE_ERROR_TEXT)
     assert backend.bot == {}
 
 

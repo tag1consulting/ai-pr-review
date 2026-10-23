@@ -155,7 +155,7 @@ The example workflow in [examples/workflows/pr-review.yml](examples/workflows/pr
   env:
     FORCE_FULL_DIFF: ${{ contains(github.event.pull_request.labels.*.name, 'ai-review-rescan') }}
   with:
-    image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}  # or pin to a release tag, e.g. '2.24.1'
+    image-tag: ${{ vars.AI_REVIEW_IMAGE_TAG || 'latest' }}  # or pin to a release tag, e.g. '2.25.0'
     provider: ${{ vars.AI_REVIEW_PROVIDER || 'anthropic' }}
     api-key: ${{ secrets.AI_REVIEW_API_KEY }}
     base-url: ${{ vars.AI_REVIEW_BASE_URL || '' }}
@@ -178,7 +178,7 @@ See [examples/README.md](examples/README.md) for the complete setup walkthrough 
 | `AI_REVIEW_BASE_URL` | Variable | No | Custom endpoint URL (for `openai-compatible` or `bedrock-proxy`) |
 | `AI_REVIEW_MODEL_STANDARD` | Variable | No | Override the standard model ID |
 | `AI_REVIEW_MODEL_PREMIUM` | Variable | No | Override the premium model ID (full mode only) |
-| `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `2.24.1`: image tags published by `publish-image.yml` strip the `v` prefix) |
+| `AI_REVIEW_IMAGE_TAG` | Variable | No | Container image tag (default `latest`; set to `dev` to dogfood pre-release builds or pin to a release like `2.25.0`: image tags published by `publish-image.yml` strip the `v` prefix) |
 | `AI_REVIEW_IGNORE_MERGE_COMMITS` | Variable | No | `false` to disable stripping of base-branch merge commits from the diff before review (default `true`) |
 | `AI_REVIEW_CONTEXT_ENRICHMENT` | Variable | No | `true` to enable tree-sitter symbol-context injection (default `true` for the container action, `false` for the direct action) |
 | `AI_REVIEW_SARIF_PATHS` | Variable | No | Comma-separated SARIF 2.1.0 file paths to merge as findings (default `''`) |
@@ -230,6 +230,10 @@ Once `ai-pr-review.yml` is merged to your default branch, users with write acces
 | `/ai-pr-review revise <hint>` | Ask the agent to revise its verdict with a hint (stub for now). |
 
 Slash commands are built into the canonical [examples/workflows/pr-review.yml](examples/workflows/pr-review.yml) template. Copy that single file to `.github/workflows/ai-pr-review.yml` and both automatic review and slash commands are wired in one place. The `slash-commands` job calls a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows) hosted here, so all command logic is maintained upstream. See [docs/slash-commands.md](docs/slash-commands.md) for details and the default-branch dispatch requirement.
+
+## Fork pull requests
+
+By default (`AI_FORK_POLICY=auto`), the engine reviews a fork pull request at once, with no maintainer step. A non-trusted author gets a limited run: a scrubbed environment, fewer analyzers, no PR body in the prompts, a COMMENT-only output, and spend caps. Set `AI_FORK_POLICY=label` to require a maintainer approval of each commit, or `block` to switch fork review off. The checkout step must set `persist-credentials: false`. See [docs/fork-prs.md](docs/fork-prs.md) and [SECURITY.md](SECURITY.md).
 
 ## Action inputs
 

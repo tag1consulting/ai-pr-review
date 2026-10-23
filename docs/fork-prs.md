@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Fork pull requests
-nav_order: 8
+nav_order: 9
 ---
 
 # Fork pull requests
@@ -45,7 +45,7 @@ A fork pull request by a non-trusted author runs under the fork profile. The pro
 
 **Only analyzers with a trusted or isolated configuration.** These analyzers run: phpcs, phpstan, checkov, tflint, ruff (with `--isolated`), trufflehog (without the repository config), docs-api-check, docs-ref-check, docs-drift-check, dep-exists, cve-check and suppression-check. These analyzers are skipped: eslint, golangci-lint, semgrep, shellcheck, hadolint and kube-linter. A fork review therefore has fewer static findings than a normal review. The review comment names the skipped analyzers that had files to check.
 
-**Suppression rules from the base branch.** The engine reads `.ai-pr-review/suppressions.json` and its legacy path from the base branch, never from the fork tree. A rule with an invalid regular expression is dropped alone. The other rules stay. This applies to every run.
+**Suppression rules from the base branch.** Under the fork profile, the engine reads `.ai-pr-review/suppressions.json` and its legacy path from the base branch, never from the fork tree. On every run, a rule with an invalid regular expression is dropped alone and the other rules stay.
 
 **No low-value text in the prompts.** A fork run sends no PR body, no commit message, no open-issue title and no branch name to a model. It does not run the pr-summarizer or the issue-linker. The PR title stays, and the engine escapes it. A fork review has no PR summary. The comment holds one fixed line in its place, so that the watermark still advances.
 
@@ -105,7 +105,7 @@ The daily cap needs a record of past runs. The engine keeps one bot comment per 
 
 ## The label policy
 
-Set `AI_FORK_POLICY=label` to return to a maintainer approval of each commit. The engine pauses a fork pull request until the base repository has a successful commit status named `ai-pr-review/fork-approval` on the exact head commit. The `label` policy treats every fork author the same and applies none of the `auto` caps.
+Set `AI_FORK_POLICY=label` to require a maintainer approval of each commit. The engine pauses a fork pull request until the base repository has a successful commit status named `ai-pr-review/fork-approval` on the exact head commit. The `label` policy treats every fork author the same and applies none of the `auto` caps.
 
 1. Copy [`examples/workflows/fork-approval.yml`](https://github.com/tag1consulting/ai-pr-review/blob/main/examples/workflows/fork-approval.yml) into your repository. This workflow is for the `label` policy only. Create the `ai-review-approve-fork` label first. The workflow must never check out or run code from the pull request.
 2. Add `statuses: read` to the `permissions:` block of the review workflow. Without it, the status request fails and the run stays paused, with a log line that names the permission.
