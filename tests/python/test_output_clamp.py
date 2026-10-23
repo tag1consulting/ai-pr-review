@@ -577,6 +577,9 @@ def test_graphql_bodies_without_a_body_key_are_untouched() -> None:
 # ---------------------------------------------------------------------------
 
 
+_ENGINE_SUMMARY = "## Summary\n<details><summary>Walkthrough</summary>\n\nbody\n</details>"
+
+
 def test_the_step_summary_runs_error_strings_through_the_sanitizer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -601,13 +604,15 @@ def test_the_step_summary_runs_error_strings_through_the_sanitizer(
         agents=[], cost_ceiling_unenforced_models=(), cost_ceiling_pricing_missing=False, cost_ceiling_check_failed=False,
     )
     with output_clamp(True, REPO):
-        write_step_summary(result, runtime, f"## Summary\n{_HOSTILE}")  # type: ignore[arg-type]
+        write_step_summary(result, runtime, _ENGINE_SUMMARY)  # type: ignore[arg-type]
     text = out.read_text(encoding="utf-8")
     assert "HTTP 422" in text and "Summary post error" in text
     _assert_clean(text)
+    # The summary text was sanitized where it was built, so the engine's own wrapper stays intact.
+    assert "<details><summary>Walkthrough</summary>" in text and "</details>" in text
     # Outside a fork run the same strings keep their links, and only the pings are broken.
     out.write_text("", encoding="utf-8")
-    write_step_summary(result, runtime, f"## Summary\n{_HOSTILE}")  # type: ignore[arg-type]
+    write_step_summary(result, runtime, _ENGINE_SUMMARY)  # type: ignore[arg-type]
     plain = out.read_text(encoding="utf-8")
     assert "https://evil.example/login" in plain and "@team" in plain
 
@@ -1195,3 +1200,75 @@ class TestClampKeepsTheBodyWithinTheProviderLimit:
         out = _fit(text)
         assert len(out.encode("utf-8")) <= MAX_BODY_BYTES
         assert out.count("<!--") == out.count("-->")
+
+
+# ---------------------------------------------------------------------------
+# Banner-aware readers and marker JSON
+# ---------------------------------------------------------------------------
+
+
+def test_the_inline_header_reader_skips_the_fork_banner() -> None:
+    from ai_pr_review.output_clamp import first_content_line, with_banner
+    from ai_pr_review.slash.github_orchestration import FindingLocation, parse_inline_comment_header
+
+    plain = "\U0001f534 **[High]** **[F3]** [code-reviewer] A finding"
+    assert first_content_line(with_banner(plain)) == plain
+    assert first_content_line(plain) == plain
+    assert first_content_line("") == ""
+    bare = parse_inline_comment_header(plain)
+    bannered = parse_inline_comment_header(with_banner(plain))
+    assert bannered.location is FindingLocation.INLINE
+    assert bannered == bare and bannered.source == "code-reviewer"
+
+
+def test_the_canonical_severity_fallback_skips_the_fork_banner() -> None:
+    from ai_pr_review.vcs import _canonical
+
+    assert _canonical._HEADER_SEVERITY_RE.search(
+        _canonical.first_content_line(BANNER_BLOCK + "\U0001f534 **[High]** [x] y")
+    )
+
+
+@pytest.mark.parametrize("builder", ["id_map", "judge_map", "headline_map", "verdicts"])
+def test_marker_json_with_angle_brackets_survives_the_fork_clamp(builder: str) -> None:
+    from ai_pr_review.vcs import marker
+
+    key = "a<b>&c-->d"
+    if builder == "id_map":
+        text = marker.build_id_map_marker({key: 1})
+    elif builder == "judge_map":
+        text = marker.build_judge_map_marker({key: {"v": "keep"}})
+    elif builder == "headline_map":
+        text = marker.build_headline_map_marker({key: ("High", True)})
+    else:
+        text = marker.build_verdicts_marker({key: "dismissed"})
+    assert "<" not in text.removeprefix("<!--") and "-->" not in text.removesuffix("-->")
+    with output_clamp(True, REPO):
+        clamped = clamp_request_body({"body": text})["body"]
+    assert text in clamped
+    if builder == "id_map":
+        assert marker.extract_id_map(text) == {key: 1}
+
+
+def test_the_fit_keeps_the_trailing_markers_whole() -> None:
+    from ai_pr_review.output_clamp import MAX_BODY_BYTES, _fit
+
+    markers = (
+        '\n<!-- ai-pr-review-inline -->\n<!-- ai-pr-review-id-map: {"a|f|1|x":1} -->\n'
+        '<!-- ai-pr-review-verdicts: {"a|f|1|x":"dismissed"} -->'
+    )
+    text = "word " * 20000 + markers
+    out = _fit(text)
+    assert len(out.encode("utf-8")) <= MAX_BODY_BYTES
+    assert out.endswith(markers.lstrip("\n"))
+    assert "Review output truncated" in out
+    assert out.count("<!--") == out.count("-->") == 3
+
+
+def test_the_fit_falls_back_to_a_plain_cut_when_the_markers_fill_the_limit() -> None:
+    from ai_pr_review.output_clamp import MAX_BODY_BYTES, _fit
+
+    text = "x" + "\n<!-- ai-pr-review-id-map: {" + "k" * (MAX_BODY_BYTES + 10) + "} -->"
+    out = _fit(text)
+    assert len(out.encode("utf-8")) <= MAX_BODY_BYTES
+    assert out.count("<!--") == out.count("-->")

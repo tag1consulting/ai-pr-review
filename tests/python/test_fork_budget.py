@@ -492,6 +492,13 @@ def test_the_cli_keeps_the_estimate_without_priced_totals(totals: Any) -> None:
     assert backend.totals() == (1, 100)
 
 
+def test_the_cli_keeps_the_estimate_when_an_agent_failed_or_fell_back() -> None:
+    backend = Backend()
+    runtime, _ = _runtime(backend)
+    _settle_fork_budget(runtime, SimpleNamespace(cost_units=10, any_unknown=False), incomplete=True)
+    assert backend.totals() == (1, 100)
+
+
 def test_a_settle_failure_in_the_cli_is_soft_and_keeps_the_estimate() -> None:
     backend = Backend()
     runtime, _ = _runtime(backend)

@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ai_pr_review.findings.merge import _SEVERITY_ORDER, PROXIMITY_LINES, categories_compatible
 from ai_pr_review.findings.models import STANDALONE_SOURCES, is_standalone
+from ai_pr_review.output_clamp import first_content_line
 from ai_pr_review.vcs._finding_ids import (
     _ID_RE,
     fingerprint,
@@ -360,7 +361,7 @@ def parse_prior_thread(
     prior_fingerprints = frozenset(meta.prior_fps) if meta else frozenset()
 
     if severity is None:
-        first_line = body.splitlines()[0] if body else ""
+        first_line = first_content_line(body)
         sev_match = _HEADER_SEVERITY_RE.search(first_line)
         severity = sev_match.group(1) if sev_match else None
 

@@ -679,7 +679,9 @@ def write_step_summary(
         if summary_text.strip():
             lines += [
                 "### Summary", "",
-                sanitize_display_text(strip_leading_summary_heading(summary_text.strip())), "",
+                # Already sanitized where it was built (summarizer, issue-linker). A second pass
+                # would defang the engine's own <details> wrapper.
+                strip_leading_summary_heading(summary_text.strip()), "",
             ]
 
         content = "\n".join(lines)

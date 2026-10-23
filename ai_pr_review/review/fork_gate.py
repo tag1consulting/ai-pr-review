@@ -25,12 +25,12 @@ The rule, kept deliberately small:
 
 ``AI_FORK_POLICY`` picks what happens to a gated fork pull request:
 
-* ``label``: the approval status above. This is the safest policy and the fallback for an
-  unknown value.
-* ``auto`` (the default): the run starts at once. An author whose ``author_association`` is in
+* ``label``: the approval status above. This is the safest policy that still reviews, and the
+  fallback for an unknown value.
+* ``auto`` (opt in): the run starts at once. An author whose ``author_association`` is in
   ``AI_FORK_TRUSTED_ASSOCIATIONS`` gets the normal pipeline. Any other author gets a
   ``ForkProfile`` that restricts the run. The approval status is not read.
-* ``block``: every fork pull request is paused, whoever wrote it.
+* ``block`` (the default): every fork pull request is paused, whoever wrote it.
 
 The status is read from the **base** repository only. A fork owner controls statuses in the
 fork, never in the base repository.
@@ -262,7 +262,7 @@ def decide(
 ) -> GateDecision:
     """Decide whether the review may run, and under which mode. ``facts`` is ``None`` when the VCS
     could not be read. An unknown *policy* is treated as ``label`` (``SAFEST_FORK_POLICY``), not as
-    the ``auto`` default."""
+    the ``block`` default."""
     if not needs_facts(event_name, key_present):
         return GateDecision(gated=False, allowed=True)
     if facts is None:

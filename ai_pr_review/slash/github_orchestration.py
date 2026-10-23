@@ -43,6 +43,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ai_pr_review.output_clamp import first_content_line
 from ai_pr_review.vcs._body import TRUNCATION_MARKER
 from ai_pr_review.vcs._finding_ids import (
     _ID_RE,
@@ -289,7 +290,7 @@ def parse_inline_comment_header(body: str) -> ClassifiedFinding:
     source tag could be parsed, so callers can distinguish a parse failure
     from a genuine empty source.
     """
-    first_line = body.splitlines()[0] if body else ""
+    first_line = first_content_line(body)
     stripped = _ID_RE.sub("", first_line, count=1).strip()
     brackets = _SOURCE_RE.findall(stripped)
     if len(brackets) < 2:

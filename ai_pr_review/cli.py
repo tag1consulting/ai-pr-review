@@ -291,10 +291,11 @@ def _preflight_agent_results(
     ]
 
 
-def _settle_fork_budget(runtime: ReviewRuntime, totals: Any) -> None:
+def _settle_fork_budget(runtime: ReviewRuntime, totals: Any, incomplete: bool = False) -> None:
     """Settle the fork run's ledger entries (per-PR, story 17-6, and daily, story 17-7). Fail-soft:
     the run is over, so a failure leaves the reserved estimate charged, which is the safe direction.
-    With no totals, or a model that has no price, the estimate stays. Each entry settles on its own."""
+    With no totals, a model that has no price, or an incomplete run (a failed agent or a refusal
+    fallback, whose spend the totals may miss), the estimate stays. Each entry settles on its own."""
     budget, reservation = runtime.fork_budget, runtime.fork_reservation
     spend, spend_reservation = runtime.fork_spend, runtime.fork_spend_reservation
     if (budget is None or reservation is None) and (spend is None or spend_reservation is None):
@@ -303,6 +304,12 @@ def _settle_fork_budget(runtime: ReviewRuntime, totals: Any) -> None:
         logger.warning(
             "fork budget: no priced totals (a model without a price, or no usage data), so the ledger "
             "entries keep the full estimate and may overcharge the PR and the daily pool"
+        )
+        return
+    if incomplete:
+        logger.warning(
+            "fork budget: an agent failed or fell back to another model, so the totals may miss "
+            "billed calls. The ledger entries keep the full estimate"
         )
         return
     from ai_pr_review.output_clamp import clamp_suspended
@@ -655,7 +662,12 @@ async def _run_review_with_runtime(config: ReviewConfig, runtime: ReviewRuntime 
             )
 
     # Story 17-6: replace the fork run's reserved estimate with the actual cost.
-    _settle_fork_budget(runtime, _actual_totals)
+    _settle_fork_budget(
+        runtime,
+        _actual_totals,
+        incomplete=bool(result.failed_agents)
+        or any(r.fallback_from_model for r in result.agent_results),
+    )
 
     # Full per-agent breakdown, always echoed to the CI job log regardless of
     # provider (#758) -- GitLab and Bitbucket have no GITHUB_STEP_SUMMARY

@@ -281,6 +281,13 @@ def with_banner(body: str) -> str:
     return BANNER_BLOCK + body
 
 
+def first_content_line(body: str) -> str:
+    """The first line of ``body`` after the fork banner, which ``with_banner`` puts on top."""
+    if body.startswith(BANNER_BLOCK):
+        body = body[len(BANNER_BLOCK):]
+    return body.splitlines()[0] if body else ""
+
+
 def clamp_event(event: str) -> str:
     """Cap a review event at COMMENT inside a clamp scope."""
     if clamp_active() and event.strip().upper() in _CAPPED_EVENTS:
@@ -320,17 +327,39 @@ _FIT_TRAILER: Final[str] = (
 )
 
 
+# The hidden markers the provider appends last (inline, id-map, judge-map, headline-map, verdicts).
+# They carry the maintainer verdicts, so a cut must never remove them.
+_TRAILING_MARKERS: Final[re.Pattern[str]] = re.compile(r"(?:[ \t]*\n?<!-- ai-pr-review-[^\n]*? -->)+\s*\Z")
+
+
 def _fit(text: str) -> str:
-    """Cut *text* to ``MAX_BODY_BYTES`` bytes, at a UTF-8 boundary, and end it with a trailer."""
+    """Cut *text* to ``MAX_BODY_BYTES`` bytes, at a UTF-8 boundary, and end it with a trailer.
+
+    The trailing hidden markers stay whole. Only the text before them is shortened. If the markers
+    alone leave no room, the old cut applies.
+    """
     data = text.encode("utf-8")
     if len(data) <= MAX_BODY_BYTES:
         return text
-    room = MAX_BODY_BYTES - len(_FIT_TRAILER.encode("utf-8"))
+    trailer = _FIT_TRAILER.encode("utf-8")
+    tail = ""
+    m = _TRAILING_MARKERS.search(text)
+    if m is not None:
+        tail = m.group(0)
+        text = text[: m.start()]
+        data = text.encode("utf-8")
+    tail_bytes = tail.encode("utf-8")
+    room = MAX_BODY_BYTES - len(trailer) - len(tail_bytes) - 1
+    if room < 0:
+        # The markers alone fill the limit: cut everything from the end, as before.
+        data = (text + tail).encode("utf-8")
+        tail = ""
+        room = MAX_BODY_BYTES - len(trailer)
     head = data[:room].decode("utf-8", errors="ignore")
     opener = head.rfind("<!--")
     if opener != -1 and "-->" not in head[opener:]:
         head = head[:opener]  # a cut marker would hide the trailer inside an open HTML comment
-    return head + _FIT_TRAILER
+    return head + _FIT_TRAILER + (("\n" + tail.lstrip("\n")) if tail else "")
 
 
 def _walk(value: Any, repo: str) -> Any:
