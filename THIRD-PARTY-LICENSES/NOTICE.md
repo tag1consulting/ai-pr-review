@@ -38,7 +38,7 @@ update this manifest. See `memory-bank/license-audit-2026-06-01.md` for the full
 | semgrep (engine / CE) | 1.161.0 | LGPL-2.1 | Semgrep, Inc. & contributors | https://github.com/semgrep/semgrep/releases/tag/v1.161.0 | `semgrep.LICENSE.txt` |
 | ruff | 0.15.15 | MIT | Astral Software Inc. & contributors | https://github.com/astral-sh/ruff/releases/tag/0.15.15 | `ruff.LICENSE.txt` |
 | kube-linter | v0.8.3 | Apache-2.0 | StackRox / Red Hat & contributors | https://github.com/stackrox/kube-linter/releases/tag/v0.8.3 | `kube-linter.LICENSE.txt` |
-| checkov | 3.2.524 | Apache-2.0 | Bridgecrew / Palo Alto Networks & contributors | https://github.com/bridgecrewio/checkov/releases/tag/3.2.524 | `checkov.LICENSE.txt` |
+| checkov | 3.3.30 | Apache-2.0 | Bridgecrew / Palo Alto Networks & contributors | https://github.com/bridgecrewio/checkov/releases/tag/3.3.30 | `checkov.LICENSE.txt` |
 | gh CLI | 2.91.0 | MIT | GitHub, Inc. | https://github.com/cli/cli/releases/tag/v2.91.0 | `gh-cli.LICENSE.txt` |
 | phpstan/phpstan | 2.1.51 | MIT | Ondřej Mirtes / PHPStan s.r.o. | https://github.com/phpstan/phpstan/releases/tag/2.1.51 | `phpstan.LICENSE.txt` |
 | mglaman/phpstan-drupal | 2.0.15 | MIT | Matt Glaman & contributors | https://github.com/mglaman/phpstan-drupal/releases/tag/2.0.15 | `phpstan-drupal.LICENSE.txt` |

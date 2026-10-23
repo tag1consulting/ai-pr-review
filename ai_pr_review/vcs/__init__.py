@@ -217,7 +217,9 @@ def _build_gitlab_from_env() -> GitLabProvider:
             original,
             base_url,
         )
-    bot_username = os.environ.get("GITLAB_BOT_USERNAME") or None
+    bot_username = (
+        (os.environ.get("GITLAB_BOT_USERNAME") or "").strip().lstrip("@").strip() or None
+    )
 
     # Cross-run finding dedup (#710): a per-run "kept alive" set already
     # fixes an independent bug (resolve_stale immediately resolving a
